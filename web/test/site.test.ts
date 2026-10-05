@@ -288,8 +288,9 @@ describe("responsive chrome and legal surfaces", () => {
   it("keeps legal-copy from painting button labels black", () => {
     const css = read("app/globals.css");
     expect(css).toMatch(/\.legal-copy a:not\(\.btn\)/);
-    expect(css).toMatch(/\.legal-copy a\.btn \{[^}]*var\(--on-purple\)/);
-    expect(css).toMatch(/\.legal-copy a\.btn-dark \{[^}]*var\(--on-dark\)/);
+    expect(css).toMatch(/\.legal-copy a\.btn[^{]*\{[^}]*var\(--on-purple\)/);
+    expect(css).toMatch(/\.legal-copy a\.btn-dark[^{]*\{[^}]*var\(--on-dark\)/);
+    expect(css).toMatch(/\.legal-copy a\.btn-lime/);
   });
 
   it("sizes nav, legal nav, footer, and buttons for 44px taps", () => {

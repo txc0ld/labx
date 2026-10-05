@@ -31,8 +31,8 @@ export const metadata: Metadata = {
     images: [
       {
         url: "/lab/hero-linked-panels.jpg",
-        width: 1280,
-        height: 720,
+        width: 1200,
+        height: 630,
         alt: "Linked laboratory panels, chrome junction, and fluoro cables. No figure."
       }
     ]

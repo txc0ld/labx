@@ -40,7 +40,11 @@ export function Shell({ children }: { children: ReactNode }) {
               <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {LINKS.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} aria-current={isCurrentPath(path, link.href) ? "page" : undefined}>
+                    <Link
+                      href={link.href}
+                      className={link.href === "/" ? "nav-explore" : undefined}
+                      aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
+                    >
                       {link.label}
                     </Link>
                   </li>
