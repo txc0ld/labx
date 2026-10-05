@@ -259,8 +259,10 @@ contract SyncVRF {
 
 contract MockVRF {
     uint256 public next = 1;
+    bool public lastNativePayment;
 
-    function requestRandomWords(VRFV2PlusClient.RandomWordsRequest calldata) external returns (uint256 id) {
+    function requestRandomWords(VRFV2PlusClient.RandomWordsRequest calldata req) external returns (uint256 id) {
+        lastNativePayment = abi.decode(req.extraArgs[4:], (bool));
         id = next++;
     }
 

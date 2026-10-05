@@ -262,6 +262,8 @@ These gates do not mint on-chain entries today (M-1). They matter as soon as the
 
 **Fix.** Emit old and new values for each setter.
 
+**Status (commit 2b60a12 follow-up).** `setTreasury`, `setAmoeSigner`, and `setVrfConfig` now emit `TreasurySet`, `AmoeSignerSet`, and `VrfConfigSet`. Coordinator and ETH-path changes already emitted. `setNativePayment` emits `NativePaymentSet`. See Chain Security M-4 below.
+
 ### L-6. Refunds do not reduce the raffle escrow counters, and settlement pushes USDC
 
 **Location.** `_credit` lines 693–704. `settle` lines 551–558. `refund` lines 587–595.
@@ -321,9 +323,9 @@ Happy-path accounting is consistent: price and the 5 USDC lab fee are escrowed s
 
 ### VRF callback
 
-`rawFulfillRandomWords(uint256,uint256[])` matches the selector `VRFCoordinatorV2_5` calls. `extraArgs` use `ExtraArgsV1` with `nativePayment: false`. The deployed key hash and coordinator match Chainlink's published Sepolia VRF v2.5 values. Storing the winner in the callback is a few SLOADs plus a binary search. That fits the 500,000 gas limit. The callback does not transfer tokens, which is what Chainlink asks consumers to avoid.
+`rawFulfillRandomWords(uint256,uint256[])` matches the selector `VRFCoordinatorV2_5` calls. `extraArgs` use `ExtraArgsV1`. Source after this follow-up reads `nativePayment` from storage (default false). The live Sepolia raffle `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` was compiled with `nativePayment: false` hardcoded; fund that VRF sub with LINK. The deployed key hash and coordinator match Chainlink's published Sepolia VRF v2.5 values. Storing the winner in the callback is a few SLOADs plus a binary search. That fits the 500,000 gas limit. The callback does not transfer tokens, which is what Chainlink asks consumers to avoid.
 
-`requestToRaffle` is written after `requestRandomWords` returns. The production coordinator fulfills in a later transaction. A coordinator that called back synchronously would see `requestToRaffle[id] == 0`, take the early `return`, and leave the raffle in `Drawing` with the word dropped. Pin the request id before the external call if that ordering should survive a different coordinator.
+`requestToRaffle` is written after `requestRandomWords` returns. A synchronous coordinator callback is buffered (`_awaitingRequest`) and applied once the request id is pinned. `abortDrawing` and `retryRandomness` delete the mapping so a late word cannot land on a cancelled or replaced request.
 
 `word % total` has the usual modulo bias. It is not material at 256-bit words and raffle-sized totals.
 
@@ -334,3 +336,20 @@ Happy-path accounting is consistent: price and the 5 USDC lab fee are escrowed s
 ### What this review did not do
 
 No exploit was broadcast, no mainnet or Sepolia state was used, and the Forge suite was not re-run as part of this pass. The findings above are from reading the source and the coordinator and router behavior those calls depend on.
+
+---
+
+## Chain Security threat model (commit `2b60a12`, live Sepolia `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C`)
+
+IDs below are from that read-only model. They are **not** the H/M/L numbers in the PR-1 review above.
+
+| ID | Topic | v1 response |
+| --- | --- | --- |
+| C-1 | VRF billed in LINK while the live sub has 0 LINK / 0.05 native ETH | Code: owner-settable `nativePayment`, default `false`, gated by `activeDrawings == 0`. Ops: fund LINK on the live contract; do not wait for a redeploy. A future deploy may set native ETH. |
+| M-1 | Failed VRF callback leaves `Drawing` with no word; `abortDrawing` left `requestToRaffle` populated | Owner `retryRandomness` re-requests without cancelling. `abortDrawing` and retry delete `requestToRaffle` / `requestCoordinator`. |
+| M-2 | `setVrfConfig` while a draw is in flight | Same `DrawInFlight` gate as coordinator changes. |
+| M-3 | Runtime over EIP-170 | Inherited from main after PR #7: `via_ir = true` in `foundry.toml`, CI runs `forge build --sizes` before `forge test`. |
+| M-4 | Treasury / AMOE signer / VRF config setters emit nothing | `TreasurySet`, `AmoeSignerSet`, `VrfConfigSet`, `NativePaymentSet`. |
+| H-3 | Owner can force-cancel a funded raffle | Accepted v1 centralization. Documented in NatSpec on `cancel`, `SECURITY.md`, and this note. Do not remove `cancel`. Pause+timelock is an optional follow-up. |
+
+The live bytecode at `0xa59B62…` still has `nativePayment: false` hardcoded. Hardening above is for the next compile. Until then, fund the existing VRF subscription with Sepolia LINK.

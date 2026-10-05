@@ -847,4 +847,199 @@ contract LabxRaffleTest is Test {
         labx.reclaimPrize(id);
         assertEq(nft.ownerOf(1), seller);
     }
+
+    function _drawReady() internal returns (uint256 id) {
+        (id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+    }
+
+    function test_setVrfConfigRevertsWhenDrawInFlight() public {
+        uint256 id = _drawReady();
+        labx.setVrfConfig(KEY, 2, 500_000, 3);
+        assertEq(labx.subscriptionId(), 2);
+
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vm.expectRevert(LabxRaffle.DrawInFlight.selector);
+        labx.setVrfConfig(KEY, 3, 500_000, 3);
+
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        labx.setVrfConfig(KEY, 4, 400_000, 5);
+        assertEq(labx.subscriptionId(), 4);
+        assertEq(labx.callbackGasLimit(), 400_000);
+        assertEq(labx.requestConfirmations(), 5);
+    }
+
+    function test_abortDrawingClearsRequestMap() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        assertEq(labx.requestToRaffle(requestId), id);
+        assertEq(labx.requestCoordinator(requestId), address(vrf));
+
+        vm.warp(block.timestamp + 1 days);
+        labx.abortDrawing(id);
+        assertEq(labx.requestToRaffle(requestId), 0);
+        assertEq(labx.requestCoordinator(requestId), address(0));
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+
+        vrf.fulfill(address(labx), requestId, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+        assertEq(labx.getRaffle(id).winner, address(0));
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function test_retryRandomnessReplacesFailedRequest() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 oldId = labx.getRaffle(id).vrfRequestId;
+        assertEq(labx.activeDrawings(), 1);
+
+        labx.retryRandomness(id);
+        uint256 newId = labx.getRaffle(id).vrfRequestId;
+        assertTrue(newId != oldId);
+        assertEq(labx.requestToRaffle(oldId), 0);
+        assertEq(labx.requestCoordinator(oldId), address(0));
+        assertEq(labx.requestToRaffle(newId), id);
+        assertEq(labx.requestCoordinator(newId), address(vrf));
+        assertEq(labx.activeDrawings(), 1);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
+
+        vrf.fulfill(address(labx), oldId, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
+        assertEq(labx.getRaffle(id).winner, address(0));
+
+        vrf.fulfill(address(labx), newId, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        assertEq(labx.getRaffle(id).winner, alice);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function test_retryRandomnessRevertsWhenNotDrawing() public {
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.retryRandomness(1);
+
+        uint256 id = _drawReady();
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.retryRandomness(id);
+
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vm.prank(seller);
+        vm.expectRevert(LabxRaffle.NotOwner.selector);
+        labx.retryRandomness(id);
+    }
+
+    function test_retryRandomnessRevertsWhenPaused() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        labx.setPaused(true);
+        vm.expectRevert(LabxRaffle.Paused.selector);
+        labx.retryRandomness(id);
+        labx.setPaused(false);
+        labx.retryRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+    }
+
+    function test_retryRandomnessAllowsDoubleRetry() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 first = labx.getRaffle(id).vrfRequestId;
+        labx.retryRandomness(id);
+        uint256 second = labx.getRaffle(id).vrfRequestId;
+        labx.retryRandomness(id);
+        uint256 third = labx.getRaffle(id).vrfRequestId;
+        assertTrue(first != second && second != third && first != third);
+        assertEq(labx.requestToRaffle(first), 0);
+        assertEq(labx.requestToRaffle(second), 0);
+        assertEq(labx.requestToRaffle(third), id);
+        assertEq(labx.activeDrawings(), 1);
+
+        vrf.fulfill(address(labx), first, 0);
+        vrf.fulfill(address(labx), second, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
+        assertEq(labx.getRaffle(id).winner, address(0));
+
+        vrf.fulfill(address(labx), third, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        assertEq(labx.getRaffle(id).winner, alice);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function test_nativePaymentTogglesWhenNoActiveDrawings() public {
+        assertFalse(labx.nativePayment());
+        assertFalse(vrf.lastNativePayment());
+
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        assertFalse(vrf.lastNativePayment());
+
+        vm.expectRevert(LabxRaffle.DrawInFlight.selector);
+        labx.setNativePayment(true);
+
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        assertEq(labx.activeDrawings(), 0);
+
+        labx.setNativePayment(true);
+        assertTrue(labx.nativePayment());
+
+        nft.mint(seller, 31);
+        vm.prank(seller);
+        nft.approve(address(labx), 31);
+        bytes32 nonce = keccak256("native-pay");
+        bytes32 commit = labx.hashCommitment(nonce, address(nft), 31, keccak256("a"), keccak256("b"), keccak256("c"));
+        vm.prank(seller);
+        uint256 id2 = labx.createRaffle(
+            address(nft), 31, uint64(block.timestamp + 2 days), nonce, commit, "Native Pay", _configs()
+        );
+        vm.startPrank(seller);
+        labx.escrow(id2);
+        labx.open(id2);
+        vm.stopPrank();
+        _fund(bob, 100e6);
+        _buy(bob, id2, 0, 1);
+        vm.prank(seller);
+        labx.close(id2);
+        labx.snapshot(id2, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id2);
+        assertTrue(vrf.lastNativePayment());
+
+        vrf.fulfill(address(labx), labx.getRaffle(id2).vrfRequestId, 0);
+        labx.setNativePayment(false);
+        assertFalse(labx.nativePayment());
+    }
+
+    function test_adminSettersEmitEvents() public {
+        address nextTreasury = makeAddr("next-treasury");
+        address nextSigner = makeAddr("next-signer");
+        vm.expectEmit(true, true, false, true);
+        emit LabxRaffle.TreasurySet(treasury, nextTreasury);
+        labx.setTreasury(nextTreasury);
+        assertEq(labx.treasury(), nextTreasury);
+
+        vm.expectEmit(true, true, false, true);
+        emit LabxRaffle.AmoeSignerSet(signer, nextSigner);
+        labx.setAmoeSigner(nextSigner);
+        assertEq(labx.amoeSigner(), nextSigner);
+
+        vm.expectEmit(false, false, false, true);
+        emit LabxRaffle.VrfConfigSet(keccak256("k2"), 9, 600_000, 4);
+        labx.setVrfConfig(keccak256("k2"), 9, 600_000, 4);
+
+        vm.expectEmit(false, false, false, true);
+        emit LabxRaffle.NativePaymentSet(true);
+        labx.setNativePayment(true);
+    }
 }
