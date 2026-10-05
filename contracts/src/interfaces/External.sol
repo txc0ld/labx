@@ -25,6 +25,9 @@ interface ISwapRouter02 {
     }
 
     function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
+
+    /// @notice Deadline lives here. `exactOutputSingle` itself has no deadline field.
+    function multicall(uint256 deadline, bytes[] calldata data) external payable returns (bytes[] memory results);
 }
 
 interface IWETH9 {

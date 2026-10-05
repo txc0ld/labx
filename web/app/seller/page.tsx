@@ -73,7 +73,7 @@ export default function SellerPage() {
             </div>
             <p className="hash">{piece.commit || "No commitment yet"}</p>
             <div className="btn-row">
-              {(["escrow", "open", "close", "snapshot", "draw", "reveal", "settle", "cancel"] as const).map((action) => (
+              {(["escrow", "open", "close", "snapshot", "draw", "reveal", "settle", "cancel", "claim"] as const).map((action) => (
                 <button key={action} className="btn btn-dark" type="button" onClick={() => setError(bench.mark(piece.id, action))}>
                   {action}
                 </button>

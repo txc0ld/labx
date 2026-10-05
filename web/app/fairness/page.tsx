@@ -12,11 +12,11 @@ export default function FairnessPage() {
       <div className="piece-grid" style={{ marginTop: "1rem" }}>
         <article className="pearl pad">
           <h2>Escrow</h2>
-          <p>The piece moves into the contract before packs open. Settlement sends that same token to the drawn wallet.</p>
+          <p>The piece moves into the contract before packs open. After settlement the drawn wallet pulls that same token. Pack price and the lab fee are pulled separately.</p>
         </article>
         <article className="pearl pad">
           <h2>Commit</h2>
-          <p>A private commitment is hashed on the server and stored on-chain. Public pages show the hash. The plaintext is not published.</p>
+          <p>A private commitment is hashed with a salt on the server, then committed on-chain. Public pages show the outer hash. The salt stays off this bench until a signed reveal.</p>
         </article>
         <article className="terminal pad">
           <h2 style={{ color: "#dbdbdb" }}>VRF</h2>
@@ -39,7 +39,7 @@ export default function FairnessPage() {
             {pieces.map((piece) => (
               <tr key={piece.id} id={piece.id}>
                 <td>{piece.title}</td>
-                <td>{piece.escrowed ? "Held" : "Open"}</td>
+                <td>{piece.escrowed ? "Held" : piece.phase === "settled" || piece.phase === "cancelled" ? "Pulled" : "Not held"}</td>
                 <td className="hash">{piece.revealed ? piece.publicSummary || piece.commit : piece.commit || "—"}</td>
                 <td>{piece.snapshotTotal ?? "—"}</td>
                 <td>{piece.winner || piece.phase}</td>

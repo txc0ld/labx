@@ -7,8 +7,11 @@ import { assertAgreements } from "../lib/agreements";
 import { issueChallenge, verifyChallenge } from "../lib/captcha";
 import { AMOE_TYPEHASH, COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
 import { pickWinner, snapshotLots } from "../lib/draw";
-import { receiptBody } from "../lib/email";
+import { allowReceipt, receiptBody, receiptMessage, resetReceiptRateLimit, verifyReceipt } from "../lib/email";
+import { issueAmoeClaim, captchaDigest } from "../lib/amoe";
 import { checkIn, checkInMessage, type Store } from "../lib/points";
+import { createReserve, revealReserve, saltedPrivateHash, revealMessage } from "../lib/reserve";
+import { keccak256, recoverTypedDataAddress, toBytes, type Address, type Hex } from "viem";
 
 class Mem implements Store {
   map = new Map<string, string>();
@@ -100,6 +103,153 @@ describe("receipt", () => {
     expect(body.text).toContain("5 USDC");
     expect(body.text).toContain("12 months");
     expect(body.text.toLowerCase()).not.toMatch(/\btickets?\b/);
+  });
+
+  it("requires a fresh wallet signature and then rate-limits", async () => {
+    resetReceiptRateLimit();
+    const account = privateKeyToAccount(generatePrivateKey());
+    const now = 1_700_000_000n;
+    const message = receiptMessage(account.address, "a@labx.art", "Junction Array", "Entry", now + 60n);
+    const signature = await account.signMessage({ message });
+    expect(
+      await verifyReceipt({
+        address: account.address,
+        to: "a@labx.art",
+        piece: "Junction Array",
+        pack: "Entry",
+        deadline: 0n,
+        signature,
+        now
+      })
+    ).toBe(false);
+    expect(
+      await verifyReceipt({
+        address: account.address,
+        to: "a@labx.art",
+        piece: "Junction Array",
+        pack: "Entry",
+        deadline: now + 60n,
+        signature,
+        now
+      })
+    ).toBe(true);
+    for (let i = 0; i < 5; i += 1) expect(allowReceipt(account.address, 1_000)).toBe(true);
+    expect(allowReceipt(account.address, 1_000)).toBe(false);
+  });
+});
+
+describe("reserve salt", () => {
+  it("does not publish an unsalted private hash or the salt", async () => {
+    const store = new Mem();
+    const seller = privateKeyToAccount(generatePrivateKey());
+    const text = "private-commitment";
+    const published = await createReserve(store, {
+      seller: seller.address,
+      nft: "0x3333333333333333333333333333333333333333",
+      tokenId: "1",
+      publicSummary: "The escrowed piece is the prize.",
+      privateCommitment: text,
+      chainId: 11155111n,
+      labx: "0x1111111111111111111111111111111111111111"
+    });
+    expect(published).not.toHaveProperty("salt");
+    expect(published).not.toHaveProperty("privateHash");
+    expect(saltedPrivateHash("0x6666666666666666666666666666666666666666666666666666666666666666", text)).not.toBe(
+      keccak256(toBytes(text))
+    );
+    const deadline = 1_700_000_100n;
+    const signature = await seller.signMessage({
+      message: revealMessage(published.commit, published.labx, deadline)
+    });
+    const revealed = await revealReserve(store, {
+      commit: published.commit,
+      seller: seller.address,
+      signature,
+      deadline,
+      now: deadline - 30n
+    });
+    expect(revealed.salt).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(revealed.privateHash).not.toBe(keccak256(toBytes(text)));
+    expect(revealed).not.toHaveProperty("privateCommitment");
+  });
+});
+
+describe("amoe signer", () => {
+  it("spends the captcha before it signs", async () => {
+    const store = new Mem();
+    const signerKey = generatePrivateKey();
+    const signer = privateKeyToAccount(signerKey);
+    const account = "0x00000000000000000000000000000000000000aa" as Address;
+    const terms = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Hex;
+    const labx = "0x1111111111111111111111111111111111111111" as Address;
+    const signed = await issueAmoeClaim(store, {
+      address: account,
+      pieceId: "junction-array",
+      raffleId: "4",
+      captchaId: "challenge-1",
+      answer: "9",
+      expiresAt: 1_700_000_000_000,
+      points: 10,
+      signerKey,
+      chainId: 11155111n,
+      verifyingContract: labx,
+      termsHash: terms,
+      now: 1_700_000_000_000
+    });
+    expect(signed.mode).toBe("signed");
+    if (signed.mode !== "signed") return;
+    const recovered = await recoverTypedDataAddress({
+      domain: { name: "LABx", version: "1", chainId: 11155111n, verifyingContract: labx },
+      types: {
+        AmoeClaim: [
+          { name: "raffleId", type: "uint256" },
+          { name: "account", type: "address" },
+          { name: "captchaDigest", type: "bytes32" },
+          { name: "deadline", type: "uint256" },
+          { name: "termsHash", type: "bytes32" }
+        ]
+      },
+      primaryType: "AmoeClaim",
+      message: {
+        raffleId: 4n,
+        account,
+        captchaDigest: captchaDigest("challenge-1", "9", 1_700_000_000_000),
+        deadline: BigInt(signed.deadline),
+        termsHash: terms
+      },
+      signature: signed.signature
+    });
+    expect(recovered.toLowerCase()).toBe(signer.address.toLowerCase());
+    await expect(
+      issueAmoeClaim(store, {
+        address: "0x00000000000000000000000000000000000000bb",
+        pieceId: "other",
+        raffleId: "4",
+        captchaId: "challenge-1",
+        answer: "9",
+        expiresAt: 1_700_000_000_000,
+        points: 10,
+        signerKey,
+        chainId: 11155111n,
+        verifyingContract: labx,
+        termsHash: terms
+      })
+    ).rejects.toThrow(/captcha/i);
+    await expect(
+      issueAmoeClaim(store, {
+        address: account,
+        pieceId: "junction-array",
+        raffleId: "4",
+        captchaId: "challenge-2",
+        answer: "9",
+        expiresAt: 1_700_000_000_000,
+        points: 9,
+        signerKey,
+        chainId: 11155111n,
+        verifyingContract: labx,
+        termsHash: terms
+      })
+    ).rejects.toThrow(/Check in/);
   });
 });
 

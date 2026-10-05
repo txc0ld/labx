@@ -13,6 +13,8 @@ export default function RulesPage() {
   const [age, setAge] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [tone, setTone] = useState<"warning" | "error" | "ok">("warning");
+  const [raffleId, setRaffleId] = useState("");
+  const [signature, setSignature] = useState<string | null>(null);
   if (!bench.ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
 
   async function loadChallenge() {
@@ -36,6 +38,7 @@ export default function RulesPage() {
       body: JSON.stringify({
         address: bench.address,
         pieceId,
+        raffleId: raffleId.trim() || undefined,
         terms,
         rules,
         age,
@@ -50,8 +53,9 @@ export default function RulesPage() {
       return;
     }
     bench.recordComplimentary(pieceId);
+    setSignature(typeof body.signature === "string" ? body.signature : null);
     setTone("ok");
-    setMessage("Complimentary entry recorded.");
+    setMessage(body.mode === "signed" ? "Complimentary entry signed. Submit it with the raffle." : "Complimentary entry recorded.");
   }
 
   return (
@@ -75,6 +79,9 @@ export default function RulesPage() {
               ))}
             </select>
           </label>
+          <label htmlFor="raffle">On-chain raffle id
+            <input id="raffle" inputMode="numeric" value={raffleId} onChange={(event) => setRaffleId(event.target.value)} />
+          </label>
           <button className="btn btn-dark" type="button" onClick={loadChallenge}>Start captcha</button>
           {challenge ? (
             <label htmlFor="answer">{challenge.prompt}
@@ -86,6 +93,7 @@ export default function RulesPage() {
           <label htmlFor="c-age"><input id="c-age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I am 18 or older and eligible to participate.</label>
           <button className="btn btn-lime" type="submit" disabled={!challenge}>Submit complimentary entry</button>
           {message ? <p className={`notice ${tone}`} role={tone === "error" ? "alert" : "status"}>{message}</p> : null}
+          {signature ? <p className="hash">{signature}</p> : null}
         </form>
       </article>
     </section>

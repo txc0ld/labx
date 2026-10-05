@@ -1,4 +1,5 @@
-import { isAddress, type Address } from "viem";
+import { isAddress, isHex, type Address, type Hex } from "viem";
+import { issueAmoeClaim } from "@/lib/amoe";
 import { verifyChallenge } from "@/lib/captcha";
 import { readPoints } from "@/lib/points";
 import { activeStore } from "@/lib/store";
@@ -9,6 +10,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       address?: string;
       pieceId?: string;
+      raffleId?: string;
       terms?: boolean;
       rules?: boolean;
       age?: boolean;
@@ -32,20 +34,26 @@ export async function POST(request: Request) {
     if (!passed) return fail(new Error("Captcha answer was refused."), 401);
     const store = activeStore();
     const points = await readPoints(store, body.address as Address);
-    if (points.balance < 10) {
-      return fail(new Error("Check in with the lab bot before requesting a complimentary entry."), 403);
-    }
-    const key = `amoe:${body.pieceId || "none"}:${body.address.toLowerCase()}`;
-    if (await store.get(key)) return fail(new Error("A complimentary entry is already recorded for this piece."), 409);
-    await store.set(key, JSON.stringify({ at: new Date().toISOString() }));
-    return json({
-      ok: true,
-      mode: process.env.AMOE_SIGNER_PRIVATE_KEY ? "signer-ready" : "bench",
-      pieceId: body.pieceId,
+    const terms = process.env.TERMS_HASH;
+    const labx = process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
+    const chainRaw = process.env.NEXT_PUBLIC_CHAIN_ID;
+    const issued = await issueAmoeClaim(store, {
       address: body.address,
-      entries: 1
+      pieceId: body.pieceId || "none",
+      raffleId: body.raffleId,
+      captchaId: body.id,
+      answer: body.answer,
+      expiresAt: body.expiresAt,
+      points: points.balance,
+      signerKey: process.env.AMOE_SIGNER_PRIVATE_KEY,
+      chainId: chainRaw ? BigInt(chainRaw) : undefined,
+      verifyingContract: labx && isAddress(labx) ? labx : null,
+      termsHash: terms && isHex(terms, { strict: true }) && terms.length === 66 ? (terms as Hex) : null
     });
+    return json({ ok: true, ...issued });
   } catch (error) {
-    return fail(error);
+    const message = error instanceof Error ? error.message : "";
+    const status = /already recorded|already used/i.test(message) ? 409 : /Check in/i.test(message) ? 403 : 400;
+    return fail(error, status);
   }
 }

@@ -23,8 +23,6 @@ export type Piece = {
   commit?: string;
   nonce?: string;
   publicHash?: string;
-  privateHash?: string;
-  salt?: string;
   publicSummary?: string;
   revealed?: boolean;
   snapshotTotal?: number;

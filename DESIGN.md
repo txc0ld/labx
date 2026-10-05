@@ -79,7 +79,7 @@ No parallax, no page-load theatrics, no glass shimmer.
 
 **Piece.** Chrome-framed photograph beside the pack console. Packs are chunky keys from Entry to Platinum. Each key shows bonus entries, USDC price, remaining supply, and the 5 USDC lab fee. Three real checkboxes gate the purchase. The commitment hash is mono type, not a private number.
 
-**Studio.** Pearl form for a new piece, filter photograph as the console, then one pearl row per piece with escrow, open, close, snapshot, draw, reveal, settle, and cancel. The private commitment field is cleared after submit and is never rendered on explore, the piece page, or fairness.
+**Studio.** Pearl form for a new piece, filter photograph as the console, then one pearl row per piece with escrow, open, close, snapshot, draw, reveal, settle, cancel, and claim. Settle and cancel leave the piece escrowed until claim. The private commitment field is cleared after submit and is never rendered on explore, the piece page, or fairness. The salt is not stored on the bench.
 
 **Profile.** Terminal readout for wallet and points. Connect Sepolia, or use the bench wallet. Entries table with expiry. Receipt email. Agreement log.
 
