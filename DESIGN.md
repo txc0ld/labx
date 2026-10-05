@@ -1,6 +1,6 @@
 # LABx design brief
 
-LABx is a Sepolia membership bench for one escrowed piece at a time. The interface is a physical lab console: pearlescent instrument panels, mirrored chrome hardware, and fluorescent cables that link those panels to each other. It is not a flat marketing site and it is not a glassmorphism theme.
+LABx is a Sepolia membership bench for one escrowed piece at a time. The interface is a frosted gallery suspended over a lavender field: translucent plates, fine chrome edges, and restrained fluorescent signals frame the artwork without competing with it.
 
 ## Source of truth
 
@@ -18,7 +18,7 @@ Photographs are props. Interface words are HTML set in Space Grotesk and IBM Ple
 
 - No human, head, face, figure, mannequin, eye, or wireframe body in UI, icons, alt text, or generated assets.
 - Tubes, cables, ports, and junctions connect panels to panels. They do not connect to a character.
-- No `backdrop-filter` and no frosted-glass default. Gloss is a painted pearlescent surface or a photograph of a glossy panel.
+- Frosted surfaces must retain a bright inner edge, readable contrast, and a high-opacity lightweight fallback on mobile. Avoid stacking multiple broad blur layers.
 - No public floor and no published private commitment. Membership pack prices are shown because they are the product.
 - Do not call packs tickets. The product word is membership pack. The chance word is bonus entry.
 - Ethereum mainnet is not a theme, a network option, or a deploy target.
@@ -50,7 +50,7 @@ Sage `#D4DED2` is the pigment inside inset wells. The page field is lavender, be
 
 **Lavender field.** The page background is a soft lilac wash with a hairline purple wordmark (`LAB`) stroked, not filled, behind the console.
 
-**Pearlescent panel.** A stacked gradient: white highlight at the top left, a pink fluoro kiss, a purple falloff, a mint kiss at the lower left, then a lilac body. Inner top highlight, soft lower shade. This is the card.
+**Frosted panel.** Translucent white over lavender with a fine inner highlight, a faint chrome-lavender edge, and a deep diffused purple shadow. Major surfaces use generous concentric corners. Mobile uses high-opacity layered gradients instead of broad live blur.
 
 **Mirrored chrome bezel.** A tight metallic gradient (white, steel, white, graphite, white) wraps every photograph and the outer frame of a major panel. Specular, not blurred glass.
 
@@ -58,28 +58,26 @@ Sage `#D4DED2` is the pigment inside inset wells. The page field is lavender, be
 
 **Purple terminal.** Dark violet instrument screen for wallet, chain, and VRF copy. Text on it is `#DBDBDB`, not body black.
 
-**Chunky controls.** Buttons are 16px radius, with a 6px solid foot and an inset top highlight. Pressing translates them down onto the foot. Lime and pink buttons use black text. Purple buttons use white text. The active pack key is lime.
+**Controls.** Buttons are compact, weighty islands with a soft inset highlight and directional arrow feedback. Pressing scales them slightly. Lime and pink buttons use black text. Purple buttons use white text. The active pack key is translucent lime.
 
 **Fluoro cable and chrome port.** SVG plumbing between sections: steel tube, black port, fluoro core in mint, purple, lime, or pink. A dash animation runs along the cable. Photographs repeat the same hardware at hero scale.
 
 ## Motion
 
-Restrained.
+Purposeful and staged.
 
-- Cable dash offset, about 9 seconds, linear.
-- A small Lottie pulse (`web/public/lab/flow.json`) travels once across the hero kicker. It does not loop a character.
-- Button press is a 5px translate.
-- `prefers-reduced-motion: reduce` stops the cable, the Lottie, and the button travel.
-
-No parallax, no page-load theatrics, no glass shimmer.
+- The hero title performs one short deterministic resolution effect while its complete semantic heading remains available to assistive technology.
+- Hero, catalog, and detail surfaces resolve with a weighted fade and vertical transform as they enter view. Content stays visible before JavaScript initializes and if observation is unavailable.
+- Artwork stacks open subtly on pointer hover; catalog artwork lifts inside its frame; arrows respond directionally. Nothing hijacks scrolling or loops for decoration.
+- Motion uses transforms and opacity. Observers and timers clean up on navigation. A live `prefers-reduced-motion` change immediately reveals the final title, stops observers, and leaves all content visible.
 
 ## Surfaces
 
-**Explore.** Header with chrome port mark, a single pill nav, and a Sepolia · USDC chip. Discovery uses a ruled pearlescent hero beside a purple terminal readout, followed by one chrome capsule per piece. Capsules show the existing demo hardware artwork, title, artist, phase, Entry pack price, lab fee, UTC sales deadline, and remaining sales time where valid. All pieces, Packs open, and Ended filters operate on browser demo records. Zero pieces has an explicit empty state; one capsule remains centered; multiple capsules form a responsive grid. Entire capsules are keyboard-accessible links to stable `/piece/[id]` routes. Drafts, expired deadlines, and unavailable packs are not presented as open. This is explicitly a demo catalog, not a live on-chain listing. A lime warning strip preserves the Sepolia/mainnet restriction. Mobile stacks the hero and cards; desktop hub tubing must never cover card content.
+**Explore.** A floating frosted header holds the LABx mark, primary navigation, and Sepolia · USDC chip. Discovery uses an editorial split: a resolved headline and concise action block beside a layered preview of actual demo artwork. A compact disclosure replaces the former dashboard-like terminal. One frosted capsule per piece follows. Capsules keep artwork uncropped and show title, artist, phase, Entry pack price, lab fee, UTC sales deadline, and remaining sales time where valid. All pieces, Packs open, and Ended filters operate on browser demo records. Zero pieces has an explicit empty state; one capsule remains centered; multiple capsules form a responsive grid. Entire capsules are keyboard-accessible links to stable `/piece/[id]` routes. Drafts, expired deadlines, and unavailable packs are not presented as open. This is explicitly a demo catalog, not a live on-chain listing. A lime warning strip preserves the Sepolia/mainnet restriction.
 
 The original discovery refinements draw on visually inspected public references: Atelier UI's fine construction grid and registration framing, Sora UI's clear catalog hierarchy and repeated image previews, and Refero Styles' breathing room and rounded preview wells. LABx retains its own fonts, exact colour tokens, original CSS, and existing hardware assets. No reference code, assets, logos, or proprietary components are imported.
 
-**Piece.** Chrome-framed photograph beside the pack console. Packs are chunky keys from Entry to Platinum. Each key shows bonus entries, USDC price, remaining supply, and the 5 USDC lab fee. Three real checkboxes gate the purchase. The commitment hash is mono type, not a private number.
+**Piece.** A sticky double-bezel artwork stage sits beside a frosted purchase console. The artwork stays uncropped. Packs form a clear responsive selection grid from Entry to Platinum; every key shows bonus entries, USDC price, remaining supply, and the 5 USDC lab fee. Quantity and the live total share a compact order panel. Three real checkboxes gate the purchase. The commitment hash is mono type, not a private number.
 
 **Studio.** Pearl form for a new piece, filter photograph as the console, then one pearl row per piece with escrow, open, close, snapshot, draw, reveal, settle, cancel, and claim. Settle and cancel leave the piece escrowed until claim. The private commitment field is cleared after submit and is never rendered on explore, the piece page, or fairness. The salt is not stored on the bench.
 

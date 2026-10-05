@@ -360,6 +360,23 @@ describe("responsive chrome and legal surfaces", () => {
     expect(read("app/globals.css")).toMatch(/\.hero-about/);
   });
 
+  it("keeps choreographed reveals accessible and responsive to live motion preferences", () => {
+    const motion = read("components/MotionOrchestrator.tsx");
+    const title = read("components/ResolvedTitle.tsx");
+    const hub = read("components/BenchHub.tsx");
+    const css = read("app/globals.css");
+    expect(motion).toMatch(/IntersectionObserver/);
+    expect(motion).toMatch(/MutationObserver/);
+    expect(motion).toMatch(/addEventListener\("change", start\)/);
+    expect(motion).toMatch(/delete root\.dataset\.motion/);
+    expect(title).toMatch(/aria-hidden="true"/);
+    expect(title).toMatch(/className="sr"/);
+    expect(title).toMatch(/addEventListener\("change", run\)/);
+    expect(hub).toMatch(/data-reveal/);
+    expect(css).toMatch(/\[data-reveal\]:focus-within/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
+  });
+
   it("marks OnChainStatus as bench-only with a lavender lamp", () => {
     const status = read("components/OnChainStatus.tsx");
     expect(status).toMatch(/lamp lavender/);

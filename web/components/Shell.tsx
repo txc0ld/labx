@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { BenchProvider } from "@/lib/bench";
 import { isCurrentPath } from "@/lib/nav";
 import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
+import { MotionOrchestrator } from "./MotionOrchestrator";
 import { Plumbing } from "./Plumbing";
 
 const LINKS = [
@@ -27,6 +28,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
   return (
     <BenchProvider>
+      <MotionOrchestrator />
       <a className="skip" href="#content">Skip to content</a>
       <p className="field-mark" aria-hidden="true">LAB</p>
       <div className="shell">
@@ -54,7 +56,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="chain-pill">Sepolia · USDC</span>
           </div>
         </header>
-        <div className="wrap"><Plumbing /></div>
+        <div className="wrap shell-plumbing"><Plumbing /></div>
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
           <Plumbing label="Footer cable run" />

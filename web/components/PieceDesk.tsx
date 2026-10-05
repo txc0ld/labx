@@ -35,78 +35,121 @@ export function PieceDesk({ id }: { id: string }) {
       </section>
     );
   }
+  const currentPiece = piece;
 
   function purchase() {
-    const result = bench.buy({ pieceId: piece!.id, pack, qty, terms, rules, age });
+    const result = bench.buy({ pieceId: currentPiece.id, pack, qty, terms, rules, age });
     setError(result);
   }
 
   return (
     <>
-    <div className="detail-path"><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the bench</Link><span className="kicker">Demo piece console</span></div>
-    <section className="section piece-layout">
-      <div className="bezel">
-        <div className="shot piece-artwork">
-          <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized priority />
+    <div className="detail-path" data-reveal><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the bench</Link><span className="kicker">Demo piece console</span></div>
+    <section className="section piece-layout piece-console">
+      <figure className="piece-visual glass-panel" data-reveal>
+        <div className="piece-visual-topline">
+          <span>LABx / Piece {piece.tokenId.padStart(2, "0")}</span>
+          <span>Sepolia demo</span>
         </div>
-      </div>
-      <div className="pearl pad stack">
-        <p className="kicker">{piece.artist}</p>
-        <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>{piece.title}</h1>
-        <div className="btn-row">
+        <div className="piece-art-frame">
+          <div className="shot piece-artwork">
+            <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized priority />
+          </div>
+        </div>
+        <figcaption className="piece-visual-caption">
+          <div>
+            <p className="kicker">Demo artwork</p>
+            <strong>{piece.title}</strong>
+          </div>
           <span className={`lamp ${piece.escrowed ? "mint" : "pink"}`}><i /> {piece.escrowed ? "escrowed" : "awaiting escrow"}</span>
-          <span className="lamp lavender"><i /> {view?.status}</span>
-        </div>
-        <p className="piece-deadline">{view?.timing} · Sales close {closingDate(piece.salesEnd)} UTC</p>
-        <p className="lede">Choose a membership pack. Bonus entries are part of the pack. A {LAB_FEE} USDC lab fee on each pack goes to the treasury.</p>
-        <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
-          {piece.packs.map((item) => (
-            <label
-              key={item.name}
-              className={`pack-key ${item.name === pack ? "on" : ""}`}
-            >
-              <input
-                className="sr"
-                type="radio"
-                name="membership-pack"
-                value={item.name}
-                checked={item.name === pack}
-                disabled={item.remaining < 1}
-                onChange={() => setPack(item.name)}
-              />
-              <strong>{item.name}</strong>
-              <span>{item.priceUsdc} USDC</span>
-              <small>{item.bonusEntries} bonus {item.bonusEntries === 1 ? "entry" : "entries"} · {item.remaining} remaining</small>
-              <small>+{LAB_FEE} USDC lab fee</small>
+        </figcaption>
+      </figure>
+      <div className="purchase-console glass-panel" data-reveal>
+        <header className="purchase-header">
+          <div className="purchase-eyebrow">
+            <p className="kicker">{piece.artist}</p>
+            <span className="lamp lavender"><i /> {view?.status}</span>
+          </div>
+          <h1 className="page-title">{piece.title}</h1>
+          <p className="piece-deadline">{view?.timing} · Sales close {closingDate(piece.salesEnd)} UTC</p>
+          <p className="lede">Choose a membership pack. Bonus entries come with the pack. Every pack includes a {LAB_FEE} USDC lab fee.</p>
+        </header>
+
+        <section className="pack-selector" aria-labelledby="pack-title">
+          <div className="console-section-heading">
+            <div><span>01</span><h2 id="pack-title">Membership pack</h2></div>
+            <span>Choose one</span>
+          </div>
+          <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
+            {piece.packs.map((item) => (
+              <label
+                key={item.name}
+                className={`pack-key ${item.name === pack ? "on" : ""}`}
+              >
+                <input
+                  className="sr"
+                  type="radio"
+                  name="membership-pack"
+                  value={item.name}
+                  checked={item.name === pack}
+                  disabled={item.remaining < 1}
+                  onChange={() => setPack(item.name)}
+                />
+                <span className="pack-check" aria-hidden="true" />
+                <strong>{item.name}</strong>
+                <span className="pack-price">{item.priceUsdc}<small> USDC</small></span>
+                <span className="pack-entry-count">{item.bonusEntries} bonus {item.bonusEntries === 1 ? "entry" : "entries"}</span>
+                <small>{item.remaining} remaining · +{LAB_FEE} USDC fee</small>
+              </label>
+            ))}
+          </div>
+        </section>
+
+        <section className="order-panel" aria-labelledby="order-title">
+          <div className="quantity-control">
+            <label htmlFor="qty"><span id="order-title">Quantity</span>
+              <input id="qty" type="number" min={1} max={5} value={qty} onChange={(event) => setQty(Number(event.target.value))} />
             </label>
-          ))}
-        </div>
-        <label htmlFor="qty">Quantity
-          <input id="qty" type="number" min={1} max={5} value={qty} onChange={(event) => setQty(Number(event.target.value))} />
-        </label>
+            <span>1–5 packs</span>
+          </div>
+          <div className="order-total" aria-live="polite">
+            <span>Total</span>
+            <strong>{total} <small>USDC</small></strong>
+            <p>Includes {LAB_FEE * qty} USDC fee · {entries} bonus {entries === 1 ? "entry" : "entries"}</p>
+          </div>
+        </section>
+
         <OnChainStatus surface="piece" />
-        <fieldset className="agreements well">
-          <legend className="kicker">Agreements</legend>
-          <label htmlFor="terms">
-            <input id="terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} />
-            <span>I agree to the <Link href="/legal" onClick={(event) => event.stopPropagation()}>LABx membership terms</Link>.</span>
-          </label>
-          <label htmlFor="rules">
-            <input id="rules" type="checkbox" checked={rules} onChange={(event) => setRules(event.target.checked)} />
-            <span>I agree to the <Link href="/rules" onClick={(event) => event.stopPropagation()}>draw rules</Link> and the 12-month bonus entry expiry.</span>
-          </label>
-          <label htmlFor="age"><input id="age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I confirm I am eligible and I am 18 or older.</label>
-        </fieldset>
-        <p><strong>{total} USDC</strong> including {LAB_FEE * qty} USDC lab fee · {entries} bonus {entries === 1 ? "entry" : "entries"}</p>
+
+        <section className="agreements-section" aria-labelledby="agreements-title">
+          <div className="console-section-heading">
+            <div><span>02</span><h2 id="agreements-title">Confirm eligibility</h2></div>
+            <span>Required</span>
+          </div>
+          <fieldset className="agreements glass-inset">
+            <legend className="sr">Agreements</legend>
+            <label htmlFor="terms">
+              <input id="terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} />
+              <span>I agree to the <Link href="/legal" onClick={(event) => event.stopPropagation()}>LABx membership terms</Link>.</span>
+            </label>
+            <label htmlFor="rules">
+              <input id="rules" type="checkbox" checked={rules} onChange={(event) => setRules(event.target.checked)} />
+              <span>I agree to the <Link href="/rules" onClick={(event) => event.stopPropagation()}>draw rules</Link> and the 12-month bonus entry expiry.</span>
+            </label>
+            <label htmlFor="age"><input id="age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I confirm I am eligible and I am 18 or older.</label>
+          </fieldset>
+        </section>
+
         {error ? <p className="notice error" role="alert">{error}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
-        <div className="btn-row">
-          <button className="btn btn-lime" type="button" disabled={!open || !available} onClick={purchase}>Record demo pack</button>
-          <Link className="btn btn-dark" href={`/fairness#${piece.id}`}>Fairness</Link>
-        </div>
         {!open ? <p className="notice warning">Packs are unavailable on this demo piece: {view?.status}.</p> : null}
         {open && !available ? <p className="notice warning">Choose an available pack and a whole quantity from 1 to 5 within its remaining supply.</p> : null}
-        <p className="hash muted">Commitment {piece.commit || "pending"}</p>
+
+        <footer className="purchase-actions">
+          <button className="btn btn-lime" type="button" disabled={!open || !available} onClick={purchase}>Record demo pack <span aria-hidden="true">↗</span></button>
+          <Link className="hero-about" href={`/fairness#${piece.id}`}>Inspect fairness</Link>
+        </footer>
+        <p className="hash muted commitment-line">Commitment {piece.commit || "pending"}</p>
       </div>
     </section>
     </>

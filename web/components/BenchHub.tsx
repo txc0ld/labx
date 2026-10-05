@@ -6,6 +6,7 @@ import { useState } from "react";
 import { LAB_FEE, type Piece } from "@/lib/seed";
 import { closingDate, pieceView } from "@/lib/piece-view";
 import { useBenchTime } from "@/lib/use-bench-time";
+import { ResolvedTitle } from "./ResolvedTitle";
 
 type Filter = "all" | "open" | "ended";
 const FILTERS: { value: Filter; label: string }[] = [
@@ -28,30 +29,38 @@ export function BenchHub({ pieces, banner }: {
 
   return (
     <>
-      <section className="discovery-hero pearl" aria-labelledby="hero-title">
+      <section className="discovery-hero glass-panel" aria-labelledby="hero-title" data-reveal>
         <div className="discovery-heading">
-          <p className="kicker">LABx / Sepolia demo bench</p>
-          <h1 id="hero-title">Pieces, linked<br className="desktop-break" /> on the bench.</h1>
+          <p className="kicker hero-kicker"><span aria-hidden="true" /> LABx / Sepolia demo bench</p>
+          <ResolvedTitle />
           <p className="lede">Choose a capsule. Open its piece console. Explore membership packs and the bonus entries that come with them.</p>
           <div className="btn-row">
             <a className="btn" href="#bench">Explore the bench <span aria-hidden="true">↗</span></a>
             <Link className="hero-about" href="/about">About the lab</Link>
           </div>
         </div>
-        <aside className="discovery-readout terminal" aria-label="Demo bench information">
-          <div className="readout-top"><span className="lamp lavender"><i /> Browser demo</span><span className="kicker">Sepolia</span></div>
-          <p className="readout-number">{String(pieces.length).padStart(2, "0")}<span> demo {pieces.length === 1 ? "piece" : "pieces"}</span></p>
-          <dl className="readout-specs">
-            <div><dt>Pack currency</dt><dd>USDC</dd></div>
-            <div><dt>Fee per pack</dt><dd>+{LAB_FEE} USDC</dd></div>
-            <div><dt>Packs open</dt><dd>{available} demo {available === 1 ? "piece" : "pieces"}</dd></div>
-          </dl>
-          <p className="readout-note">Local demo fixtures and browser records. These controls do not transfer funds or submit transactions.</p>
-          <Link href="/fairness" className="readout-link">How a draw stays fair <span aria-hidden="true">↗</span></Link>
+        <aside className={`hero-gallery ${pieces.length ? "" : "hero-gallery-empty"}`} aria-label="Demo artwork preview">
+          {pieces.length ? (
+            <div className="hero-art-stack" aria-hidden="true">
+              {pieces.slice(0, 3).map((piece, index) => (
+                <div className="hero-art-card" data-position={index} key={piece.id}>
+                  <Image src={piece.image} alt="" width={1101} height={1101} unoptimized priority={index === 0} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="hero-empty-orbit" aria-hidden="true"><span className="empty-port" /></div>
+          )}
+          <div className="hero-gallery-meta">
+            <span className="lamp lavender"><i /> Browser demo</span>
+            <p><strong>{String(pieces.length).padStart(2, "0")}</strong> demo {pieces.length === 1 ? "piece" : "pieces"} · {available} open</p>
+            <p>USDC packs · +{LAB_FEE} USDC lab fee</p>
+            <Link href="/fairness" className="readout-link">How a draw stays fair <span aria-hidden="true">↗</span></Link>
+          </div>
         </aside>
       </section>
       {banner ? <p className={`notice ${banner.tone}`} role="status">{banner.text}</p> : null}
-      <section className="capsule-collection" id="bench" aria-labelledby="bench-title">
+      <section className="capsule-collection" id="bench" aria-labelledby="bench-title" data-reveal>
         <div className="collection-heading">
           <div><p className="kicker">01 / Discovery</p><h2 id="bench-title">On the bench <span className="collection-count">{pieces.length}</span></h2></div>
           <div className="collection-filters" role="group" aria-label="Filter demo pieces">
@@ -81,8 +90,8 @@ function Capsule({ piece, now, index }: { piece: Piece; now: number; index: numb
   const view = pieceView(piece, now);
   const entry = piece.packs.find((pack) => pack.name === "Entry");
   return (
-    <li>
-      <Link className="raffle-capsule bezel" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
+    <li data-reveal>
+      <Link className="raffle-capsule glass-panel" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
         <div className="capsule-art">
           <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized />
           <span className="capsule-index" aria-hidden="true">LAB / {String(index + 1).padStart(2, "0")}</span>
