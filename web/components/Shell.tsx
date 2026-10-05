@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { BenchProvider } from "@/lib/bench";
+import { isCurrentPath } from "@/lib/nav";
+import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 import { Plumbing } from "./Plumbing";
 
 const LINKS = [
@@ -11,6 +13,14 @@ const LINKS = [
   { href: "/fairness", label: "Fairness" },
   { href: "/seller", label: "Studio" },
   { href: "/profile", label: "Profile" }
+];
+
+const FOOTER_LINKS = [
+  { href: "/about", label: "About" },
+  { href: "/fairness", label: "Fairness" },
+  { href: "/rules", label: "Draw rules" },
+  { href: "/legal", label: "Terms" },
+  { href: "/privacy", label: "Privacy" }
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -30,7 +40,11 @@ export function Shell({ children }: { children: ReactNode }) {
               <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {LINKS.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} aria-current={path === link.href ? "page" : undefined}>
+                    <Link
+                      href={link.href}
+                      className={link.href === "/" ? "nav-explore" : undefined}
+                      aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
+                    >
                       {link.label}
                     </Link>
                   </li>
@@ -44,14 +58,25 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
           <Plumbing label="Footer cable run" />
-          <strong>LABx · labx.art</strong>
-          <span>Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166</span>
-          <nav aria-label="Footer">
-            <Link href="/fairness">Fairness</Link>
-            <Link href="/rules">Draw rules</Link>
-            <Link href="/legal">Terms</Link>
-          </nav>
-          <span>Ethereum Sepolia only. Mainnet is disabled.</span>
+          <div className="pearl pad footer-strip">
+            <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
+            <span>{OPERATOR_LINE}</span>
+            <nav aria-label="Footer">
+              <ul>
+                {FOOTER_LINKS.map((link) => (
+                  <li key={link.href}>
+                    <Link
+                      href={link.href}
+                      aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+            <span>Ethereum Sepolia only. Mainnet is disabled.</span>
+          </div>
         </footer>
       </div>
     </BenchProvider>

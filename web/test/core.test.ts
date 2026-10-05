@@ -299,7 +299,7 @@ describe("surface copy and materials", () => {
     expect(hub).toMatch(/NFT\s*<br \/>CONTAINER/);
     expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
     expect(css).toMatch(/nft-capsule/);
-    expect(css).toMatch(/tube-body/);
+    expect(css).toMatch(/lab-tube-liquid/);
     expect(css).toMatch(/border-radius: 999px/);
     expect(css).toMatch(/\.btn[^{]*\{[^}]*text-decoration:\s*none/);
   });

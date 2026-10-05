@@ -2,14 +2,14 @@
 
 Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries come with the pack. Chainlink VRF v2.5 draws after an entry snapshot. The treasury and admin are a Safe.
 
-Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166 · [labx.art](https://labx.art)
+Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166 · public site `NEXT_PUBLIC_SITE_URL` (default [labx-two.vercel.app](https://labx-two.vercel.app))
 
 Mainnet is disabled.
 
 ## Layout
 
 - `contracts` Foundry: `LabxRaffle`, Sepolia and local scripts, tests
-- `web` Next.js bench: explore, piece, studio, profile, fairness, draw rules
+- `web` Next.js bench: explore, piece, studio, profile, fairness, draw rules, terms, privacy, about
 - `DESIGN.md` materials and tokens
 - `SECURITY.md` threat notes
 - `LEGAL.md` counsel draft

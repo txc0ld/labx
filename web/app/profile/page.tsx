@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 
 export default function ProfilePage() {
@@ -30,7 +32,8 @@ export default function ProfilePage() {
           <div>points {points}</div>
           <div>chain sepolia</div>
         </div>
-        <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token.</p>
+        <OnChainStatus surface="profile" />
+        <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token. Receipts are described in the <Link href="/privacy">privacy policy</Link>.</p>
         <div className="btn-row">
           <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>
           <button className="btn btn-dark" type="button" onClick={() => bench.useBenchWallet()}>Use bench wallet</button>

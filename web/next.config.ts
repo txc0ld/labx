@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   images: {
     formats: ["image/avif", "image/webp"]
+  },
+  async redirects() {
+    return [{ source: "/terms", destination: "/legal", permanent: true }];
   }
 };
 

@@ -14,6 +14,10 @@ export function raffleAddress(): Address | null {
   return value as Address;
 }
 
+export function onChainReady(): boolean {
+  return raffleAddress() !== null;
+}
+
 export function rpcUrl(): string {
   return process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
 }
@@ -45,13 +49,13 @@ export function walletClient() {
 
 export async function readRaffle(id: bigint) {
   const address = raffleAddress();
-  if (!address) throw new Error("NEXT_PUBLIC_RAFFLE_ADDRESS is not set.");
+  if (!address) throw new Error("Sepolia raffle is not wired. NEXT_PUBLIC_RAFFLE_ADDRESS is not set.");
   return publicClient().readContract({ address, abi: labxAbi, functionName: "getRaffle", args: [id] });
 }
 
 export async function sendRaffle(functionName: string, args: unknown[], account: Address) {
   const address = raffleAddress();
-  if (!address) throw new Error("NEXT_PUBLIC_RAFFLE_ADDRESS is not set.");
+  if (!address) throw new Error("Sepolia raffle is not wired. NEXT_PUBLIC_RAFFLE_ADDRESS is not set.");
   const hash = await walletClient().writeContract({
     address,
     abi: labxAbi,

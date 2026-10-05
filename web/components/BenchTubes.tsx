@@ -1,32 +1,63 @@
 "use client";
 
-import { useId, useLayoutEffect, useRef, useState } from "react";
-
-type Box = { x: number; y: number; w: number; h: number };
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  boxOf,
+  fmt,
+  hubRoutes,
+  roundedOrtho,
+  type FittingKind,
+  type Point,
+  type Spoke,
+  type TubeState
+} from "@/lib/tubes";
 
 const KEYS = ["hero", "left", "well", "right", "p0", "p1", "p2", "p3"] as const;
 
-function boxOf(root: DOMRect, node: Element): Box {
-  const rect = node.getBoundingClientRect();
-  return { x: rect.left - root.left, y: rect.top - root.top, w: rect.width, h: rect.height };
+type Frame = {
+  w: number;
+  h: number;
+  bend: number;
+  fittingLen: number;
+  fittingDia: number;
+  spokes: Spoke[];
+};
+
+function readToken(name: string, fallback: number) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : fallback;
 }
 
-function point(box: Box, edge: "top" | "bottom" | "left" | "right") {
-  if (edge === "top") return { x: box.x + box.w / 2, y: box.y };
-  if (edge === "bottom") return { x: box.x + box.w / 2, y: box.y + box.h };
-  if (edge === "left") return { x: box.x, y: box.y + box.h / 2 };
-  return { x: box.x + box.w, y: box.y + box.h / 2 };
-}
-
-function elbow(from: { x: number; y: number }, to: { x: number; y: number }, first: "h" | "v") {
-  if (first === "h") return `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} H ${to.x.toFixed(1)} V ${to.y.toFixed(1)}`;
-  return `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} V ${to.y.toFixed(1)} H ${to.x.toFixed(1)}`;
-}
-
-export function BenchTubes() {
+export function BenchTubes({ state = "idle" }: { state?: TubeState }) {
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement>(null);
-  const [frame, setFrame] = useState<{ w: number; h: number; paths: string[] }>({ w: 0, h: 0, paths: [] });
+  const [frame, setFrame] = useState<Frame>({
+    w: 0,
+    h: 0,
+    bend: 24,
+    fittingLen: 26,
+    fittingDia: 18,
+    spokes: []
+  });
+  const ids = {
+    glass: `${uid}-tubeGlassGrad`,
+    liquid: `${uid}-tubeLiquidGrad`,
+    liquidActive: `${uid}-tubeLiquidActive`,
+    chrome: `${uid}-fittingChrome`,
+    ceramic: `${uid}-fittingCeramic`,
+    softGlow: `${uid}-tubeSoftGlow`,
+    coreGlow: `${uid}-tubeCoreGlow`
+  };
+  const tubeStyle = {
+    "--tube-glass-stroke": `url(#${ids.glass})`,
+    "--tube-liquid-stroke": `url(#${ids.liquid})`,
+    "--tube-liquid-active": `url(#${ids.liquidActive})`,
+    "--tube-soft-glow": `url(#${ids.softGlow})`,
+    "--tube-core-glow": `url(#${ids.coreGlow})`,
+    "--fitting-chrome": `url(#${ids.chrome})`,
+    "--fitting-ceramic": `url(#${ids.ceramic})`
+  } as CSSProperties;
 
   useLayoutEffect(() => {
     const svg = svgRef.current;
@@ -35,55 +66,20 @@ export function BenchTubes() {
 
     const measure = () => {
       const rootBox = host.getBoundingClientRect();
-      const take = (key: string) => {
+      const boxes: Record<string, ReturnType<typeof boxOf>> = {};
+      KEYS.forEach((key) => {
         const el = host.querySelector(`[data-tube="${key}"]`);
-        return el ? boxOf(rootBox, el) : null;
-      };
-      const hero = take("hero");
-      const left = take("left");
-      const well = take("well");
-      const right = take("right");
-      const pieces = KEYS.slice(4).map(take);
-      const paths: string[] = [];
-
-      if (hero && well) paths.push(elbow(point(hero, "bottom"), point(well, "top"), "v"));
-      if (hero && left) {
-        const start = { x: hero.x + hero.w * 0.16, y: hero.y + hero.h };
-        const end = point(left, "top");
-        paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${(start.y + 26).toFixed(1)} H ${end.x.toFixed(1)} V ${end.y.toFixed(1)}`);
-      }
-      if (hero && right) {
-        const start = { x: hero.x + hero.w * 0.84, y: hero.y + hero.h };
-        const end = point(right, "top");
-        paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${(start.y + 26).toFixed(1)} H ${end.x.toFixed(1)} V ${end.y.toFixed(1)}`);
-      }
-      if (left && well) paths.push(elbow(point(left, "right"), point(well, "left"), "h"));
-      if (right && well) paths.push(elbow(point(well, "right"), point(right, "left"), "h"));
-      const present = pieces.filter((box): box is Box => Boolean(box));
-      if (present.length) {
-        const manifoldY = Math.min(...present.map((box) => box.y)) - 24;
-        if (well) {
-          const start = point(well, "bottom");
-          paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${manifoldY.toFixed(1)}`);
-        }
-        if (left) {
-          const start = point(left, "bottom");
-          paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${manifoldY.toFixed(1)}`);
-        }
-        if (right) {
-          const start = point(right, "bottom");
-          paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${manifoldY.toFixed(1)}`);
-        }
-        const first = point(present[0], "top");
-        const last = point(present[present.length - 1], "top");
-        paths.push(`M ${first.x.toFixed(1)} ${manifoldY.toFixed(1)} H ${last.x.toFixed(1)}`);
-        present.forEach((box) => {
-          const top = point(box, "top");
-          paths.push(`M ${top.x.toFixed(1)} ${manifoldY.toFixed(1)} V ${top.y.toFixed(1)}`);
-        });
-      }
-
-      setFrame({ w: rootBox.width, h: rootBox.height, paths });
+        if (el) boxes[key] = boxOf(rootBox, el);
+      });
+      host.setAttribute("data-tube-state", state);
+      setFrame({
+        w: rootBox.width,
+        h: rootBox.height,
+        bend: readToken("--tube-bend-r", 24),
+        fittingLen: readToken("--fitting-len", 26),
+        fittingDia: readToken("--fitting-dia", 18),
+        spokes: hubRoutes(boxes)
+      });
     };
 
     measure();
@@ -91,41 +87,195 @@ export function BenchTubes() {
     observer.observe(host);
     host.querySelectorAll("[data-tube]").forEach((node) => observer.observe(node));
     window.addEventListener("resize", measure);
+    const settle = requestAnimationFrame(() => requestAnimationFrame(measure));
+    const later = window.setTimeout(measure, 120);
+    const late = window.setTimeout(measure, 400);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
+      cancelAnimationFrame(settle);
+      window.clearTimeout(later);
+      window.clearTimeout(late);
     };
-  }, []);
-
-  const chrome = `tube-chrome-${uid}`;
-  const glow = `tube-glow-${uid}`;
+  }, [state]);
 
   return (
-    <svg ref={svgRef} className="bench-tubes" viewBox={frame.w ? `0 0 ${frame.w} ${frame.h}` : "0 0 1 1"} role="img" aria-label="Fluoro chrome tubes linking the bench panels">
-      <title>Fluoro chrome tubes linking the bench panels</title>
-      <defs>
-        <linearGradient id={chrome} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#f4ffe4" />
-          <stop offset="0.22" stopColor="#b9ff87" />
-          <stop offset="0.48" stopColor="#ffffff" />
-          <stop offset="0.72" stopColor="#8fffb6" />
-          <stop offset="1" stopColor="#5aa63a" />
-        </linearGradient>
-        <filter id={glow} x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="3.5" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      {frame.paths.map((d, index) => (
-        <g key={`${d}-${index}`} filter={`url(#${glow})`}>
-          <path className="tube-shell" d={d} />
-          <path className="tube-body" d={d} stroke={`url(#${chrome})`} />
-          <path className="tube-shine" d={d} />
-        </g>
+    <svg
+      ref={svgRef}
+      className="bench-tubes"
+      viewBox={frame.w ? `0 0 ${frame.w} ${frame.h}` : "0 0 1 1"}
+      aria-hidden="true"
+      focusable="false"
+      style={tubeStyle}
+    >
+      <TubeDefs ids={ids} />
+      {frame.spokes.map((spoke, index) => (
+        <LabTube
+          key={`spoke-${index}`}
+          d={roundedOrtho(spoke.pts, frame.bend)}
+          from={spoke.from}
+          to={spoke.to}
+          fitFrom={spoke.fitFrom ? spoke.fit : false}
+          fitTo={spoke.fitTo ? (spoke.fit === "ceramic" ? "chrome" : "ceramic") : false}
+          fromAngle={spoke.fa}
+          toAngle={spoke.ta}
+          fittingLen={frame.fittingLen}
+          fittingDia={frame.fittingDia}
+        />
       ))}
     </svg>
+  );
+}
+
+function TubeDefs({
+  ids
+}: {
+  ids: {
+    glass: string;
+    liquid: string;
+    liquidActive: string;
+    chrome: string;
+    ceramic: string;
+    softGlow: string;
+    coreGlow: string;
+  };
+}) {
+  return (
+    <defs>
+      <linearGradient id={ids.glass} x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+        <stop offset="0" stopColor="#ffffff" stopOpacity="0.95" />
+        <stop offset="0.18" stopColor="#e8ffc8" stopOpacity="0.9" />
+        <stop offset="0.42" stopColor="#b9ff87" stopOpacity="0.72" />
+        <stop offset="0.62" stopColor="#8ad86a" stopOpacity="0.78" />
+        <stop offset="0.82" stopColor="#d4ff9e" stopOpacity="0.88" />
+        <stop offset="1" stopColor="#5aa63a" stopOpacity="0.85" />
+      </linearGradient>
+      <linearGradient id={ids.liquid} x1="0" y1="0" x2="1" y2="0" gradientUnits="objectBoundingBox">
+        <stop offset="0" stopColor="#8fffb6" />
+        <stop offset="0.25" stopColor="#d8ff9a" />
+        <stop offset="0.5" stopColor="#b9ff87" />
+        <stop offset="0.75" stopColor="#f4ffe4" />
+        <stop offset="1" stopColor="#8fffb6" />
+      </linearGradient>
+      <linearGradient id={ids.liquidActive} x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stopColor="#b9ff87" />
+        <stop offset="0.35" stopColor="#ffffff" />
+        <stop offset="0.65" stopColor="#8fffb6" />
+        <stop offset="1" stopColor="#b9ff87" />
+      </linearGradient>
+      <linearGradient id={ids.chrome} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#ffffff" />
+        <stop offset="0.18" stopColor="#e8ecf2" />
+        <stop offset="0.4" stopColor="#9aa6b8" />
+        <stop offset="0.58" stopColor="#f7f8fb" />
+        <stop offset="0.78" stopColor="#6e7888" />
+        <stop offset="1" stopColor="#c5ceda" />
+      </linearGradient>
+      <linearGradient id={ids.ceramic} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#ffffff" />
+        <stop offset="0.45" stopColor="#f4eaff" />
+        <stop offset="1" stopColor="#d4c2f3" />
+      </linearGradient>
+      <filter id={ids.softGlow} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="b" />
+        <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.85 0" result="b2" />
+        <feMerge>
+          <feMergeNode in="b2" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id={ids.coreGlow} x="-60%" y="-60%" width="220%" height="220%" colorInterpolationFilters="sRGB">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="b" />
+        <feMerge>
+          <feMergeNode in="b" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+  );
+}
+
+function LabTube({
+  d,
+  from,
+  to,
+  fitFrom,
+  fitTo,
+  fromAngle,
+  toAngle,
+  fittingLen,
+  fittingDia
+}: {
+  d: string;
+  from: Point;
+  to: Point;
+  fitFrom: FittingKind | false;
+  fitTo: FittingKind | false;
+  fromAngle: number;
+  toAngle: number;
+  fittingLen: number;
+  fittingDia: number;
+}) {
+  if (!d) return null;
+  return (
+    <g className="lab-tube-group">
+      <path className="lab-tube lab-tube-glow" d={d} />
+      <path className="lab-tube lab-tube-rim" d={d} />
+      <path className="lab-tube lab-tube-glass" d={d} />
+      <path className="lab-tube lab-tube-liquid" d={d} />
+      <path className="lab-tube lab-tube-reflect" d={d} transform="translate(0.9 -1.0)" />
+      <path className="lab-tube lab-tube-specular" d={d} transform="translate(-0.7 -1.6)" />
+      <path className="lab-tube lab-tube-flow" d={d} />
+      {fitFrom ? (
+        <TubeFitting x={from.x} y={from.y} rotationDeg={fromAngle} kind={fitFrom} length={fittingLen} diameter={fittingDia} />
+      ) : null}
+      {fitTo ? (
+        <TubeFitting x={to.x} y={to.y} rotationDeg={toAngle} kind={fitTo} length={fittingLen} diameter={fittingDia} />
+      ) : null}
+    </g>
+  );
+}
+
+function TubeFitting({
+  x,
+  y,
+  rotationDeg,
+  kind,
+  length,
+  diameter
+}: {
+  x: number;
+  y: number;
+  rotationDeg: number;
+  kind: FittingKind;
+  length: number;
+  diameter: number;
+}) {
+  const hx = length / 2;
+  const hy = diameter / 2;
+  const rx = Math.min(4, hy);
+  const portR = Math.max(2.4, diameter * 0.22);
+  const coreR = Math.max(1.2, diameter * 0.12);
+  return (
+    <g className="fitting" transform={`translate(${fmt(x)} ${fmt(y)}) rotate(${fmt(rotationDeg)})`}>
+      <rect className="fitting-flange" x={-hx - 2} y={-hy - 2.5} width="5" height={diameter + 5} rx="1.5" />
+      <rect
+        className={kind === "ceramic" ? "fitting-collar" : "fitting-body"}
+        x={-hx}
+        y={-hy}
+        width={length}
+        height={diameter}
+        rx={rx}
+      />
+      <line className="fitting-groove" x1={-hx + 5} y1={-hy * 0.35} x2={hx - 5} y2={-hy * 0.35} />
+      <line className="fitting-groove-hi" x1={-hx + 5} y1={-hy * 0.35 - 0.8} x2={hx - 5} y2={-hy * 0.35 - 0.8} />
+      <line className="fitting-groove" x1={-hx + 5} y1="0" x2={hx - 5} y2="0" />
+      <line className="fitting-groove" x1={-hx + 5} y1={hy * 0.35} x2={hx - 5} y2={hy * 0.35} />
+      <line className="fitting-groove-hi" x1={-hx + 5} y1={hy * 0.35 - 0.8} x2={hx - 5} y2={hy * 0.35 - 0.8} />
+      <circle className="fitting-port" cx={hx - 1} cy="0" r={portR} />
+      <circle className="fitting-core" cx={hx - 1} cy="0" r={coreR} />
+      <circle className="fitting-screw" cx={-hx + 3.5} cy={-hy + 3.2} r="1.5" />
+      <circle className="fitting-screw" cx={-hx + 3.5} cy={hy - 3.2} r="1.5" />
+    </g>
   );
 }

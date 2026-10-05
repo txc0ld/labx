@@ -1,7 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
+import { LegalNav } from "@/components/LegalNav";
+import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
+import { onChainReady } from "@/lib/wallet";
 
 export default function RulesPage() {
   const bench = useBench();
@@ -15,6 +19,7 @@ export default function RulesPage() {
   const [tone, setTone] = useState<"warning" | "error" | "ok">("warning");
   const [raffleId, setRaffleId] = useState("");
   const [signature, setSignature] = useState<string | null>(null);
+  const wired = onChainReady();
   if (!bench.ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
 
   async function loadChallenge() {
@@ -62,11 +67,13 @@ export default function RulesPage() {
     <section className="section stack">
       <p className="kicker">Draw rules</p>
       <h1 className="page-title">How a piece is drawn.</h1>
+      <LegalNav />
+      <OnChainStatus surface="rules" />
       <article className="pearl pad stack">
         <p>Packs are memberships. Each pack includes a published number of bonus entries into that piece only.</p>
         <p>Entries expire 12 months after they are recorded. Expired entries are left out of the snapshot.</p>
         <p>The snapshot is taken before randomness is requested. Chainlink VRF v2.5 supplies the word used to walk the frozen weights.</p>
-        <p>The lab fee is 5 USDC per pack, paid to the Safe treasury on settlement. Pack price and fee are refunded if the piece is cancelled before settlement.</p>
+        <p>The lab fee is 5 USDC per pack. Settlement (`settle`) flips the piece to the settled phase. The drawn wallet claims the prize with `claimPrize`. The seller claims pack proceeds with `claimProceeds`. The treasury claims the lab fee with `claimFee`. Pack price and fee are refunded if the piece is cancelled before settlement.</p>
       </article>
       <article className="well pad stack">
         <h2>Complimentary entry</h2>
@@ -79,17 +86,27 @@ export default function RulesPage() {
               ))}
             </select>
           </label>
-          <label htmlFor="raffle">On-chain raffle id
-            <input id="raffle" inputMode="numeric" value={raffleId} onChange={(event) => setRaffleId(event.target.value)} />
-          </label>
+          {wired ? (
+            <label htmlFor="raffle">On-chain raffle id
+              <input id="raffle" inputMode="numeric" value={raffleId} onChange={(event) => setRaffleId(event.target.value)} />
+            </label>
+          ) : (
+            <p className="muted">On-chain raffle id stays off until the Sepolia contract is wired.</p>
+          )}
           <button className="btn btn-dark" type="button" onClick={loadChallenge}>Start captcha</button>
           {challenge ? (
             <label htmlFor="answer">{challenge.prompt}
               <input id="answer" inputMode="numeric" value={answer} onChange={(event) => setAnswer(event.target.value)} required />
             </label>
           ) : null}
-          <label htmlFor="c-terms"><input id="c-terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} /> I agree to the membership terms.</label>
-          <label htmlFor="c-rules"><input id="c-rules" type="checkbox" checked={rules} onChange={(event) => setRules(event.target.checked)} /> I agree to the draw rules and the 12-month expiry.</label>
+          <label htmlFor="c-terms">
+            <input id="c-terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} />
+            <span>I agree to the <Link href="/legal" onClick={(event) => event.stopPropagation()}>membership terms</Link>.</span>
+          </label>
+          <label htmlFor="c-rules">
+            <input id="c-rules" type="checkbox" checked={rules} onChange={(event) => setRules(event.target.checked)} />
+            <span>I agree to the draw rules and the 12-month expiry.</span>
+          </label>
           <label htmlFor="c-age"><input id="c-age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I am 18 or older and eligible to participate.</label>
           <button className="btn btn-lime" type="submit" disabled={!challenge}>Submit complimentary entry</button>
           {message ? <p className={`notice ${tone}`} role={tone === "error" ? "alert" : "status"}>{message}</p> : null}
