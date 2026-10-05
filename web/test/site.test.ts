@@ -377,6 +377,10 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain("Records stay in this browser; no transactions are submitted.");
     expect(markup).toContain('href="#bench"');
     expect(markup).toContain('href="/fairness"');
+    expect(markup).toContain('class="pixel-divider"');
+    expect(markup).toContain('aria-hidden="true"');
+    expect(markup).toContain('class="pixel-divider-fallback"');
+    expect(markup).not.toContain("<canvas");
   });
 
   it("marks OnChainStatus as bench-only with a lavender lamp", () => {

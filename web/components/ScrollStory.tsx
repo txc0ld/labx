@@ -3,6 +3,7 @@
 import Link from "next/link";
 import React from "react";
 import { useEffect, useRef } from "react";
+import { PixelDivider } from "./PixelDivider";
 
 const STORIES = [
   {
@@ -105,8 +106,9 @@ export function ScrollStory() {
 
   return (
     <div className="scroll-stories" ref={rootRef}>
-      {STORIES.map((story) => (
-        <section className="scroll-story" data-story key={story.title}>
+      {STORIES.map((story, storyIndex) => (
+        <React.Fragment key={story.title}>
+        <section className="scroll-story" data-story>
           <h2 className="scroll-story-heading">
             <span className="sr">{story.title}</span>
             <span aria-hidden="true">
@@ -127,6 +129,8 @@ export function ScrollStory() {
             <Link href={story.href}>{story.link} <span aria-hidden="true">↗</span></Link>
           </div>
         </section>
+        {storyIndex === 0 ? <PixelDivider /> : null}
+        </React.Fragment>
       ))}
     </div>
   );

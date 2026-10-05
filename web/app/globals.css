@@ -840,8 +840,9 @@ main.wrap { padding-block-start:clamp(1.8rem,4vw,4rem); }
 .capsule-art img { width:100%; height:100%; object-fit:contain; image-rendering:pixelated; transition:transform 480ms var(--ease-out); }
 .capsule-meta { padding-block:.8rem 0; }
 .capsule-title-row { display:flex; align-items:start; justify-content:space-between; gap:.75rem; }
-.capsule-meta h3 { margin:0 0 .12rem; font-size:clamp(1rem,1.25vw,1.25rem); line-height:1.1; letter-spacing:-.035em; }
-.capsule-artist { margin:0; color:var(--charcoal); font-size:.72rem; }
+.capsule-title-row>div { min-width:0; flex:1; }
+.capsule-meta h3 { max-width:100%; margin:0 0 .12rem; overflow-wrap:anywhere; word-break:break-word; font-size:clamp(1rem,1.25vw,1.25rem); line-height:1.1; letter-spacing:-.035em; }
+.capsule-artist { max-width:100%; margin:0; overflow-wrap:anywhere; color:var(--charcoal); font-size:.72rem; }
 .capsule-status,.piece-status,.piece-escrow-status { flex:0 0 auto; padding:.25rem .4rem; border:1px solid #a99dc8; border-radius:5px; background:#eee9fa; color:#4a337c; font:.58rem var(--font-mono),monospace; text-transform:uppercase; }
 .capsule-status.is-open { border-color:#84ad6d; background:#e5f7d9; color:#345427; }
 .capsule-specs { display:grid; gap:.4rem; margin:.9rem 0 .7rem; }
@@ -901,6 +902,10 @@ fieldset.agreements label { padding:.55rem 0; border-bottom:1px solid var(--line
 .scroll-story-copy { display:grid; gap:1rem; align-self:end; max-width:30rem; }
 .scroll-story-copy p { margin:0; color:var(--charcoal); font-size:clamp(.95rem,1.3vw,1.12rem); line-height:1.55; }
 .scroll-story-copy a { justify-self:start; min-height:44px; display:inline-flex; align-items:center; font-weight:650; text-underline-offset:5px; }
+.pixel-divider { position:relative; width:100%; height:clamp(120px,14vw,200px); overflow:hidden; border-block:1px solid var(--line); pointer-events:none; }
+.pixel-divider>section { width:100%; }
+.pixel-divider-canvas { color:var(--terminal); }
+.pixel-divider-fallback { display:block; width:100%; height:100%; background:linear-gradient(90deg,transparent 0 9%,rgba(198,183,237,.72) 9% 18%,transparent 18% 42%,rgba(185,255,135,.68) 42% 51%,transparent 51% 76%,rgba(198,183,237,.4) 76% 86%,transparent 86%),linear-gradient(var(--line),var(--line)) center/100% 1px no-repeat; }
 .site-footer { padding-block:1rem 2.5rem; border-top:1px solid var(--line-dark); }
 .footer-strip { display:grid; grid-template-columns:1fr auto; gap:.35rem 2rem; font-size:.72rem; }
 .site-footer nav { grid-column:1/-1; grid-row:1; }
