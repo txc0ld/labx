@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { OnChainStatus } from "../components/OnChainStatus";
 import { raffleAddress, readRaffle, sendRaffle } from "../lib/wallet";
 import { roundedOrtho } from "../lib/tubes";
 
@@ -232,6 +235,21 @@ describe("on-chain soft disable", () => {
     expect(read("lib/bench.tsx")).toMatch(/onChainReady\(\)|raffleAddress\(\)/);
     expect(read("lib/bench.tsx")).toMatch(/saltedPrivateHash|generatePrivateKey/);
   });
+
+  it.each([undefined, "0x0000000000000000000000000000000000000001"])(
+    "keeps browser-demo disclosures visible with raffle address %s",
+    (address) => {
+      if (address === undefined) delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
+      else process.env.NEXT_PUBLIC_RAFFLE_ADDRESS = address;
+      for (const surface of ["studio", "profile", "rules", "piece"] as const) {
+        const markup = renderToStaticMarkup(createElement(OnChainStatus, { surface }));
+        expect(markup).toContain('role="status"');
+        expect(markup).toContain("bench only");
+        expect(markup).toMatch(/browser demo|browser\. It does not transfer/);
+        if (address) expect(markup).toContain("these controls still do not submit transactions");
+      }
+    }
+  );
 });
 
 describe("hub laboratory tubing", () => {
@@ -248,7 +266,7 @@ describe("hub laboratory tubing", () => {
     expect(d).not.toMatch(/ H | V /);
   });
 
-  it("renders a lab-tube stack, TubeFitting grooves, and a thinner mobile stack", () => {
+  it("renders the desktop lab-tube stack and hides it over stacked mobile content", () => {
     const tubes = read("components/BenchTubes.tsx");
     const css = read("app/globals.css");
     expect(tubes).toMatch(/function TubeFitting/);
@@ -276,7 +294,7 @@ describe("hub laboratory tubing", () => {
     expect(css).not.toMatch(/\.tube-shell/);
     expect(css).not.toMatch(/\.tube-body/);
     expect(css).not.toMatch(/\.tube-shine/);
-    expect(css).not.toMatch(/\.bench-tubes \{ display: none/);
+    expect(css).toMatch(/@media \(max-width: 900px\)[\s\S]*\.bench-tubes \{ display: none/);
     expect(css).toMatch(/@media \(max-width: 900px\)[\s\S]*\.lab-tube-reflect[\s\S]*display:\s*none/);
     expect(css).toMatch(/data-tube-state="disabled"[\s\S]*lab-tube-flow[\s\S]*animation:\s*none/);
     expect(css).toMatch(/data-tube-state="disabled"[\s\S]*#9aa0a8/);

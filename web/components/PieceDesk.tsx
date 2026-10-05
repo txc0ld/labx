@@ -53,19 +53,23 @@ export function PieceDesk({ id }: { id: string }) {
         <p className="lede">Choose a membership pack. Bonus entries are part of the pack. A {LAB_FEE} USDC lab fee on each pack goes to the treasury.</p>
         <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
           {piece.packs.map((item) => (
-            <button
+            <label
               key={item.name}
-              type="button"
               className={`pack-key ${item.name === pack ? "on" : ""}`}
-              role="radio"
-              aria-checked={item.name === pack}
-              onClick={() => setPack(item.name)}
             >
+              <input
+                className="sr"
+                type="radio"
+                name="membership-pack"
+                value={item.name}
+                checked={item.name === pack}
+                onChange={() => setPack(item.name)}
+              />
               <strong>{item.name}</strong>
               <span>{item.priceUsdc} USDC</span>
               <small>{item.bonusEntries} bonus {item.bonusEntries === 1 ? "entry" : "entries"} · {item.remaining} remaining</small>
               <small>+{LAB_FEE} USDC lab fee</small>
-            </button>
+            </label>
           ))}
         </div>
         <label htmlFor="qty">Quantity
@@ -88,7 +92,7 @@ export function PieceDesk({ id }: { id: string }) {
         {error ? <p className="notice error" role="alert">{error}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
         <div className="btn-row">
-          <button className="btn btn-lime" type="button" disabled={!open} onClick={purchase}>Record pack</button>
+          <button className="btn btn-lime" type="button" disabled={!open} onClick={purchase}>Record demo pack</button>
           <Link className="btn btn-dark" href={`/fairness#${piece.id}`}>Fairness</Link>
         </div>
         {!open ? <p className="notice warning">Packs are closed on this piece.</p> : null}
