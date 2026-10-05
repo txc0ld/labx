@@ -937,6 +937,45 @@ contract LabxRaffleTest is Test {
         labx.retryRandomness(id);
     }
 
+    function test_retryRandomnessRevertsWhenPaused() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        labx.setPaused(true);
+        vm.expectRevert(LabxRaffle.Paused.selector);
+        labx.retryRandomness(id);
+        labx.setPaused(false);
+        labx.retryRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+    }
+
+    function test_retryRandomnessAllowsDoubleRetry() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 first = labx.getRaffle(id).vrfRequestId;
+        labx.retryRandomness(id);
+        uint256 second = labx.getRaffle(id).vrfRequestId;
+        labx.retryRandomness(id);
+        uint256 third = labx.getRaffle(id).vrfRequestId;
+        assertTrue(first != second && second != third && first != third);
+        assertEq(labx.requestToRaffle(first), 0);
+        assertEq(labx.requestToRaffle(second), 0);
+        assertEq(labx.requestToRaffle(third), id);
+        assertEq(labx.activeDrawings(), 1);
+
+        vrf.fulfill(address(labx), first, 0);
+        vrf.fulfill(address(labx), second, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
+        assertEq(labx.getRaffle(id).winner, address(0));
+
+        vrf.fulfill(address(labx), third, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        assertEq(labx.getRaffle(id).winner, alice);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
     function test_nativePaymentTogglesWhenNoActiveDrawings() public {
         assertFalse(labx.nativePayment());
         assertFalse(vrf.lastNativePayment());

@@ -348,7 +348,7 @@ IDs below are from that read-only model. They are **not** the H/M/L numbers in t
 | C-1 | VRF billed in LINK while the live sub has 0 LINK / 0.05 native ETH | Code: owner-settable `nativePayment`, default `false`, gated by `activeDrawings == 0`. Ops: fund LINK on the live contract; do not wait for a redeploy. A future deploy may set native ETH. |
 | M-1 | Failed VRF callback leaves `Drawing` with no word; `abortDrawing` left `requestToRaffle` populated | Owner `retryRandomness` re-requests without cancelling. `abortDrawing` and retry delete `requestToRaffle` / `requestCoordinator`. |
 | M-2 | `setVrfConfig` while a draw is in flight | Same `DrawInFlight` gate as coordinator changes. |
-| M-3 | Runtime over EIP-170 | `via_ir` is owned by PR #7 (`cursor/shrink-labxraffle-runtime-342e`). This follow-up does not duplicate that `foundry.toml` hunk. |
+| M-3 | Runtime over EIP-170 | Inherited from main after PR #7: `via_ir = true` in `foundry.toml`, CI runs `forge build --sizes` before `forge test`. |
 | M-4 | Treasury / AMOE signer / VRF config setters emit nothing | `TreasurySet`, `AmoeSignerSet`, `VrfConfigSet`, `NativePaymentSet`. |
 | H-3 | Owner can force-cancel a funded raffle | Accepted v1 centralization. Documented in NatSpec on `cancel`, `SECURITY.md`, and this note. Do not remove `cancel`. Pause+timelock is an optional follow-up. |
 
