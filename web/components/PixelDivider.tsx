@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import PixelScroll from "./pixel-scroll/pixel-scroll";
 
-const ACCENT_COLORS = ["#c6b7ed", "#b9ff87"];
+const ACCENT_COLORS = ["#b37df6", "#b9ff87", "#ff79c0"];
 const DIVIDER_HEIGHT = "clamp(120px, 14vw, 200px)";
 
 export function PixelDivider() {

@@ -292,7 +292,7 @@ describe("hub laboratory tubing", () => {
     expect(css).toMatch(/--lab-tube-lime:\s*#b9ff87/i);
     expect(css).toMatch(/--lab-tube-pink:\s*#ff79c0/i);
     expect(css).toMatch(/--lab-tube-mint:\s*#8fffb6/i);
-    expect(css).toMatch(/--lab-tube-purple:\s*#8049ff/i);
+    expect(css).toMatch(/--lab-tube-purple:\s*#b37df6/i);
     expect(css).not.toMatch(/\.tube-shell/);
     expect(css).not.toMatch(/\.tube-body/);
     expect(css).not.toMatch(/\.tube-shine/);

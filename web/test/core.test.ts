@@ -159,7 +159,7 @@ describe("surface copy and materials", () => {
 
   it("keeps the fluoro tokens and provides a solid reduced-transparency fallback", () => {
     const css = readFileSync(path.join(root, "app/globals.css"), "utf8");
-    for (const token of ["#b9ff87", "#ff79c0", "#8fffb6", "#8049ff", "#b09be8", "#000000", "#3c3b3c"]) {
+    for (const token of ["#b9ff87", "#b37df6", "#ff79c0", "#8fffb6", "#000000", "#3c3b3c"]) {
       expect(css.toLowerCase()).toContain(token);
     }
     expect(css).toMatch(/backdrop-filter:\s*blur/);
