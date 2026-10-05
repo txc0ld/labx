@@ -5,6 +5,10 @@ libs = ["lib"]
 solc = "0.8.24"
 optimizer = true
 optimizer_runs = 200
+# Legacy codegen at runs=200 is 25,252 bytes (676 over EIP-170). runs=1 is still
+# 25,021 (445 over). via_ir at runs=200 is 21,171 (3,405 under). runs=1 on top of
+# via_ir only saves another ~106 bytes, so execution-cost tuning stays at 200.
+via_ir = true
 evm_version = "cancun"
 remappings = [
   "forge-std/=lib/forge-std/src/",
