@@ -376,8 +376,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit VrfConfigSet(nextKeyHash, nextSubId, gasLimit, confirmations);
     }
 
-    /// @notice Flips VRF v2.5 LINK vs native ETH billing. Refused while a draw is in flight
-    ///         so an in-progress request cannot change payment mode mid-callback.
+    /// @notice Flips VRF v2.5 LINK vs native ETH billing for the *next* request.
+    ///         Refused while a draw is in flight so in-flight and retry requests cannot
+    ///         mix payment modes. ExtraArgs are snapshotted at request time.
     function setNativePayment(bool next) external onlyOwner {
         if (activeDrawings != 0) revert DrawInFlight();
         nativePayment = next;
@@ -577,9 +578,11 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
 
     /// @notice Re-request VRF while the raffle is still Drawing and has no winner.
     ///         Use after a failed or dropped callback (Chainlink does not retry). Owner-only
-    ///         so a seller cannot drain the VRF subscription. The previous `requestToRaffle`
-    ///         mapping is forgotten after the new request succeeds; a late fulfill of the
-    ///         old id is ignored.
+    ///         so a seller cannot drain the VRF subscription. Key hash, sub id, gas limit,
+    ///         and payment mode stay frozen until `activeDrawings` is 0 (same as M-2).
+    ///         The previous `requestToRaffle` mapping is forgotten after the new request
+    ///         succeeds; a late fulfill of the old id is ignored. Restarts `VRF_ABORT_AFTER`
+    ///         from this call.
     function retryRandomness(uint256 id) external onlyOwner nonReentrant {
         if (paused) revert Paused();
         Raffle storage r = _raffles[id];

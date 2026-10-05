@@ -929,6 +929,9 @@ contract LabxRaffleTest is Test {
         uint256 id = _drawReady();
         vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.retryRandomness(id);
+
+        vm.prank(seller);
+        labx.requestRandomness(id);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.NotOwner.selector);
         labx.retryRandomness(id);
