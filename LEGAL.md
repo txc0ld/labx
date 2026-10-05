@@ -8,7 +8,7 @@ Fantom Labs Pty Ltd
 ABN 56 702 056 166  
 ACN 702 056 166  
 Brand: LABx  
-Site: labx.art
+Site: `NEXT_PUBLIC_SITE_URL` (default https://labx-two.vercel.app)
 
 ## Network
 

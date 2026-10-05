@@ -129,7 +129,7 @@ export function BenchProvider({ children }: { children: ReactNode }) {
             pieces,
             entries: [entry, ...current.entries],
             agreements: [{ pieceId: piece.id, at: new Date().toISOString(), terms: true, rules: true, age: true }, ...current.agreements],
-            banner: { tone: "ok", text: `${pack.name} pack recorded. ${entry.count} bonus entries. Lab fee ${LAB_FEE * input.qty} USDC.` }
+            banner: { tone: "ok", text: `${pack.name} pack recorded. ${entry.count} bonus ${entry.count === 1 ? "entry" : "entries"}. Lab fee ${LAB_FEE * input.qty} USDC.` }
           };
         });
         return message;

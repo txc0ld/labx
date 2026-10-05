@@ -63,7 +63,7 @@ export function PieceDesk({ id }: { id: string }) {
             >
               <strong>{item.name}</strong>
               <span>{item.priceUsdc} USDC</span>
-              <small>{item.bonusEntries} bonus entries · {item.remaining} remaining</small>
+              <small>{item.bonusEntries} bonus {item.bonusEntries === 1 ? "entry" : "entries"} · {item.remaining} remaining</small>
               <small>+{LAB_FEE} USDC lab fee</small>
             </button>
           ))}
@@ -84,7 +84,7 @@ export function PieceDesk({ id }: { id: string }) {
           </label>
           <label htmlFor="age"><input id="age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I confirm I am eligible and I am 18 or older.</label>
         </fieldset>
-        <p><strong>{total} USDC</strong> including {LAB_FEE * qty} USDC lab fee · {entries} bonus entries</p>
+        <p><strong>{total} USDC</strong> including {LAB_FEE * qty} USDC lab fee · {entries} bonus {entries === 1 ? "entry" : "entries"}</p>
         {error ? <p className="notice error" role="alert">{error}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
         <div className="btn-row">
