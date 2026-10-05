@@ -13,7 +13,7 @@ LABx v1.0 is an Ethereum Sepolia membership-pack contract plus a Next.js bench. 
 
 | Role | Held by | Powers |
 | --- | --- | --- |
-| Owner | Safe, after `acceptOwnership` | Pause, treasury, terms hash, VRF config, ETH path, cancel, abort a stuck draw, settle an unrevealed draw after 7 days |
+| Owner | Safe, after `acceptOwnership` | Pause, treasury, terms hash, VRF config, VRF payment mode, ETH path, cancel funded raffles, abort or retry a stuck draw, settle an unrevealed draw after 7 days |
 | Seller | Piece creator | Escrow, open, close early, request VRF, reveal, cancel only before money arrives or when the snapshot is empty |
 | AMOE signer | Server key | At most `amoeCap` complimentary entries per raffle (default 100). Each captcha digest is single-use |
 | Buyer | Any wallet | Buy a pack, refund after cancel |
@@ -26,7 +26,7 @@ There is no renounce. Admin stays a Safe.
 2. The prize token is escrowed before `open`.
 3. Buys stop at `close` or at `salesEnd`.
 4. `snapshot` walks lots in chunks of at most 500 and skips lots whose 365-day expiry has passed. VRF cannot be requested until the cursor finishes.
-5. `requestRandomness` calls Chainlink VRF v2.5 (`nativePayment: false`, 3 confirmations, 500k callback gas). The coordinator that accepted the request is pinned. `rawFulfillRandomWords` accepts only that address. A coordinator change is a one-day timelock and is refused while `activeDrawings` is non-zero.
+5. `requestRandomness` calls Chainlink VRF v2.5 (`nativePayment` defaults to false / LINK, 3 confirmations, 500k callback gas). The owner may flip `nativePayment` only while `activeDrawings == 0`. The live Sepolia raffle `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` was deployed with LINK billing hardcoded; fund that subscription with LINK until a redeploy can set native ETH. The coordinator that accepted the request is pinned. `rawFulfillRandomWords` accepts only that address. A coordinator change is a one-day timelock and is refused while `activeDrawings` is non-zero. `setVrfConfig` is refused the same way. If a callback fails, Chainlink does not retry: the owner may `retryRandomness` (clears the old `requestToRaffle` entry) or wait `VRF_ABORT_AFTER` and `abortDrawing` (also clears the map).
 6. The word walks a cumulative weight table with a binary search. Entries that arrive after the snapshot are absent from that table.
 7. `settle` only records the winner. The winner pulls the NFT with `transferFrom` (so `onERC721Received` cannot revert the claim). The seller pulls USDC principal and anyone can pull the lab fee to the current treasury. Cancel and `abortDrawing` do not push the NFT. The seller pulls it afterwards, and buyers pull their own USDC.
 
@@ -52,6 +52,7 @@ State changes that follow token or coordinator calls are inside `nonReentrant`. 
 - A prize token that reverts `transferFrom` can stick the NFT in escrow. It cannot stick the USDC, which is pulled on its own calls.
 - The ETH route depends on a liquid WETH/USDC pool at the immutable fee. Leave `WIRE_ETH_PATH` unset so the deploy script leaves the path unwired.
 - The signer key can mint up to the per-raffle complimentary cap. Keep it off the client. Rotating it is an owner call.
+- The owner can force-cancel a funded Open or Closed raffle without a delay. That is accepted v1 centralization (Chain Security H-3). Buyers then pull USDC; the seller pulls the NFT. A pause+timelock on this path is a follow-up, not a silent removal.
 - This document is an engineering note, not a pentest.
 
 ## Commands
