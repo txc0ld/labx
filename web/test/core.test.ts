@@ -271,7 +271,8 @@ describe("surface copy and materials", () => {
 
   it("does not market packs as chances or publish a floor", () => {
     expect(text.toLowerCase()).not.toMatch(/\btickets?\b/);
-    expect(text.toLowerCase()).not.toMatch(/\bfloor\b/);
+    // Arithmetic rounding is code, not published pricing copy.
+    expect(text.toLowerCase().replaceAll("math.floor", "")).not.toMatch(/\bfloor\b/);
   });
 
   it("keeps the fluoro tokens and refuses backdrop blur", () => {
@@ -289,14 +290,18 @@ describe("surface copy and materials", () => {
     expect(names).not.toMatch(/head|face|human|workstation/);
   });
 
-  it("explore hub uses vector marks and a capsule well", () => {
+  it("explore discovers demo pieces through individual artwork capsules", () => {
     const page = readFileSync(path.join(root, "app/page.tsx"), "utf8");
     const hub = readFileSync(path.join(root, "components/BenchHub.tsx"), "utf8");
     const marks = readFileSync(path.join(root, "components/PieceMark.tsx"), "utf8");
     const css = readFileSync(path.join(root, "app/globals.css"), "utf8");
     expect(page).not.toMatch(/next\/image/);
     expect(hub).not.toMatch(/\.jpg|\.png/);
-    expect(hub).toMatch(/NFT\s*<br \/>CONTAINER/);
+    expect(hub).toMatch(/shown\.map/);
+    expect(hub).toMatch(/raffle-capsule bezel/);
+    expect(hub).toMatch(/src=\{piece.image\}/);
+    expect(hub).toMatch(/Demo artwork/);
+    expect(hub).toMatch(/not a live raffle listing/);
     expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
     expect(css).toMatch(/nft-capsule/);
     expect(css).toMatch(/lab-tube-liquid/);

@@ -781,5 +781,106 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
 }
 
 @keyframes tube-flow { to { stroke-dashoffset: -190; } }
-:focus-visible { outline: 3px solid var(--lime); outline-offset: 3px; }
+
+/* Original capsule discovery: laboratory materials with an editorial catalog rhythm. */
+.discovery-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(17rem, 0.8fr);
+  gap: 2.5rem;
+  align-items: center;
+  padding: clamp(1.25rem, 4vw, 3rem);
+  margin-block: 0.5rem 2.5rem;
+  border: 1px solid rgba(128, 73, 255, 0.15);
+  background-image:
+    linear-gradient(rgba(128, 73, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(128, 73, 255, 0.045) 1px, transparent 1px),
+    radial-gradient(ellipse at top left, #fff, #f4eaff 55%, #e5d4fb);
+  background-size: 28px 28px, 28px 28px, auto;
+}
+.discovery-hero::before, .discovery-hero::after {
+  content: "";
+  position: absolute;
+  inline-size: 15px;
+  block-size: 15px;
+  border-color: var(--purple);
+  border-style: solid;
+  pointer-events: none;
+}
+.discovery-hero::before { inset: 14px auto auto 14px; border-width: 1px 0 0 1px; }
+.discovery-hero::after { inset: auto 14px 14px auto; border-width: 0 1px 1px 0; }
+.discovery-heading { display: grid; gap: 1.4rem; min-inline-size: 0; }
+.discovery-heading h1 { margin: 0; font-size: clamp(2.7rem, 5.5vw, 4.65rem); line-height: 0.96; letter-spacing: -0.055em; }
+.discovery-heading .lede { max-inline-size: 44ch; line-height: 1.55; }
+.discovery-heading .btn { gap: 1rem; }
+.discovery-readout { padding: 1.35rem; border: 1px solid rgba(176,155,232,0.4); }
+.readout-top { display: flex; gap: 0.6rem; align-items: center; justify-content: space-between; }
+.readout-top .kicker { color: var(--on-dark); }
+.readout-number { margin: 1rem 0; font-size: 3.6rem; line-height: 1; letter-spacing: -0.08em; color: var(--lime); }
+.readout-number span { display: block; margin-block-start: 0.6rem; font-size: 0.8rem; letter-spacing: 0; color: var(--on-dark); }
+.readout-specs { margin: 0; font-size: 0.75rem; }
+.readout-specs > div { display: flex; justify-content: space-between; gap: 1rem; padding-block: 0.65rem; border-top: 1px solid rgba(176,155,232,0.25); }
+.readout-specs dd, .capsule-specs dd { margin: 0; }
+.readout-note { font-size: 0.75rem; line-height: 1.6; margin: 1rem 0 0.5rem; }
+.readout-link { display: flex; gap: 0.7rem; align-items: center; justify-content: space-between; min-block-size: 44px; font-size: 0.8rem; text-underline-offset: 4px; }
+.capsule-collection { margin-block: 2.5rem; scroll-margin-top: 1rem; }
+.collection-heading { display: flex; gap: 1rem; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
+.collection-heading h2 { display: flex; gap: 0.7rem; align-items: center; margin: 0.3rem 0 0; font-size: clamp(1.8rem, 3vw, 2.4rem); letter-spacing: -0.045em; }
+.collection-count { display: inline-grid; place-items: center; min-inline-size: 2rem; block-size: 2rem; padding-inline: 0.5rem; background: var(--lavender); border-radius: 99px; font: 0.9rem var(--font-mono), monospace; letter-spacing: 0; }
+.collection-filters { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.3rem; background: rgba(255,255,255,0.55); border: 1px solid rgba(128,73,255,0.15); border-radius: 18px; }
+.collection-filters button { border: 0; border-radius: 13px; min-block-size: 44px; padding: 0.6rem 0.9rem; background: transparent; cursor: pointer; font-size: 0.9rem; }
+.collection-filters button[aria-pressed="true"] { background: var(--terminal); color: var(--on-dark); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); }
+.collection-note { font-size: 0.88rem; color: var(--charcoal); margin: 1rem 0 1.6rem; }
+.capsule-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15.5rem), 1fr)); align-items: start; gap: 1.2rem; list-style: none; padding: 0; margin: 0; }
+.capsule-grid > li { min-inline-size: 0; max-inline-size: 380px; inline-size: 100%; justify-self: center; }
+.raffle-capsule { display: block; border-radius: 180px 180px 30px 30px; text-decoration: none; color: var(--ink); transition: transform 180ms ease, box-shadow 180ms ease; }
+.capsule-art { position: relative; overflow: hidden; border-radius: 170px 170px 22px 22px; aspect-ratio: 1 / 1.08; background: var(--terminal); }
+.capsule-art img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.capsule-index { position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); padding: 0.25rem 0.7rem; border-radius: 99px; background: var(--terminal); color: var(--on-dark); font: 0.64rem var(--font-mono), monospace; white-space: nowrap; letter-spacing: 0.08em; }
+.capsule-art-label { position: absolute; inset: auto auto 0.7rem 0.7rem; padding: 0.3rem 0.55rem; border-radius: 99px; background: var(--terminal); color: var(--on-dark); font: 0.64rem var(--font-mono), monospace; }
+.capsule-meta { margin-block-start: 0.5rem; padding: 1rem; border-radius: 22px; }
+.capsule-meta .lamp { font-size: 0.65rem; }
+.capsule-meta h3 { font-size: 1.3rem; letter-spacing: -0.04em; line-height: 1.15; margin: 0.85rem 0 0.35rem; overflow-wrap: anywhere; }
+.capsule-artist { margin: 0; color: var(--charcoal); font-size: 0.8rem; }
+.capsule-specs { display: grid; gap: 0.65rem; margin: 1.2rem 0; }
+.capsule-specs > div { display: grid; gap: 0.15rem; }
+.capsule-specs dt { font: 0.65rem var(--font-mono), monospace; letter-spacing: 0.04em; text-transform: uppercase; color: var(--charcoal); }
+.capsule-specs dd { font-size: 0.92rem; font-weight: 650; }
+.capsule-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-block-start: 0.8rem; border-top: 1px solid rgba(128,73,255,0.2); font: 0.68rem var(--font-mono), monospace; }
+.capsule-open { display: inline-grid; place-items: center; inline-size: 36px; block-size: 36px; border-radius: 12px; color: var(--ink); background: var(--lime); font-size: 1.2rem; box-shadow: inset 0 1px 0 #fff, 0 3px 0 #4e972f; }
+.empty-bench { display: grid; justify-items: center; gap: 0.8rem; padding: 3rem 1rem; text-align: center; }
+.empty-bench h3, .empty-bench p { margin: 0; }
+.empty-port { inline-size: 44px; block-size: 44px; border: 10px solid #b6bdc9; border-radius: 50%; background: var(--terminal); box-shadow: 0 0 0 3px #fff; margin-block-end: 0.6rem; }
+.detail-path { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-block-start: 1rem; }
+.detail-back { display: inline-flex; gap: 0.6rem; align-items: center; min-block-size: 44px; font-weight: 650; text-decoration: none; text-underline-offset: 4px; }
+.detail-back:hover { text-decoration: underline; }
+.piece-deadline { margin: 0; font: 0.8rem var(--font-mono), monospace; color: var(--charcoal); }
+@media (hover: hover) {
+  .raffle-capsule:hover { transform: translateY(-4px); box-shadow: inset 0 1px 0 #fff, 0 22px 38px rgba(64,24,120,0.2); }
+}
+@media (max-width: 900px) {
+  .discovery-hero { grid-template-columns: 1fr; gap: 1.5rem; }
+  .discovery-readout { max-inline-size: 100%; }
+  .readout-number { font-size: 2.5rem; }
+  .readout-number span { display: inline; margin-inline-start: 0.8rem; }
+}
+@media (max-width: 560px) {
+  .desktop-break { display: none; }
+  .discovery-hero { margin-block-end: 1.8rem; }
+  .discovery-heading { gap: 1rem; }
+  .discovery-heading h1 { font-size: clamp(2.35rem, 9vw, 3.1rem); }
+  .collection-filters { inline-size: 100%; justify-content: space-between; }
+  .collection-filters button { flex: 1; padding-inline: 0.5rem; }
+  .capsule-grid { grid-template-columns: 1fr; gap: 1.5rem; }
+  .capsule-art { aspect-ratio: 1.18; }
+  .capsule-specs { grid-template-columns: 1fr 1fr; }
+  .capsule-specs > div:last-child { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .raffle-capsule { transition: none; }
+  .raffle-capsule:hover { transform: none; }
+}
+:focus-visible { outline: 3px solid var(--purple); outline-offset: 3px; }
+.terminal :focus-visible, .btn-dark:focus-visible { outline-color: var(--lime); }
+.raffle-capsule:focus-visible, .collection-filters button:focus-visible, .detail-back:focus-visible { outline-color: var(--purple); }
 .btn-lime:focus-visible, .pack-key.on:focus-visible { outline-color: var(--purple); }

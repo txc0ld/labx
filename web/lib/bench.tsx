@@ -8,6 +8,7 @@ import { pickWinner, snapshotLots } from "./draw";
 import { receiptMessage } from "./email";
 import { saltedPrivateHash } from "./reserve";
 import { connectSepolia, onChainReady } from "./wallet";
+import { pieceView } from "./piece-view";
 
 type Agreement = { pieceId: string; at: string; terms: boolean; rules: boolean; age: boolean };
 type State = {
@@ -95,12 +96,14 @@ export function BenchProvider({ children }: { children: ReactNode }) {
       },
       buy: (input) => {
         if (!input.terms || !input.rules || !input.age) return "All three agreements are required.";
+        const offered = state.pieces.find((piece) => piece.id === input.pieceId);
+        if (!offered || !pieceView(offered, Date.now()).isOpen) return "That pack is not open.";
         let message: string | null = null;
         setState((current) => {
           const pieces = current.pieces.map((piece) => ({ ...piece, packs: piece.packs.map((pack) => ({ ...pack })) }));
           const piece = pieces.find((item) => item.id === input.pieceId);
           const pack = piece?.packs.find((item) => item.name === input.pack);
-          if (!piece || piece.phase !== "open" || !pack) {
+          if (!piece || !pieceView(piece, Date.now()).isOpen || !pack) {
             message = "That pack is not open.";
             return current;
           }

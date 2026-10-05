@@ -2,13 +2,16 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 import { LAB_FEE, type PackName } from "@/lib/seed";
+import { closingDate, pieceView } from "@/lib/piece-view";
+import { useBenchTime } from "@/lib/use-bench-time";
 
 export function PieceDesk({ id }: { id: string }) {
   const bench = useBench();
+  const now = useBenchTime();
   const piece = bench.pieces.find((item) => item.id === id);
   const [pack, setPack] = useState<PackName>("Entry");
   const [qty, setQty] = useState(1);
@@ -19,7 +22,9 @@ export function PieceDesk({ id }: { id: string }) {
   const selected = piece?.packs.find((item) => item.name === pack);
   const total = selected ? selected.priceUsdc * qty + LAB_FEE * qty : 0;
   const entries = selected ? selected.bonusEntries * qty : 0;
-  const open = useMemo(() => piece?.phase === "open", [piece]);
+  const view = piece ? pieceView(piece, now) : null;
+  const open = view?.isOpen ?? false;
+  const available = !!selected && Number.isInteger(qty) && qty >= 1 && qty <= 5 && qty <= selected.remaining;
 
   if (!bench.ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
   if (!piece) {
@@ -37,6 +42,8 @@ export function PieceDesk({ id }: { id: string }) {
   }
 
   return (
+    <>
+    <div className="detail-path"><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the bench</Link><span className="kicker">Demo piece console</span></div>
     <section className="section piece-layout">
       <div className="bezel">
         <div className="shot">
@@ -48,8 +55,9 @@ export function PieceDesk({ id }: { id: string }) {
         <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>{piece.title}</h1>
         <div className="btn-row">
           <span className={`lamp ${piece.escrowed ? "mint" : "pink"}`}><i /> {piece.escrowed ? "escrowed" : "awaiting escrow"}</span>
-          <span className="lamp lavender"><i /> {piece.phase}</span>
+          <span className="lamp lavender"><i /> {view?.status}</span>
         </div>
+        <p className="piece-deadline">{view?.timing} · Sales close {closingDate(piece.salesEnd)} UTC</p>
         <p className="lede">Choose a membership pack. Bonus entries are part of the pack. A {LAB_FEE} USDC lab fee on each pack goes to the treasury.</p>
         <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
           {piece.packs.map((item) => (
@@ -63,6 +71,7 @@ export function PieceDesk({ id }: { id: string }) {
                 name="membership-pack"
                 value={item.name}
                 checked={item.name === pack}
+                disabled={item.remaining < 1}
                 onChange={() => setPack(item.name)}
               />
               <strong>{item.name}</strong>
@@ -92,12 +101,14 @@ export function PieceDesk({ id }: { id: string }) {
         {error ? <p className="notice error" role="alert">{error}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
         <div className="btn-row">
-          <button className="btn btn-lime" type="button" disabled={!open} onClick={purchase}>Record demo pack</button>
+          <button className="btn btn-lime" type="button" disabled={!open || !available} onClick={purchase}>Record demo pack</button>
           <Link className="btn btn-dark" href={`/fairness#${piece.id}`}>Fairness</Link>
         </div>
-        {!open ? <p className="notice warning">Packs are closed on this piece.</p> : null}
+        {!open ? <p className="notice warning">Packs are unavailable on this demo piece: {view?.status}.</p> : null}
+        {open && !available ? <p className="notice warning">Choose an available pack and a whole quantity from 1 to 5 within its remaining supply.</p> : null}
         <p className="hash muted">Commitment {piece.commit || "pending"}</p>
       </div>
     </section>
+    </>
   );
 }
