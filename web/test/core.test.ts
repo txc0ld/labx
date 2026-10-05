@@ -301,5 +301,6 @@ describe("surface copy and materials", () => {
     expect(css).toMatch(/nft-capsule/);
     expect(css).toMatch(/tube-body/);
     expect(css).toMatch(/border-radius: 999px/);
+    expect(css).toMatch(/\.btn[^{]*\{[^}]*text-decoration:\s*none/);
   });
 });
