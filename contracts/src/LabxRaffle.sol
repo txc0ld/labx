@@ -191,6 +191,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     error NotClaimable();
     error BadDeadline();
     error DrawInFlight();
+    error RandomnessRetryDisabled();
 
     IERC20 public immutable usdc;
 
@@ -576,21 +577,12 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         _pinRequest(id, requestId, pinned);
     }
 
-    /// @notice Re-request VRF while the raffle is still Drawing and has no winner.
-    ///         Use after a failed or dropped callback (Chainlink does not retry). Owner-only
-    ///         so a seller cannot drain the VRF subscription. Key hash, sub id, gas limit,
-    ///         and payment mode stay frozen until `activeDrawings` is 0 (same as M-2).
-    ///         The previous `requestToRaffle` mapping is forgotten after the new request
-    ///         succeeds; a late fulfill of the old id is ignored. Restarts `VRF_ABORT_AFTER`
-    ///         from this call.
-    function retryRandomness(uint256 id) external onlyOwner nonReentrant {
-        if (paused) revert Paused();
-        Raffle storage r = _raffles[id];
-        if (r.phase != Phase.Drawing) revert BadPhase();
-        uint256 oldId = r.vrfRequestId;
-        (uint256 requestId, address pinned) = _requestWords();
-        _forgetRequest(oldId);
-        _pinRequest(id, requestId, pinned);
+    /// @notice Disabled: replacing a pending request permits selective winner rerolls.
+    ///         Retained for ABI compatibility; always reverts without changing the request.
+    ///         A failed callback must use the existing timed abort/refund path. That path
+    ///         remains an owner cancellation power; it does not guarantee draw liveness.
+    function retryRandomness(uint256) external view onlyOwner {
+        revert RandomnessRetryDisabled();
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {

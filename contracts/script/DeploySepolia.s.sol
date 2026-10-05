@@ -8,6 +8,8 @@ import {IVRFSubscriptionV2Plus} from "../src/interfaces/External.sol";
 /// @notice Deploys LABx to Ethereum Sepolia and proposes Safe as owner.
 ///         Mainnet and every other chain id are refused.
 contract DeploySepolia is Script {
+    error SafeNotDeployed(address safe);
+
     // Confirmed against Chainlink VRF v2.5 docs and Circle USDC (Sepolia), October 2026.
     address internal constant USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     address internal constant VRF_COORDINATOR = 0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B;
@@ -20,8 +22,9 @@ contract DeploySepolia is Script {
     function run() external {
         if (block.chainid != 11155111) revert("LABx: Sepolia only. Mainnet is disabled.");
 
-        uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address safe = vm.envAddress("SAFE_ADDRESS");
+        _validateSafe(safe);
+        uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address amoe = vm.envAddress("AMOE_SIGNER");
         bytes32 terms = vm.envBytes32("TERMS_HASH");
         uint256 subId = vm.envUint("VRF_SUBSCRIPTION_ID");
@@ -54,6 +57,12 @@ contract DeploySepolia is Script {
         console2.log("LINK", LINK);
         console2.log("VRF coordinator", VRF_COORDINATOR);
         console2.log("Safe must acceptOwnership and addConsumer on the VRF subscription");
+    }
+
+    /// @dev Rejects an EOA or an undeployed counterfactual Safe before broadcasting.
+    ///      Code presence is necessary, but does not prove Safe implementation or signers.
+    function _validateSafe(address safe) internal view {
+        if (safe.code.length == 0) revert SafeNotDeployed(safe);
     }
 }
 

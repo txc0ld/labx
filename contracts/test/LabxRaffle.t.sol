@@ -895,87 +895,83 @@ contract LabxRaffleTest is Test {
         assertEq(labx.activeDrawings(), 0);
     }
 
-    function test_retryRandomnessReplacesFailedRequest() public {
-        uint256 id = _drawReady();
+    function test_retryCannotSelectivelyDiscardWinner() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 30e6);
+        _fund(bob, 30e6);
+        _buy(alice, id, 0, 1);
+        _buy(bob, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
-        uint256 oldId = labx.getRaffle(id).vrfRequestId;
-        assertEq(labx.activeDrawings(), 1);
+        uint256 originalRequest = labx.getRaffle(id).vrfRequestId;
+        uint64 requestedAt = labx.getRaffle(id).vrfRequestedAt;
+        uint256 nextRequest = vrf.next();
 
+        // Even after a timeout, the owner cannot discard an unfavorable pending
+        // fulfillment and ask for a new winner over the same paid entry snapshot.
+        vm.warp(block.timestamp + 2 days);
+        vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
         labx.retryRandomness(id);
-        uint256 newId = labx.getRaffle(id).vrfRequestId;
-        assertTrue(newId != oldId);
-        assertEq(labx.requestToRaffle(oldId), 0);
-        assertEq(labx.requestCoordinator(oldId), address(0));
-        assertEq(labx.requestToRaffle(newId), id);
-        assertEq(labx.requestCoordinator(newId), address(vrf));
+        assertEq(labx.getRaffle(id).vrfRequestId, originalRequest);
+        assertEq(labx.getRaffle(id).vrfRequestedAt, requestedAt);
+        assertEq(labx.requestToRaffle(originalRequest), id);
+        assertEq(labx.requestCoordinator(originalRequest), address(vrf));
         assertEq(labx.activeDrawings(), 1);
-        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
+        assertEq(vrf.next(), nextRequest);
 
-        vrf.fulfill(address(labx), oldId, 0);
-        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
-        assertEq(labx.getRaffle(id).winner, address(0));
-
-        vrf.fulfill(address(labx), newId, 0);
-        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        vrf.fulfill(address(labx), originalRequest, 0);
+        assertEq(labx.getRaffle(id).winner, alice);
+        // A duplicate callback cannot replace the recorded winner either.
+        vrf.fulfill(address(labx), originalRequest, 1);
         assertEq(labx.getRaffle(id).winner, alice);
         assertEq(labx.activeDrawings(), 0);
     }
 
-    function test_retryRandomnessRevertsWhenNotDrawing() public {
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
+    function test_retryDisabledForOwnerAndUnauthorizedCaller() public {
+        vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
         labx.retryRandomness(1);
-
         uint256 id = _drawReady();
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.retryRandomness(id);
-
         vm.prank(seller);
         labx.requestRandomness(id);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.NotOwner.selector);
         labx.retryRandomness(id);
-    }
-
-    function test_retryRandomnessRevertsWhenPaused() public {
-        uint256 id = _drawReady();
-        vm.prank(seller);
-        labx.requestRandomness(id);
+        vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
+        labx.retryRandomness(id);
         labx.setPaused(true);
-        vm.expectRevert(LabxRaffle.Paused.selector);
+        vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
         labx.retryRandomness(id);
-        labx.setPaused(false);
-        labx.retryRandomness(id);
-        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
-        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
     }
 
-    function test_retryRandomnessAllowsDoubleRetry() public {
+    function test_failedCallbackStillAllowsTimedAbortAndRefund() public {
         uint256 id = _drawReady();
         vm.prank(seller);
         labx.requestRandomness(id);
-        uint256 first = labx.getRaffle(id).vrfRequestId;
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        // Model an absent/failed callback: no winner has been recorded.
+        vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
         labx.retryRandomness(id);
-        uint256 second = labx.getRaffle(id).vrfRequestId;
-        labx.retryRandomness(id);
-        uint256 third = labx.getRaffle(id).vrfRequestId;
-        assertTrue(first != second && second != third && first != third);
-        assertEq(labx.requestToRaffle(first), 0);
-        assertEq(labx.requestToRaffle(second), 0);
-        assertEq(labx.requestToRaffle(third), id);
-        assertEq(labx.activeDrawings(), 1);
-
-        vrf.fulfill(address(labx), first, 0);
-        vrf.fulfill(address(labx), second, 0);
-        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawing));
-        assertEq(labx.getRaffle(id).winner, address(0));
-
-        vrf.fulfill(address(labx), third, 0);
-        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
-        assertEq(labx.getRaffle(id).winner, alice);
+        vm.expectRevert(LabxRaffle.TooEarly.selector);
+        labx.abortDrawing(id);
+        vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
+        labx.abortDrawing(id);
+        vm.prank(alice);
+        labx.refund(id);
+        vm.prank(seller);
+        labx.reclaimPrize(id);
+        assertEq(usdc.balanceOf(alice), 100e6);
+        assertEq(usdc.balanceOf(address(labx)), 0);
+        assertEq(nft.ownerOf(1), seller);
         assertEq(labx.activeDrawings(), 0);
+        assertEq(labx.requestToRaffle(requestId), 0);
+        vrf.fulfill(address(labx), requestId, 0);
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+        assertEq(labx.getRaffle(id).winner, address(0));
     }
-
     function test_nativePaymentTogglesWhenNoActiveDrawings() public {
         assertFalse(labx.nativePayment());
         assertFalse(vrf.lastNativePayment());
@@ -1019,6 +1015,101 @@ contract LabxRaffleTest is Test {
         vrf.fulfill(address(labx), labx.getRaffle(id2).vrfRequestId, 0);
         labx.setNativePayment(false);
         assertFalse(labx.nativePayment());
+    }
+
+    function testFuzz_weightedWinnerAndCallbackReplay(uint32 aliceQty, uint32 bobQty, uint256 word) public {
+        aliceQty = uint32(bound(aliceQty, 1, 20));
+        bobQty = uint32(bound(bobQty, 1, 20));
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, uint256(aliceQty) * 30e6);
+        _fund(bob, uint256(bobQty) * 55e6);
+        _buy(alice, id, 0, aliceQty);
+        _buy(bob, id, 1, bobQty);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 1);
+        labx.snapshot(id, 1);
+        uint256 total = uint256(aliceQty) + uint256(bobQty) * 5;
+        assertEq(labx.getRaffle(id).snapshotTotal, total);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        vrf.fulfill(address(labx), requestId, word);
+        address expected = word % total < aliceQty ? alice : bob;
+        assertEq(labx.getRaffle(id).winner, expected);
+        vrf.fulfill(address(labx), requestId, ~word);
+        assertEq(labx.getRaffle(id).winner, expected);
+        assertEq(labx.getRaffle(id).randomWord, word);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function testFuzz_twoRaffleSolvencyAcrossRefundsAndSettlement(uint32 qtyA, uint32 qtyB, bool refundFirst) public {
+        qtyA = uint32(bound(qtyA, 1, 20));
+        qtyB = uint32(bound(qtyB, 1, 20));
+        (uint256 cancelled,,,) = _create();
+        _escrowOpen(cancelled);
+        nft.mint(seller, 2);
+        vm.startPrank(seller);
+        nft.approve(address(labx), 2);
+        uint256 settled = labx.createRaffle(
+            address(nft), 2, uint64(block.timestamp + 2 days), bytes32(uint256(2)),
+            bytes32(uint256(3)), "Second raffle", _configs()
+        );
+        labx.escrow(settled);
+        labx.open(settled);
+        vm.stopPrank();
+        uint256 paidA = uint256(qtyA) * 30e6;
+        uint256 paidB = uint256(qtyB) * 55e6;
+        _fund(alice, paidA);
+        _fund(bob, paidB);
+        _buy(alice, cancelled, 0, qtyA);
+        _buy(bob, settled, 1, qtyB);
+        _assertEscrowBacking(cancelled, settled);
+        labx.cancel(cancelled);
+        vm.prank(seller);
+        labx.close(settled);
+        labx.snapshot(settled, 5);
+        vm.prank(seller);
+        labx.requestRandomness(settled);
+        vrf.fulfill(address(labx), labx.getRaffle(settled).vrfRequestId, 0);
+        vm.warp(block.timestamp + labx.REVEAL_GRACE());
+        labx.settle(settled);
+        _assertEscrowBacking(cancelled, settled);
+        if (refundFirst) {
+            vm.prank(alice);
+            labx.refund(cancelled);
+            _assertEscrowBacking(cancelled, settled);
+        }
+        vm.prank(seller);
+        labx.claimProceeds(settled);
+        _assertEscrowBacking(cancelled, settled);
+        labx.claimFee(settled);
+        _assertEscrowBacking(cancelled, settled);
+        if (!refundFirst) {
+            vm.prank(alice);
+            labx.refund(cancelled);
+            _assertEscrowBacking(cancelled, settled);
+        }
+        assertEq(usdc.balanceOf(alice), paidA);
+        assertEq(usdc.balanceOf(seller), uint256(qtyB) * 50e6);
+        assertEq(usdc.balanceOf(treasury), uint256(qtyB) * 5e6);
+        assertEq(usdc.balanceOf(address(labx)), 0);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(cancelled);
+        vm.prank(bob);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(settled);
+    }
+
+    function _assertEscrowBacking(uint256 a, uint256 b) internal view {
+        LabxRaffle.RaffleView memory first = labx.getRaffle(a);
+        LabxRaffle.RaffleView memory second = labx.getRaffle(b);
+        assertEq(
+            usdc.balanceOf(address(labx)),
+            first.principalEscrow + first.feeEscrow + second.principalEscrow + second.feeEscrow
+        );
     }
 
     function test_adminSettersEmitEvents() public {

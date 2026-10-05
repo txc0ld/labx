@@ -353,3 +353,9 @@ IDs below are from that read-only model. They are **not** the H/M/L numbers in t
 | H-3 | Owner can force-cancel a funded raffle | Accepted v1 centralization. Documented in NatSpec on `cancel`, `SECURITY.md`, and this note. Do not remove `cancel`. Pause+timelock is an optional follow-up. |
 
 The live bytecode at `0xa59B62…` still has `nativePayment: false` hardcoded. Hardening above is for the next compile. Until then, fund the existing VRF subscription with Sepolia LINK.
+
+## Follow-up: VRF retry fairness hardening (2026-10-05)
+
+At source `2bb586e798cfe5bf797965657954a1f2161f461f`, the retry added in `9230205` allows the owner to replace a request immediately. A local two-buyer reproduction confirms that replacing the request before an unfavorable fulfillment discards that result and allows a different winner over the same snapshot. Exploitation requires owner authority and transaction ordering before fulfillment; no live abuse was tested or observed. This is a new privileged fairness issue, not clearance from the earlier review.
+
+The current source disables `retryRandomness` with `RandomnessRetryDisabled`, retaining its selector. Chainlink's [VRF security guidance](https://docs.chain.link/vrf/v2-5/security) warns against discarding unfavorable randomness through retries. A timeout alone would not prevent that behavior. The old Chain Security M-1 retry response above is superseded; failed callbacks now require the existing timed abort and refunds. The owner can still censor a delayed draw through that timed abort, so this change does not remove all owner trust or guarantee liveness. Existing Sepolia bytecode is unchanged by this source patch.
