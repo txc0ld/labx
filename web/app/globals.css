@@ -18,16 +18,18 @@
   --lab-tube-mint: #8fffb6;
   --lab-tube-purple: #8049ff;
   --lab-tube-off: #9aa0ab;
-  --lab-tube-shadow: rgba(20, 12, 46, 0.22);
-  --lab-tube-bore: rgba(20, 12, 46, 0.42);
-  --lab-tube-ceramic: #d4ded2;
-  --lab-tube-w-shadow: 26px;
-  --lab-tube-w-jacket: 20px;
-  --lab-tube-w-enamel: 15px;
-  --lab-tube-w-core: 9px;
-  --lab-tube-w-bore: 3.2px;
-  --lab-tube-w-reflect: 2.2px;
-  --lab-tube-w-flow: 2px;
+  --tube-glow-w: 26px;
+  --tube-rim-w: 16px;
+  --tube-glass-w: 13px;
+  --tube-liquid-w: 9px;
+  --tube-spec-w: 2.4px;
+  --tube-reflect-w: 1.2px;
+  --tube-flow-w: 2.6px;
+  --tube-glow-blur: 8px;
+  --tube-bend-r: 24px;
+  --fitting-len: 26px;
+  --fitting-dia: 18px;
+  --fitting-ring: 1.4px;
   color-scheme: light;
 }
 
@@ -406,76 +408,71 @@ button, input, select, textarea { font: inherit; color: inherit; }
   inline-size: 100%;
   block-size: 100%;
   pointer-events: none;
-  z-index: 0;
+  z-index: 3;
   overflow: visible;
 }
-.lab-tube-shadow,
-.lab-tube-jacket,
-.lab-tube-enamel,
-.lab-tube-core,
-.lab-tube-bore,
-.lab-tube-reflect,
-.lab-tube-flow,
-.lab-tube-fitting-groove {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.lab-tube { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.lab-tube-glow {
+  stroke: rgba(185, 255, 135, 0.38);
+  stroke-width: var(--tube-glow-w);
+  filter: var(--tube-soft-glow);
 }
-.lab-tube-shadow {
-  stroke: var(--lab-tube-shadow);
-  stroke-width: var(--lab-tube-w-shadow);
+.lab-tube-rim {
+  stroke: rgba(55, 95, 38, 0.72);
+  stroke-width: var(--tube-rim-w);
 }
-.lab-tube-jacket { stroke-width: var(--lab-tube-w-jacket); }
-.lab-tube-enamel { stroke-width: var(--lab-tube-w-enamel); }
-.lab-tube-core { stroke-width: var(--lab-tube-w-core); }
-.lab-tube-lime .lab-tube-core { stroke: var(--lab-tube-lime); }
-.lab-tube-pink .lab-tube-core { stroke: var(--lab-tube-pink); }
-.lab-tube-mint .lab-tube-core { stroke: var(--lab-tube-mint); }
-.lab-tube-purple .lab-tube-core { stroke: var(--lab-tube-purple); }
-.lab-tube-bore {
-  stroke: var(--lab-tube-bore);
-  stroke-width: var(--lab-tube-w-bore);
+.lab-tube-glass {
+  stroke: var(--tube-glass-stroke);
+  stroke-width: var(--tube-glass-w);
+  opacity: 0.88;
+}
+.lab-tube-liquid {
+  stroke: var(--tube-liquid-stroke);
+  stroke-width: var(--tube-liquid-w);
+  filter: var(--tube-core-glow);
+}
+.lab-tube-specular {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: var(--tube-spec-w);
 }
 .lab-tube-reflect {
-  stroke: rgba(255, 255, 255, 0.88);
-  stroke-width: var(--lab-tube-w-reflect);
-  stroke-dasharray: 18 36;
+  stroke: rgba(255, 255, 255, 0.32);
+  stroke-width: var(--tube-reflect-w);
+  opacity: 0.9;
 }
 .lab-tube-flow {
-  stroke-width: var(--lab-tube-w-flow);
-  stroke-dasharray: 8 18;
-  animation: lab-tube-flow 9s linear infinite;
+  stroke: rgba(255, 255, 255, 0.78);
+  stroke-width: var(--tube-flow-w);
+  stroke-dasharray: 8 26;
+  animation: tube-flow 8.5s linear infinite;
 }
-.lab-tube-lime .lab-tube-flow { stroke: var(--lab-tube-lime); }
-.lab-tube-pink .lab-tube-flow { stroke: var(--lab-tube-pink); }
-.lab-tube-mint .lab-tube-flow { stroke: var(--lab-tube-mint); }
-.lab-tube-purple .lab-tube-flow { stroke: var(--lab-tube-purple); }
-.lab-tube-fitting { pointer-events: none; }
-.lab-tube-fitting-shadow { fill: rgba(20, 12, 46, 0.18); }
-.lab-tube-fitting-enamel {
-  fill: var(--lab-tube-ceramic);
-  stroke: rgba(142, 151, 168, 0.7);
-  stroke-width: 0.8;
+.bench[data-tube-state="active"] .lab-tube-liquid { stroke: var(--tube-liquid-active); }
+.bench[data-tube-state="active"] .lab-tube-glow { stroke: rgba(143, 255, 182, 0.55); }
+.bench[data-tube-state="flowing"] .lab-tube-flow {
+  stroke-dasharray: 14 18;
+  animation-duration: 4.2s;
+  stroke: rgba(255, 255, 255, 0.92);
 }
-.lab-tube-fitting-groove {
-  stroke: rgba(20, 12, 46, 0.38);
-  stroke-width: 1.15;
-}
-.lab-tube-fitting-port { fill: #141018; }
-.lab-tube-lamp-lime { fill: var(--lab-tube-lime); }
-.lab-tube-lamp-pink { fill: var(--lab-tube-pink); }
-.lab-tube-lamp-mint { fill: var(--lab-tube-mint); }
-.lab-tube-lamp-purple { fill: var(--lab-tube-purple); }
-.bench-tubes.is-off {
-  --lab-tube-lime: var(--lab-tube-off);
-  --lab-tube-pink: var(--lab-tube-off);
-  --lab-tube-mint: var(--lab-tube-off);
-  --lab-tube-purple: var(--lab-tube-off);
-}
-.bench-tubes.is-off .lab-tube-flow {
-  animation: none;
-  opacity: 0.28;
-}
+.bench[data-tube-state="flowing"] .lab-tube-liquid { stroke: var(--tube-liquid-active); }
+.bench[data-tube-state="disabled"] .lab-tube-glow { stroke: rgba(60, 59, 60, 0.12); }
+.bench[data-tube-state="disabled"] .lab-tube-rim { stroke: #6a6a6e; opacity: 0.55; }
+.bench[data-tube-state="disabled"] .lab-tube-glass { opacity: 0.45; }
+.bench[data-tube-state="disabled"] .lab-tube-liquid { stroke: #9aa0a8; filter: none; opacity: 0.5; }
+.bench[data-tube-state="disabled"] .lab-tube-flow { animation: none; opacity: 0; }
+.bench[data-tube-state="disabled"] .fitting { opacity: 0.55; }
+.fitting { pointer-events: none; }
+.fitting-body { fill: var(--fitting-chrome); stroke: rgba(20, 12, 46, 0.4); stroke-width: 0.7; }
+.fitting-groove { fill: none; stroke: rgba(30, 28, 40, 0.55); stroke-width: 1.35; }
+.fitting-groove-hi { fill: none; stroke: rgba(255, 255, 255, 0.55); stroke-width: 0.7; }
+.fitting-screw { fill: #1a1624; stroke: rgba(255, 255, 255, 0.35); stroke-width: 0.4; }
+.fitting-collar { fill: var(--fitting-ceramic); stroke: rgba(60, 59, 60, 0.28); stroke-width: 0.55; }
+.fitting-port { fill: #141018; }
+.fitting-core { fill: var(--lime); filter: var(--tube-core-glow); }
+.fitting-flange { fill: var(--fitting-chrome); stroke: rgba(20, 12, 46, 0.35); stroke-width: 0.5; }
+html.simplify-tubes .lab-tube-glow { display: none; }
+html.simplify-tubes .lab-tube-reflect { display: none; }
+html.simplify-tubes .lab-tube-flow { animation: none; opacity: 0.25; }
+html.simplify-tubes .fitting-groove { display: none; }
 .terminal h2 { color: var(--on-dark); }
 
 .nft-capsule,
@@ -667,15 +664,21 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
       "pieces";
   }
   .piece-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bench-tubes {
-    --lab-tube-w-shadow: 16px;
-    --lab-tube-w-jacket: 13px;
-    --lab-tube-w-enamel: 10px;
-    --lab-tube-w-core: 6px;
-    --lab-tube-w-bore: 2.2px;
-    --lab-tube-w-flow: 1.5px;
+  :root {
+    --tube-glow-w: 16px;
+    --tube-rim-w: 11px;
+    --tube-glass-w: 9px;
+    --tube-liquid-w: 6px;
+    --tube-spec-w: 1.7px;
+    --tube-reflect-w: 0.9px;
+    --tube-flow-w: 2px;
+    --tube-glow-blur: 5px;
+    --tube-bend-r: 16px;
+    --fitting-len: 18px;
+    --fitting-dia: 13px;
   }
   .lab-tube-reflect { display: none; }
+  .lab-tube-glow { stroke-width: 14px; }
   .nft-capsule { min-block-size: 18rem; max-inline-size: 18rem; }
   .site-header {
     display: flex;
@@ -691,9 +694,10 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .btn:hover, .btn:active { transform: none; }
-  .cable, .lab-tube-flow { animation: none !important; }
+  .cable { animation: none !important; }
+  .lab-tube-flow { animation: none !important; opacity: 0.35; }
 }
 
-@keyframes lab-tube-flow { to { stroke-dashoffset: -120; } }
+@keyframes tube-flow { to { stroke-dashoffset: -190; } }
 :focus-visible { outline: 3px solid var(--lime); outline-offset: 3px; }
 .btn-lime:focus-visible, .pack-key.on:focus-visible { outline-color: var(--purple); }
