@@ -1112,7 +1112,13 @@ body::before {
   letter-spacing: -0.075em;
   text-wrap: balance;
 }
-.resolved-title-visual { display: block; white-space: pre-line; }
+.resolved-title-visual,
+.resolved-title-line { display: block; }
+.resolved-title-line { white-space: nowrap; }
+.resolved-title-character {
+  display: inline-block;
+  animation: character-resolve 620ms var(--ease-out) both;
+}
 .discovery-heading .lede { max-inline-size: 42ch; font-size: clamp(1rem, 1.35vw, 1.2rem); line-height: 1.6; }
 .hero-about { gap: 0.55rem; padding-inline: 0.8rem; transition: transform 220ms var(--ease-out), box-shadow 220ms ease; }
 @media (hover: hover) { .hero-about:hover { transform: translateX(3px); } }
@@ -1374,6 +1380,15 @@ input, select, textarea { border: 1px solid rgba(128,73,255,.12); background: rg
 .site-footer nav ul { gap: .4rem 1.35rem; }
 .site-footer nav a { padding: .4rem 0; min-width: auto; }
 
+html { scroll-padding-top: 7rem; }
+.capsule-collection { scroll-margin-top: 7rem; }
+:where(a, button, input, select, textarea, [tabindex]) { scroll-margin-top: 7rem; }
+
+@keyframes character-resolve {
+  from { opacity: .34; transform: translateY(.28em) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+
 html[data-motion="enabled"] [data-reveal] {
   opacity: 0;
   transform: translateY(28px) scale(.99);
@@ -1402,6 +1417,9 @@ html[data-motion="enabled"] .capsule-grid > li:nth-child(4) { transition-delay: 
 }
 
 @media (max-width: 720px) {
+  html { scroll-padding-top: 1rem; }
+  .capsule-collection,
+  :where(a, button, input, select, textarea, [tabindex]) { scroll-margin-top: 1rem; }
   .site-header {
     position: relative;
     top: auto;
@@ -1481,6 +1499,7 @@ html[data-motion="enabled"] .capsule-grid > li:nth-child(4) { transition-delay: 
     transition-duration: .01ms !important;
   }
   html[data-motion="enabled"] [data-reveal] { opacity: 1; transform: none; }
+  .resolved-title-character { animation: none; opacity: 1; transform: none; }
   .raffle-capsule, .capsule-art img, .piece-artwork { transform: none; }
   .hero-art-card[data-position="1"] { transform: translate(-35%, -53%) rotate(8deg); }
   .hero-art-card[data-position="2"] { transform: translate(-68%, -48%) rotate(-10deg); }

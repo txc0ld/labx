@@ -66,10 +66,10 @@ Sage `#D4DED2` is the pigment inside inset wells. The page field is lavender, be
 
 Purposeful and staged.
 
-- The hero title performs one short deterministic resolution effect while its complete semantic heading remains available to assistive technology.
+- The hero title resolves its final letters in place with opacity and vertical transforms, so the completed line boxes and surrounding layout never move. Its complete semantic heading remains available to assistive technology from the first render.
 - Hero, catalog, and detail surfaces resolve with a weighted fade and vertical transform as they enter view. Content stays visible before JavaScript initializes and if observation is unavailable.
 - Artwork stacks open subtly on pointer hover; catalog artwork lifts inside its frame; arrows respond directionally. Nothing hijacks scrolling or loops for decoration.
-- Motion uses transforms and opacity. Observers and timers clean up on navigation. A live `prefers-reduced-motion` change immediately reveals the final title, stops observers, and leaves all content visible.
+- Motion uses transforms and opacity. Observers clean up on navigation. A live `prefers-reduced-motion` change immediately reveals the final title, stops observers, and leaves all content visible.
 
 ## Surfaces
 
