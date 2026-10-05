@@ -62,10 +62,10 @@ export const SEED_PIECES: Piece[] = [
   {
     id: "junction-array",
     title: "Junction Array",
-    artist: "LABx studio",
+    artist: "Demo placeholder",
     mark: "junction",
-    image: "/lab/hero-linked-panels.jpg",
-    imageAlt: "Pearlescent terminal and glossy filter panel linked by mirrored chrome tubes and fluorescent cables",
+    image: "/artwork/demo-portrait-01.png",
+    imageAlt: "Grayscale pixel-art portrait on a dark background",
     phase: "open",
     escrowed: true,
     salesEnd: "2027-06-01T00:00:00.000Z",
@@ -79,10 +79,10 @@ export const SEED_PIECES: Piece[] = [
   {
     id: "filter-bank",
     title: "Filter Bank",
-    artist: "LABx studio",
+    artist: "Demo placeholder",
     mark: "filter",
-    image: "/lab/filter-panel.jpg",
-    imageAlt: "Glossy pearlescent filter panel with chunky buttons, a chrome port, and a fluorescent cable",
+    image: "/artwork/argonaut-7297.png",
+    imageAlt: "Gray pixel-art figure wearing a pink cap on a pale gray background",
     phase: "open",
     escrowed: true,
     salesEnd: "2027-05-12T00:00:00.000Z",
@@ -96,10 +96,10 @@ export const SEED_PIECES: Piece[] = [
   {
     id: "terminal-well",
     title: "Terminal Well",
-    artist: "LABx studio",
+    artist: "Demo placeholder",
     mark: "terminal",
-    image: "/lab/terminal-panel.jpg",
-    imageAlt: "Purple terminal housing with a mirrored chrome bezel, chunky keys, and a fluorescent cable",
+    image: "/artwork/demo-portrait-03.png",
+    imageAlt: "Olive and charcoal pixel-art figure on a dark background",
     phase: "open",
     escrowed: true,
     salesEnd: "2027-04-20T00:00:00.000Z",
@@ -112,10 +112,10 @@ export const SEED_PIECES: Piece[] = [
   {
     id: "cable-run",
     title: "Cable Run",
-    artist: "LABx studio",
+    artist: "Demo placeholder",
     mark: "cable",
-    image: "/lab/chrome-fluoro-run.jpg",
-    imageAlt: "Mirrored chrome tube junctions and fluorescent cables linking two instrument panels",
+    image: "/artwork/demo-portrait-04.png",
+    imageAlt: "Purple and mint pixel-art figure on a dark background",
     phase: "draft",
     escrowed: false,
     salesEnd: "2027-07-01T00:00:00.000Z",
@@ -124,3 +124,18 @@ export const SEED_PIECES: Piece[] = [
     tokenId: "12"
   }
 ];
+
+const LEGACY_DEMO_IMAGES: Record<string, string> = {
+  "junction-array": "/lab/hero-linked-panels.jpg",
+  "filter-bank": "/lab/filter-panel.jpg",
+  "terminal-well": "/lab/terminal-panel.jpg",
+  "cable-run": "/lab/chrome-fluoro-run.jpg"
+};
+
+/** Refresh only the original placeholder, preserving saved demo activity and custom artwork. */
+export function withCurrentDemoArtwork(piece: Piece): Piece {
+  const seed = SEED_PIECES.find((item) => item.id === piece.id);
+  if (!seed || piece.image !== LEGACY_DEMO_IMAGES[piece.id]) return piece;
+  return { ...piece, image: seed.image, imageAlt: seed.imageAlt,
+    artist: piece.artist === "LABx studio" ? seed.artist : piece.artist };
+}

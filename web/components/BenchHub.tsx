@@ -84,7 +84,7 @@ function Capsule({ piece, now, index }: { piece: Piece; now: number; index: numb
     <li>
       <Link className="raffle-capsule bezel" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
         <div className="capsule-art">
-          <Image src={piece.image} alt={piece.imageAlt} width={600} height={750} sizes="(max-width: 560px) 90vw, (max-width: 900px) 45vw, 280px" />
+          <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized />
           <span className="capsule-index" aria-hidden="true">LAB / {String(index + 1).padStart(2, "0")}</span>
           <span className="capsule-art-label">Demo artwork</span>
         </div>

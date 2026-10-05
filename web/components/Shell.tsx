@@ -58,7 +58,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
           <Plumbing label="Footer cable run" />
-          <div className="pearl pad footer-strip">
+          <div className="footer-strip">
             <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
             <span>{OPERATOR_LINE}</span>
             <nav aria-label="Footer">

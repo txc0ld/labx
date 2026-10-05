@@ -46,8 +46,8 @@ export function PieceDesk({ id }: { id: string }) {
     <div className="detail-path"><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the bench</Link><span className="kicker">Demo piece console</span></div>
     <section className="section piece-layout">
       <div className="bezel">
-        <div className="shot">
-          <Image src={piece.image} alt={piece.imageAlt} width={1200} height={900} priority />
+        <div className="shot piece-artwork">
+          <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized priority />
         </div>
       </div>
       <div className="pearl pad stack">

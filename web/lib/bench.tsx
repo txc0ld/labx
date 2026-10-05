@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { keccak256, toBytes, type Address } from "viem";
 import { generatePrivateKey } from "viem/accounts";
-import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, type Entry, type PackName, type Piece } from "./seed";
+import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, withCurrentDemoArtwork, type Entry, type PackName, type Piece } from "./seed";
 import { pickWinner, snapshotLots } from "./draw";
 import { saltedPrivateHash } from "./reserve";
 import { connectSepolia, onChainReady } from "./wallet";
@@ -62,7 +62,7 @@ export function BenchProvider({ children }: { children: ReactNode }) {
           void _salt;
           void _privateHash;
           const mark = rest.mark ?? (rest.id.includes("cable") ? "cable" : rest.id.includes("filter") ? "filter" : rest.id.includes("terminal") ? "terminal" : "junction");
-          return { ...rest, mark };
+          return withCurrentDemoArtwork({ ...rest, mark });
         });
         setState({ ...initial(), ...parsed });
       }
