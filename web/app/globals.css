@@ -1436,8 +1436,23 @@ html[data-motion="enabled"] .capsule-grid > li:nth-child(4) { transition-delay: 
   .shell-plumbing { height: 2rem; }
   .discovery-hero { margin-bottom: 3rem; border-radius: 30px; padding: 1.4rem; }
   .discovery-heading .resolved-title { font-size: clamp(3rem, 15vw, 5rem); }
-  .hero-gallery { min-height: 23rem; }
-  .hero-art-stack { inset: 0 0 6.3rem; }
+  .hero-gallery {
+    min-height: 0;
+    grid-template-rows: auto auto;
+    align-content: stretch;
+    gap: .85rem;
+  }
+  .hero-art-stack {
+    position: relative;
+    inset: auto;
+    min-height: clamp(14rem, 66vw, 25rem);
+  }
+  .hero-art-card { width: min(62%, 20rem); }
+  .hero-empty-orbit {
+    position: relative;
+    inset: auto;
+    min-height: clamp(14rem, 66vw, 25rem);
+  }
   .hero-gallery-meta { grid-template-columns: auto 1fr; }
   .hero-gallery-meta > p:nth-of-type(2), .hero-gallery-meta .readout-link { grid-column: 1 / -1; }
   .capsule-grid { grid-template-columns: 1fr; }
@@ -1475,10 +1490,7 @@ html[data-motion="enabled"] .capsule-grid > li:nth-child(4) { transition-delay: 
   .discovery-heading .btn-row { gap: .2rem; }
   .discovery-heading .btn { flex: 1 1 100%; }
   .discovery-heading .resolved-title { font-size: clamp(2.7rem, 14.5vw, 3.7rem); }
-  .hero-gallery { min-height: 15.5rem; }
-  .hero-art-stack { inset: 0 0 5.4rem; }
-  .hero-art-card { width: 62%; }
-  .hero-empty-orbit { inset: .5rem 2.5rem 6rem; }
+  .hero-gallery { min-height: 0; }
   .hero-gallery-meta { padding: .75rem .8rem; gap: .25rem .65rem; }
   .collection-filters { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
   .collection-filters button { padding-inline: .25rem; font-size: .76rem; }
