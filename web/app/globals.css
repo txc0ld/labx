@@ -264,14 +264,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
     "hero hero hero"
     "side-l capsule side-r"
     "pieces pieces pieces";
-  gap: 1.15rem 1.35rem;
+  gap: 1.4rem 1.6rem;
   align-items: center;
   margin-block-start: 0.4rem;
-  padding-block: 0.2rem 0.4rem;
+  padding-block: 0.35rem 0.8rem;
 }
 .bench-hero {
   grid-area: hero;
-  inline-size: min(46rem, 100%);
+  inline-size: min(38rem, 100%);
   justify-self: center;
   position: relative;
   z-index: 1;
@@ -279,8 +279,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .side-l { grid-area: side-l; }
 .nft-capsule { grid-area: capsule; }
 .side-r { grid-area: side-r; }
-.piece-row { grid-area: pieces; }
-.side-card, .nft-capsule, .piece-row { position: relative; z-index: 1; min-inline-size: 0; }
+.bench-pieces { grid-area: pieces; position: relative; z-index: 2; min-inline-size: 0; }
+.side-card, .nft-capsule, .bench-hero { position: relative; z-index: 2; min-inline-size: 0; }
+.bench-pieces h2 { margin-block-end: 0.7rem; }
 
 .bench-tubes {
   position: absolute;
@@ -305,13 +306,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
   animation: tube-shine 10s linear infinite;
 }
 
-.nft-capsule {
+.nft-capsule,
+.nft-capsule.bezel {
   justify-self: center;
-  inline-size: min(100%, 22rem);
-  min-block-size: 24rem;
-  aspect-ratio: 3 / 4;
+  inline-size: min(100%, 18.5rem);
+  min-block-size: 26rem;
+  aspect-ratio: 1 / 1.55;
   border-radius: 999px;
-  padding: 0.7rem;
+  padding: 0.75rem;
+  overflow: hidden;
 }
 .nft-capsule-well {
   display: grid;
@@ -372,7 +375,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .piece-card h3, .side-card h3, .card h3 { margin: 0; letter-spacing: -0.04em; font-size: 1.35rem; }
 .piece-card p, .card p { margin: 0; color: var(--charcoal); }
 .price { font-weight: 700; }
-.bench-foot { margin-block-start: 0.6rem; }
 
 .section { margin: 1.6rem 0 2.4rem; }
 .section h2 { font-size: clamp(1.8rem, 3vw, 2.6rem); letter-spacing: -0.04em; margin: 0 0 0.8rem; }

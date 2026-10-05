@@ -1,95 +1,85 @@
 "use client";
 
-import { useId, useLayoutEffect, useState, type RefObject } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 
 type Box = { x: number; y: number; w: number; h: number };
 
-export type TubeNode = "hero" | "left" | "well" | "right" | "p0" | "p1" | "p2" | "p3";
+const KEYS = ["hero", "left", "well", "right", "p0", "p1", "p2", "p3"] as const;
 
 function boxOf(root: DOMRect, node: Element): Box {
   const rect = node.getBoundingClientRect();
   return { x: rect.left - root.left, y: rect.top - root.top, w: rect.width, h: rect.height };
 }
 
-function point(box: Box, edge: "top" | "bottom" | "left" | "right" | "center") {
+function point(box: Box, edge: "top" | "bottom" | "left" | "right") {
   if (edge === "top") return { x: box.x + box.w / 2, y: box.y };
   if (edge === "bottom") return { x: box.x + box.w / 2, y: box.y + box.h };
   if (edge === "left") return { x: box.x, y: box.y + box.h / 2 };
-  if (edge === "right") return { x: box.x + box.w, y: box.y + box.h / 2 };
-  return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+  return { x: box.x + box.w, y: box.y + box.h / 2 };
 }
 
-function elbow(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  first: "h" | "v"
-) {
-  if (first === "h") return `M ${from.x} ${from.y} H ${to.x} V ${to.y}`;
-  return `M ${from.x} ${from.y} V ${to.y} H ${to.x}`;
+function elbow(from: { x: number; y: number }, to: { x: number; y: number }, first: "h" | "v") {
+  if (first === "h") return `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} H ${to.x.toFixed(1)} V ${to.y.toFixed(1)}`;
+  return `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} V ${to.y.toFixed(1)} H ${to.x.toFixed(1)}`;
 }
 
-export function BenchTubes({
-  root,
-  nodes
-}: {
-  root: RefObject<HTMLElement | null>;
-  nodes: RefObject<Partial<Record<TubeNode, HTMLElement | null>>>;
-}) {
+export function BenchTubes() {
   const uid = useId().replace(/:/g, "");
+  const svgRef = useRef<SVGSVGElement>(null);
   const [frame, setFrame] = useState<{ w: number; h: number; paths: string[] }>({ w: 0, h: 0, paths: [] });
 
   useLayoutEffect(() => {
-    const host = root.current;
-    if (!host) return;
+    const svg = svgRef.current;
+    const host = svg?.closest(".bench");
+    if (!svg || !(host instanceof HTMLElement)) return;
 
     const measure = () => {
-      if (!root.current) return;
-      const rootBox = root.current.getBoundingClientRect();
-      const map = nodes.current;
-      const take = (key: TubeNode) => {
-        const el = map?.[key];
+      const rootBox = host.getBoundingClientRect();
+      const take = (key: string) => {
+        const el = host.querySelector(`[data-tube="${key}"]`);
         return el ? boxOf(rootBox, el) : null;
       };
       const hero = take("hero");
       const left = take("left");
       const well = take("well");
       const right = take("right");
-      const pieces = [take("p0"), take("p1"), take("p2"), take("p3")];
+      const pieces = KEYS.slice(4).map(take);
       const paths: string[] = [];
 
-      if (hero && well) {
-        paths.push(elbow(point(hero, "bottom"), point(well, "top"), "v"));
-      }
+      if (hero && well) paths.push(elbow(point(hero, "bottom"), point(well, "top"), "v"));
       if (hero && left) {
-        const start = { x: hero.x + hero.w * 0.18, y: hero.y + hero.h };
+        const start = { x: hero.x + hero.w * 0.16, y: hero.y + hero.h };
         const end = point(left, "top");
-        paths.push(`M ${start.x} ${start.y} V ${start.y + 28} H ${end.x} V ${end.y}`);
+        paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${(start.y + 26).toFixed(1)} H ${end.x.toFixed(1)} V ${end.y.toFixed(1)}`);
       }
       if (hero && right) {
-        const start = { x: hero.x + hero.w * 0.82, y: hero.y + hero.h };
+        const start = { x: hero.x + hero.w * 0.84, y: hero.y + hero.h };
         const end = point(right, "top");
-        paths.push(`M ${start.x} ${start.y} V ${start.y + 28} H ${end.x} V ${end.y}`);
+        paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${(start.y + 26).toFixed(1)} H ${end.x.toFixed(1)} V ${end.y.toFixed(1)}`);
       }
       if (left && well) paths.push(elbow(point(left, "right"), point(well, "left"), "h"));
       if (right && well) paths.push(elbow(point(well, "right"), point(right, "left"), "h"));
-      if (well && pieces[1] && pieces[2]) {
-        const mid = {
-          x: (pieces[1].x + pieces[1].w + pieces[2].x) / 2,
-          y: Math.min(pieces[1].y, pieces[2].y)
-        };
-        paths.push(elbow(point(well, "bottom"), mid, "v"));
-      }
-      if (left && pieces[0]) paths.push(elbow(point(left, "bottom"), point(pieces[0], "top"), "v"));
-      if (right && pieces[3]) paths.push(elbow(point(right, "bottom"), point(pieces[3], "top"), "v"));
       const present = pieces.filter((box): box is Box => Boolean(box));
-      if (present.length > 1) {
-        const y = present[0].y - 18;
+      if (present.length) {
+        const manifoldY = Math.min(...present.map((box) => box.y)) - 24;
+        if (well) {
+          const start = point(well, "bottom");
+          paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${manifoldY.toFixed(1)}`);
+        }
+        if (left) {
+          const start = point(left, "bottom");
+          paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${manifoldY.toFixed(1)}`);
+        }
+        if (right) {
+          const start = point(right, "bottom");
+          paths.push(`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} V ${manifoldY.toFixed(1)}`);
+        }
         const first = point(present[0], "top");
         const last = point(present[present.length - 1], "top");
-        paths.push(`M ${first.x} ${first.y} V ${y} H ${last.x} V ${last.y}`);
-        present.slice(1, -1).forEach((box) => {
+        paths.push(`M ${first.x.toFixed(1)} ${manifoldY.toFixed(1)} H ${last.x.toFixed(1)}`);
+        present.forEach((box) => {
           const top = point(box, "top");
-          paths.push(`M ${top.x} ${y} V ${top.y}`);
+          paths.push(`M ${top.x.toFixed(1)} ${manifoldY.toFixed(1)} V ${top.y.toFixed(1)}`);
         });
       }
 
@@ -99,23 +89,19 @@ export function BenchTubes({
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(host);
-    Object.values(nodes.current ?? {}).forEach((node) => {
-      if (node) observer.observe(node);
-    });
+    host.querySelectorAll("[data-tube]").forEach((node) => observer.observe(node));
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [nodes, root]);
-
-  if (frame.w < 8 || frame.paths.length === 0) return null;
+  }, []);
 
   const chrome = `tube-chrome-${uid}`;
   const glow = `tube-glow-${uid}`;
 
   return (
-    <svg className="bench-tubes" viewBox={`0 0 ${frame.w} ${frame.h}`} role="img" aria-label="Fluoro chrome tubes linking the bench panels">
+    <svg ref={svgRef} className="bench-tubes" viewBox={frame.w ? `0 0 ${frame.w} ${frame.h}` : "0 0 1 1"} role="img" aria-label="Fluoro chrome tubes linking the bench panels">
       <title>Fluoro chrome tubes linking the bench panels</title>
       <defs>
         <linearGradient id={chrome} x1="0" y1="0" x2="1" y2="1">
@@ -134,7 +120,7 @@ export function BenchTubes({
         </filter>
       </defs>
       {frame.paths.map((d, index) => (
-        <g key={d + index} filter={`url(#${glow})`}>
+        <g key={`${d}-${index}`} filter={`url(#${glow})`}>
           <path className="tube-shell" d={d} />
           <path className="tube-body" d={d} stroke={`url(#${chrome})`} />
           <path className="tube-shine" d={d} />
