@@ -100,7 +100,11 @@ contract LabxRaffleTest is Test {
         configs[4] = _pack("Platinum", 500e6, 100, 10);
     }
 
-    function _commit(bytes32 nonce, bytes32 publicHash, bytes32 privateHash, bytes32 salt) internal view returns (bytes32) {
+    function _commit(bytes32 nonce, bytes32 publicHash, bytes32 privateHash, bytes32 salt)
+        internal
+        view
+        returns (bytes32)
+    {
         return labx.hashCommitment(nonce, address(nft), 1, publicHash, privateHash, salt);
     }
 
@@ -111,7 +115,9 @@ contract LabxRaffleTest is Test {
         salt = bytes32(uint256(9));
         bytes32 commit = _commit(nonce, publicHash, privateHash, salt);
         vm.prank(seller);
-        id = labx.createRaffle(address(nft), 1, uint64(block.timestamp + 2 days), nonce, commit, "Junction Array", _configs());
+        id = labx.createRaffle(
+            address(nft), 1, uint64(block.timestamp + 2 days), nonce, commit, "Junction Array", _configs()
+        );
     }
 
     function _escrowOpen(uint256 id) internal {
@@ -241,7 +247,9 @@ contract LabxRaffleTest is Test {
         bytes32 salt = bytes32(uint256(3));
         bytes32 commit = labx.hashCommitment(nonce, address(nft), 2, publicHash, privateHash, salt);
         vm.prank(seller);
-        uint256 id = labx.createRaffle(address(nft), 2, uint64(block.timestamp + 2 days), nonce, commit, "Port Cluster", _configs());
+        uint256 id = labx.createRaffle(
+            address(nft), 2, uint64(block.timestamp + 2 days), nonce, commit, "Port Cluster", _configs()
+        );
         vm.startPrank(seller);
         labx.escrow(id);
         labx.open(id);
@@ -485,7 +493,8 @@ contract LabxRaffleTest is Test {
         bytes32 nonce = keccak256("n");
         bytes32 commit = labx.hashCommitment(nonce, address(nft), 3, keccak256("a"), keccak256("b"), keccak256("c"));
         vm.prank(seller);
-        uint256 id2 = labx.createRaffle(address(nft), 3, uint64(block.timestamp + 1 days), nonce, commit, "Cable Run", one);
+        uint256 id2 =
+            labx.createRaffle(address(nft), 3, uint64(block.timestamp + 1 days), nonce, commit, "Cable Run", one);
         vm.startPrank(seller);
         labx.escrow(id2);
         labx.open(id2);
@@ -504,7 +513,9 @@ contract LabxRaffleTest is Test {
         bytes32 nonce = keccak256("mal");
         bytes32 commit = labx.hashCommitment(nonce, address(bad), 9, keccak256("a"), keccak256("b"), keccak256("c"));
         vm.prank(seller);
-        uint256 id = labx.createRaffle(address(bad), 9, uint64(block.timestamp + 1 days), nonce, commit, "Hostile Port", _configs());
+        uint256 id = labx.createRaffle(
+            address(bad), 9, uint64(block.timestamp + 1 days), nonce, commit, "Hostile Port", _configs()
+        );
         bad.setTarget(address(labx));
         _fund(seller, 100e6);
         vm.prank(seller);
@@ -972,6 +983,7 @@ contract LabxRaffleTest is Test {
         assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
         assertEq(labx.getRaffle(id).winner, address(0));
     }
+
     function test_nativePaymentTogglesWhenNoActiveDrawings() public {
         assertFalse(labx.nativePayment());
         assertFalse(vrf.lastNativePayment());
@@ -1053,8 +1065,13 @@ contract LabxRaffleTest is Test {
         vm.startPrank(seller);
         nft.approve(address(labx), 2);
         uint256 settled = labx.createRaffle(
-            address(nft), 2, uint64(block.timestamp + 2 days), bytes32(uint256(2)),
-            bytes32(uint256(3)), "Second raffle", _configs()
+            address(nft),
+            2,
+            uint64(block.timestamp + 2 days),
+            bytes32(uint256(2)),
+            bytes32(uint256(3)),
+            "Second raffle",
+            _configs()
         );
         labx.escrow(settled);
         labx.open(settled);
@@ -1132,5 +1149,85 @@ contract LabxRaffleTest is Test {
         vm.expectEmit(false, false, false, true);
         emit LabxRaffle.NativePaymentSet(true);
         labx.setNativePayment(true);
+    }
+
+    /// @dev Evidence of the documented owner cancellation trust, not a fairness guarantee.
+    function test_policyOwnerCanDiscardDelayedOutcomeAfterAbortTimeout() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 30e6);
+        _fund(bob, 30e6);
+        _buy(alice, id, 0, 1);
+        _buy(bob, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
+
+        // Ordering model: owner aborts before a delayed fulfillment that would
+        // award Alice. The already requested outcome can no longer settle.
+        labx.abortDrawing(id);
+        vrf.fulfill(address(labx), requestId, 0);
+        assertEq(labx.getRaffle(id).winner, address(0));
+        assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+        vm.prank(alice);
+        labx.refund(id);
+        vm.prank(bob);
+        labx.refund(id);
+        vm.prank(seller);
+        labx.reclaimPrize(id);
+        assertEq(usdc.balanceOf(alice), 30e6);
+        assertEq(usdc.balanceOf(bob), 30e6);
+        assertEq(nft.ownerOf(1), seller);
+    }
+
+    function test_policyPausedFundedSnapshotNeedsOwnerForRecovery() public {
+        uint256 id = _drawReady();
+        labx.setPaused(true);
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(seller);
+        vm.expectRevert(LabxRaffle.Paused.selector);
+        labx.requestRandomness(id);
+        vm.prank(seller);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.cancel(id);
+        vm.startPrank(alice);
+        vm.expectRevert(LabxRaffle.NotSeller.selector);
+        labx.cancel(id);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(address(labx)), 30e6);
+        // Owner cancellation can recover funds while paused, but inactivity has
+        // no permissionless timeout escape even after this long delay.
+        labx.cancel(id);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), 100e6);
+    }
+
+    function test_policyUnrevealedDrawNeedsOwnerAfterGrace() public {
+        uint256 id = _drawReady();
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        vm.warp(block.timestamp + labx.REVEAL_GRACE() + 30 days);
+        vm.startPrank(alice);
+        vm.expectRevert(LabxRaffle.RevealRequired.selector);
+        labx.settle(id);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.claimPrize(id);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
+        vm.stopPrank();
+        assertEq(labx.getRaffle(id).winner, alice);
+        assertEq(nft.ownerOf(1), address(labx));
+        labx.settle(id);
+        vm.prank(alice);
+        labx.claimPrize(id);
+        assertEq(nft.ownerOf(1), alice);
     }
 }

@@ -44,8 +44,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     uint16 public constant MIN_CONFIRMATIONS = 3;
     uint16 public constant MAX_CONFIRMATIONS = 200;
 
-    bytes32 public constant AMOE_TYPEHASH =
-        keccak256("AmoeClaim(uint256 raffleId,address account,bytes32 captchaDigest,uint256 deadline,bytes32 termsHash)");
+    bytes32 public constant AMOE_TYPEHASH = keccak256(
+        "AmoeClaim(uint256 raffleId,address account,bytes32 captchaDigest,uint256 deadline,bytes32 termsHash)"
+    );
 
     enum Phase {
         Draft,
@@ -240,7 +241,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
 
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event RaffleCreated(uint256 indexed id, address indexed seller, address indexed nft, uint256 tokenId, bytes32 reserveCommit);
+    event RaffleCreated(
+        uint256 indexed id, address indexed seller, address indexed nft, uint256 tokenId, bytes32 reserveCommit
+    );
     event Escrowed(uint256 indexed id, address indexed nft, uint256 tokenId);
     event Opened(uint256 indexed id);
     event Closed(uint256 indexed id);
@@ -295,7 +298,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (IERC20Metadata(init.usdc).decimals() != 6) revert UsdcDecimals();
         bool ethConfigured = init.router != address(0) || init.weth != address(0) || init.ethUsdFeed != address(0);
         if (ethConfigured) {
-            if (init.router == address(0) || init.weth == address(0) || init.ethUsdFeed == address(0)) revert BadConfig();
+            if (init.router == address(0) || init.weth == address(0) || init.ethUsdFeed == address(0)) {
+                revert BadConfig();
+            }
             if (AggregatorV3Interface(init.ethUsdFeed).decimals() != 8) revert BadFeed();
         }
         uint32 cap = init.amoeCap == 0 ? DEFAULT_AMOE_CAP : init.amoeCap;
@@ -761,9 +766,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         view
         returns (bytes32)
     {
-        return _hashTypedDataV4(
-            keccak256(abi.encode(AMOE_TYPEHASH, id, account, captchaDigest, deadline, termsHash))
-        );
+        return _hashTypedDataV4(keccak256(abi.encode(AMOE_TYPEHASH, id, account, captchaDigest, deadline, termsHash)));
     }
 
     function hashCommitment(
@@ -781,7 +784,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (ethUsdFeed == address(0)) revert EthPathDisabled();
         (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
             AggregatorV3Interface(ethUsdFeed).latestRoundData();
-        if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp || startedAt > block.timestamp) revert StalePrice();
+        if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp || startedAt > block.timestamp) {
+            revert StalePrice();
+        }
         if (answeredInRound < roundId || block.timestamp - updatedAt > PRICE_STALE_AFTER) revert StalePrice();
         if (AggregatorV3Interface(ethUsdFeed).decimals() != 8) revert BadFeed();
         ethWei = (usdcAmount * 1e20 + uint256(answer) - 1) / uint256(answer);
@@ -846,8 +851,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         bytes[] memory calls = new bytes[](1);
         calls[0] = abi.encodeCall(
             ISwapRouter02.exactOutputSingle,
-            (
-                ISwapRouter02.ExactOutputSingleParams({
+            (ISwapRouter02.ExactOutputSingleParams({
                     tokenIn: weth,
                     tokenOut: address(usdc),
                     fee: poolFee,
@@ -855,8 +859,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
                     amountOut: usdcOut,
                     amountInMaximum: cap,
                     sqrtPriceLimitX96: 0
-                })
-            )
+                }))
         );
         ISwapRouter02(router).multicall(deadline, calls);
         if (usdc.balanceOf(address(this)) - usdcBefore < usdcOut) revert SwapShortfall();
@@ -877,16 +880,17 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         pinned = vrfCoordinator;
         _awaitingRequest = true;
         _syncFilled = false;
-        requestId = IVRFCoordinatorV2Plus(pinned).requestRandomWords(
-            VRFV2PlusClient.RandomWordsRequest({
-                keyHash: keyHash,
-                subId: subscriptionId,
-                requestConfirmations: requestConfirmations,
-                callbackGasLimit: callbackGasLimit,
-                numWords: 1,
-                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: nativePayment}))
-            })
-        );
+        requestId = IVRFCoordinatorV2Plus(pinned)
+            .requestRandomWords(
+                VRFV2PlusClient.RandomWordsRequest({
+                    keyHash: keyHash,
+                    subId: subscriptionId,
+                    requestConfirmations: requestConfirmations,
+                    callbackGasLimit: callbackGasLimit,
+                    numWords: 1,
+                    extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: nativePayment}))
+                })
+            );
         _awaitingRequest = false;
         if (requestId == 0) revert BadConfig();
     }
