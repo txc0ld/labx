@@ -44,31 +44,29 @@ export function PieceDesk({ id }: { id: string }) {
 
   return (
     <>
-    <div className="detail-path" data-reveal><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the bench</Link><span className="kicker">Demo piece console</span></div>
+    <div className="detail-path" data-reveal><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the collection</Link><span className="kicker">Sepolia browser demo</span></div>
     <section className="section piece-layout piece-console">
-      <figure className="piece-visual glass-panel" data-reveal>
+      <figure className="piece-visual" data-reveal>
         <div className="piece-visual-topline">
           <span>LABx / Piece {piece.tokenId.padStart(2, "0")}</span>
           <span>Sepolia demo</span>
         </div>
-        <div className="piece-art-frame">
-          <div className="shot piece-artwork">
-            <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized priority />
-          </div>
+        <div className="piece-artwork">
+          <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized priority />
         </div>
         <figcaption className="piece-visual-caption">
           <div>
             <p className="kicker">Demo artwork</p>
             <strong>{piece.title}</strong>
           </div>
-          <span className={`lamp ${piece.escrowed ? "mint" : "pink"}`}><i /> {piece.escrowed ? "escrowed" : "awaiting escrow"}</span>
+          <span className="piece-escrow-status">{piece.escrowed ? "Escrowed" : "Awaiting escrow"}</span>
         </figcaption>
       </figure>
-      <div className="purchase-console glass-panel" data-reveal>
+      <div className="purchase-console" data-reveal>
         <header className="purchase-header">
           <div className="purchase-eyebrow">
             <p className="kicker">{piece.artist}</p>
-            <span className="lamp lavender"><i /> {view?.status}</span>
+            <span className="piece-status">{view?.status}</span>
           </div>
           <h1 className="page-title">{piece.title}</h1>
           <p className="piece-deadline">{view?.timing} · Sales close {closingDate(piece.salesEnd)} UTC</p>
@@ -77,7 +75,7 @@ export function PieceDesk({ id }: { id: string }) {
 
         <section className="pack-selector" aria-labelledby="pack-title">
           <div className="console-section-heading">
-            <div><span>01</span><h2 id="pack-title">Membership pack</h2></div>
+            <div><h2 id="pack-title">Membership pack</h2></div>
             <span>Choose one</span>
           </div>
           <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
@@ -123,10 +121,10 @@ export function PieceDesk({ id }: { id: string }) {
 
         <section className="agreements-section" aria-labelledby="agreements-title">
           <div className="console-section-heading">
-            <div><span>02</span><h2 id="agreements-title">Confirm eligibility</h2></div>
+            <div><h2 id="agreements-title">Confirm eligibility</h2></div>
             <span>Required</span>
           </div>
-          <fieldset className="agreements glass-inset">
+          <fieldset className="agreements">
             <legend className="sr">Agreements</legend>
             <label htmlFor="terms">
               <input id="terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} />

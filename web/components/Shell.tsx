@@ -7,7 +7,6 @@ import { BenchProvider } from "@/lib/bench";
 import { isCurrentPath } from "@/lib/nav";
 import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 import { MotionOrchestrator } from "./MotionOrchestrator";
-import { Plumbing } from "./Plumbing";
 
 const LINKS = [
   { href: "/", label: "Explore" },
@@ -30,7 +29,6 @@ export function Shell({ children }: { children: ReactNode }) {
     <BenchProvider>
       <MotionOrchestrator />
       <a className="skip" href="#content">Skip to content</a>
-      <p className="field-mark" aria-hidden="true">LAB</p>
       <div className="shell">
         <header className="site-header">
           <Link className="brand" href="/">
@@ -56,10 +54,8 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="chain-pill">Sepolia · USDC</span>
           </div>
         </header>
-        <div className="wrap shell-plumbing"><Plumbing /></div>
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
-          <Plumbing label="Footer cable run" />
           <div className="footer-strip">
             <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
             <span>{OPERATOR_LINE}</span>

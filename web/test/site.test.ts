@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { OnChainStatus } from "../components/OnChainStatus";
 import { ResolvedTitle } from "../components/ResolvedTitle";
+import { ScrollStory } from "../components/ScrollStory";
 import { raffleAddress, readRaffle, sendRaffle } from "../lib/wallet";
 import { roundedOrtho } from "../lib/tubes";
 
@@ -353,20 +354,29 @@ describe("responsive chrome and legal surfaces", () => {
     expect(plumbing).not.toMatch(/id=["']chrome["']/);
   });
 
-  it("demotes the About hero CTA so Explore and Fairness stay on the fold", () => {
+  it("puts the real collection ahead of promotional content", () => {
     const hub = read("components/BenchHub.tsx");
-    expect(hub).toMatch(/Explore the bench/);
-    expect(hub).toMatch(/How a draw stays fair/);
-    expect(hub).toMatch(/className="hero-about"/);
-    expect(read("app/globals.css")).toMatch(/\.hero-about/);
+    expect(hub).toMatch(/<ResolvedTitle \/>/);
+    expect(hub).toMatch(/className="capsule-grid"/);
+    expect(hub).toMatch(/Demo collection/);
+    expect(hub).not.toMatch(/hero-art-stack|hero-art-card|Explore the bench/);
   });
 
   it("renders a complete accessible hero heading before visual motion runs", () => {
     const markup = renderToStaticMarkup(createElement(ResolvedTitle));
     expect(markup.match(/<h1/g)).toHaveLength(1);
     expect(markup).toContain('id="hero-title"');
-    expect(markup).toContain('<span class="sr">Pieces, linked on the bench.</span>');
-    expect(markup).toContain('aria-hidden="true"');
+    expect(markup).toContain("The collection");
+  });
+
+  it("keeps both scroll stories readable before client motion starts", () => {
+    const markup = renderToStaticMarkup(createElement(ScrollStory));
+    expect(markup).toContain("Look closer.");
+    expect(markup).toContain("Follow the draw.");
+    expect(markup).toContain("Each piece has its own membership packs.");
+    expect(markup).toContain("Records stay in this browser; no transactions are submitted.");
+    expect(markup).toContain('href="#bench"');
+    expect(markup).toContain('href="/fairness"');
   });
 
   it("marks OnChainStatus as bench-only with a lavender lamp", () => {

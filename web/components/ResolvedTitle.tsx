@@ -1,31 +1,39 @@
-import React from "react";
+"use client";
 
-const LINES = ["Pieces, linked", "on the bench."] as const;
+import React, { useEffect, useState } from "react";
+import { TextScramble } from "./text-scramble/text-scramble";
+
+const TITLE = "The collection";
 
 export function ResolvedTitle() {
-  let characterOffset = 0;
+  const [motionEnabled, setMotionEnabled] = useState(false);
+
+  useEffect(() => {
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setMotionEnabled(!preference.matches);
+    update();
+    preference.addEventListener("change", update);
+    return () => preference.removeEventListener("change", update);
+  }, []);
 
   return (
     <h1 id="hero-title" className="resolved-title">
-      <span className="sr">Pieces, linked on the bench.</span>
-      <span className="resolved-title-visual" aria-hidden="true">
-        {LINES.map((line) => {
-          const lineOffset = characterOffset;
-          characterOffset += line.length;
-          return (
-            <span className="resolved-title-line" key={line}>
-              {Array.from(line, (character, index) => (
-                <span
-                  className="resolved-title-character"
-                  key={`${line}-${index}`}
-                  style={{ animationDelay: `${160 + (lineOffset + index) * 22}ms` }}
-                >
-                  {character === " " ? "\u00a0" : character}
-                </span>
-              ))}
-            </span>
-          );
-        })}
+      <span className="sr">{TITLE}</span>
+      <span className="resolved-title-slot" aria-hidden="true">
+        <span className="resolved-title-measure">{TITLE}</span>
+        {motionEnabled ? (
+          <TextScramble
+            duration={0.7}
+            scrambleFps={30}
+            playOnMount={true}
+            playOnHover={true}
+            render={<span className="resolved-title-visual" />}
+          >
+            {TITLE}
+          </TextScramble>
+        ) : (
+          <span className="resolved-title-visual">{TITLE}</span>
+        )}
       </span>
     </h1>
   );

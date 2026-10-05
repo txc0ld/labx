@@ -29,48 +29,28 @@ export function BenchHub({ pieces, banner }: {
 
   return (
     <>
-      <section className="discovery-hero glass-panel" aria-labelledby="hero-title" data-reveal>
-        <div className="discovery-heading">
-          <p className="kicker hero-kicker"><span aria-hidden="true" /> LABx / Sepolia demo bench</p>
+      <section className="collection-intro" aria-labelledby="hero-title" data-reveal>
+        <div className="collection-title-block">
+          <p className="kicker">LABx / Sepolia browser demo</p>
           <ResolvedTitle />
-          <p className="lede">Choose a capsule. Open its piece console. Explore membership packs and the bonus entries that come with them.</p>
-          <div className="btn-row">
-            <a className="btn" href="#bench">Explore the bench <span aria-hidden="true">↗</span></a>
-            <Link className="hero-about" href="/about">About the lab</Link>
-          </div>
         </div>
-        <aside className={`hero-gallery ${pieces.length ? "" : "hero-gallery-empty"}`} aria-label="Demo artwork preview">
-          {pieces.length ? (
-            <div className="hero-art-stack" aria-hidden="true">
-              {pieces.slice(0, 3).map((piece, index) => (
-                <div className="hero-art-card" data-position={index} key={piece.id}>
-                  <Image src={piece.image} alt="" width={1101} height={1101} unoptimized priority={index === 0} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="hero-empty-orbit" aria-hidden="true"><span className="empty-port" /></div>
-          )}
-          <div className="hero-gallery-meta">
-            <span className="lamp lavender"><i /> Browser demo</span>
-            <p><strong>{String(pieces.length).padStart(2, "0")}</strong> demo {pieces.length === 1 ? "piece" : "pieces"} · {available} open</p>
-            <p>USDC packs · +{LAB_FEE} USDC lab fee</p>
-            <Link href="/fairness" className="readout-link">How a draw stays fair <span aria-hidden="true">↗</span></Link>
-          </div>
-        </aside>
+        <div className="collection-intro-copy">
+          <p>Explore artwork, membership packs and availability.</p>
+          <p className="collection-demo-label"><strong>Demo collection</strong> · {pieces.length} {pieces.length === 1 ? "piece" : "pieces"} · {available} open · no live transactions</p>
+        </div>
       </section>
       {banner ? <p className={`notice ${banner.tone}`} role="status">{banner.text}</p> : null}
       <section className="capsule-collection" id="bench" aria-labelledby="bench-title" data-reveal>
         <div className="collection-heading">
-          <div><p className="kicker">01 / Discovery</p><h2 id="bench-title">On the bench <span className="collection-count">{pieces.length}</span></h2></div>
+          <h2 className="sr" id="bench-title">Available pieces</h2>
           <div className="collection-filters" role="group" aria-label="Filter demo pieces">
             {FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value} onClick={() => setFilter(item.value)}>{item.label}</button>)}
           </div>
         </div>
-        <p className="collection-note" role="status">Showing {shown.length} {shown.length === 1 ? "demo piece" : "demo pieces"}. Demo artwork and status; this is not a live raffle listing.</p>
+        <p className="sr" role="status">Showing {shown.length} {shown.length === 1 ? "demo piece" : "demo pieces"}. Demo artwork and status; this is not a live raffle listing.</p>
         {shown.length ? (
           <ul className="capsule-grid" data-count={shown.length}>
-            {shown.map((piece, index) => <Capsule key={piece.id} piece={piece} now={now} index={index} />)}
+            {shown.map((piece) => <Capsule key={piece.id} piece={piece} now={now} />)}
           </ul>
         ) : (
           <div className="well empty-bench">
@@ -86,27 +66,26 @@ export function BenchHub({ pieces, banner }: {
   );
 }
 
-function Capsule({ piece, now, index }: { piece: Piece; now: number; index: number }) {
+function Capsule({ piece, now }: { piece: Piece; now: number }) {
   const view = pieceView(piece, now);
   const entry = piece.packs.find((pack) => pack.name === "Entry");
   return (
     <li data-reveal>
-      <Link className="raffle-capsule glass-panel" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
+      <Link className="raffle-capsule" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
         <div className="capsule-art">
           <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized />
-          <span className="capsule-index" aria-hidden="true">LAB / {String(index + 1).padStart(2, "0")}</span>
-          <span className="capsule-art-label">Demo artwork</span>
         </div>
-        <div className="capsule-meta pearl">
-          <span className={`lamp ${view.isOpen ? "mint" : "lavender"}`}><i /> {view.status}</span>
-          <h3>{piece.title}</h3>
-          <p className="capsule-artist">{piece.artist}</p>
+        <div className="capsule-meta">
+          <div className="capsule-title-row">
+            <div><h3>{piece.title}</h3><p className="capsule-artist">{piece.artist}</p></div>
+            <span className={`capsule-status ${view.isOpen ? "is-open" : ""}`}>{view.status}</span>
+          </div>
           <dl className="capsule-specs">
             <div><dt>Entry pack</dt><dd>{entry ? `${entry.priceUsdc} USDC` : "Unavailable"}</dd></div>
             <div><dt>Lab fee</dt><dd>+{LAB_FEE} USDC / pack</dd></div>
             <div><dt>Sales close · UTC</dt><dd>{view.scheduled ? <time dateTime={piece.salesEnd}>{closingDate(piece.salesEnd)}</time> : "Not scheduled"}</dd></div>
           </dl>
-          <div className="capsule-foot"><span>{view.timing}</span><span className="capsule-open" aria-hidden="true">↗</span></div>
+          <div className="capsule-foot"><span>{view.timing}</span><span className="capsule-open" aria-hidden="true">View piece ↗</span></div>
         </div>
       </Link>
     </li>

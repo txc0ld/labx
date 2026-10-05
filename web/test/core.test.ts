@@ -157,13 +157,13 @@ describe("surface copy and materials", () => {
     expect(text.toLowerCase().replaceAll("math.floor", "")).not.toMatch(/\bfloor\b/);
   });
 
-  it("keeps the fluoro tokens and provides frosted mobile fallbacks", () => {
+  it("keeps the fluoro tokens and provides a solid reduced-transparency fallback", () => {
     const css = readFileSync(path.join(root, "app/globals.css"), "utf8");
     for (const token of ["#b9ff87", "#ff79c0", "#8fffb6", "#8049ff", "#b09be8", "#000000", "#3c3b3c"]) {
       expect(css.toLowerCase()).toContain(token);
     }
     expect(css).toMatch(/backdrop-filter:\s*blur/);
-    expect(css).toMatch(/@media \(max-width: 720px\)[\s\S]*backdrop-filter:\s*none/);
+    expect(css).toMatch(/@media \(prefers-reduced-transparency:\s*reduce\)[\s\S]*backdrop-filter:\s*none/);
   });
 
   it("ships hardware plates and no figure assets", () => {
@@ -181,14 +181,14 @@ describe("surface copy and materials", () => {
     expect(page).not.toMatch(/next\/image/);
     expect(hub).not.toMatch(/\.jpg|\.png/);
     expect(hub).toMatch(/shown\.map/);
-    expect(hub).toMatch(/raffle-capsule glass-panel/);
+    expect(hub).toMatch(/className="raffle-capsule"/);
     expect(hub).toMatch(/src=\{piece.image\}/);
     expect(hub).toMatch(/Demo artwork/);
     expect(hub).toMatch(/not a live raffle listing/);
     expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
     expect(css).toMatch(/nft-capsule/);
     expect(css).toMatch(/lab-tube-liquid/);
-    expect(css).toMatch(/border-radius: 999px/);
+    expect(css).toMatch(/\.capsule-art[^{]*\{[^}]*aspect-ratio:\s*1/);
     expect(css).toMatch(/\.btn[^{]*\{[^}]*text-decoration:\s*none/);
   });
 });
