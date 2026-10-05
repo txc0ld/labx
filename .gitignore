@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+build/
+.vercel/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/dry-run/
+contracts/.gas-snapshot.tmp
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Tooling output
+coverage/
+lcov.info
+*.tsbuildinfo
+slither-report.json
+.DS_Store
+*.log
