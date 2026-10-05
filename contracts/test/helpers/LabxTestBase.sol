@@ -8,6 +8,7 @@ import {LabxJurisdictionRegistry} from "../../src/LabxJurisdictionRegistry.sol";
 import {LabxMembership} from "../../src/LabxMembership.sol";
 import {LabxRaffleHouse} from "../../src/LabxRaffleHouse.sol";
 import {LabxPoints} from "../../src/LabxPoints.sol";
+import {LabxAmoeGateway} from "../../src/LabxAmoeGateway.sol";
 import {LabxDiscountMarketplace} from "../../src/LabxDiscountMarketplace.sol";
 import {LabxUniswapV3SwapAdapter} from "../../src/LabxUniswapV3SwapAdapter.sol";
 import {LabxVRFConsumerBase} from "../../src/base/LabxVRFConsumerBase.sol";
@@ -50,6 +51,7 @@ abstract contract LabxTestBase is Test {
     LabxMembership internal membership;
     LabxRaffleHouse internal raffleHouse;
     LabxPoints internal points;
+    LabxAmoeGateway internal amoe;
     LabxDiscountMarketplace internal marketplace;
     LabxUniswapV3SwapAdapter internal swapAdapter;
 
@@ -95,6 +97,7 @@ abstract contract LabxTestBase is Test {
             })
         );
         points = new LabxPoints(safe, address(membership));
+        amoe = new LabxAmoeGateway(safe, address(raffleHouse));
         marketplace = new LabxDiscountMarketplace(safe, address(membership));
 
         vm.startPrank(safe);
@@ -128,7 +131,9 @@ abstract contract LabxTestBase is Test {
         raffleHouse.setJurisdiction(address(jurisdiction));
         raffleHouse.grantRole(raffleHouse.OPERATIONS_ROLE(), operator);
         raffleHouse.grantRole(raffleHouse.CURATOR_ROLE(), curator);
-        raffleHouse.grantRole(raffleHouse.ATTESTOR_ROLE(), attestor);
+        raffleHouse.grantRole(raffleHouse.ENTRY_ISSUER_ROLE(), address(amoe));
+
+        amoe.grantRole(amoe.ATTESTOR_ROLE(), attestor);
 
         points.grantRole(points.ATTESTOR_ROLE(), attestor);
         points.grantRole(points.OPERATIONS_ROLE(), operator);
@@ -156,6 +161,14 @@ abstract contract LabxTestBase is Test {
     // Helpers
     // --------------------------------------------------------------------------------------------
 
+    /// @dev Always read the clock through this. The Solidity optimizer treats `block.timestamp` as
+    ///      constant for the whole function, so a test that calls `vm.warp` between statements would
+    ///      otherwise keep seeing the pre-warp value. The cheatcode is an external call, so it cannot
+    ///      be folded away.
+    function _now() internal view returns (uint256) {
+        return vm.getBlockTimestamp();
+    }
+
     function _acceptTerms(address user) internal {
         bytes32[] memory keys = new bytes32[](2);
         uint32[] memory versions = new uint32[](2);
@@ -182,8 +195,8 @@ abstract contract LabxTestBase is Test {
             amount: 1,
             standard: LabxRaffleHouse.NftStandard.ERC721,
             seller: seller,
-            opensAt: uint64(block.timestamp),
-            endsAt: uint64(block.timestamp + 7 days),
+            opensAt: uint64(_now()),
+            endsAt: uint64(_now() + 7 days),
             maxEntriesPerUser: 0,
             reserveCommitment: _reserveCommitment(reserveUsdc, salt),
             allowlistRoot: bytes32(0),
@@ -209,7 +222,7 @@ abstract contract LabxTestBase is Test {
     }
 
     function _createRaffle(LabxRaffleHouse.CreateRaffleParams memory params) internal returns (uint256 raffleId) {
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes memory signature = _signListing(params, deadline);
         vm.prank(curator);
         raffleId = raffleHouse.createRaffle(params, deadline, signature);
@@ -254,7 +267,7 @@ abstract contract LabxTestBase is Test {
                 deadline
             )
         );
-        return _sign(attestorKey, raffleHouse.domainSeparator(), structHash);
+        return _sign(attestorKey, amoe.domainSeparator(), structHash);
     }
 
     function _signCheckIn(address user, uint32 pointsAwarded, bytes32 nonce, uint64 deadline)

@@ -50,7 +50,7 @@ contract LabxMembershipTest is LabxTestBase {
 
         ILabxMembership.EntryBatch memory batch = membership.batchAt(alice, 0);
         assertEq(batch.valuePerEntry, 4e6, "100 USDC across 25 entries = 4 USDC each");
-        assertEq(batch.expiresAt, uint64(block.timestamp) + 365 days, "entries expire 12 months after purchase");
+        assertEq(batch.expiresAt, uint64(_now()) + 365 days, "entries expire 12 months after purchase");
     }
 
     function test_purchaseSetsMembershipRankAndKeepsTheHighest() public {
@@ -70,7 +70,7 @@ contract LabxMembershipTest is LabxTestBase {
     function test_membershipRankLapsesAfterValidity() public {
         vm.prank(alice);
         membership.purchaseWithUsdc(TIER_GOLD);
-        vm.warp(block.timestamp + 366 days);
+        vm.warp(_now() + 366 days);
         assertEq(membership.memberRank(alice), 0);
     }
 
@@ -174,7 +174,7 @@ contract LabxMembershipTest is LabxTestBase {
         vm.prank(alice);
         membership.purchaseWithUsdc(TIER_ENTRY);
 
-        vm.warp(block.timestamp + 365 days + 1);
+        vm.warp(_now() + 365 days + 1);
         assertEq(membership.entriesAvailable(alice), 0);
 
         vm.expectRevert(abi.encodeWithSelector(LabxMembership.InsufficientEntries.selector, 1, 0));
@@ -186,7 +186,7 @@ contract LabxMembershipTest is LabxTestBase {
         vm.prank(alice);
         membership.purchaseWithUsdc(TIER_SILVER); // 100 USDC of entry value
 
-        vm.warp(block.timestamp + 365 days + 1);
+        vm.warp(_now() + 365 days + 1);
 
         (uint256[] memory ids, uint256 value) = membership.expirableBatchIds(alice);
         assertEq(ids.length, 1);
@@ -213,7 +213,7 @@ contract LabxMembershipTest is LabxTestBase {
         vm.expectRevert(abi.encodeWithSelector(LabxMembership.BatchNotExpired.selector, 0));
         membership.expireBatches(alice, ids);
 
-        vm.warp(block.timestamp + 366 days);
+        vm.warp(_now() + 366 days);
         membership.expireBatches(alice, ids);
         uint256 treasuryAfterFirst = usdc.balanceOf(treasury);
         membership.expireBatches(alice, ids); // second sweep is a no-op
@@ -227,7 +227,7 @@ contract LabxMembershipTest is LabxTestBase {
         vm.prank(address(raffleHouse));
         membership.spendEntries(alice, 10);
 
-        vm.warp(block.timestamp + 366 days);
+        vm.warp(_now() + 366 days);
         (uint256[] memory ids, uint256 value) = membership.expirableBatchIds(alice);
         assertEq(value, 15 * 4e6);
 
@@ -270,7 +270,7 @@ contract LabxMembershipTest is LabxTestBase {
         vm.prank(address(raffleHouse));
         (uint256 value,, uint64 earliestExpiry) = membership.spendEntries(alice, 5);
 
-        vm.warp(block.timestamp + 30 days);
+        vm.warp(_now() + 30 days);
 
         vm.startPrank(address(raffleHouse));
         usdc.approve(address(membership), value);
@@ -288,7 +288,7 @@ contract LabxMembershipTest is LabxTestBase {
         vm.stopPrank();
 
         assertEq(membership.entriesAvailable(alice), 2);
-        assertEq(membership.batchAt(alice, 0).expiresAt, uint64(block.timestamp) + 365 days);
+        assertEq(membership.batchAt(alice, 0).expiresAt, uint64(_now()) + 365 days);
     }
 
     function test_rescueCannotTouchMemberEntryValue() public {

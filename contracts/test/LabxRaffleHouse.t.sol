@@ -6,6 +6,8 @@ import {LabxRaffleHouse} from "../src/LabxRaffleHouse.sol";
 import {LabxMembership} from "../src/LabxMembership.sol";
 import {ILabxMembership} from "../src/interfaces/ILabxMembership.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {LabxAmoeGateway} from "../src/LabxAmoeGateway.sol";
+import {LabxEntryKind} from "../src/interfaces/ILabxRaffleEntries.sol";
 
 contract LabxRaffleHouseTest is LabxTestBase {
     uint256 internal constant RESERVE = 300e6;
@@ -35,7 +37,7 @@ contract LabxRaffleHouseTest is LabxTestBase {
         LabxRaffleHouse.CreateRaffleParams memory params = _defaultRaffleParamsWithMint(1, RESERVE, SALT);
         params.reserveCommitment = bytes32(0);
 
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes memory signature = _signListing(params, deadline);
         vm.expectRevert(LabxRaffleHouse.ZeroReserveCommitment.selector);
         vm.prank(curator);
@@ -44,7 +46,7 @@ contract LabxRaffleHouseTest is LabxTestBase {
 
     function test_curatorCannotListWithoutTheSellersSignature() public {
         LabxRaffleHouse.CreateRaffleParams memory params = _defaultRaffleParamsWithMint(1, RESERVE, SALT);
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes memory signature = _signListing(params, deadline);
 
         // The operator tries to swap in a reserve the seller never agreed to.
@@ -66,7 +68,7 @@ contract LabxRaffleHouseTest is LabxTestBase {
         _createRaffle(1, RESERVE, SALT);
 
         LabxRaffleHouse.CreateRaffleParams memory params = _defaultRaffleParams(1, RESERVE, SALT);
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes memory signature = _signListing(params, deadline);
         vm.expectRevert(abi.encodeWithSelector(LabxRaffleHouse.TokenAlreadyEscrowed.selector, address(nft), 1));
         vm.prank(curator);
@@ -180,23 +182,23 @@ contract LabxRaffleHouseTest is LabxTestBase {
 
     function test_freeDirectEntryIsOncePerPersonPerRaffle() public {
         uint256 raffleId = _createRaffle(1, RESERVE, SALT);
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
 
         bytes memory sig = _signFreeEntry(alice, raffleId, keccak256("n1"), deadline);
-        raffleHouse.enterFree(raffleId, alice, keccak256("n1"), deadline, sig);
+        amoe.claimFreeEntry(raffleId, alice, keccak256("n1"), deadline, sig);
 
         LabxRaffleHouse.Raffle memory raffle = raffleHouse.raffles(raffleId);
         assertEq(raffle.totalEntries, 1, "a free entry carries the same weight as a purchased one");
         assertEq(raffle.pot, 0, "a free entry adds no value to the pot");
 
         bytes memory sig2 = _signFreeEntry(alice, raffleId, keccak256("n2"), deadline);
-        vm.expectRevert(LabxRaffleHouse.FreeEntryAlreadyUsed.selector);
-        raffleHouse.enterFree(raffleId, alice, keccak256("n2"), deadline, sig2);
+        vm.expectRevert(abi.encodeWithSelector(LabxAmoeGateway.FreeEntryAlreadyClaimed.selector, raffleId, alice));
+        amoe.claimFreeEntry(raffleId, alice, keccak256("n2"), deadline, sig2);
     }
 
     function test_freeEntryRequiresAnAttestorSignature() public {
         uint256 raffleId = _createRaffle(1, RESERVE, SALT);
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
 
         bytes32 structHash = keccak256(
             abi.encode(
@@ -207,24 +209,24 @@ contract LabxRaffleHouseTest is LabxTestBase {
                 deadline
             )
         );
-        bytes memory forged = _sign(0xDEAD, raffleHouse.domainSeparator(), structHash);
+        bytes memory forged = _sign(0xDEAD, amoe.domainSeparator(), structHash);
 
-        vm.expectRevert(LabxRaffleHouse.InvalidAttestor.selector);
-        raffleHouse.enterFree(raffleId, alice, keccak256("n1"), deadline, forged);
+        vm.expectRevert(LabxAmoeGateway.InvalidAttestor.selector);
+        amoe.claimFreeEntry(raffleId, alice, keccak256("n1"), deadline, forged);
     }
 
     function test_freeEntryAttestationIsSingleUse() public {
         uint256 first = _createRaffle(1, RESERVE, SALT);
         uint256 second = _createRaffle(2, RESERVE, SALT);
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes32 nonce = keccak256("reused");
 
         bytes memory sig = _signFreeEntry(alice, first, nonce, deadline);
-        raffleHouse.enterFree(first, alice, nonce, deadline, sig);
+        amoe.claimFreeEntry(first, alice, nonce, deadline, sig);
 
         bytes memory sig2 = _signFreeEntry(bob, second, nonce, deadline);
-        vm.expectRevert(abi.encodeWithSelector(LabxRaffleHouse.NonceUsed.selector, nonce));
-        raffleHouse.enterFree(second, bob, nonce, deadline, sig2);
+        vm.expectRevert(abi.encodeWithSelector(LabxAmoeGateway.NonceAlreadyUsed.selector, nonce));
+        amoe.claimFreeEntry(second, bob, nonce, deadline, sig2);
     }
 
     function test_freeEntryCanBeDisabledPerRaffle() public {
@@ -232,10 +234,10 @@ contract LabxRaffleHouseTest is LabxTestBase {
         params.freeEntryEnabled = false;
         uint256 raffleId = _createRaffle(params);
 
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes memory sig = _signFreeEntry(alice, raffleId, keccak256("n1"), deadline);
-        vm.expectRevert(LabxRaffleHouse.FreeEntryDisabled.selector);
-        raffleHouse.enterFree(raffleId, alice, keccak256("n1"), deadline, sig);
+        vm.expectRevert(abi.encodeWithSelector(LabxAmoeGateway.FreeEntryDisabled.selector, raffleId));
+        amoe.claimFreeEntry(raffleId, alice, keccak256("n1"), deadline, sig);
     }
 
     function test_pastHolderAllowlistGrantsBonusEntries() public {
@@ -247,19 +249,19 @@ contract LabxRaffleHouseTest is LabxTestBase {
         uint256 raffleId = _createRaffle(params);
 
         vm.prank(alice);
-        raffleHouse.enterWithAllowlist(raffleId, proof);
+        amoe.claimAllowlistBonus(raffleId, proof);
 
         LabxRaffleHouse.Raffle memory raffle = raffleHouse.raffles(raffleId);
         assertEq(raffle.totalEntries, 3);
         assertEq(raffle.pot, 0, "allowlist bonus entries are free and add no pot value");
 
-        vm.expectRevert(LabxRaffleHouse.AllowlistAlreadyUsed.selector);
+        vm.expectRevert(abi.encodeWithSelector(LabxAmoeGateway.AllowlistAlreadyClaimed.selector, raffleId, alice));
         vm.prank(alice);
-        raffleHouse.enterWithAllowlist(raffleId, proof);
+        amoe.claimAllowlistBonus(raffleId, proof);
 
-        vm.expectRevert(LabxRaffleHouse.InvalidProof.selector);
+        vm.expectRevert(LabxAmoeGateway.InvalidProof.selector);
         vm.prank(carol);
-        raffleHouse.enterWithAllowlist(raffleId, proof);
+        amoe.claimAllowlistBonus(raffleId, proof);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -286,12 +288,12 @@ contract LabxRaffleHouseTest is LabxTestBase {
         bytes32 replay;
         replay = keccak256(
             abi.encode(
-                replay, alice, uint32(5), uint256(25e6), uint8(LabxRaffleHouse.EntryKind.MembershipPack), uint32(5)
+                replay, alice, uint32(5), uint256(25e6), uint8(LabxEntryKind.MembershipPack), uint32(5)
             )
         );
         replay = keccak256(
             abi.encode(
-                replay, bob, uint32(12), uint256(54e6), uint8(LabxRaffleHouse.EntryKind.MembershipPack), uint32(17)
+                replay, bob, uint32(12), uint256(54e6), uint8(LabxEntryKind.MembershipPack), uint32(17)
             )
         );
         assertEq(replay, commitmentBeforeClose, "anyone can recompute the committed entry list");
@@ -333,6 +335,20 @@ contract LabxRaffleHouseTest is LabxTestBase {
         assertEq(usdc.balanceOf(treasury), treasuryBefore + fee);
         assertEq(usdc.balanceOf(seller), sellerBefore + pot - fee, "seller receives the pot minus the platform fee");
         assertEq(uint8(raffleHouse.raffles(raffleId).status), uint8(LabxRaffleHouse.RaffleStatus.Delivered));
+        assertEq(raffleHouse.raffles(raffleId).pot, 0, "no USDC stays escrowed for a settled raffle");
+        assertEq(usdc.balanceOf(address(raffleHouse)), 0);
+    }
+
+    function test_settledPotIsRecoverableFromTheEvent() public {
+        uint256 raffleId = _createRaffle(1, 1e6, SALT);
+        vm.prank(alice);
+        raffleHouse.buyPackWithUsdc(raffleId, TIER_SILVER, 0); // 100 USDC pot
+        _closeRevealAndDraw(raffleId, 1e6, SALT, 0);
+
+        vm.expectEmit(true, true, false, true, address(raffleHouse));
+        emit LabxRaffleHouse.RaffleSettled(raffleId, seller, 90e6, 10e6);
+        vm.prank(alice);
+        raffleHouse.claimPrize(raffleId);
     }
 
     function test_winnerWeightIsProportionalToEntries() public {
@@ -489,9 +505,9 @@ contract LabxRaffleHouseTest is LabxTestBase {
         LabxRaffleHouse.CreateRaffleParams memory params = _defaultRaffleParamsWithMint(1, 0, SALT);
         uint256 raffleId = _createRaffle(params);
 
-        uint64 deadline = uint64(block.timestamp + 1 hours);
+        uint64 deadline = uint64(_now() + 1 hours);
         bytes memory sig = _signFreeEntry(alice, raffleId, keccak256("n1"), deadline);
-        raffleHouse.enterFree(raffleId, alice, keccak256("n1"), deadline, sig);
+        amoe.claimFreeEntry(raffleId, alice, keccak256("n1"), deadline, sig);
 
         _closeRevealAndDraw(raffleId, 0, SALT, 0);
 

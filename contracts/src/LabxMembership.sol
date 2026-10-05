@@ -473,7 +473,7 @@ contract LabxMembership is LabxRoles, Pausable, ReentrancyGuard, ILabxMembership
     function expireBatches(address user, uint256[] calldata batchIds) external {
         EntryBatch[] storage batches = _batches[user];
         uint256 length = batches.length;
-        uint256 swept;
+        uint256 swept = 0;
 
         for (uint256 i; i < batchIds.length; ++i) {
             uint256 batchId = batchIds[i];
@@ -591,7 +591,7 @@ contract LabxMembership is LabxRoles, Pausable, ReentrancyGuard, ILabxMembership
         EntryBatch[] storage batches = _batches[user];
         uint256 length = batches.length;
         uint256[] memory buffer = new uint256[](length);
-        uint256 count;
+        uint256 count = 0;
         for (uint256 i; i < length; ++i) {
             EntryBatch storage batch = batches[i];
             if (batch.expiresAt > block.timestamp) continue;

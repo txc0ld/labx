@@ -8,11 +8,22 @@ solc = "0.8.26"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
-# The raffle house is close to the EIP-170 limit; IR codegen keeps it comfortably under 24,576 bytes.
-via_ir = true
 bytecode_hash = "none"
 cbor_metadata = false
 gas_reports = ["LabxMembership", "LabxRaffleHouse"]
+
+# `LabxRaffleHouse` only fits under EIP-170 with IR codegen, and IR is the better codegen path anyway.
+# It is scoped to `src/` on purpose: under `via_ir` the optimizer treats `block.timestamp` as constant for
+# the whole function, which silently breaks test functions that call `vm.warp` between statements.
+[[profile.default.additional_compiler_profiles]]
+name = "src-via-ir"
+via_ir = true
+optimizer = true
+optimizer_runs = 200
+
+[[profile.default.compilation_restrictions]]
+paths = "src/**"
+via_ir = true
 
 [profile.default.fuzz]
 runs = 256

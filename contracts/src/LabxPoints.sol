@@ -153,6 +153,7 @@ contract LabxPoints is LabxRoles, EIP712 {
 
     function nextCheckInAt(address user) external view returns (uint64) {
         uint64 last = lastCheckInAt[user];
+        // slither-disable-next-line incorrect-equality  (0 is the "never checked in" sentinel)
         return last == 0 ? uint64(block.timestamp) : last + checkInCooldown;
     }
 

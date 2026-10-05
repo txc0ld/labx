@@ -8,7 +8,6 @@ import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {ERC721Holder} from "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
 import {ERC1155Holder} from "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -19,6 +18,7 @@ import {LabxVRFConsumerBase} from "./base/LabxVRFConsumerBase.sol";
 import {ILabxMembership} from "./interfaces/ILabxMembership.sol";
 import {ILabxTerms} from "./interfaces/ILabxTerms.sol";
 import {ILabxJurisdictionRegistry} from "./interfaces/ILabxJurisdictionRegistry.sol";
+import {ILabxRaffleEntries, LabxEntryKind} from "./interfaces/ILabxRaffleEntries.sol";
 
 /// @title LabxRaffleHouse
 /// @notice Escrows an NFT, collects entries from the platform-wide LABx entry ledger, and draws a
@@ -32,6 +32,7 @@ import {ILabxJurisdictionRegistry} from "./interfaces/ILabxJurisdictionRegistry.
 ///      reserve after entries have been sold. If the operator does nothing within `operatorActionWindow`
 ///      of close, anyone may force the refund path, so buyers are never trapped by a server outage.
 contract LabxRaffleHouse is
+    ILabxRaffleEntries,
     LabxRoles,
     EIP712,
     Pausable,
@@ -56,13 +57,6 @@ contract LabxRaffleHouse is
         Delivered, // prize transferred and seller settled
         Refunding, // reserve not met / abandoned: NFT returned, entrants may pull entries back
         Cancelled // cancelled before any entry was sold
-    }
-
-    enum EntryKind {
-        MembershipPack, // entries bought as part of a membership pack
-        LedgerBalance, // entries already held in the member's platform-wide balance
-        FreeDirect, // AMOE: one free entry per person per raffle
-        AllowlistBonus // past-holder bonus entries
     }
 
     struct Raffle {
@@ -116,8 +110,6 @@ contract LabxRaffleHouse is
         uint128 value;
         uint64 earliestExpiry;
         bool refunded;
-        bool freeDirectUsed;
-        bool allowlistUsed;
     }
 
     struct Segment {
@@ -146,8 +138,6 @@ contract LabxRaffleHouse is
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant MAX_PICK_ATTEMPTS = 64;
 
-    bytes32 private constant FREE_ENTRY_TYPEHASH =
-        keccak256("FreeEntry(address user,uint256 raffleId,bytes32 nonce,uint64 deadline)");
     bytes32 private constant LIST_RAFFLE_TYPEHASH = keccak256(
         "ListRaffle(address seller,address nft,uint256 tokenId,uint96 amount,uint8 standard,uint64 opensAt,uint64 endsAt,bytes32 reserveCommitment,uint256 nonce,uint64 deadline)"
     );
@@ -166,11 +156,11 @@ contract LabxRaffleHouse is
     mapping(uint256 raffleId => string) public metadataUri;
     /// @notice Per-raffle entry segments in the order they were bought. `cumulative` is the running
     ///         entry weight, which is what the VRF word indexes into.
+    // slither-disable-next-line uninitialized-state  (mappings have no initial value to assign)
     mapping(uint256 raffleId => Segment[]) public segments;
     mapping(uint256 raffleId => mapping(address account => EntrantRecord)) public entrants;
     mapping(uint256 raffleId => mapping(address account => bool)) public excludedFromDraw;
     mapping(uint256 requestId => uint256) private _requestToRaffle; // stored as raffleId + 1
-    mapping(bytes32 nonce => bool) public freeEntryNonceUsed;
     mapping(address seller => uint256) public listingNonce;
     mapping(address nft => mapping(uint256 tokenId => uint256)) private _escrowedBy; // raffleId + 1
 
@@ -190,7 +180,7 @@ contract LabxRaffleHouse is
     event EntriesAdded(
         uint256 indexed raffleId,
         address indexed account,
-        EntryKind kind,
+        LabxEntryKind kind,
         uint32 count,
         uint256 value,
         uint32 totalEntries,
@@ -246,14 +236,8 @@ contract LabxRaffleHouse is
     error TimeoutNotReached(uint64 availableAt);
     error AlreadyRefunded();
     error NothingToRefund();
-    error FreeEntryDisabled();
-    error FreeEntryAlreadyUsed();
     error AllowlistBonusUnavailable();
-    error AllowlistAlreadyUsed();
-    error InvalidProof();
     error AttestationExpired();
-    error NonceUsed(bytes32 nonce);
-    error InvalidAttestor();
     error InvalidSellerSignature();
     error ListingNotPermitted();
     error TokenAlreadyEscrowed(address nft, uint256 tokenId);
@@ -268,9 +252,9 @@ contract LabxRaffleHouse is
         address usdc_,
         address membership_,
         address treasury_,
-        address vrfCoordinator,
+        address vrfCoordinator_,
         VrfConfig memory vrfConfig_
-    ) LabxRoles(admin) EIP712("LABx Raffle House", "1") LabxVRFConsumerBase(vrfCoordinator, vrfConfig_) {
+    ) LabxRoles(admin) EIP712("LABx Raffle House", "1") LabxVRFConsumerBase(vrfCoordinator_, vrfConfig_) {
         if (usdc_ == address(0) || membership_ == address(0) || treasury_ == address(0)) revert ZeroAddress();
         usdc = IERC20(usdc_);
         membership = ILabxMembership(membership_);
@@ -472,7 +456,7 @@ contract LabxRaffleHouse is
 
     /// @notice Spends entries already held in the caller's platform-wide balance on this raffle.
     function enterWithEntries(uint256 raffleId, uint32 count) external whenNotPaused nonReentrant {
-        _spendAndEnter(raffleId, msg.sender, count, EntryKind.LedgerBalance);
+        _spendAndEnter(raffleId, msg.sender, count, LabxEntryKind.LedgerBalance);
     }
 
     /// @notice One-click: buys a membership pack with USDC and puts its bonus entries into this raffle.
@@ -484,7 +468,7 @@ contract LabxRaffleHouse is
     {
         uint32 granted = membership.purchaseForWithUsdc(msg.sender, tierId);
         uint32 toAllocate = allocateEntries == 0 ? granted : allocateEntries;
-        _spendAndEnter(raffleId, msg.sender, toAllocate, EntryKind.MembershipPack);
+        _spendAndEnter(raffleId, msg.sender, toAllocate, LabxEntryKind.MembershipPack);
     }
 
     /// @notice One-click: buys a membership pack with ETH (swapped to USDC atomically) and enters.
@@ -496,52 +480,24 @@ contract LabxRaffleHouse is
     {
         uint32 granted = membership.purchaseForWithEth{value: msg.value}(msg.sender, tierId, maxEthIn);
         uint32 toAllocate = allocateEntries == 0 ? granted : allocateEntries;
-        _spendAndEnter(raffleId, msg.sender, toAllocate, EntryKind.MembershipPack);
+        _spendAndEnter(raffleId, msg.sender, toAllocate, LabxEntryKind.MembershipPack);
     }
 
-    /// @notice Alternative Method of Entry: one free entry per person per raffle, no purchase necessary.
-    /// @dev The bot gate (captcha + wallet signature) happens off-chain; an `ATTESTOR_ROLE` key signs the
-    ///      result. Anyone may relay the attestation, so LABx can pay the gas. Weighted identically to a
-    ///      purchased entry, and carries no pot value.
-    function enterFree(uint256 raffleId, address account, bytes32 nonce, uint64 deadline, bytes calldata attestation)
+    /// @notice Adds zero-value entries on behalf of the AMOE gateway (free entry, allowlist bonus).
+    /// @dev Restricted to `ENTRY_ISSUER_ROLE`, which is granted to `LabxAmoeGateway` only. The gateway
+    ///      owns the bot gate and the one-per-person bookkeeping; this contract owns the raffle rules.
+    function creditFreeEntries(uint256 raffleId, address account, uint32 count, LabxEntryKind kind)
         external
+        onlyRole(ENTRY_ISSUER_ROLE)
         whenNotPaused
         nonReentrant
     {
+        if (count == 0) revert ZeroEntries();
         Raffle storage raffle = _requireEnterable(raffleId, account);
-        if (!raffle.freeEntryEnabled) revert FreeEntryDisabled();
-        if (block.timestamp > deadline) revert AttestationExpired();
-        if (freeEntryNonceUsed[nonce]) revert NonceUsed(nonce);
-
-        EntrantRecord storage record = entrants[raffleId][account];
-        if (record.freeDirectUsed) revert FreeEntryAlreadyUsed();
-
-        bytes32 structHash = keccak256(abi.encode(FREE_ENTRY_TYPEHASH, account, raffleId, nonce, deadline));
-        address signer = ECDSA.recover(_hashTypedDataV4(structHash), attestation);
-        if (!hasRole(ATTESTOR_ROLE, signer)) revert InvalidAttestor();
-
-        freeEntryNonceUsed[nonce] = true;
-        record.freeDirectUsed = true;
-        _addEntries(raffleId, raffle, account, 1, 0, 1, 0, EntryKind.FreeDirect);
+        _addEntries(raffleId, raffle, account, count, 0, count, 0, kind);
     }
 
-    /// @notice Past-holder allowlist bonus entries. Free, zero pot value, equal weight.
-    function enterWithAllowlist(uint256 raffleId, bytes32[] calldata proof) external whenNotPaused nonReentrant {
-        Raffle storage raffle = _requireEnterable(raffleId, msg.sender);
-        uint32 bonus = raffle.allowlistBonusEntries;
-        if (bonus == 0 || raffle.allowlistRoot == bytes32(0)) revert AllowlistBonusUnavailable();
-
-        EntrantRecord storage record = entrants[raffleId][msg.sender];
-        if (record.allowlistUsed) revert AllowlistAlreadyUsed();
-
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender))));
-        if (!MerkleProof.verifyCalldata(proof, raffle.allowlistRoot, leaf)) revert InvalidProof();
-
-        record.allowlistUsed = true;
-        _addEntries(raffleId, raffle, msg.sender, bonus, 0, bonus, 0, EntryKind.AllowlistBonus);
-    }
-
-    function _spendAndEnter(uint256 raffleId, address account, uint32 count, EntryKind kind) private {
+    function _spendAndEnter(uint256 raffleId, address account, uint32 count, LabxEntryKind kind) private {
         if (count == 0) revert ZeroEntries();
         Raffle storage raffle = _requireEnterable(raffleId, account);
 
@@ -558,7 +514,7 @@ contract LabxRaffleHouse is
         uint256 value,
         uint32 freeCount,
         uint64 earliestExpiry,
-        EntryKind kind
+        LabxEntryKind kind
     ) private {
         EntrantRecord storage record = entrants[raffleId][account];
 
@@ -661,7 +617,7 @@ contract LabxRaffleHouse is
         Raffle storage raffle = _requireRaffle(raffleId);
         RaffleStatus status = raffle.status;
 
-        uint64 availableAt;
+        uint64 availableAt = 0;
         if (status == RaffleStatus.Closed) {
             availableAt = raffle.closedAt + _config.operatorActionWindow;
         } else if (status == RaffleStatus.Won) {
@@ -741,7 +697,7 @@ contract LabxRaffleHouse is
 
     /// @dev Smallest index whose cumulative weight is strictly greater than `ticket`.
     function _searchSegment(Segment[] storage haystack, uint32 ticket) private view returns (uint256) {
-        uint256 low;
+        uint256 low = 0;
         uint256 high = haystack.length;
         while (low < high) {
             uint256 mid = (low + high) / 2;
@@ -802,6 +758,9 @@ contract LabxRaffleHouse is
         raffle.settled = true;
 
         uint256 pot = raffle.pot;
+        // `pot` tracks the USDC still escrowed for this raffle, so it is cleared as the funds leave.
+        // The gross amount raised stays recoverable from `RaffleSettled` (proceeds + fee).
+        raffle.pot = 0;
         if (pot == 0) {
             emit RaffleSettled(raffleId, raffle.seller, 0, 0);
             return;
@@ -864,12 +823,16 @@ contract LabxRaffleHouse is
         raffle.pot -= value;
 
         if (value != 0) usdc.forceApprove(address(membership), value);
+        // slither-disable-next-line calls-loop  (reached from the `refundEntrants` batch helper by design)
         membership.refundEntries(account, paid, free, value, expiresAt);
         if (value != 0) usdc.forceApprove(address(membership), 0);
 
         emit EntrantRefunded(raffleId, account, paid, free, value);
     }
 
+    /// @dev The loop makes one external call per entrant on purpose: refunds are independent, and a
+    ///      single failure should not block the rest of the batch from being retried individually.
+    // slither-disable-next-line calls-loop
     function refundEntrants(uint256 raffleId, address[] calldata accounts) external {
         for (uint256 i; i < accounts.length; ++i) {
             refundEntrant(raffleId, accounts[i]);
@@ -903,6 +866,18 @@ contract LabxRaffleHouse is
     // --------------------------------------------------------------------------------------------
     // Views
     // --------------------------------------------------------------------------------------------
+
+    /// @inheritdoc ILabxRaffleEntries
+    function raffleEntryRules(uint256 raffleId)
+        external
+        view
+        returns (bool acceptingEntries, bool freeEntryEnabled, bytes32 allowlistRoot, uint32 allowlistBonusEntries)
+    {
+        Raffle storage raffle = _requireRaffle(raffleId);
+        acceptingEntries = raffle.status == RaffleStatus.Open && block.timestamp >= raffle.opensAt
+            && block.timestamp < raffle.endsAt;
+        return (acceptingEntries, raffle.freeEntryEnabled, raffle.allowlistRoot, raffle.allowlistBonusEntries);
+    }
 
     function config() external view returns (Config memory) {
         return _config;

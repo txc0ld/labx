@@ -174,7 +174,7 @@ contract LabxTerms is LabxRoles, EIP712, ILabxTerms {
     function pendingKeys(address user) external view returns (bytes32[] memory pending) {
         uint256 length = _requiredKeys.length;
         bytes32[] memory buffer = new bytes32[](length);
-        uint256 count;
+        uint256 count = 0;
         for (uint256 i; i < length; ++i) {
             bytes32 key = _requiredKeys[i];
             if (_acceptedVersion[user][key] != _currentVersion[key]) {

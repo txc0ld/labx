@@ -96,6 +96,7 @@ contract LabxUniswapV3SwapAdapter is LabxRoles, ReentrancyGuard, ILabxSwapAdapte
 
     /// @inheritdoc ILabxSwapAdapter
     function quoteEthForUsdc(uint256 usdcOut) public view returns (uint256 ethIn) {
+        // slither-disable-next-line unused-return  (round ids are not used; freshness is checked below)
         (, int256 answer,, uint256 updatedAt,) = ethUsdFeed.latestRoundData();
         if (answer <= 0) revert InvalidOraclePrice(answer);
         if (updatedAt == 0 || block.timestamp - updatedAt > maxOracleAge) revert StaleOracle(updatedAt);
