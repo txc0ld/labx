@@ -47,7 +47,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-radius: 12px;
   text-decoration: none;
 }
-.skip:focus { transform: none; }
+.skip:focus,
+.skip:focus-visible {
+  position: fixed;
+  transform: none;
+}
 
 .field-mark {
   position: fixed;
@@ -234,6 +238,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .lamp.purple { background: var(--purple); color: var(--on-purple); }
 .lamp.lime { background: var(--lime); }
 .lamp.pink { background: var(--pink); }
+.lamp.mint { background: var(--mint); }
 
 .notice {
   border-radius: 16px;
@@ -253,6 +258,41 @@ button, input, select, textarea { font: inherit; color: inherit; }
   margin: 0;
 }
 .lede { margin: 0; color: var(--charcoal); font-size: 1.05rem; }
+.legal-copy { max-width: 72ch; }
+.legal-copy h2 {
+  font-size: clamp(1.35rem, 2vw, 1.7rem);
+  letter-spacing: -0.03em;
+  margin: 0.35rem 0 0;
+}
+.legal-copy ul {
+  margin: 0;
+  padding-inline-start: 1.2rem;
+  display: grid;
+  gap: 0.35rem;
+}
+.legal-copy a {
+  color: var(--ink);
+  font-weight: 650;
+}
+.legal-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.legal-nav a {
+  color: var(--ink);
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.legal-nav a[aria-current="page"],
+.legal-nav a:hover,
+.legal-nav a:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--purple);
+}
 .kicker {
   font-family: var(--font-mono), ui-monospace, monospace;
   text-transform: uppercase;
@@ -413,6 +453,11 @@ fieldset.agreements {
   gap: 0.45rem;
 }
 fieldset.agreements label { font-weight: 550; grid-template-columns: auto 1fr; align-items: start; }
+.agreements a,
+.muted a {
+  color: var(--ink);
+  font-weight: 650;
+}
 input[type="checkbox"] { width: 1.15rem; height: 1.15rem; accent-color: var(--purple); margin-top: 0.15rem; }
 
 .pack-keys { display: grid; gap: 0.45rem; }
@@ -444,13 +489,28 @@ th { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; colo
 
 .plumbing { width: 100%; height: 72px; display: block; }
 .site-footer { padding: 1rem 0 2.4rem; color: var(--charcoal); display: grid; gap: 0.35rem; }
-.site-footer nav { display: flex; gap: 1rem; flex-wrap: wrap; }
+.site-footer nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
 .site-footer nav a,
 .site-footer nav a:hover,
 .site-footer nav a:focus,
 .site-footer nav a:focus-visible,
 .site-footer nav a:visited {
+  color: var(--ink);
+  font-weight: 650;
   text-decoration: none;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.site-footer nav a[aria-current="page"],
+.site-footer nav a:hover,
+.site-footer nav a:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--purple);
 }
 .muted { color: var(--charcoal); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

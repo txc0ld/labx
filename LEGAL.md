@@ -44,7 +44,7 @@ Receipts are sent with Resend when configured. They describe the pack, the bonus
 - Whether the complimentary route is prominent enough, and whether points may be required.
 - Sanctions, age, and geo restrictions.
 - Consumer copy, cooling-off, and refund wording.
-- Privacy notice for wallet, email, and server records.
+- Privacy notice for wallet, email, and server records. The published draft is `/privacy`. The operator page is `/about`. Terms are `/legal` (`/terms` redirects there).
 - Safe signer policy and key custody.
 
 Until that review, keep the system on Sepolia and describe it as a test bench.

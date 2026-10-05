@@ -1,5 +1,6 @@
 "use client";
 
+import { LegalNav } from "@/components/LegalNav";
 import { useBench } from "@/lib/bench";
 
 export default function FairnessPage() {
@@ -9,6 +10,8 @@ export default function FairnessPage() {
     <section className="section">
       <p className="kicker">Fairness</p>
       <h1 className="page-title">Three locks on every draw.</h1>
+      <p className="lede">Escrow holds the piece. A hash holds the private commitment. VRF waits for the snapshot. Terms, privacy, and draw rules sit beside this table.</p>
+      <LegalNav />
       <div className="piece-grid" style={{ marginTop: "1rem" }}>
         <article className="pearl pad">
           <h2>Escrow</h2>

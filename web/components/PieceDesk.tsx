@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 import { LAB_FEE, type PackName } from "@/lib/seed";
 
@@ -70,10 +71,17 @@ export function PieceDesk({ id }: { id: string }) {
         <label htmlFor="qty">Quantity
           <input id="qty" type="number" min={1} max={5} value={qty} onChange={(event) => setQty(Number(event.target.value))} />
         </label>
+        <OnChainStatus surface="piece" />
         <fieldset className="agreements well">
           <legend className="kicker">Agreements</legend>
-          <label htmlFor="terms"><input id="terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} /> I agree to the LABx membership terms.</label>
-          <label htmlFor="rules"><input id="rules" type="checkbox" checked={rules} onChange={(event) => setRules(event.target.checked)} /> I agree to the draw rules and the 12-month bonus entry expiry.</label>
+          <label htmlFor="terms">
+            <input id="terms" type="checkbox" checked={terms} onChange={(event) => setTerms(event.target.checked)} />
+            <span>I agree to the <Link href="/legal" onClick={(event) => event.stopPropagation()}>LABx membership terms</Link>.</span>
+          </label>
+          <label htmlFor="rules">
+            <input id="rules" type="checkbox" checked={rules} onChange={(event) => setRules(event.target.checked)} />
+            <span>I agree to the <Link href="/rules" onClick={(event) => event.stopPropagation()}>draw rules</Link> and the 12-month bonus entry expiry.</span>
+          </label>
           <label htmlFor="age"><input id="age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I confirm I am eligible and I am 18 or older.</label>
         </fieldset>
         <p><strong>{total} USDC</strong> including {LAB_FEE * qty} USDC lab fee · {entries} bonus entries</p>

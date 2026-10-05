@@ -9,7 +9,7 @@ Mainnet is disabled.
 ## Layout
 
 - `contracts` Foundry: `LabxRaffle`, Sepolia and local scripts, tests
-- `web` Next.js bench: explore, piece, studio, profile, fairness, draw rules
+- `web` Next.js bench: explore, piece, studio, profile, fairness, draw rules, terms, privacy, about
 - `DESIGN.md` materials and tokens
 - `SECURITY.md` threat notes
 - `LEGAL.md` counsel draft

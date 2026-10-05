@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { BenchProvider } from "@/lib/bench";
+import { OPERATOR, OPERATOR_LINE } from "@/lib/operator";
 import { Plumbing } from "./Plumbing";
 
 const LINKS = [
@@ -11,6 +12,14 @@ const LINKS = [
   { href: "/fairness", label: "Fairness" },
   { href: "/seller", label: "Studio" },
   { href: "/profile", label: "Profile" }
+];
+
+const FOOTER_LINKS = [
+  { href: "/about", label: "About" },
+  { href: "/fairness", label: "Fairness" },
+  { href: "/rules", label: "Draw rules" },
+  { href: "/legal", label: "Terms" },
+  { href: "/privacy", label: "Privacy" }
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -44,12 +53,21 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
           <Plumbing label="Footer cable run" />
-          <strong>LABx · labx.art</strong>
-          <span>Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166</span>
+          <strong>{OPERATOR.brand} · {OPERATOR.site}</strong>
+          <span>{OPERATOR_LINE}</span>
           <nav aria-label="Footer">
-            <Link href="/fairness">Fairness</Link>
-            <Link href="/rules">Draw rules</Link>
-            <Link href="/legal">Terms</Link>
+            <ul>
+              {FOOTER_LINKS.map((link) => (
+                <li key={link.href}>
+                  <Link
+                    href={link.href}
+                    aria-current={path === link.href || (link.href === "/legal" && path === "/terms") ? "page" : undefined}
+                  >
+                    {link.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
           </nav>
           <span>Ethereum Sepolia only. Mainnet is disabled.</span>
         </footer>

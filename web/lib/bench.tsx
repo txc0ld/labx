@@ -1,11 +1,11 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Address } from "viem";
+import { keccak256, toBytes, type Address } from "viem";
 import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, type Entry, type PackName, type Piece } from "./seed";
 import { pickWinner, snapshotLots } from "./draw";
 import { receiptMessage } from "./email";
-import { connectSepolia } from "./wallet";
+import { connectSepolia, raffleAddress } from "./wallet";
 
 type Agreement = { pieceId: string; at: string; terms: boolean; rules: boolean; age: boolean };
 type State = {
@@ -134,19 +134,30 @@ export function BenchProvider({ children }: { children: ReactNode }) {
       },
       createPiece: async (input) => {
         if (!input.title.trim() || !input.privateCommitment.trim()) return "Title and private commitment are required.";
-        const response = await fetch("/api/reserve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            seller: address,
-            nft: input.nft,
-            tokenId: input.tokenId,
-            publicSummary: input.publicSummary,
-            privateCommitment: input.privateCommitment
-          })
-        });
-        const body = await response.json();
-        if (!response.ok) return body.error || "Commitment was refused.";
+        const wired = raffleAddress();
+        let commit = keccak256(toBytes(`labx-bench:${input.privateCommitment.trim()}`));
+        let nonce: string | undefined;
+        let publicHash: string | undefined;
+        let publicSummary = input.publicSummary;
+        if (wired) {
+          const response = await fetch("/api/reserve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              seller: address,
+              nft: input.nft,
+              tokenId: input.tokenId,
+              publicSummary: input.publicSummary,
+              privateCommitment: input.privateCommitment
+            })
+          });
+          const body = await response.json();
+          if (!response.ok) return body.error || "Commitment was refused.";
+          commit = body.commit;
+          nonce = body.nonce;
+          publicHash = body.publicHash;
+          publicSummary = body.publicSummary;
+        }
         const piece: Piece = {
           id: `piece-${Date.now()}`,
           title: input.title.trim(),
@@ -158,17 +169,19 @@ export function BenchProvider({ children }: { children: ReactNode }) {
           escrowed: false,
           salesEnd: input.salesEnd,
           packs: SEED_PIECES[0].packs.map((pack) => ({ ...pack, remaining: pack.supply })),
-          commit: body.commit,
-          nonce: body.nonce,
-          publicHash: body.publicHash,
-          publicSummary: body.publicSummary,
+          commit,
+          nonce,
+          publicHash,
+          publicSummary,
           nft: input.nft,
           tokenId: input.tokenId
         };
         setState((current) => ({
           ...current,
           pieces: [piece, ...current.pieces],
-          banner: { tone: "ok", text: "Private commitment stored. Only the hash is public." }
+          banner: wired
+            ? { tone: "ok", text: "Private commitment stored. Only the hash is public." }
+            : { tone: "warning", text: "Sepolia contract is not wired. This commit stays on this bench." }
         }));
         return null;
       },
