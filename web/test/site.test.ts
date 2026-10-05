@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { raffleAddress, readRaffle, sendRaffle } from "../lib/wallet";
+import { roundedOrtho } from "../lib/tubes";
 
 const webRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(webRoot, "..");
@@ -34,10 +35,10 @@ const STATIC_ROUTES = new Set([
   "/legal",
   "/privacy",
   "/about",
-  "/terms",
   "/profile",
   "/seller"
 ]);
+const ALIAS_ROUTES = new Set(["/terms"]);
 
 function routeFile(route: string) {
   if (route === "/") return "app/page.tsx";
@@ -54,7 +55,9 @@ describe("required marketing routes", () => {
   });
 
   it("keeps /terms as a Legal alias that resolves to /legal", () => {
-    expect(read("app/terms/page.tsx")).toMatch(/redirect\(\s*["']\/legal["']\s*\)/);
+    expect(read("next.config.ts")).toMatch(/source:\s*["']\/terms["']/);
+    expect(read("next.config.ts")).toMatch(/destination:\s*["']\/legal["']/);
+    expect(read("next.config.ts")).toMatch(/permanent:\s*true/);
   });
 
   it("names the operator on About, Privacy, and Terms", () => {
@@ -62,11 +65,12 @@ describe("required marketing routes", () => {
     expect(operator).toContain("Fantom Labs Pty Ltd");
     expect(operator).toContain("56 702 056 166");
     expect(operator).toContain("702 056 166");
+    expect(operator).toMatch(/publicSiteUrl|NEXT_PUBLIC_SITE_URL/);
+    expect(operator).toContain("labx-two.vercel.app");
     for (const file of ["app/about/page.tsx", "app/privacy/page.tsx", "app/legal/page.tsx"]) {
-      const text = `${read(file)}\n${operator}`;
-      expect(text).toMatch(/OPERATOR_LINE|Fantom Labs Pty Ltd/);
-      expect(text).toContain("56 702 056 166");
-      expect(text).toContain("702 056 166");
+      const text = read(file);
+      expect(text).toMatch(/import \{[^}]*OPERATOR_LINE[^}]*\} from "@\/lib\/operator"/);
+      expect(text).toContain("{OPERATOR_LINE}");
       expect(text.toLowerCase()).toMatch(/sepolia/);
       expect(text.toLowerCase()).not.toMatch(/\btickets?\b/);
     }
@@ -86,8 +90,24 @@ describe("required marketing routes", () => {
       expect(text).toContain(heading);
     }
     expect(text).toMatch(/Privacy Act 1988/);
-    expect(text).not.toMatch(/TODO|FIXME|lorem ipsum|coming soon|TBD/i);
+    expect(text).toMatch(/Australian Privacy Principle 3|APP 3/);
+    expect(text).toMatch(/Australian Privacy Principle 6|APP 6/);
+    expect(text).toMatch(/privacy contact via the site operator/i);
+    expect(text).toContain("https://www.oaic.gov.au/");
+    expect(text).not.toMatch(/legitimate need|lawful bas/i);
+    expect(text).not.toMatch(/lorem ipsum|coming soon/i);
     expect(text).not.toMatch(/NEXT_PUBLIC_RAFFLE_ADDRESS\s*=\s*0x/i);
+    expect(text).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/i);
+  });
+
+  it("states settle flips phase and claims pull prize, proceeds, and fee", () => {
+    for (const file of ["app/legal/page.tsx", "app/rules/page.tsx"]) {
+      const text = read(file);
+      expect(text).toMatch(/claimPrize/);
+      expect(text).toMatch(/claimProceeds/);
+      expect(text).toMatch(/claimFee/);
+      expect(text).toMatch(/settled phase|flips the (piece|phase)|phase to settled/i);
+    }
   });
 
   it("describes the lab and the Sepolia bench on About", () => {
@@ -138,7 +158,12 @@ describe("chrome links", () => {
 
     for (const href of hrefs) {
       if (href.startsWith("mailto:") || href.startsWith("https://") || href.startsWith("http://")) {
-        expect(href === "https://labx.art" || href.startsWith("https://labx.art/")).toBe(true);
+        expect(
+          href.startsWith("https://www.oaic.gov.au") ||
+            href.startsWith("https://labx-two.vercel.app") ||
+            href === "https://labx.art" ||
+            href.startsWith("https://labx.art/")
+        ).toBe(true);
         continue;
       }
       if (href.startsWith("#")) {
@@ -152,6 +177,10 @@ describe("chrome links", () => {
       }
       if (pathname.startsWith("/fairness")) {
         expect(pageExists("app/fairness/page.tsx")).toBe(true);
+        continue;
+      }
+      if (ALIAS_ROUTES.has(pathname)) {
+        expect(read("next.config.ts")).toMatch(/source:\s*["']\/terms["']/);
         continue;
       }
       expect(STATIC_ROUTES.has(pathname), `unresolved href ${href}`).toBe(true);
@@ -200,6 +229,50 @@ describe("on-chain soft disable", () => {
     ].join("\n");
     expect(surfaces).toMatch(/raffleAddress|onChainReady|OnChainStatus/);
     expect(surfaces).toMatch(/not wired|bench only|this bench/i);
-    expect(read("lib/bench.tsx")).toMatch(/raffleAddress\(\)/);
+    expect(read("lib/bench.tsx")).toMatch(/onChainReady\(\)|raffleAddress\(\)/);
+    expect(read("lib/bench.tsx")).toMatch(/saltedPrivateHash|generatePrivateKey/);
+  });
+});
+
+describe("hub laboratory tubing", () => {
+  it("fillets orthogonal elbows instead of drawing flat H/V", () => {
+    const d = roundedOrtho(
+      [
+        { x: 0, y: 0 },
+        { x: 80, y: 0 },
+        { x: 80, y: 60 }
+      ],
+      16
+    );
+    expect(d).toMatch(/Q /);
+    expect(d).not.toMatch(/ H | V /);
+  });
+
+  it("renders a lab-tube stack, TubeFitting grooves, and a thinner mobile stack", () => {
+    const tubes = read("components/BenchTubes.tsx");
+    const css = read("app/globals.css");
+    expect(tubes).toMatch(/function TubeFitting/);
+    expect(tubes).toMatch(/lab-tube-fitting-groove/);
+    expect(tubes).toMatch(/lab-tube-shadow/);
+    expect(tubes).toMatch(/lab-tube-jacket/);
+    expect(tubes).toMatch(/lab-tube-enamel/);
+    expect(tubes).toMatch(/lab-tube-core/);
+    expect(tubes).toMatch(/lab-tube-reflect/);
+    expect(tubes).toMatch(/ResizeObserver/);
+    expect(tubes).toMatch(/aria-hidden/);
+    expect(tubes).toMatch(/roundedOrtho|makeRun/);
+    expect(tubes.toLowerCase()).not.toMatch(/head|face|human|figure/);
+    expect(css).toMatch(/--lab-tube-lime:\s*#b9ff87/i);
+    expect(css).toMatch(/--lab-tube-pink:\s*#ff79c0/i);
+    expect(css).toMatch(/--lab-tube-mint:\s*#8fffb6/i);
+    expect(css).toMatch(/--lab-tube-purple:\s*#8049ff/i);
+    expect(css).toMatch(/--lab-tube-off:/);
+    expect(css).not.toMatch(/\.tube-shell/);
+    expect(css).not.toMatch(/\.tube-body/);
+    expect(css).not.toMatch(/\.tube-shine/);
+    expect(css).not.toMatch(/\.bench-tubes \{ display: none/);
+    expect(css).toMatch(/@media \(max-width: 900px\)[\s\S]*\.lab-tube-reflect[\s\S]*display:\s*none/);
+    expect(css).toMatch(/\.bench-tubes\.is-off[\s\S]*--lab-tube-lime:\s*var\(--lab-tube-off\)/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.lab-tube-flow[\s\S]*animation:\s*none/);
   });
 });

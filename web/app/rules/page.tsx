@@ -5,7 +5,7 @@ import { useState, type FormEvent } from "react";
 import { LegalNav } from "@/components/LegalNav";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
-import { raffleAddress } from "@/lib/wallet";
+import { onChainReady } from "@/lib/wallet";
 
 export default function RulesPage() {
   const bench = useBench();
@@ -19,7 +19,7 @@ export default function RulesPage() {
   const [tone, setTone] = useState<"warning" | "error" | "ok">("warning");
   const [raffleId, setRaffleId] = useState("");
   const [signature, setSignature] = useState<string | null>(null);
-  const wired = raffleAddress();
+  const wired = onChainReady();
   if (!bench.ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
 
   async function loadChallenge() {
@@ -73,7 +73,7 @@ export default function RulesPage() {
         <p>Packs are memberships. Each pack includes a published number of bonus entries into that piece only.</p>
         <p>Entries expire 12 months after they are recorded. Expired entries are left out of the snapshot.</p>
         <p>The snapshot is taken before randomness is requested. Chainlink VRF v2.5 supplies the word used to walk the frozen weights.</p>
-        <p>The lab fee is 5 USDC per pack, paid to the Safe treasury on settlement. Pack price and fee are refunded if the piece is cancelled before settlement.</p>
+        <p>The lab fee is 5 USDC per pack. Settlement (`settle`) flips the piece to the settled phase. The drawn wallet claims the prize with `claimPrize`. The seller claims pack proceeds with `claimProceeds`. The treasury claims the lab fee with `claimFee`. Pack price and fee are refunded if the piece is cancelled before settlement.</p>
       </article>
       <article className="well pad stack">
         <h2>Complimentary entry</h2>

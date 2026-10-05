@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { BenchProvider } from "@/lib/bench";
-import { OPERATOR, OPERATOR_LINE } from "@/lib/operator";
+import { isCurrentPath } from "@/lib/nav";
+import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 import { Plumbing } from "./Plumbing";
 
 const LINKS = [
@@ -39,7 +40,7 @@ export function Shell({ children }: { children: ReactNode }) {
               <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {LINKS.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} aria-current={path === link.href ? "page" : undefined}>
+                    <Link href={link.href} aria-current={isCurrentPath(path, link.href) ? "page" : undefined}>
                       {link.label}
                     </Link>
                   </li>
@@ -53,7 +54,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
           <Plumbing label="Footer cable run" />
-          <strong>{OPERATOR.brand} · {OPERATOR.site}</strong>
+          <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
           <span>{OPERATOR_LINE}</span>
           <nav aria-label="Footer">
             <ul>
@@ -61,7 +62,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 <li key={link.href}>
                   <Link
                     href={link.href}
-                    aria-current={path === link.href || (link.href === "/legal" && path === "/terms") ? "page" : undefined}
+                    aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
                   >
                     {link.label}
                   </Link>

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { isCurrentPath } from "@/lib/nav";
 
 const LINKS = [
   { href: "/about", label: "About" },
@@ -15,16 +16,13 @@ export function LegalNav() {
   return (
     <nav className="legal-nav" aria-label="Legal">
       <ul>
-        {LINKS.map((link) => {
-          const current = path === link.href || (link.href === "/legal" && path === "/terms");
-          return (
-            <li key={link.href}>
-              <Link href={link.href} aria-current={current ? "page" : undefined}>
-                {link.label}
-              </Link>
-            </li>
-          );
-        })}
+        {LINKS.map((link) => (
+          <li key={link.href}>
+            <Link href={link.href} aria-current={isCurrentPath(path, link.href) ? "page" : undefined}>
+              {link.label}
+            </Link>
+          </li>
+        ))}
       </ul>
     </nav>
   );

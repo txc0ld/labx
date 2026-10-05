@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import { Shell } from "@/components/Shell";
+import { publicSiteUrl } from "@/lib/operator";
 import "./globals.css";
 
 const sans = Space_Grotesk({ subsets: ["latin"], variable: "--font-sans" });
@@ -9,7 +10,7 @@ const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variabl
 export const metadata: Metadata = {
   title: { default: "LABx", template: "%s · LABx" },
   description: "Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries, Chainlink VRF, Safe treasury.",
-  metadataBase: new URL("https://labx.art"),
+  metadataBase: new URL(publicSiteUrl()),
   icons: { icon: "/favicon.svg" }
 };
 

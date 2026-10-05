@@ -10,19 +10,19 @@ export default function FairnessPage() {
     <section className="section">
       <p className="kicker">Fairness</p>
       <h1 className="page-title">Three locks on every draw.</h1>
-      <p className="lede">Escrow holds the piece. A hash holds the private commitment. VRF waits for the snapshot. Terms, privacy, and draw rules sit beside this table.</p>
+      <p className="lede">Escrow, a commitment hash, then VRF after the snapshot. Settlement flips phase; claims move the prize, proceeds, and fee.</p>
       <LegalNav />
       <div className="piece-grid" style={{ marginTop: "1rem" }}>
         <article className="pearl pad">
           <h2>Escrow</h2>
-          <p>The piece moves into the contract before packs open. After settlement the drawn wallet pulls that same token. Pack price and the lab fee are pulled separately.</p>
+          <p>The piece moves into the contract before packs open. After the settled phase, the drawn wallet claims that token with claimPrize. Pack proceeds and the lab fee are claimed separately.</p>
         </article>
         <article className="pearl pad">
           <h2>Commit</h2>
           <p>A private commitment is hashed with a salt on the server, then committed on-chain. Public pages show the outer hash. The salt stays off this bench until a signed reveal.</p>
         </article>
         <article className="terminal pad">
-          <h2 style={{ color: "#dbdbdb" }}>VRF</h2>
+          <h2>VRF</h2>
           <p>Sales close, then the entry snapshot freezes. Only then does the contract ask Chainlink VRF v2.5. Later entries miss the snapshot.</p>
         </article>
       </div>

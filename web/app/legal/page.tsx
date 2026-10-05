@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
-import { OPERATOR, OPERATOR_LINE } from "@/lib/operator";
+import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 
 export const metadata: Metadata = {
   title: "Terms",
@@ -16,7 +16,7 @@ export default function LegalPage() {
       <LegalNav />
       <article className="pearl pad stack legal-copy">
         <h2>Operator</h2>
-        <p>{OPERATOR.brand} is operated by {OPERATOR_LINE} at {OPERATOR.site}.</p>
+        <p>{OPERATOR.brand} is operated by {OPERATOR_LINE} at {publicSiteHost()}.</p>
 
         <h2>Network</h2>
         <p>This deployment is {OPERATOR.network} only. It is a test network. Packs recorded here do not create mainnet obligations. Mainnet deployment is disabled in the contract and in the wallet gate.</p>
@@ -25,7 +25,7 @@ export default function LegalPage() {
         <p>A membership pack is a paid membership for a single piece. Bonus entries included with a pack are a feature of that membership. They expire 12 months after they are recorded.</p>
 
         <h2>Draw and settlement</h2>
-        <p>The piece is escrowed in the contract before packs open. After sales close, an entry snapshot is frozen, then Chainlink VRF v2.5 selects the wallet. Settlement transfers the escrowed token to that wallet and the pack proceeds and lab fee as the contract specifies.</p>
+        <p>The piece is escrowed in the contract before packs open. After sales close, an entry snapshot is frozen, then Chainlink VRF v2.5 selects the wallet. Settlement (`settle`) flips the piece to the settled phase. It does not transfer the token or USDC. The drawn wallet claims the prize with `claimPrize`. The seller claims pack proceeds with `claimProceeds`. The treasury claims the lab fee with `claimFee`.</p>
 
         <h2>Lab fee</h2>
         <p>The lab fee is 5 USDC per pack, denominated in USDC. ETH can be used only as an optional route through Uniswap and the Chainlink ETH/USD feed. USDC is the unit of account.</p>

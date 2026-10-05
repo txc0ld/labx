@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
-import { OPERATOR, OPERATOR_LINE } from "@/lib/operator";
+import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 
 export const metadata: Metadata = {
   title: "About",
@@ -21,7 +21,7 @@ export default function AboutPage() {
         <article className="pearl pad stack">
           <h2>Operator</h2>
           <p>{OPERATOR.brand} is operated by {OPERATOR_LINE}.</p>
-          <p>The public site is {OPERATOR.site}. The treasury and admin are a Safe multisig. Fantom Labs can pause new packs and rotate the complimentary-entry signer.</p>
+          <p>The public site is {publicSiteHost()}. The treasury and admin are a Safe multisig. Fantom Labs can pause new packs and rotate the complimentary-entry signer.</p>
         </article>
         <article className="pearl pad stack">
           <h2>The bench</h2>
@@ -29,12 +29,12 @@ export default function AboutPage() {
           <p>Public pages do not publish a private commitment. They show the outer hash, the escrow lamp, and the draw phase.</p>
         </article>
         <article className="terminal pad stack">
-          <h2 style={{ color: "#dbdbdb" }}>Network</h2>
+          <h2>Network</h2>
           <p>This deployment is {OPERATOR.network} only, chain id {OPERATOR.chainId}. Sepolia assets have no cash value. Mainnet is disabled in the contract constructor, the deploy script, and the wallet gate.</p>
         </article>
         <article className="well pad stack">
           <h2>Materials</h2>
-          <p>The console is matte ceramic and enamel panels, fluoro chrome tubes, black SVG marks, and a vertical capsule NFT CONTAINER well. Photographs are hardware props. Interface words are HTML.</p>
+          <p>Matte ceramic and enamel panels. Fluoro chrome laboratory tubes with fittings. Black SVG marks. Capsule NFT CONTAINER well.</p>
         </article>
       </div>
       <article className="pearl pad stack legal-copy">

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
-import { OPERATOR, OPERATOR_LINE } from "@/lib/operator";
+import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 
 export const metadata: Metadata = {
   title: "Privacy",
@@ -14,7 +14,7 @@ export default function PrivacyPage() {
       <p className="kicker">Privacy</p>
       <h1 className="page-title">How LABx handles records.</h1>
       <p className="lede legal-copy">
-        This notice describes records created when you use the {OPERATOR.brand} bench at {OPERATOR.site}. It is a product draft for counsel, not a legal opinion.
+        This notice describes records created when you use the {OPERATOR.brand} bench at {publicSiteHost()}. It is a product draft for counsel, not a legal opinion.
       </p>
       <LegalNav />
       <article className="pearl pad stack legal-copy">
@@ -43,8 +43,12 @@ export default function PrivacyPage() {
         <p>We do not ask for a government identity document on this bench. We do not sell personal information.</p>
 
         <h2>Why we collect it</h2>
-        <p>We use those records to run the Sepolia bench: to record packs and agreements, to send a receipt you requested, to gate complimentary entries, to keep a studio commitment hash, to prevent automated abuse, and to keep the wallet gate on Sepolia.</p>
-        <p>Under the Privacy Act 1988 (Cth) and the Australian Privacy Principles, those purposes are the operation of the service you asked for, a legal obligation where one applies, and our legitimate need to keep the bench secure and limited to a test network.</p>
+        <p>
+          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the Sepolia bench: recording packs and agreements, sending a receipt you asked for, gating complimentary entries, holding a studio commitment hash, stopping automated abuse, and keeping the wallet gate on Sepolia.
+        </p>
+        <p>
+          We use and disclose it under Australian Privacy Principle 6 for that primary purpose. A secondary purpose is limited to security, abuse prevention, and a legal obligation. We do not use these records for unrelated marketing.
+        </p>
 
         <h2>How we store it</h2>
         <p>This browser stores a local bench card so explore, studio, and profile keep working if you reload. That store is on your device. Clearing site data removes it.</p>
@@ -61,14 +65,14 @@ export default function PrivacyPage() {
 
         <h2>Who else sees a record</h2>
         <p>Infrastructure that may process data on our behalf includes the site host, an optional Redis store, an optional email sender, a wallet you install, and public Sepolia infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
-        <p>Some of those services store data outside Australia. If you use the bench, you understand that a wallet address and a receipt email may be processed overseas by those operators.</p>
+        <p>We do not publish a country-by-country storage map. Hosting, optional persistence, and optional mail may process a record outside Australia. Use of the bench is use of those processors.</p>
 
         <h2>Retention</h2>
         <p>Browser records stay until you clear them. Server points and complimentary marks are kept to enforce one complimentary entry per person per piece and one check-in award per UTC day. Agreement logs are kept to show that the three confirmations were made. Email is retained by the mail provider according to that provider&apos;s terms. Public chain records cannot be deleted by {OPERATOR.brand}.</p>
 
         <h2>Your rights</h2>
         <p>You may ask {OPERATOR.name} for access to personal information we hold about you, and you may ask for a correction. You may ask us to delete server-side records that are not required to keep the bench honest, such as a receipt email. We may refuse a request that would break a draw, hide an agreement, or rewrite a public chain event.</p>
-        <p>If you are not satisfied, you may complain to us first. You may also contact the Office of the Australian Information Commissioner.</p>
+        <p>If you are not satisfied, complain to the operator first. If that does not resolve it, you may complain to the Office of the Australian Information Commissioner. The process is published at <a href="https://www.oaic.gov.au/">the OAIC</a>.</p>
 
         <h2>Children</h2>
         <p>The bench is for people 18 or older. A pack or complimentary entry requires that confirmation. Do not use the bench if you are under 18.</p>
@@ -77,7 +81,8 @@ export default function PrivacyPage() {
         <p>We may update this notice as the Sepolia bench changes. The date below is the current draft. Material changes will be posted on this page.</p>
 
         <h2>Contact</h2>
-        <p>Write to {OPERATOR.name}, the operator published on {OPERATOR.site}. Do not send wallet keys, seed phrases, or a private commitment in that correspondence.</p>
+        {/* TODO: add a published privacy mailbox when counsel assigns one. Do not invent an address. */}
+        <p>Privacy contact via the site operator (Fantom Labs Pty Ltd). Use the operator published on {publicSiteHost()}. Do not send wallet keys, seed phrases, or a private commitment in that correspondence.</p>
         <p className="muted">Last updated 5 October 2026. {OPERATOR_LINE}.</p>
         <div className="btn-row">
           <Link className="btn" href="/legal">Terms</Link>

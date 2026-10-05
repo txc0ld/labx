@@ -1,6 +1,6 @@
 "use client";
 
-import { raffleAddress } from "@/lib/wallet";
+import { onChainReady } from "@/lib/wallet";
 
 const COPY = {
   studio: "Sepolia contract is not wired. Creating a piece stores the commitment hash on this bench only.",
@@ -10,6 +10,6 @@ const COPY = {
 } as const;
 
 export function OnChainStatus({ surface }: { surface: keyof typeof COPY }) {
-  if (raffleAddress()) return null;
+  if (onChainReady()) return null;
   return <p className="notice warning" role="status">{COPY[surface]}</p>;
 }

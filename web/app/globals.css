@@ -13,6 +13,21 @@
   --sage: #d4ded2;
   --terminal: #140c2e;
   --shadow: 0 18px 40px rgba(64, 24, 120, 0.16);
+  --lab-tube-lime: #b9ff87;
+  --lab-tube-pink: #ff79c0;
+  --lab-tube-mint: #8fffb6;
+  --lab-tube-purple: #8049ff;
+  --lab-tube-off: #9aa0ab;
+  --lab-tube-shadow: rgba(20, 12, 46, 0.22);
+  --lab-tube-bore: rgba(20, 12, 46, 0.42);
+  --lab-tube-ceramic: #d4ded2;
+  --lab-tube-w-shadow: 26px;
+  --lab-tube-w-jacket: 20px;
+  --lab-tube-w-enamel: 15px;
+  --lab-tube-w-core: 9px;
+  --lab-tube-w-bore: 3.2px;
+  --lab-tube-w-reflect: 2.2px;
+  --lab-tube-w-flow: 2px;
   color-scheme: light;
 }
 
@@ -341,19 +356,74 @@ button, input, select, textarea { font: inherit; color: inherit; }
   z-index: 0;
   overflow: visible;
 }
-.tube-shell, .tube-body, .tube-shine {
+.lab-tube-shadow,
+.lab-tube-jacket,
+.lab-tube-enamel,
+.lab-tube-core,
+.lab-tube-bore,
+.lab-tube-reflect,
+.lab-tube-flow,
+.lab-tube-fitting-groove {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.tube-shell { stroke: #3e8d2c; stroke-width: 18; }
-.tube-body { stroke-width: 13; }
-.tube-shine {
-  stroke: rgba(255, 255, 255, 0.72);
-  stroke-width: 3.5;
-  stroke-dasharray: 18 42;
-  animation: tube-shine 10s linear infinite;
+.lab-tube-shadow {
+  stroke: var(--lab-tube-shadow);
+  stroke-width: var(--lab-tube-w-shadow);
 }
+.lab-tube-jacket { stroke-width: var(--lab-tube-w-jacket); }
+.lab-tube-enamel { stroke-width: var(--lab-tube-w-enamel); }
+.lab-tube-core { stroke-width: var(--lab-tube-w-core); }
+.lab-tube-lime .lab-tube-core { stroke: var(--lab-tube-lime); }
+.lab-tube-pink .lab-tube-core { stroke: var(--lab-tube-pink); }
+.lab-tube-mint .lab-tube-core { stroke: var(--lab-tube-mint); }
+.lab-tube-purple .lab-tube-core { stroke: var(--lab-tube-purple); }
+.lab-tube-bore {
+  stroke: var(--lab-tube-bore);
+  stroke-width: var(--lab-tube-w-bore);
+}
+.lab-tube-reflect {
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: var(--lab-tube-w-reflect);
+  stroke-dasharray: 18 36;
+}
+.lab-tube-flow {
+  stroke-width: var(--lab-tube-w-flow);
+  stroke-dasharray: 8 18;
+  animation: lab-tube-flow 9s linear infinite;
+}
+.lab-tube-lime .lab-tube-flow { stroke: var(--lab-tube-lime); }
+.lab-tube-pink .lab-tube-flow { stroke: var(--lab-tube-pink); }
+.lab-tube-mint .lab-tube-flow { stroke: var(--lab-tube-mint); }
+.lab-tube-purple .lab-tube-flow { stroke: var(--lab-tube-purple); }
+.lab-tube-fitting { pointer-events: none; }
+.lab-tube-fitting-shadow { fill: rgba(20, 12, 46, 0.18); }
+.lab-tube-fitting-enamel {
+  fill: var(--lab-tube-ceramic);
+  stroke: rgba(142, 151, 168, 0.7);
+  stroke-width: 0.8;
+}
+.lab-tube-fitting-groove {
+  stroke: rgba(20, 12, 46, 0.38);
+  stroke-width: 1.15;
+}
+.lab-tube-fitting-port { fill: #141018; }
+.lab-tube-lamp-lime { fill: var(--lab-tube-lime); }
+.lab-tube-lamp-pink { fill: var(--lab-tube-pink); }
+.lab-tube-lamp-mint { fill: var(--lab-tube-mint); }
+.lab-tube-lamp-purple { fill: var(--lab-tube-purple); }
+.bench-tubes.is-off {
+  --lab-tube-lime: var(--lab-tube-off);
+  --lab-tube-pink: var(--lab-tube-off);
+  --lab-tube-mint: var(--lab-tube-off);
+  --lab-tube-purple: var(--lab-tube-off);
+}
+.bench-tubes.is-off .lab-tube-flow {
+  animation: none;
+  opacity: 0.28;
+}
+.terminal h2 { color: var(--on-dark); }
 
 .nft-capsule,
 .nft-capsule.bezel {
@@ -535,7 +605,15 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
       "pieces";
   }
   .piece-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bench-tubes { display: none; }
+  .bench-tubes {
+    --lab-tube-w-shadow: 16px;
+    --lab-tube-w-jacket: 13px;
+    --lab-tube-w-enamel: 10px;
+    --lab-tube-w-core: 6px;
+    --lab-tube-w-bore: 2.2px;
+    --lab-tube-w-flow: 1.5px;
+  }
+  .lab-tube-reflect { display: none; }
   .nft-capsule { min-block-size: 18rem; max-inline-size: 18rem; }
   .site-header {
     display: flex;
@@ -551,9 +629,9 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .btn:hover, .btn:active { transform: none; }
-  .cable, .tube-shine { animation: none !important; }
+  .cable, .lab-tube-flow { animation: none !important; }
 }
 
-@keyframes tube-shine { to { stroke-dashoffset: -120; } }
+@keyframes lab-tube-flow { to { stroke-dashoffset: -120; } }
 :focus-visible { outline: 3px solid var(--lime); outline-offset: 3px; }
 .btn-lime:focus-visible, .pack-key.on:focus-visible { outline-color: var(--purple); }

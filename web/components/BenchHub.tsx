@@ -26,7 +26,7 @@ export function BenchHub({
       <section className="bench" aria-labelledby="hero-title">
         <BenchTubes />
         <article className="pearl hero-copy bench-hero" data-tube="hero">
-          <p className="kicker">labx.art · sepolia bench</p>
+          <p className="kicker">sepolia bench</p>
           <h1 id="hero-title">Pieces, linked on the bench.</h1>
           <p className="lede">
             Membership packs for one escrowed piece. Bonus entries come with the pack. Chainlink VRF runs after the entry snapshot.

@@ -2,10 +2,12 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { keccak256, toBytes, type Address } from "viem";
+import { generatePrivateKey } from "viem/accounts";
 import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, type Entry, type PackName, type Piece } from "./seed";
 import { pickWinner, snapshotLots } from "./draw";
 import { receiptMessage } from "./email";
-import { connectSepolia, raffleAddress } from "./wallet";
+import { saltedPrivateHash } from "./reserve";
+import { connectSepolia, onChainReady } from "./wallet";
 
 type Agreement = { pieceId: string; at: string; terms: boolean; rules: boolean; age: boolean };
 type State = {
@@ -134,8 +136,9 @@ export function BenchProvider({ children }: { children: ReactNode }) {
       },
       createPiece: async (input) => {
         if (!input.title.trim() || !input.privateCommitment.trim()) return "Title and private commitment are required.";
-        const wired = raffleAddress();
-        let commit = keccak256(toBytes(`labx-bench:${input.privateCommitment.trim()}`));
+        const wired = onChainReady();
+        const benchSalt = keccak256(toBytes(generatePrivateKey()));
+        let commit = saltedPrivateHash(benchSalt, input.privateCommitment.trim());
         let nonce: string | undefined;
         let publicHash: string | undefined;
         let publicSummary = input.publicSummary;
