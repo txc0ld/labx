@@ -6,7 +6,6 @@ LABx is a Sepolia membership bench for one escrowed piece at a time. The interfa
 
 | File | Role |
 | --- | --- |
-| `design/reference/moodboard-style-source.png` | Materials, lighting, cables, chrome, chunky controls, lavender field. The figure in this photograph is excluded from the product. |
 | `design/reference/colour-tokens.png` | Exact UI colour tokens. |
 | `web/public/lab/hero-linked-panels.jpg` | Hero hardware: terminal, chrome junction, glossy filter panel, fluoro cables. No figure. |
 | `web/public/lab/filter-panel.jpg` | Glossy filter panel with chunky buttons and a chrome port. |
