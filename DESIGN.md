@@ -75,7 +75,7 @@ No parallax, no page-load theatrics, no glass shimmer.
 
 ## Surfaces
 
-**Explore.** Header with chrome port mark, chunky nav, Sepolia pill. Hero is three linked objects: terminal photograph, pearl copy panel, filter photograph. The cable-run photograph sits underneath as the physical link. Then a lime warning strip (black text) that this is Sepolia. Then a two-up grid of piece cards in chrome bezels.
+**Explore.** Header with chrome port mark, a single pill nav, and a Sepolia · USDC chip. The bench is a hub: pearlescent hero copy, a vertical ceramic NFT CONTAINER capsule in the center (placeholder, no featured piece), tall side cards, and four piece cards. Cards use black vector marks, not photographs. Fluoro chrome tubes (rounded pipe shine) link hero → capsule → side cards → bottom cards. A lime warning strip (black text) states this is Sepolia. Mobile stacks the hub and hides the tubes.
 
 **Piece.** Chrome-framed photograph beside the pack console. Packs are chunky keys from Entry to Platinum. Each key shows bonus entries, USDC price, remaining supply, and the 5 USDC lab fee. Three real checkboxes gate the purchase. The commitment hash is mono type, not a private number.
 
