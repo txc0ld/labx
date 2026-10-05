@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 import { publicSiteUrl } from "@/lib/operator";
 
-const paths = ["/", "/about", "/privacy", "/legal", "/fairness", "/rules", "/seller", "/profile"];
+const paths = ["/", "/about", "/guide", "/privacy", "/legal", "/fairness", "/rules", "/seller", "/profile"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const origin = publicSiteUrl();

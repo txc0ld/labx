@@ -10,7 +10,8 @@ const COPY = {
   piece: "Recording a demo pack stays in this browser. It does not transfer USDC or create an on-chain bonus entry."
 } as const;
 
-export function OnChainStatus({ surface }: { surface: keyof typeof COPY }) {
+export function OnChainStatus({ surface, compact = false }: { surface: keyof typeof COPY; compact?: boolean }) {
+  if (compact) return <p className="notice warning notice-compact" role="status">Browser demo. No USDC transfers or on-chain entries.</p>;
   const configured = onChainReady();
   return (
     <p className="notice warning" role="status">

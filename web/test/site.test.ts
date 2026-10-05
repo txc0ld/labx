@@ -40,6 +40,7 @@ const STATIC_ROUTES = new Set([
   "/legal",
   "/privacy",
   "/about",
+  "/guide",
   "/profile",
   "/seller"
 ]);
@@ -51,7 +52,7 @@ function routeFile(route: string) {
 }
 
 describe("required marketing routes", () => {
-  it("ships explore, fairness, rules, legal, privacy, about, terms, profile, and studio", () => {
+  it("ships explore, guide, fairness, rules, legal, privacy, about, terms, profile, and studio", () => {
     for (const route of STATIC_ROUTES) {
       expect(pageExists(routeFile(route)), `${route} is missing ${routeFile(route)}`).toBe(true);
     }
@@ -172,7 +173,7 @@ describe("chrome links", () => {
         continue;
       }
       if (href.startsWith("#")) {
-        expect(["#content", "#bench"].includes(href)).toBe(true);
+        expect(["#content", "#bench", "#browse", "#packs", "#eligibility", "#workflow"].includes(href)).toBe(true);
         continue;
       }
       const [pathname] = href.split("#");
@@ -358,7 +359,8 @@ describe("responsive chrome and legal surfaces", () => {
     const hub = read("components/BenchHub.tsx");
     expect(hub).toMatch(/<ResolvedTitle \/>/);
     expect(hub).toMatch(/className="capsule-grid"/);
-    expect(hub).toMatch(/Demo collection/);
+    expect(hub).toMatch(/Browser demo/);
+    expect(hub).toMatch(/href="\/guide"/);
     expect(hub).not.toMatch(/hero-art-stack|hero-art-card|Explore the bench/);
   });
 
@@ -373,14 +375,30 @@ describe("responsive chrome and legal surfaces", () => {
     const markup = renderToStaticMarkup(createElement(ScrollStory));
     expect(markup).toContain("Look closer.");
     expect(markup).toContain("Follow the draw.");
-    expect(markup).toContain("Each piece has its own membership packs.");
-    expect(markup).toContain("Records stay in this browser; no transactions are submitted.");
     expect(markup).toContain('href="#bench"');
-    expect(markup).toContain('href="/fairness"');
+    expect(markup).toContain('href="/guide"');
     expect(markup).toContain('class="pixel-divider"');
     expect(markup).toContain('aria-hidden="true"');
     expect(markup).toContain('class="pixel-divider-fallback"');
     expect(markup).not.toContain("<canvas");
+  });
+
+  it("publishes a complete browser-demo and pack guide", () => {
+    const guide = read("app/guide/page.tsx");
+    expect(guide).toMatch(/browser demo/i);
+    expect(guide).toMatch(/do not transfer USDC|do not perform those on-chain actions/i);
+    expect(guide).toMatch(/LAB_FEE/);
+    expect(guide).toMatch(/Quantity is limited to 1–5 packs/);
+    expect(guide).toMatch(/12-month bonus-entry expiry/);
+    expect(guide).toMatch(/intended contract workflow/i);
+    for (const href of ["/", "/fairness", "/rules", "/legal", "/profile", "/seller"]) {
+      expect(guide).toContain(`href="${href}`);
+    }
+    const hub = read("components/BenchHub.tsx");
+    expect(hub).toMatch(/Browser demo[\s\S]*no transactions/i);
+    expect(hub).not.toMatch(/Ethereum mainnet is disabled/);
+    expect(read("components/PieceDesk.tsx")).toMatch(/OnChainStatus surface="piece" compact/);
+    expect(read("app/sitemap.ts")).toContain('"/guide"');
   });
 
   it("marks OnChainStatus as bench-only with a lavender lamp", () => {

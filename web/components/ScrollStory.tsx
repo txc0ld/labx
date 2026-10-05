@@ -8,15 +8,13 @@ import { PixelDivider } from "./PixelDivider";
 const STORIES = [
   {
     title: "Look closer.",
-    body: "Each piece has its own membership packs. Open a piece to compare price, bonus entries and remaining supply.",
     href: "#bench",
     link: "Back to the collection"
   },
   {
     title: "Follow the draw.",
-    body: "Inspect the demo’s escrow, commitment and draw status. Records stay in this browser; no transactions are submitted.",
-    href: "/fairness",
-    link: "View fairness"
+    href: "/guide",
+    link: "How it works"
   }
 ] as const;
 
@@ -125,7 +123,6 @@ export function ScrollStory() {
             </span>
           </h2>
           <div className="scroll-story-copy">
-            <p>{story.body}</p>
             <Link href={story.href}>{story.link} <span aria-hidden="true">↗</span></Link>
           </div>
         </section>

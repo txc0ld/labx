@@ -44,21 +44,16 @@ export function PieceDesk({ id }: { id: string }) {
 
   return (
     <>
-    <div className="detail-path" data-reveal><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the collection</Link><span className="kicker">Sepolia browser demo</span></div>
+    <div className="detail-path" data-reveal><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to the collection</Link></div>
     <section className="section piece-layout piece-console">
       <figure className="piece-visual" data-reveal>
         <div className="piece-visual-topline">
           <span>LABx / Piece {piece.tokenId.padStart(2, "0")}</span>
-          <span>Sepolia demo</span>
         </div>
         <div className="piece-artwork">
           <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized priority />
         </div>
         <figcaption className="piece-visual-caption">
-          <div>
-            <p className="kicker">Demo artwork</p>
-            <strong>{piece.title}</strong>
-          </div>
           <span className="piece-escrow-status">{piece.escrowed ? "Escrowed" : "Awaiting escrow"}</span>
         </figcaption>
       </figure>
@@ -70,7 +65,7 @@ export function PieceDesk({ id }: { id: string }) {
           </div>
           <h1 className="page-title">{piece.title}</h1>
           <p className="piece-deadline">{view?.timing} · Sales close {closingDate(piece.salesEnd)} UTC</p>
-          <p className="lede">Choose a membership pack. Bonus entries come with the pack. Every pack includes a {LAB_FEE} USDC lab fee.</p>
+          <Link className="guide-link" href="/guide#packs">Pack guide <span aria-hidden="true">↗</span></Link>
         </header>
 
         <section className="pack-selector" aria-labelledby="pack-title">
@@ -117,7 +112,7 @@ export function PieceDesk({ id }: { id: string }) {
           </div>
         </section>
 
-        <OnChainStatus surface="piece" />
+        <OnChainStatus surface="piece" compact />
 
         <section className="agreements-section" aria-labelledby="agreements-title">
           <div className="console-section-heading">

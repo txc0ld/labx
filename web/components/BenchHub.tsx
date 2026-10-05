@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { LAB_FEE, type Piece } from "@/lib/seed";
-import { closingDate, pieceView } from "@/lib/piece-view";
+import { pieceView } from "@/lib/piece-view";
 import { useBenchTime } from "@/lib/use-bench-time";
 import { ResolvedTitle } from "./ResolvedTitle";
 
@@ -25,18 +25,15 @@ export function BenchHub({ pieces, banner }: {
     const view = pieceView(piece, now);
     return filter === "all" || (filter === "open" ? view.isOpen : view.isEnded);
   });
-  const available = pieces.filter((piece) => pieceView(piece, now).isOpen).length;
-
   return (
     <>
       <section className="collection-intro" aria-labelledby="hero-title" data-reveal>
         <div className="collection-title-block">
-          <p className="kicker">LABx / Sepolia browser demo</p>
           <ResolvedTitle />
         </div>
-        <div className="collection-intro-copy">
-          <p>Explore artwork, membership packs and availability.</p>
-          <p className="collection-demo-label"><strong>Demo collection</strong> · {pieces.length} {pieces.length === 1 ? "piece" : "pieces"} · {available} open · no live transactions</p>
+        <div className="collection-intro-actions">
+          <p className="collection-demo-label"><strong>Browser demo</strong> · No transactions</p>
+          <Link href="/guide" className="guide-link">How it works <span aria-hidden="true">↗</span></Link>
         </div>
       </section>
       {banner ? <p className={`notice ${banner.tone}`} role="status">{banner.text}</p> : null}
@@ -61,7 +58,6 @@ export function BenchHub({ pieces, banner }: {
           </div>
         )}
       </section>
-      <p className="notice warning">Sepolia demo bench. Pack and draw records stay in this browser; they do not submit transactions. Ethereum mainnet is disabled.</p>
     </>
   );
 }
@@ -69,6 +65,11 @@ export function BenchHub({ pieces, banner }: {
 function Capsule({ piece, now }: { piece: Piece; now: number }) {
   const view = pieceView(piece, now);
   const entry = piece.packs.find((pack) => pack.name === "Entry");
+  const entrySummary = !entry
+    ? "Entry pack unavailable"
+    : entry.remaining > 0
+      ? `${entry.priceUsdc} USDC entry pack`
+      : "Entry pack sold out";
   return (
     <li data-reveal>
       <Link className="raffle-capsule" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
@@ -80,11 +81,7 @@ function Capsule({ piece, now }: { piece: Piece; now: number }) {
             <div><h3>{piece.title}</h3><p className="capsule-artist">{piece.artist}</p></div>
             <span className={`capsule-status ${view.isOpen ? "is-open" : ""}`}>{view.status}</span>
           </div>
-          <dl className="capsule-specs">
-            <div><dt>Entry pack</dt><dd>{entry ? `${entry.priceUsdc} USDC` : "Unavailable"}</dd></div>
-            <div><dt>Lab fee</dt><dd>+{LAB_FEE} USDC / pack</dd></div>
-            <div><dt>Sales close · UTC</dt><dd>{view.scheduled ? <time dateTime={piece.salesEnd}>{closingDate(piece.salesEnd)}</time> : "Not scheduled"}</dd></div>
-          </dl>
+          <p className="capsule-price">{entrySummary} · +{LAB_FEE} USDC fee</p>
           <div className="capsule-foot"><span>{view.timing}</span><span className="capsule-open" aria-hidden="true">View piece ↗</span></div>
         </div>
       </Link>
