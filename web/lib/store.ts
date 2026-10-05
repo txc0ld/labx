@@ -82,6 +82,8 @@ export function activeStore(): Store {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
     return upstashStore(process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN);
   }
+  // Hosted requests must never acknowledge data kept only in one ephemeral instance.
+  if (process.env.VERCEL) throw new Error("Persistent Redis storage must be configured on Vercel.");
   if (process.env.LABX_STORE === "memory") return memoryStore();
   return fileStore();
 }

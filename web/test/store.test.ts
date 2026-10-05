@@ -1,11 +1,52 @@
 import { mkdir, mkdtemp, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReserve } from "../lib/reserve";
-import { fileStore, upstashStore } from "../lib/store";
+import { activeStore, fileStore, upstashStore } from "../lib/store";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe("hosted persistence configuration", () => {
+  beforeEach(() => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", undefined);
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", undefined);
+    vi.stubEnv("LABX_STORE", undefined);
+  });
+
+  it.each([
+    [undefined, undefined, undefined],
+    ["https://redis.example", undefined, undefined],
+    [undefined, "test-token", undefined],
+    [undefined, undefined, "memory"],
+    ["https://redis.example", undefined, "memory"],
+    [undefined, "test-token", "memory"]
+  ])("refuses ephemeral hosted storage (%s, %s, %s)", (url, token, mode) => {
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", url);
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", token);
+    vi.stubEnv("LABX_STORE", mode);
+    expect(() => activeStore()).toThrow(/persistent.*Redis/i);
+  });
+
+  it("uses configured Redis even when hosted memory mode is requested", async () => {
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://redis.example");
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "test-token");
+    vi.stubEnv("LABX_STORE", "memory");
+    vi.stubGlobal("fetch", async () => Response.json({ result: "persisted commitment" }));
+    expect(await activeStore().get("reserve:hosted-fixture")).toBe("persisted commitment");
+  });
+
+  it("keeps explicitly selected memory storage available locally", async () => {
+    vi.stubEnv("VERCEL", undefined);
+    vi.stubEnv("LABX_STORE", "memory");
+    await activeStore().set("reserve:local-demo-fixture", "local demo commitment");
+    expect(await activeStore().get("reserve:local-demo-fixture")).toBe("local demo commitment");
+  });
+});
 
 describe("Redis persistence", () => {
   it("distinguishes a missing record from a failed read", async () => {
