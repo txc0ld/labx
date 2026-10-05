@@ -5,7 +5,6 @@ import { keccak256, toBytes, type Address } from "viem";
 import { generatePrivateKey } from "viem/accounts";
 import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, type Entry, type PackName, type Piece } from "./seed";
 import { pickWinner, snapshotLots } from "./draw";
-import { receiptMessage } from "./email";
 import { saltedPrivateHash } from "./reserve";
 import { connectSepolia, onChainReady } from "./wallet";
 import { pieceView } from "./piece-view";
@@ -122,11 +121,6 @@ export function BenchProvider({ children }: { children: ReactNode }) {
             kind: "pack",
             address
           };
-          void fetch("/api/agreements", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ address, pieceId: piece.id, terms: true, rules: true, age: true })
-          });
           return {
             ...current,
             pieces,
@@ -251,43 +245,9 @@ export function BenchProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
-      saveEmail: async (email, piece, pack, entries, priceUsdc) => {
+      saveEmail: async (email) => {
         setState((current) => ({ ...current, email }));
-        if (!state.wallet || state.wallet.toLowerCase() === DEMO_ADDRESS.toLowerCase()) {
-          return "A Sepolia wallet signature is required before a receipt can be sent.";
-        }
-        const provider = window.ethereum;
-        if (!provider) return "A Sepolia wallet signature is required before a receipt can be sent.";
-        const deadline = BigInt(Math.trunc(Date.now() / 1000) + 10 * 60);
-        const message = receiptMessage(state.wallet as Address, email, piece, pack, deadline);
-        let signature: string;
-        try {
-          signature = (await provider.request({
-            method: "personal_sign",
-            params: [message, state.wallet]
-          })) as string;
-        } catch {
-          return "The wallet refused the receipt signature.";
-        }
-        const response = await fetch("/api/email/receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            address: state.wallet,
-            signature,
-            deadline: deadline.toString(),
-            to: email,
-            piece,
-            pack,
-            entries,
-            priceUsdc,
-            feeUsdc: LAB_FEE
-          })
-        });
-        const body = await response.json();
-        if (!response.ok) return body.error || "Email was refused.";
-        if (!body.delivered) return body.reason || "Receipt was not delivered.";
-        return null;
+        return "Email saved in this browser. Demo records cannot issue receipts; a verified on-chain purchase is required.";
       },
       recordComplimentary: (pieceId) => {
         const piece = state.pieces.find((item) => item.id === pieceId);

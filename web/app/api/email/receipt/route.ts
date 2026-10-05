@@ -1,43 +1,22 @@
-import { isAddress, type Address, type Hex } from "viem";
-import { allowReceipt, receiptBody, sendReceipt, verifyReceipt, type Receipt } from "@/lib/email";
+import { deliverPurchaseReceipt, resendSender } from "@/lib/receipt-delivery";
+import { receiptChainReader } from "@/lib/purchase-proof";
+import { requestContext } from "@/lib/request-auth";
+import { activeStore } from "@/lib/store";
 import { fail, json } from "@/lib/http";
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as Partial<Receipt> & {
-      address?: string;
-      signature?: string;
-      deadline?: string | number;
-    };
-    if (!body.to || !body.to.includes("@") || !body.piece || !body.pack) {
-      return fail(new Error("Email, piece, and pack are required."));
-    }
-    if (!body.address || !isAddress(body.address) || !body.signature || body.deadline === undefined) {
-      return fail(new Error("A wallet signature is required."), 401);
-    }
-    const receipt: Receipt = {
-      to: body.to,
-      piece: body.piece,
-      pack: body.pack,
-      entries: Number(body.entries) || 0,
-      priceUsdc: Number(body.priceUsdc) || 0,
-      feeUsdc: Number(body.feeUsdc) || 5
-    };
-    const accepted = await verifyReceipt({
-      address: body.address,
-      to: receipt.to,
-      piece: receipt.piece,
-      pack: receipt.pack,
-      deadline: BigInt(body.deadline),
-      signature: body.signature as Hex
-    });
-    if (!accepted) return fail(new Error("Receipt signature was refused."), 401);
-    if (!allowReceipt(body.address)) return fail(new Error("Too many receipt requests."), 429);
-    const preview = receiptBody(receipt);
-    if (/\btickets?\b/i.test(preview.text)) return fail(new Error("Receipt copy was refused."));
-    const result = await sendReceipt(receipt);
-    return json({ ok: true, ...result, subject: preview.subject });
+    const body = await request.json();
+    const key = process.env.RESEND_API_KEY;
+    const from = process.env.RESEND_FROM;
+    if (!key || !from) return fail(new Error("Receipt delivery is not configured."), 503);
+    const transportIdentity = createHash("sha256").update(key).digest("hex");
+    const result = await deliverPurchaseReceipt(activeStore(), body, requestContext(), receiptChainReader(), resendSender(key), from, transportIdentity);
+    return json({ ok: true, ...result });
   } catch (error) {
-    return fail(error);
+    // Do not expose RPC/provider URLs, headers or upstream error bodies.
+    const safe = error instanceof Error && /^(A valid|A purchase|A finalized|Receipt |Sepolia request|Persistent Redis|Store )/.test(error.message);
+    return fail(new Error(safe ? (error as Error).message : "Receipt request could not be completed."));
   }
 }
+import { createHash } from "node:crypto";

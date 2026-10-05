@@ -7,7 +7,7 @@ import { assertAgreements } from "../lib/agreements";
 import { issueChallenge, verifyChallenge } from "../lib/captcha";
 import { AMOE_TYPEHASH, COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
 import { pickWinner, snapshotLots } from "../lib/draw";
-import { allowReceipt, receiptBody, receiptMessage, resetReceiptRateLimit, verifyReceipt } from "../lib/email";
+import { receiptBody } from "../lib/email";
 import { issueAmoeClaim, captchaDigest } from "../lib/amoe";
 import { checkIn, checkInMessage, type Store } from "../lib/points";
 import { createReserve, revealReserve, saltedPrivateHash, revealMessage } from "../lib/reserve";
@@ -105,37 +105,6 @@ describe("receipt", () => {
     expect(body.text.toLowerCase()).not.toMatch(/\btickets?\b/);
   });
 
-  it("requires a fresh wallet signature and then rate-limits", async () => {
-    resetReceiptRateLimit();
-    const account = privateKeyToAccount(generatePrivateKey());
-    const now = 1_700_000_000n;
-    const message = receiptMessage(account.address, "a@labx.art", "Junction Array", "Entry", now + 60n);
-    const signature = await account.signMessage({ message });
-    expect(
-      await verifyReceipt({
-        address: account.address,
-        to: "a@labx.art",
-        piece: "Junction Array",
-        pack: "Entry",
-        deadline: 0n,
-        signature,
-        now
-      })
-    ).toBe(false);
-    expect(
-      await verifyReceipt({
-        address: account.address,
-        to: "a@labx.art",
-        piece: "Junction Array",
-        pack: "Entry",
-        deadline: now + 60n,
-        signature,
-        now
-      })
-    ).toBe(true);
-    for (let i = 0; i < 5; i += 1) expect(allowReceipt(account.address, 1_000)).toBe(true);
-    expect(allowReceipt(account.address, 1_000)).toBe(false);
-  });
 });
 
 describe("reserve salt", () => {

@@ -51,7 +51,8 @@ export default function ProfilePage() {
           <label htmlFor="email">Receipt email
             <input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
-          <button className="btn btn-lime" type="submit">Send receipt</button>
+          <p className="muted">Demo records do not send receipts. A receipt requires a verified on-chain purchase.</p>
+          <button className="btn btn-lime" type="submit">Save email in this browser</button>
           {note ? <p className="notice warning" role="status">{note}</p> : null}
         </form>
       </div>

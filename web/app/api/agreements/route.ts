@@ -1,19 +1,16 @@
-import { assertAgreements } from "@/lib/agreements";
+import { recordAgreement } from "@/lib/agreement-record";
+import { requestContext } from "@/lib/request-auth";
+import type { Hex } from "viem";
 import { activeStore } from "@/lib/store";
 import { fail, json } from "@/lib/http";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    assertAgreements(body);
-    const store = activeStore();
-    const key = `agree:${body.address.toLowerCase()}:${body.pieceId || "general"}:${Date.now()}`;
-    await store.set(
-      key,
-      JSON.stringify({ ...body, at: new Date().toISOString() })
-    );
-    return json({ ok: true });
+    const result = await recordAgreement(activeStore(), body, { ...requestContext(), termsHash: (process.env.TERMS_HASH || "0x") as Hex });
+    return json({ ok: true, ...result });
   } catch (error) {
-    return fail(error);
+    const safe = error instanceof Error && /^(A wallet|A valid wallet|All three agreements|Agreement |Sepolia request|Persistent Redis|Store )/.test(error.message);
+    return fail(new Error(safe ? (error as Error).message : "Agreement request could not be completed."));
   }
 }
