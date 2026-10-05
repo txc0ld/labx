@@ -59,6 +59,51 @@ describe("AMOE wallet ownership and request binding", () => {
 });
 
 describe("AMOE atomic issuance and recovery", () => {
+  it("recovers a newer concurrent issuance after an older request waits across a clock tick", async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const firstRead = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    class GatedStore extends MemoryStore {
+      first = true;
+      override async get(key: string) {
+        if (this.first && key.startsWith("amoe:v2:")) { this.first = false; entered(); await gate; }
+        return super.get(key);
+      }
+    }
+    const store = new GatedStore();
+    const older = issueAmoeClaim(store, await request());
+    await firstRead;
+    const newer = await issueAmoeClaim(store, await request({ now: now + 1000 }));
+    release();
+    await expect(older).resolves.toEqual(newer);
+  });
+
+  it.each(["high-s", "v-parity"])("rejects a recovered signature the contract would refuse: %s", async (kind) => {
+    class InspectableStore extends MemoryStore {
+      claimKey = "";
+      override async setIfAbsent(entries: Record<string, string>) {
+        this.claimKey = Object.keys(entries).find((key) => key.startsWith("amoe:v2:"))!;
+        return super.setIfAbsent(entries);
+      }
+    }
+    const store = new InspectableStore();
+    const input = await request();
+    await issueAmoeClaim(store, input);
+    const record = JSON.parse((await store.get(store.claimKey))!);
+    const sig = record.result.signature.slice(2);
+    const v = Number.parseInt(sig.slice(128), 16);
+    if (kind === "high-s") {
+      const order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+      const highS = (order - BigInt(`0x${sig.slice(64, 128)}`)).toString(16).padStart(64, "0");
+      record.result.signature = `0x${sig.slice(0, 64)}${highS}${v === 27 ? "1c" : "1b"}`;
+    } else record.result.signature = `0x${sig.slice(0, 128)}${(v - 27).toString(16).padStart(2, "0")}`;
+    const raw = JSON.stringify(record);
+    await store.set(store.claimKey, raw);
+    await expect(issueAmoeClaim(store, input)).rejects.toThrow(/reconciliation/);
+    expect(await store.get(store.claimKey)).toBe(raw);
+  });
+
   it("rejects zero terms before consuming issuance and rejects that server configuration", async () => {
     const store = new MemoryStore();
     const input = await request({ context: { ...context, termsHash: `0x${"0".repeat(64)}` } });

@@ -134,8 +134,15 @@ export async function issueAmoeClaim(store: Store, input: AmoeInput): Promise<Am
         !validHex(result.captchaDigest, 66) || !validHex(result.signature, 132) ||
         typeof result.deadline !== "string" || !/^[1-9]\d{0,11}$/.test(result.deadline)) throw invalid();
     const deadline = BigInt(result.deadline);
-    if (deadline < seconds) throw new AmoeRequestError("The issued authorization expired; operator reconciliation is required.");
-    if (deadline > seconds + 3600n) throw invalid();
+    const recoverySeconds = input.now === undefined ? BigInt(Math.trunc(Date.now() / 1000)) : seconds;
+    if (deadline < recoverySeconds) throw new AmoeRequestError("The issued authorization expired; operator reconciliation is required.");
+    // Match the contract's OpenZeppelin ECDSA rules, which are stricter than viem recovery.
+    const s = BigInt(`0x${result.signature.slice(66, 130)}`);
+    const v = Number.parseInt(result.signature.slice(130, 132), 16);
+    if (s === 0n || s > 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n ||
+        (v !== 27 && v !== 28)) throw invalid();
+    // The signer authenticates the bounded deadline below. A deadline relative to this
+    // request's start would incorrectly reject a newer concurrent request's winner.
     let authentic = false;
     try {
       authentic = await verifyTypedData({ address: signer as Address, signature: result.signature,
