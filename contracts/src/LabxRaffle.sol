@@ -20,6 +20,9 @@ import {IVRFCoordinatorV2Plus, ISwapRouter02, IWETH9, AggregatorV3Interface} fro
 ///      A server-side commitment is stored as a hash and never decoded on-chain.
 ///      Randomness is Chainlink VRF v2.5, requested only after an entry snapshot. The
 ///      coordinator that accepted a request stays pinned until that draw ends.
+///      `nativePayment` defaults to false (LINK). The live Sepolia deploy
+///      `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` hardcodes that mode; fund the VRF
+///      subscription with LINK until a redeploy that can set `nativePayment` true.
 contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     using SafeERC20 for IERC20;
 
@@ -210,6 +213,11 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     uint24 public immutable poolFee;
     uint32 public amoeCap;
     bool public ethPathEnabled;
+    /// @notice VRF v2.5 extraArgs payment mode. False = LINK (default, matches Sepolia
+    ///         `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C`). True = native ETH. Owner-settable
+    ///         only while `activeDrawings == 0`. Live Sepolia must keep LINK funding until a
+    ///         redeploy can flip this.
+    bool public nativePayment;
     bool public paused;
     uint256 public nextId = 1;
     bool private _awaitingRequest;
@@ -262,6 +270,10 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     event CoordinatorProposed(address indexed next, uint256 eta);
     event CoordinatorApplied(address indexed coordinator);
     event EthPathSet(bool enabled);
+    event TreasurySet(address indexed previous, address indexed next);
+    event AmoeSignerSet(address indexed previous, address indexed next);
+    event VrfConfigSet(bytes32 keyHash, uint256 subscriptionId, uint32 callbackGasLimit, uint16 requestConfirmations);
+    event NativePaymentSet(bool nativePayment);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -333,11 +345,13 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
 
     function setTreasury(address next) external onlyOwner {
         if (next == address(0)) revert ZeroAddress();
+        emit TreasurySet(treasury, next);
         treasury = next;
     }
 
     function setAmoeSigner(address next) external onlyOwner {
         if (next == address(0)) revert ZeroAddress();
+        emit AmoeSignerSet(amoeSigner, next);
         amoeSigner = next;
     }
 
@@ -351,6 +365,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         external
         onlyOwner
     {
+        if (activeDrawings != 0) revert DrawInFlight();
         if (nextKeyHash == bytes32(0) || nextSubId == 0) revert BadConfig();
         if (gasLimit < 200_000 || gasLimit > 2_500_000) revert BadConfig();
         if (confirmations < MIN_CONFIRMATIONS || confirmations > MAX_CONFIRMATIONS) revert BadConfig();
@@ -358,6 +373,15 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         subscriptionId = nextSubId;
         callbackGasLimit = gasLimit;
         requestConfirmations = confirmations;
+        emit VrfConfigSet(nextKeyHash, nextSubId, gasLimit, confirmations);
+    }
+
+    /// @notice Flips VRF v2.5 LINK vs native ETH billing. Refused while a draw is in flight
+    ///         so an in-progress request cannot change payment mode mid-callback.
+    function setNativePayment(bool next) external onlyOwner {
+        if (activeDrawings != 0) revert DrawInFlight();
+        nativePayment = next;
+        emit NativePaymentSet(next);
     }
 
     /// @notice Starts a one-day delay before the VRF coordinator can change.
@@ -545,29 +569,25 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (msg.sender != r.seller && msg.sender != owner) revert NotSeller();
         if (r.phase != Phase.Closed || !r.snapshotted) revert BadPhase();
         if (r.snapshotTotal == 0) revert EmptyDraw();
-        address pinned = vrfCoordinator;
-        _awaitingRequest = true;
-        _syncFilled = false;
-        uint256 requestId = IVRFCoordinatorV2Plus(pinned).requestRandomWords(
-            VRFV2PlusClient.RandomWordsRequest({
-                keyHash: keyHash,
-                subId: subscriptionId,
-                requestConfirmations: requestConfirmations,
-                callbackGasLimit: callbackGasLimit,
-                numWords: 1,
-                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
-            })
-        );
-        _awaitingRequest = false;
-        if (requestId == 0) revert BadConfig();
+        (uint256 requestId, address pinned) = _requestWords();
         r.phase = Phase.Drawing;
-        r.vrfRequestId = requestId;
-        r.vrfRequestedAt = uint64(block.timestamp);
-        requestToRaffle[requestId] = id;
-        requestCoordinator[requestId] = pinned;
         activeDrawings += 1;
-        emit RandomnessRequested(id, requestId);
-        if (_syncFilled && _syncRequestId == requestId) _applyWord(id, requestId, _syncWord);
+        _pinRequest(id, requestId, pinned);
+    }
+
+    /// @notice Re-request VRF while the raffle is still Drawing and has no winner.
+    ///         Use after a failed or dropped callback (Chainlink does not retry). Owner-only
+    ///         so a seller cannot drain the VRF subscription. The previous `requestToRaffle`
+    ///         mapping is forgotten after the new request succeeds; a late fulfill of the
+    ///         old id is ignored.
+    function retryRandomness(uint256 id) external onlyOwner nonReentrant {
+        if (paused) revert Paused();
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Drawing) revert BadPhase();
+        uint256 oldId = r.vrfRequestId;
+        (uint256 requestId, address pinned) = _requestWords();
+        _forgetRequest(oldId);
+        _pinRequest(id, requestId, pinned);
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
@@ -642,6 +662,10 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit FeeClaimed(id, payee, fee);
     }
 
+    /// @notice Seller may cancel before funds arrive, or after an empty snapshot.
+    ///         The owner may force-cancel a funded Open/Closed raffle. That is accepted
+    ///         v1 centralization (Chain Security H-3): buyers refund, prize returns to the
+    ///         seller. A pause+timelock on this path is a follow-up, not a silent removal.
     function cancel(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
         Phase p = r.phase;
@@ -656,10 +680,14 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit Cancelled(id);
     }
 
+    /// @notice Owner cancels a stuck Drawing after `VRF_ABORT_AFTER`. Clears `requestToRaffle`
+    ///         so a late coordinator callback cannot land on this raffle.
     function abortDrawing(uint256 id) external onlyOwner nonReentrant {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Drawing) revert BadPhase();
         if (block.timestamp < uint256(r.vrfRequestedAt) + VRF_ABORT_AFTER) revert TooEarly();
+        _forgetRequest(r.vrfRequestId);
+        r.vrfRequestId = 0;
         r.phase = Phase.Cancelled;
         activeDrawings -= 1;
         emit Cancelled(id);
@@ -848,6 +876,40 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         IWETH9(weth).withdraw(refundEth);
         (bool ok,) = msg.sender.call{value: refundEth}("");
         if (!ok) revert RefundFailed();
+    }
+
+    function _requestWords() internal returns (uint256 requestId, address pinned) {
+        pinned = vrfCoordinator;
+        _awaitingRequest = true;
+        _syncFilled = false;
+        requestId = IVRFCoordinatorV2Plus(pinned).requestRandomWords(
+            VRFV2PlusClient.RandomWordsRequest({
+                keyHash: keyHash,
+                subId: subscriptionId,
+                requestConfirmations: requestConfirmations,
+                callbackGasLimit: callbackGasLimit,
+                numWords: 1,
+                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: nativePayment}))
+            })
+        );
+        _awaitingRequest = false;
+        if (requestId == 0) revert BadConfig();
+    }
+
+    function _pinRequest(uint256 id, uint256 requestId, address pinned) internal {
+        Raffle storage r = _raffles[id];
+        r.vrfRequestId = requestId;
+        r.vrfRequestedAt = uint64(block.timestamp);
+        requestToRaffle[requestId] = id;
+        requestCoordinator[requestId] = pinned;
+        emit RandomnessRequested(id, requestId);
+        if (_syncFilled && _syncRequestId == requestId) _applyWord(id, requestId, _syncWord);
+    }
+
+    function _forgetRequest(uint256 requestId) internal {
+        if (requestId == 0) return;
+        delete requestToRaffle[requestId];
+        delete requestCoordinator[requestId];
     }
 
     function _applyWord(uint256 id, uint256 requestId, uint256 word) internal {

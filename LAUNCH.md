@@ -17,6 +17,8 @@ The deployer key is only a proposer. After deploy it calls `transferOwnership(SA
 
 Create a subscription on the Sepolia VRF v2.5 coordinator and fund it with Sepolia LINK from the Chainlink faucet.
 
+The live raffle `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` bills VRF in LINK (`nativePayment: false`). The current subscription may show native ETH and 0 LINK; fund LINK. Do not wait for a redeploy with `nativePayment: true` to unstick draws. Future deploys can set `nativePayment` on-chain only while no draw is in flight.
+
 | Item | Value |
 | --- | --- |
 | Coordinator | `0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B` |
