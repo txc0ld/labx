@@ -34,7 +34,7 @@ export default function SellerPage() {
     <section className="section">
       <p className="kicker">Studio</p>
       <h1 className="page-title">Build a piece.</h1>
-      <div className="split" style={{ marginTop: "1rem" }}>
+      <div className="split legal-surfaces">
         <form className="pearl pad stack" onSubmit={onCreate}>
           <OnChainStatus surface="studio" />
           <label htmlFor="title">Piece title

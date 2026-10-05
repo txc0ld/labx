@@ -301,6 +301,10 @@ describe("responsive chrome and legal surfaces", () => {
     expect(css).toMatch(/touch-action:\s*manipulation/);
     expect(css).toMatch(/safe-area-inset/);
     expect(css).toMatch(/overflow-x:\s*clip/);
+    expect(css).toMatch(/text-size-adjust:\s*100%/);
+    expect(css).toMatch(/min-height:\s*100dvh/);
+    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*\.piece-grid/);
+    expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*\.site-header/);
   });
 
   it("splits privacy and terms into operator, network, and data surfaces", () => {
