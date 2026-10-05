@@ -25,18 +25,20 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="brand-mark" aria-hidden="true" />
             <span className="word">LAB<i>x</i></span>
           </Link>
-          <nav aria-label="Primary">
-            <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {LINKS.map((link) => (
-                <li key={link.href}>
-                  <Link href={link.href} aria-current={path === link.href ? "page" : undefined}>
-                    {link.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
-          <span className="chain-pill">Sepolia · USDC</span>
+          <div className="nav-cluster">
+            <nav aria-label="Primary">
+              <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {LINKS.map((link) => (
+                  <li key={link.href}>
+                    <Link href={link.href} aria-current={path === link.href ? "page" : undefined}>
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+            <span className="chain-pill">Sepolia · USDC</span>
+          </div>
         </header>
         <div className="wrap"><Plumbing /></div>
         <main id="content" tabIndex={-1} className="wrap">{children}</main>

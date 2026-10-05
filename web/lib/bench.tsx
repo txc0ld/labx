@@ -59,7 +59,8 @@ export function BenchProvider({ children }: { children: ReactNode }) {
           const { salt: _salt, privateHash: _privateHash, ...rest } = piece as Piece & { salt?: string; privateHash?: string };
           void _salt;
           void _privateHash;
-          return rest;
+          const mark = rest.mark ?? (rest.id.includes("cable") ? "cable" : rest.id.includes("filter") ? "filter" : rest.id.includes("terminal") ? "terminal" : "junction");
+          return { ...rest, mark };
         });
         setState({ ...initial(), ...parsed });
       }
@@ -150,6 +151,7 @@ export function BenchProvider({ children }: { children: ReactNode }) {
           id: `piece-${Date.now()}`,
           title: input.title.trim(),
           artist: "Studio",
+          mark: "filter",
           image: "/lab/filter-panel.jpg",
           imageAlt: "Glossy filter panel chosen for a new studio piece",
           phase: "draft",

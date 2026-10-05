@@ -10,10 +10,13 @@ export type Pack = {
 
 export type Phase = "draft" | "open" | "closed" | "drawing" | "drawn" | "settled" | "cancelled";
 
+export type PieceMark = "cable" | "filter" | "terminal" | "junction";
+
 export type Piece = {
   id: string;
   title: string;
   artist: string;
+  mark: PieceMark;
   image: string;
   imageAlt: string;
   phase: Phase;
@@ -60,6 +63,7 @@ export const SEED_PIECES: Piece[] = [
     id: "junction-array",
     title: "Junction Array",
     artist: "LABx studio",
+    mark: "junction",
     image: "/lab/hero-linked-panels.jpg",
     imageAlt: "Pearlescent terminal and glossy filter panel linked by mirrored chrome tubes and fluorescent cables",
     phase: "open",
@@ -76,6 +80,7 @@ export const SEED_PIECES: Piece[] = [
     id: "filter-bank",
     title: "Filter Bank",
     artist: "LABx studio",
+    mark: "filter",
     image: "/lab/filter-panel.jpg",
     imageAlt: "Glossy pearlescent filter panel with chunky buttons, a chrome port, and a fluorescent cable",
     phase: "open",
@@ -92,6 +97,7 @@ export const SEED_PIECES: Piece[] = [
     id: "terminal-well",
     title: "Terminal Well",
     artist: "LABx studio",
+    mark: "terminal",
     image: "/lab/terminal-panel.jpg",
     imageAlt: "Purple terminal housing with a mirrored chrome bezel, chunky keys, and a fluorescent cable",
     phase: "open",
@@ -107,6 +113,7 @@ export const SEED_PIECES: Piece[] = [
     id: "cable-run",
     title: "Cable Run",
     artist: "LABx studio",
+    mark: "cable",
     image: "/lab/chrome-fluoro-run.jpg",
     imageAlt: "Mirrored chrome tube junctions and fluorescent cables linking two instrument panels",
     phase: "draft",

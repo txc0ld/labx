@@ -288,4 +288,18 @@ describe("surface copy and materials", () => {
     expect(names).toContain("chrome-fluoro-run.jpg");
     expect(names).not.toMatch(/head|face|human|workstation/);
   });
+
+  it("explore hub uses vector marks and a capsule well", () => {
+    const page = readFileSync(path.join(root, "app/page.tsx"), "utf8");
+    const hub = readFileSync(path.join(root, "components/BenchHub.tsx"), "utf8");
+    const marks = readFileSync(path.join(root, "components/PieceMark.tsx"), "utf8");
+    const css = readFileSync(path.join(root, "app/globals.css"), "utf8");
+    expect(page).not.toMatch(/next\/image/);
+    expect(hub).not.toMatch(/\.jpg|\.png/);
+    expect(hub).toMatch(/NFT\s*<br \/>CONTAINER/);
+    expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
+    expect(css).toMatch(/nft-capsule/);
+    expect(css).toMatch(/tube-body/);
+    expect(css).toMatch(/border-radius: 999px/);
+  });
 });
