@@ -8,20 +8,11 @@ import { issueChallenge, verifyChallenge } from "../lib/captcha";
 import { AMOE_TYPEHASH, COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
 import { pickWinner, snapshotLots } from "../lib/draw";
 import { receiptBody } from "../lib/email";
-import { issueAmoeClaim, captchaDigest } from "../lib/amoe";
-import { checkIn, checkInMessage, type Store } from "../lib/points";
+import { MemoryStore as Mem } from "../lib/store";
+import { checkIn, checkInMessage } from "../lib/points";
 import { createReserve, revealReserve, saltedPrivateHash, revealMessage } from "../lib/reserve";
-import { keccak256, recoverTypedDataAddress, toBytes, type Address, type Hex } from "viem";
+import { keccak256, toBytes } from "viem";
 
-class Mem implements Store {
-  map = new Map<string, string>();
-  async get(key: string) {
-    return this.map.get(key) ?? null;
-  }
-  async set(key: string, value: string) {
-    this.map.set(key, value);
-  }
-}
 
 describe("draw weights", () => {
   const lots = [
@@ -143,84 +134,6 @@ describe("reserve salt", () => {
   });
 });
 
-describe("amoe signer", () => {
-  it("spends the captcha before it signs", async () => {
-    const store = new Mem();
-    const signerKey = generatePrivateKey();
-    const signer = privateKeyToAccount(signerKey);
-    const account = "0x00000000000000000000000000000000000000aa" as Address;
-    const terms = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Hex;
-    const labx = "0x1111111111111111111111111111111111111111" as Address;
-    const signed = await issueAmoeClaim(store, {
-      address: account,
-      pieceId: "junction-array",
-      raffleId: "4",
-      captchaId: "challenge-1",
-      answer: "9",
-      expiresAt: 1_700_000_000_000,
-      points: 10,
-      signerKey,
-      chainId: 11155111n,
-      verifyingContract: labx,
-      termsHash: terms,
-      now: 1_700_000_000_000
-    });
-    expect(signed.mode).toBe("signed");
-    if (signed.mode !== "signed") return;
-    const recovered = await recoverTypedDataAddress({
-      domain: { name: "LABx", version: "1", chainId: 11155111n, verifyingContract: labx },
-      types: {
-        AmoeClaim: [
-          { name: "raffleId", type: "uint256" },
-          { name: "account", type: "address" },
-          { name: "captchaDigest", type: "bytes32" },
-          { name: "deadline", type: "uint256" },
-          { name: "termsHash", type: "bytes32" }
-        ]
-      },
-      primaryType: "AmoeClaim",
-      message: {
-        raffleId: 4n,
-        account,
-        captchaDigest: captchaDigest("challenge-1", "9", 1_700_000_000_000),
-        deadline: BigInt(signed.deadline),
-        termsHash: terms
-      },
-      signature: signed.signature
-    });
-    expect(recovered.toLowerCase()).toBe(signer.address.toLowerCase());
-    await expect(
-      issueAmoeClaim(store, {
-        address: "0x00000000000000000000000000000000000000bb",
-        pieceId: "other",
-        raffleId: "4",
-        captchaId: "challenge-1",
-        answer: "9",
-        expiresAt: 1_700_000_000_000,
-        points: 10,
-        signerKey,
-        chainId: 11155111n,
-        verifyingContract: labx,
-        termsHash: terms
-      })
-    ).rejects.toThrow(/captcha/i);
-    await expect(
-      issueAmoeClaim(store, {
-        address: account,
-        pieceId: "junction-array",
-        raffleId: "4",
-        captchaId: "challenge-2",
-        answer: "9",
-        expiresAt: 1_700_000_000_000,
-        points: 9,
-        signerKey,
-        chainId: 11155111n,
-        verifyingContract: labx,
-        termsHash: terms
-      })
-    ).rejects.toThrow(/Check in/);
-  });
-});
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

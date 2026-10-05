@@ -4,6 +4,8 @@ import { verifyMessage, type Address, type Hex } from "viem";
 export type Store = {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
+  /** Atomically writes every entry only if none of its keys exist. */
+  setIfAbsent(entries: Record<string, string>): Promise<boolean>;
 };
 
 export type PointAccount = { balance: number; lastDay: string };

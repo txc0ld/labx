@@ -11,14 +11,20 @@ export class MemoryStore implements Store {
   async set(key: string, value: string) {
     this.map.set(key, value);
   }
+  async setIfAbsent(entries: Record<string, string>) {
+    const pairs = checkedEntries(entries);
+    if (pairs.some(([key]) => this.map.has(key))) return false;
+    for (const [key, value] of pairs) this.map.set(key, value);
+    return true;
+  }
 }
 
 const globalStore = globalThis as unknown as {
   __labx?: MemoryStore;
-  __labxFileWrites?: Map<string, Promise<void>>;
+  __labxFileWrites?: Map<string, Promise<unknown>>;
 };
 
-function serializeFileWrite(file: string, write: () => Promise<void>): Promise<void> {
+function serializeFileWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
   const writes = globalStore.__labxFileWrites ??= new Map();
   const pending = (writes.get(file) ?? Promise.resolve()).catch(() => {}).then(write);
   writes.set(file, pending);
@@ -43,19 +49,40 @@ export function fileStore(): Store {
       await serializeFileWrite(file, async () => {
         const all = await readAll(file);
         all[key] = value;
-        await mkdir(path.dirname(file), { recursive: true });
-        const temporary = `${file}.${randomUUID()}.tmp`;
-        try {
-          await writeFile(temporary, JSON.stringify(all));
-          await rename(temporary, file);
-        } finally {
-          await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== "ENOENT") throw error;
-          });
-        }
+        await writeAll(file, all);
+      });
+    },
+    async setIfAbsent(entries) {
+      const pairs = checkedEntries(entries);
+      return serializeFileWrite(file, async () => {
+        const all = await readAll(file);
+        if (pairs.some(([key]) => Object.hasOwn(all, key))) return false;
+        await writeAll(file, { ...all, ...entries });
+        return true;
       });
     }
   };
+}
+
+function checkedEntries(entries: Record<string, string>): [string, string][] {
+  const pairs = Object.entries(entries);
+  if (!pairs.length || pairs.some(([key, value]) => !key || typeof value !== "string")) {
+    throw new Error("Store requires nonempty string entries.");
+  }
+  return pairs;
+}
+
+async function writeAll(file: string, all: Record<string, string>): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(all));
+    await rename(temporary, file);
+  } finally {
+    await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
 }
 
 async function readAll(file: string): Promise<Record<string, string>> {
@@ -106,6 +133,17 @@ export function upstashStore(url: string, token: string): Store {
         body: JSON.stringify(["SET", key, value])
       });
       if (await redisResult(response) !== "OK") throw new Error("Store did not acknowledge the write.");
+    },
+    async setIfAbsent(entries) {
+      // Redis MSETNX commits all keys or none; a pipeline of SET NX cannot do this.
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(["MSETNX", ...checkedEntries(entries).flat()])
+      });
+      const result = await redisResult(response);
+      if (result !== 0 && result !== 1) throw new Error("Store returned an invalid atomic write result.");
+      return result === 1;
     }
   };
 }

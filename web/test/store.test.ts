@@ -3,11 +3,67 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReserve } from "../lib/reserve";
-import { activeStore, fileStore, upstashStore } from "../lib/store";
+import { activeStore, fileStore, MemoryStore, upstashStore } from "../lib/store";
+import type { Store } from "../lib/points";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+describe("atomic multi-key persistence", () => {
+  it.each(["memory", "file", "redis"])("commits all keys or none under contention with %s", async (adapter) => {
+    let directory: string | undefined;
+    let cwd: ReturnType<typeof vi.spyOn> | undefined;
+    let store: Store;
+    if (adapter === "file") {
+      directory = await mkdtemp(path.join(tmpdir(), "labx-store-test-"));
+      cwd = vi.spyOn(process, "cwd").mockReturnValue(directory);
+      vi.stubEnv("VERCEL", "");
+      store = fileStore();
+    } else if (adapter === "redis") {
+      const records = new Map<string, string>();
+      vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          const command = JSON.parse(String(init.body)) as string[];
+          expect(command[0]).toBe("MSETNX");
+          expect(command).toHaveLength(5);
+          if (records.has(command[1]) || records.has(command[3])) return Response.json({ result: 0 });
+          records.set(command[1], command[2]);
+          records.set(command[3], command[4]);
+          return Response.json({ result: 1 });
+        }
+        return Response.json({ result: records.get(decodeURIComponent(url.split("/get/")[1])) ?? null });
+      });
+      store = upstashStore("https://redis.example", "fixture-token");
+    } else store = new MemoryStore();
+    try {
+      const outcomes = await Promise.all([
+        store.setIfAbsent({ "claim:a": "result-a", "captcha:shared": "owner-a" }),
+        store.setIfAbsent({ "claim:b": "result-b", "captcha:shared": "owner-b" })
+      ]);
+      expect(outcomes.filter(Boolean)).toHaveLength(1);
+      const winner = outcomes[0] ? "a" : "b";
+      const loser = outcomes[0] ? "b" : "a";
+      expect(await store.get(`claim:${winner}`)).toBe(`result-${winner}`);
+      expect(await store.get("captcha:shared")).toBe(`owner-${winner}`);
+      expect(await store.get(`claim:${loser}`)).toBeNull();
+      expect(await store.setIfAbsent({ [`claim:${loser}`]: `result-${loser}`, "captcha:fresh": "fresh" })).toBe(true);
+      expect(await store.get(`claim:${loser}`)).toBe(`result-${loser}`);
+    } finally {
+      cwd?.mockRestore();
+      if (directory) {
+        await unlink(path.join(directory, "data", "store.json"));
+        await rmdir(path.join(directory, "data"));
+        await rmdir(directory);
+      }
+    }
+  });
+
+  it.each([null, "OK", {}, 2])("refuses malformed atomic write acknowledgement %s", async (result) => {
+    vi.stubGlobal("fetch", async () => Response.json({ result }));
+    await expect(upstashStore("https://redis.example", "fixture-token").setIfAbsent({ claim: "result" })).rejects.toThrow(/atomic/i);
+  });
 });
 
 describe("hosted persistence configuration", () => {

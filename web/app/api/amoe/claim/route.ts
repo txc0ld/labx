@@ -1,59 +1,48 @@
-import { isAddress, isHex, type Address, type Hex } from "viem";
-import { issueAmoeClaim } from "@/lib/amoe";
-import { verifyChallenge } from "@/lib/captcha";
+import { isAddress, isHex, type Hex } from "viem";
+import { AmoeRequestError, configuredAmoeContext, issueAmoeClaim } from "@/lib/amoe";
 import { readPoints } from "@/lib/points";
 import { activeStore } from "@/lib/store";
 import { fail, json } from "@/lib/http";
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as {
-      address?: string;
-      pieceId?: string;
-      raffleId?: string;
-      terms?: boolean;
-      rules?: boolean;
-      age?: boolean;
-      id?: string;
-      answer?: string;
-      expiresAt?: number;
-      mac?: string;
-    };
-    if (!body.address || !isAddress(body.address)) return fail(new Error("A wallet is required."));
-    if (!body.terms || !body.rules || !body.age) return fail(new Error("All three agreements are required."));
-    const secret = process.env.CAPTCHA_SECRET || process.env.BOT_CHECKIN_TOKEN;
-    if (!secret || !body.id || !body.answer || !body.expiresAt || !body.mac) {
-      return fail(new Error("The captcha challenge is incomplete."));
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body !== "object" || typeof body.address !== "string" || !isAddress(body.address)) {
+      return fail(new Error("A wallet is required."));
     }
-    const passed = verifyChallenge(secret, {
-      id: body.id,
-      answer: body.answer,
-      expiresAt: body.expiresAt,
-      mac: body.mac
-    });
-    if (!passed) return fail(new Error("Captcha answer was refused."), 401);
+    if (body.terms !== true || body.rules !== true || body.age !== true) return fail(new Error("All three agreements are required."));
+    if (typeof body.pieceId !== "string" || typeof body.id !== "string" || typeof body.answer !== "string" ||
+        typeof body.mac !== "string" || typeof body.expiresAt !== "number" ||
+        (body.raffleId !== undefined && typeof body.raffleId !== "string")) {
+      return fail(new Error("The captcha challenge or piece is incomplete."));
+    }
+    if (typeof body.authorization?.deadline !== "string" || typeof body.authorization?.signature !== "string" ||
+        !isHex(body.authorization.signature, { strict: true })) return fail(new Error("Wallet authorization is required."), 401);
     const store = activeStore();
-    const points = await readPoints(store, body.address as Address);
-    const terms = process.env.TERMS_HASH;
-    const labx = process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
-    const chainRaw = process.env.NEXT_PUBLIC_CHAIN_ID;
+    const points = await readPoints(store, body.address);
     const issued = await issueAmoeClaim(store, {
       address: body.address,
-      pieceId: body.pieceId || "none",
+      pieceId: body.pieceId,
       raffleId: body.raffleId,
       captchaId: body.id,
       answer: body.answer,
       expiresAt: body.expiresAt,
+      captchaMac: body.mac,
+      captchaSecret: process.env.CAPTCHA_SECRET || process.env.BOT_CHECKIN_TOKEN,
       points: points.balance,
       signerKey: process.env.AMOE_SIGNER_PRIVATE_KEY,
-      chainId: chainRaw ? BigInt(chainRaw) : undefined,
-      verifyingContract: labx && isAddress(labx) ? labx : null,
-      termsHash: terms && isHex(terms, { strict: true }) && terms.length === 66 ? (terms as Hex) : null
+      context: configuredAmoeContext(),
+      authorization: { deadline: body.authorization.deadline, signature: body.authorization.signature as Hex }
     });
     return json({ ok: true, ...issued });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    const status = /already recorded|already used/i.test(message) ? 409 : /Check in/i.test(message) ? 403 : 400;
+    if (!(error instanceof AmoeRequestError)) {
+      return fail(new Error("Complimentary entry request could not be completed. Please retry."), 503);
+    }
+    const message = error.message;
+    const status = /already recorded|already used|reconciliation/i.test(message) ? 409
+      : /Check in/i.test(message) ? 403 : /configuration|signer/i.test(message) ? 503
+      : /authorization|Captcha/i.test(message) ? 401 : 400;
     return fail(error, status);
   }
 }

@@ -6,11 +6,14 @@ import { LegalNav } from "@/components/LegalNav";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 import { onChainReady } from "@/lib/wallet";
+import { amoeAuthorizationMessage, captchaDigest, type AmoeContext } from "@/lib/amoe-authorization";
+import { isAddress, toHex, type Hex } from "viem";
 
 export default function RulesPage() {
   const bench = useBench();
   const [pieceId, setPieceId] = useState(bench.pieces[0]?.id || "");
-  const [challenge, setChallenge] = useState<{ id: string; prompt: string; expiresAt: number; mac: string } | null>(null);
+  const [challenge, setChallenge] = useState<{ id: string; prompt: string; expiresAt: number; mac: string; context: AmoeContext } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [answer, setAnswer] = useState("");
   const [terms, setTerms] = useState(false);
   const [rules, setRules] = useState(false);
@@ -36,31 +39,57 @@ export default function RulesPage() {
 
   async function claim(event: FormEvent) {
     event.preventDefault();
-    if (!challenge) return;
-    const response = await fetch("/api/amoe/claim", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        address: bench.address,
-        pieceId,
-        raffleId: raffleId.trim() || undefined,
-        terms,
-        rules,
-        age,
-        ...challenge,
-        answer
-      })
-    });
-    const body = await response.json();
-    if (!response.ok) {
+    if (!challenge || submitting) return;
+    if (!terms || !rules || !age) {
       setTone("error");
-      setMessage(body.error || "Request refused.");
+      setMessage("All three agreements are required.");
       return;
     }
-    bench.recordComplimentary(pieceId);
-    setSignature(typeof body.signature === "string" ? body.signature : null);
-    setTone("ok");
-    setMessage(body.mode === "signed" ? "Complimentary entry signed. Submit it with the raffle." : "Complimentary entry recorded.");
+    if (!window.ethereum || !isAddress(bench.wallet)) {
+      setTone("error");
+      setMessage("Connect a wallet to authorize this complimentary entry.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const deadline = String(Math.trunc(Date.now() / 1000) + 600);
+      const authorizationMessage = amoeAuthorizationMessage({ context: challenge.context,
+        address: bench.wallet, pieceId, raffleId: raffleId.trim() || undefined,
+        captchaDigest: captchaDigest(challenge.id, answer, challenge.expiresAt), deadline });
+      const walletSignature = await window.ethereum.request({ method: "personal_sign", params: [toHex(authorizationMessage), bench.wallet] }) as Hex;
+      const response = await fetch("/api/amoe/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: bench.address,
+          pieceId,
+          raffleId: raffleId.trim() || undefined,
+          terms,
+          rules,
+          age,
+          ...challenge,
+          answer,
+          authorization: { deadline, signature: walletSignature }
+        })
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setTone("error");
+        setMessage(body.error || "Request refused.");
+        return;
+      }
+      if (!bench.entries.some((entry) => entry.pieceId === pieceId && entry.kind === "complimentary" && entry.address.toLowerCase() === bench.address.toLowerCase())) {
+        bench.recordComplimentary(pieceId);
+      }
+      setSignature(typeof body.signature === "string" ? body.signature : null);
+      setTone("ok");
+      setMessage(body.mode === "signed" ? "Complimentary entry signed. Submit it with the raffle." : "Complimentary entry recorded.");
+    } catch (error) {
+      setTone("error");
+      setMessage(error instanceof Error ? error.message : "Wallet authorization or request failed. You can retry safely.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -108,7 +137,7 @@ export default function RulesPage() {
             <span>I agree to the draw rules and the 12-month expiry.</span>
           </label>
           <label htmlFor="c-age"><input id="c-age" type="checkbox" checked={age} onChange={(event) => setAge(event.target.checked)} /> I am 18 or older and eligible to participate.</label>
-          <button className="btn btn-lime" type="submit" disabled={!challenge}>Submit complimentary entry</button>
+          <button className="btn btn-lime" type="submit" disabled={!challenge || submitting}>Submit complimentary entry</button>
           {message ? <p className={`notice ${tone}`} role={tone === "error" ? "alert" : "status"}>{message}</p> : null}
           {signature ? <p className="hash">{signature}</p> : null}
         </form>
