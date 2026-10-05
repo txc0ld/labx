@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { recoverTypedDataAddress, type Hex } from "viem";
-import { issueAmoeClaim, type AmoeInput } from "../lib/amoe";
+import { configuredAmoeContext, issueAmoeClaim, type AmoeInput } from "../lib/amoe";
 import { amoeAuthorizationMessage, captchaDigest, type AmoeContext } from "../lib/amoe-authorization";
 import { issueChallenge } from "../lib/captcha";
 import { MemoryStore } from "../lib/store";
@@ -59,6 +59,44 @@ describe("AMOE wallet ownership and request binding", () => {
 });
 
 describe("AMOE atomic issuance and recovery", () => {
+  it("rejects zero terms before consuming issuance and rejects that server configuration", async () => {
+    const store = new MemoryStore();
+    const input = await request({ context: { ...context, termsHash: `0x${"0".repeat(64)}` } });
+    await expect(issueAmoeClaim(store, input)).rejects.toThrow(/nonzero terms/);
+    expect((await issueAmoeClaim(store, await authorize({ ...input, context }))).mode).toBe("signed");
+    vi.stubEnv("AMOE_SIGNER_PRIVATE_KEY", signerKey);
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", context.chainId);
+    vi.stubEnv("NEXT_PUBLIC_RAFFLE_ADDRESS", context.verifyingContract);
+    vi.stubEnv("TERMS_HASH", `0x${"0".repeat(64)}`);
+    try { expect(() => configuredAmoeContext()).toThrow(/configuration/); }
+    finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each([
+    null, {}, { mode: "bench" }, { entries: 99 }, { address: stranger.address },
+    { pieceId: "another-piece" }, { raffleId: "5" }, { verifyingContract: stranger.address },
+    { termsHash: `0x${"b".repeat(64)}` }, { captchaDigest: "malformed" },
+    { captchaDigest: `0x${"b".repeat(64)}` }, { signature: `0x${"0".repeat(130)}` },
+    { deadline: "not-an-integer" }, { deadline: "9".repeat(80) },
+    { deadline: String(Math.trunc(now / 1000) + 3601) }
+  ])("fails closed without replacing corrupted persisted results %#", async (mutation) => {
+    class InspectableStore extends MemoryStore {
+      claimKey = "";
+      override async setIfAbsent(entries: Record<string, string>) {
+        this.claimKey = Object.keys(entries).find((key) => key.startsWith("amoe:v2:"))!;
+        return super.setIfAbsent(entries);
+      }
+    }
+    const store = new InspectableStore();
+    await issueAmoeClaim(store, await request());
+    const record = JSON.parse((await store.get(store.claimKey))!);
+    record.result = mutation === null ? null : Object.keys(mutation).length ? { ...record.result, ...mutation } : {};
+    const corrupted = JSON.stringify(record);
+    await store.set(store.claimKey, corrupted);
+    await expect(issueAmoeClaim(store, await request())).rejects.toThrow(/reconciliation/);
+    expect(await store.get(store.claimKey)).toBe(corrupted);
+  });
+
   it("returns one stable signed result for concurrent requests and fresh-challenge retries", async () => {
     const store = new MemoryStore();
     const inputs = await Promise.all(Array.from({ length: 12 }, () => request()));
