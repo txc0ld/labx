@@ -45,6 +45,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   color: var(--ink);
   padding: 0.6rem 0.9rem;
   border-radius: 12px;
+  text-decoration: none;
 }
 .skip:focus { transform: none; }
 
@@ -179,6 +180,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
   color: var(--on-purple);
   background: linear-gradient(180deg, #c3a6ff 0%, var(--purple) 46%, #5b22e8 100%);
   box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), inset 0 -4px 0 rgba(30, 0, 70, 0.35), 0 6px 0 #3a1594;
+  text-decoration: none;
+}
+.btn:hover,
+.btn:focus,
+.btn:focus-visible,
+.btn:active,
+.btn:visited {
+  text-decoration: none;
 }
 .btn:hover { transform: translateY(1px); }
 .btn:active { transform: translateY(5px); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 1px 0 #3a1594; }
@@ -436,6 +445,13 @@ th { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; colo
 .plumbing { width: 100%; height: 72px; display: block; }
 .site-footer { padding: 1rem 0 2.4rem; color: var(--charcoal); display: grid; gap: 0.35rem; }
 .site-footer nav { display: flex; gap: 1rem; flex-wrap: wrap; }
+.site-footer nav a,
+.site-footer nav a:hover,
+.site-footer nav a:focus,
+.site-footer nav a:focus-visible,
+.site-footer nav a:visited {
+  text-decoration: none;
+}
 .muted { color: var(--charcoal); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
