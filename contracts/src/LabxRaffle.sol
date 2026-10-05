@@ -15,8 +15,11 @@ import {IVRFCoordinatorV2Plus, ISwapRouter02, IWETH9, AggregatorV3Interface} fro
 /// @title LabxRaffle
 /// @notice Sepolia membership-pack draws for LABx. Bonus entries are not tickets.
 ///         Ethereum mainnet (chain id 1) cannot be deployed. Treasury and admin are a Safe.
-/// @dev Prize NFTs are escrowed. A server-side commitment is stored as a hash and never
-///      decoded on-chain. Randomness is Chainlink VRF v2.5, requested only after an entry snapshot.
+/// @dev Prize NFTs are escrowed and pulled after settlement or cancellation. USDC principal
+///      and the lab fee are pulled separately, so a reverting receiver cannot freeze them.
+///      A server-side commitment is stored as a hash and never decoded on-chain.
+///      Randomness is Chainlink VRF v2.5, requested only after an entry snapshot. The
+///      coordinator that accepted a request stays pinned until that draw ends.
 contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     using SafeERC20 for IERC20;
 
@@ -31,6 +34,10 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     uint256 public constant PRICE_STALE_AFTER = 3 hours;
     uint256 public constant REVEAL_GRACE = 7 days;
     uint256 public constant VRF_ABORT_AFTER = 1 days;
+    uint256 public constant MAX_ETH_DEADLINE = 10 minutes;
+    uint256 public constant COORDINATOR_DELAY = 1 days;
+    uint32 public constant DEFAULT_AMOE_CAP = 100;
+    uint32 public constant MAX_AMOE_CAP = 10_000;
     uint16 public constant MIN_CONFIRMATIONS = 3;
     uint16 public constant MAX_CONFIRMATIONS = 200;
 
@@ -92,6 +99,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         uint256 randomWord;
         address winner;
         uint8 packCount;
+        uint32 amoeCount;
         string title;
     }
 
@@ -118,6 +126,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         uint256 randomWord;
         address winner;
         uint8 packCount;
+        uint32 amoeCount;
         string title;
     }
 
@@ -135,6 +144,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         bytes32 termsHash;
         uint32 callbackGasLimit;
         uint16 requestConfirmations;
+        uint32 amoeCap;
     }
 
     error MainnetDisabled();
@@ -170,8 +180,14 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     error BadConfig();
     error UsdcDecimals();
     error AmoeUsed();
+    error AmoeCap();
+    error CaptchaUsed();
     error BadSignature();
     error Expired();
+    error NotWinner();
+    error NotClaimable();
+    error BadDeadline();
+    error DrawInFlight();
 
     IERC20 public immutable usdc;
 
@@ -180,17 +196,26 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     address public treasury;
     address public amoeSigner;
     address public vrfCoordinator;
-    address public router;
-    address public weth;
-    address public ethUsdFeed;
+    address public pendingCoordinator;
+    uint256 public coordinatorEta;
+    uint256 public activeDrawings;
+    address public immutable router;
+    address public immutable weth;
+    address public immutable ethUsdFeed;
     bytes32 public keyHash;
     bytes32 public termsHash;
     uint256 public subscriptionId;
     uint32 public callbackGasLimit;
     uint16 public requestConfirmations;
-    uint24 public poolFee;
+    uint24 public immutable poolFee;
+    uint32 public amoeCap;
+    bool public ethPathEnabled;
     bool public paused;
     uint256 public nextId = 1;
+    bool private _awaitingRequest;
+    uint256 private _syncRequestId;
+    uint256 private _syncWord;
+    bool private _syncFilled;
 
     mapping(uint256 => Raffle) internal _raffles;
     mapping(uint256 => mapping(uint8 => Pack)) internal _packs;
@@ -200,7 +225,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     mapping(uint256 => mapping(address => uint256)) public principalOf;
     mapping(uint256 => mapping(address => uint256)) public feeOf;
     mapping(uint256 => mapping(address => bool)) public amoeClaimed;
+    mapping(bytes32 => bool) public captchaUsed;
     mapping(uint256 => uint256) public requestToRaffle;
+    mapping(uint256 => address) public requestCoordinator;
 
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -228,6 +255,13 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     event AmoeClaimed(uint256 indexed id, address indexed account);
     event TermsUpdated(bytes32 termsHash);
     event PausedSet(bool paused);
+    event PrizeClaimed(uint256 indexed id, address indexed winner);
+    event PrizeReclaimed(uint256 indexed id, address indexed seller);
+    event ProceedsClaimed(uint256 indexed id, address indexed seller, uint256 principal);
+    event FeeClaimed(uint256 indexed id, address indexed treasury, uint256 fee);
+    event CoordinatorProposed(address indexed next, uint256 eta);
+    event CoordinatorApplied(address indexed coordinator);
+    event EthPathSet(bool enabled);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -246,6 +280,13 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
             revert BadConfig();
         }
         if (IERC20Metadata(init.usdc).decimals() != 6) revert UsdcDecimals();
+        bool ethConfigured = init.router != address(0) || init.weth != address(0) || init.ethUsdFeed != address(0);
+        if (ethConfigured) {
+            if (init.router == address(0) || init.weth == address(0) || init.ethUsdFeed == address(0)) revert BadConfig();
+            if (AggregatorV3Interface(init.ethUsdFeed).decimals() != 8) revert BadFeed();
+        }
+        uint32 cap = init.amoeCap == 0 ? DEFAULT_AMOE_CAP : init.amoeCap;
+        if (cap > MAX_AMOE_CAP) revert BadConfig();
 
         owner = msg.sender;
         treasury = init.treasury;
@@ -254,6 +295,8 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         weth = init.weth;
         ethUsdFeed = init.ethUsdFeed;
         poolFee = init.poolFee == 0 ? 3000 : init.poolFee;
+        ethPathEnabled = ethConfigured;
+        amoeCap = cap;
         vrfCoordinator = init.vrfCoordinator;
         keyHash = init.keyHash;
         subscriptionId = init.subscriptionId;
@@ -317,16 +360,32 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         requestConfirmations = confirmations;
     }
 
-    function setCoordinator(address next) external onlyOwner {
+    /// @notice Starts a one-day delay before the VRF coordinator can change.
+    ///         Refuses while a draw is in flight so the pinned coordinator cannot be swapped out.
+    function proposeCoordinator(address next) external onlyOwner {
         if (next == address(0)) revert ZeroAddress();
-        vrfCoordinator = next;
+        if (activeDrawings != 0) revert DrawInFlight();
+        pendingCoordinator = next;
+        coordinatorEta = block.timestamp + COORDINATOR_DELAY;
+        emit CoordinatorProposed(next, coordinatorEta);
     }
 
-    function setEthPath(address nextRouter, address nextWeth, address nextFeed, uint24 nextFee) external onlyOwner {
-        router = nextRouter;
-        weth = nextWeth;
-        ethUsdFeed = nextFeed;
-        if (nextFee != 0) poolFee = nextFee;
+    function applyCoordinator() external onlyOwner {
+        if (activeDrawings != 0) revert DrawInFlight();
+        address next = pendingCoordinator;
+        if (next == address(0)) revert ZeroAddress();
+        if (block.timestamp < coordinatorEta) revert TooEarly();
+        vrfCoordinator = next;
+        pendingCoordinator = address(0);
+        coordinatorEta = 0;
+        emit CoordinatorApplied(next);
+    }
+
+    /// @notice Turns the immutable ETH path on or off. Router, WETH, and the feed cannot be replaced.
+    function setEthPathEnabled(bool next) external onlyOwner {
+        if (next && (router == address(0) || weth == address(0) || ethUsdFeed == address(0))) revert EthPathDisabled();
+        ethPathEnabled = next;
+        emit EthPathSet(next);
     }
 
     // --- seller lifecycle ---
@@ -413,41 +472,27 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         _credit(id, packId, qty, principal, fee, false);
     }
 
-    function buyPackWithEth(uint256 id, uint8 packId, uint32 qty, bytes32 acceptedTerms, uint16 slippageBps)
-        external
-        payable
-        nonReentrant
-    {
-        if (router == address(0) || weth == address(0) || ethUsdFeed == address(0)) revert EthPathDisabled();
+    function buyPackWithEth(
+        uint256 id,
+        uint8 packId,
+        uint32 qty,
+        bytes32 acceptedTerms,
+        uint16 slippageBps,
+        uint256 deadline
+    ) external payable nonReentrant {
+        if (!ethPathEnabled) revert EthPathDisabled();
+        if (deadline == 0 || deadline < block.timestamp || deadline > block.timestamp + MAX_ETH_DEADLINE) {
+            revert BadDeadline();
+        }
         if (slippageBps > MAX_SLIPPAGE_BPS) revert SlippageTooHigh();
         (uint256 principal, uint256 fee) = _quote(id, packId, qty, acceptedTerms);
         uint256 total = principal + fee;
         uint256 minEth = quoteEthForUsdc(total);
-        uint256 required = (minEth * (10_000 + slippageBps) + 9_999) / 10_000;
-        if (msg.value < required) revert InsufficientEth();
-
-        IWETH9(weth).deposit{value: msg.value}();
-        if (!IWETH9(weth).approve(router, msg.value)) revert RefundFailed();
-        uint256 beforeBal = usdc.balanceOf(address(this));
-        uint256 spent = ISwapRouter02(router).exactOutputSingle(
-            ISwapRouter02.ExactOutputSingleParams({
-                tokenIn: weth,
-                tokenOut: address(usdc),
-                fee: poolFee,
-                recipient: address(this),
-                amountOut: total,
-                amountInMaximum: msg.value,
-                sqrtPriceLimitX96: 0
-            })
-        );
-        if (usdc.balanceOf(address(this)) - beforeBal < total) revert SwapShortfall();
+        uint256 cap = (minEth * (10_000 + slippageBps) + 9_999) / 10_000;
+        if (msg.value < cap) revert InsufficientEth();
+        uint256 spent = _swapEthForUsdc(total, cap, deadline);
         _credit(id, packId, qty, principal, fee, true);
-        if (spent < msg.value) {
-            uint256 refundEth = msg.value - spent;
-            IWETH9(weth).withdraw(refundEth);
-            (bool ok,) = msg.sender.call{value: refundEth}("");
-            if (!ok) revert RefundFailed();
-        }
+        if (spent < msg.value) _refundEth(msg.value - spent);
     }
 
     /// @notice One complimentary bonus entry per account per draw. Signature is produced off-chain
@@ -460,11 +505,15 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Open || block.timestamp >= r.salesEnd) revert SalesClosed();
         if (block.timestamp > deadline) revert Expired();
+        if (captchaDigest == bytes32(0) || captchaUsed[captchaDigest]) revert CaptchaUsed();
         if (amoeClaimed[id][msg.sender]) revert AmoeUsed();
+        if (r.amoeCount >= amoeCap) revert AmoeCap();
         bytes32 digest = hashAmoe(id, msg.sender, captchaDigest, deadline);
         (address signer, ECDSA.RecoverError err, bytes32 errArg) = ECDSA.tryRecover(digest, signature);
         if (err != ECDSA.RecoverError.NoError || errArg != bytes32(0) || signer != amoeSigner) revert BadSignature();
+        captchaUsed[captchaDigest] = true;
         amoeClaimed[id][msg.sender] = true;
+        r.amoeCount += 1;
         _lots[id].push(Lot({owner: msg.sender, amount: 1, expiresAt: uint64(block.timestamp + ENTRY_EXPIRY)}));
         emit AmoeClaimed(id, msg.sender);
     }
@@ -496,7 +545,10 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (msg.sender != r.seller && msg.sender != owner) revert NotSeller();
         if (r.phase != Phase.Closed || !r.snapshotted) revert BadPhase();
         if (r.snapshotTotal == 0) revert EmptyDraw();
-        uint256 requestId = IVRFCoordinatorV2Plus(vrfCoordinator).requestRandomWords(
+        address pinned = vrfCoordinator;
+        _awaitingRequest = true;
+        _syncFilled = false;
+        uint256 requestId = IVRFCoordinatorV2Plus(pinned).requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash: keyHash,
                 subId: subscriptionId,
@@ -506,25 +558,32 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
                 extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
             })
         );
+        _awaitingRequest = false;
+        if (requestId == 0) revert BadConfig();
         r.phase = Phase.Drawing;
         r.vrfRequestId = requestId;
         r.vrfRequestedAt = uint64(block.timestamp);
         requestToRaffle[requestId] = id;
+        requestCoordinator[requestId] = pinned;
+        activeDrawings += 1;
         emit RandomnessRequested(id, requestId);
+        if (_syncFilled && _syncRequestId == requestId) _applyWord(id, requestId, _syncWord);
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        if (msg.sender != vrfCoordinator) revert OnlyCoordinator(msg.sender, vrfCoordinator);
+        address pinned = requestCoordinator[requestId];
+        if (pinned == address(0)) {
+            if (_awaitingRequest && msg.sender == vrfCoordinator && randomWords.length != 0) {
+                _syncRequestId = requestId;
+                _syncWord = randomWords[0];
+                _syncFilled = true;
+            }
+            return;
+        }
+        if (msg.sender != pinned) revert OnlyCoordinator(msg.sender, pinned);
         uint256 id = requestToRaffle[requestId];
-        if (id == 0) return;
-        Raffle storage r = _raffles[id];
-        if (r.phase != Phase.Drawing || r.vrfRequestId != requestId || randomWords.length == 0) return;
-        uint256 word = randomWords[0];
-        r.randomWord = word;
-        r.winner = _select(id, word);
-        r.drawnAt = uint64(block.timestamp);
-        r.phase = Phase.Drawn;
-        emit WinnerDrawn(id, r.winner, word);
+        if (id == 0 || randomWords.length == 0) return;
+        _applyWord(id, requestId, randomWords[0]);
     }
 
     /// @notice Proves the off-chain commitment. Plaintext stays off-chain; only hashes are submitted.
@@ -547,17 +606,40 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
             if (msg.sender != owner || block.timestamp < uint256(r.drawnAt) + REVEAL_GRACE) revert RevealRequired();
         }
         r.phase = Phase.Settled;
+        emit Settled(id, r.winner, r.principalEscrow, r.feeEscrow);
+    }
+
+    /// @notice Winner pulls the NFT with `transferFrom`, so `onERC721Received` cannot revert the claim.
+    function claimPrize(uint256 id) external nonReentrant {
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Settled) revert BadPhase();
+        if (msg.sender != r.winner) revert NotWinner();
+        if (!r.escrowed) revert NotClaimable();
         r.escrowed = false;
+        IERC721(r.nft).transferFrom(address(this), r.winner, r.tokenId);
+        emit PrizeClaimed(id, r.winner);
+    }
+
+    function claimProceeds(uint256 id) external nonReentrant {
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Settled) revert BadPhase();
+        if (msg.sender != r.seller) revert NotSeller();
         uint256 principal = r.principalEscrow;
-        uint256 fee = r.feeEscrow;
-        address winner = r.winner;
-        address seller = r.seller;
+        if (principal == 0) revert NotClaimable();
         r.principalEscrow = 0;
+        usdc.safeTransfer(r.seller, principal);
+        emit ProceedsClaimed(id, r.seller, principal);
+    }
+
+    function claimFee(uint256 id) external nonReentrant {
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Settled) revert BadPhase();
+        uint256 fee = r.feeEscrow;
+        if (fee == 0) revert NotClaimable();
+        address payee = treasury;
         r.feeEscrow = 0;
-        if (principal > 0) usdc.safeTransfer(seller, principal);
-        if (fee > 0) usdc.safeTransfer(treasury, fee);
-        IERC721(r.nft).safeTransferFrom(address(this), winner, r.tokenId);
-        emit Settled(id, winner, principal, fee);
+        usdc.safeTransfer(payee, fee);
+        emit FeeClaimed(id, payee, fee);
     }
 
     function cancel(uint256 id) external nonReentrant {
@@ -571,7 +653,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
             if (p == Phase.Closed && !(r.snapshotted && r.snapshotTotal == 0)) revert BadPhase();
         }
         r.phase = Phase.Cancelled;
-        _returnPrize(r);
         emit Cancelled(id);
     }
 
@@ -580,16 +661,32 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (r.phase != Phase.Drawing) revert BadPhase();
         if (block.timestamp < uint256(r.vrfRequestedAt) + VRF_ABORT_AFTER) revert TooEarly();
         r.phase = Phase.Cancelled;
-        _returnPrize(r);
+        activeDrawings -= 1;
         emit Cancelled(id);
     }
 
+    /// @notice Seller pulls the NFT after a cancel or an aborted draw.
+    function reclaimPrize(uint256 id) external nonReentrant {
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Cancelled) revert BadPhase();
+        if (msg.sender != r.seller) revert NotSeller();
+        if (!r.escrowed) revert NotClaimable();
+        r.escrowed = false;
+        IERC721(r.nft).transferFrom(address(this), r.seller, r.tokenId);
+        emit PrizeReclaimed(id, r.seller);
+    }
+
     function refund(uint256 id) external nonReentrant {
-        if (_raffles[id].phase != Phase.Cancelled) revert BadPhase();
-        uint256 amount = principalOf[id][msg.sender] + feeOf[id][msg.sender];
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Cancelled) revert BadPhase();
+        uint256 principal = principalOf[id][msg.sender];
+        uint256 fee = feeOf[id][msg.sender];
+        uint256 amount = principal + fee;
         if (amount == 0) revert BadPhase();
         principalOf[id][msg.sender] = 0;
         feeOf[id][msg.sender] = 0;
+        r.principalEscrow -= principal;
+        r.feeEscrow -= fee;
         usdc.safeTransfer(msg.sender, amount);
         emit Refunded(id, msg.sender, amount);
     }
@@ -620,6 +717,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         v.randomWord = r.randomWord;
         v.winner = r.winner;
         v.packCount = r.packCount;
+        v.amoeCount = r.amoeCount;
         v.title = r.title;
     }
 
@@ -717,9 +815,49 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         return snapshotOwners[id][lo];
     }
 
-    function _returnPrize(Raffle storage r) internal {
-        if (!r.escrowed) return;
-        r.escrowed = false;
-        IERC721(r.nft).safeTransferFrom(address(this), r.seller, r.tokenId);
+    function _swapEthForUsdc(uint256 usdcOut, uint256 cap, uint256 deadline) internal returns (uint256 spent) {
+        uint256 wethBefore = IWETH9(weth).balanceOf(address(this));
+        IWETH9(weth).deposit{value: msg.value}();
+        if (!IWETH9(weth).approve(router, cap)) revert RefundFailed();
+        uint256 usdcBefore = usdc.balanceOf(address(this));
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(
+            ISwapRouter02.exactOutputSingle,
+            (
+                ISwapRouter02.ExactOutputSingleParams({
+                    tokenIn: weth,
+                    tokenOut: address(usdc),
+                    fee: poolFee,
+                    recipient: address(this),
+                    amountOut: usdcOut,
+                    amountInMaximum: cap,
+                    sqrtPriceLimitX96: 0
+                })
+            )
+        );
+        ISwapRouter02(router).multicall(deadline, calls);
+        if (usdc.balanceOf(address(this)) - usdcBefore < usdcOut) revert SwapShortfall();
+        uint256 deposited = wethBefore + msg.value;
+        uint256 wethAfter = IWETH9(weth).balanceOf(address(this));
+        if (wethAfter > deposited) revert SwapShortfall();
+        spent = deposited - wethAfter;
+        if (spent > cap) revert SwapShortfall();
+    }
+
+    function _refundEth(uint256 refundEth) internal {
+        IWETH9(weth).withdraw(refundEth);
+        (bool ok,) = msg.sender.call{value: refundEth}("");
+        if (!ok) revert RefundFailed();
+    }
+
+    function _applyWord(uint256 id, uint256 requestId, uint256 word) internal {
+        Raffle storage r = _raffles[id];
+        if (r.phase != Phase.Drawing || r.vrfRequestId != requestId) return;
+        activeDrawings -= 1;
+        r.randomWord = word;
+        r.winner = _select(id, word);
+        r.drawnAt = uint64(block.timestamp);
+        r.phase = Phase.Drawn;
+        emit WinnerDrawn(id, r.winner, word);
     }
 }

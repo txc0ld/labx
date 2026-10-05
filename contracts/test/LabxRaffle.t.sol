@@ -10,7 +10,10 @@ import {
     MockFeed,
     MockWETH,
     MockRouter,
-    MockVRF
+    MockVRF,
+    RevertingReceiver,
+    StickyERC721,
+    SyncVRF
 } from "./mocks/Mocks.sol";
 
 contract LabxRaffleTest is Test {
@@ -62,9 +65,22 @@ contract LabxRaffleTest is Test {
                 amoeSigner: signer,
                 termsHash: bytes32(TERMS),
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3
+                requestConfirmations: 3,
+                amoeCap: 0
             })
         );
+    }
+
+    function _deadline() internal view returns (uint256) {
+        return block.timestamp + 5 minutes;
+    }
+
+    function _pullSettled(uint256 id, address winner) internal {
+        vm.prank(winner);
+        labx.claimPrize(id);
+        vm.prank(seller);
+        labx.claimProceeds(id);
+        labx.claimFee(id);
     }
 
     function _pack(string memory name, uint128 price, uint32 entries, uint32 supply)
@@ -165,6 +181,9 @@ contract LabxRaffleTest is Test {
         vm.prank(seller);
         labx.reveal(id, publicHash, privateHash, salt);
         labx.settle(id);
+        assertEq(nft.ownerOf(1), address(labx));
+        assertEq(usdc.balanceOf(seller), 0);
+        _pullSettled(id, cara);
 
         assertEq(nft.ownerOf(1), cara);
         assertEq(usdc.balanceOf(seller), 100e6);
@@ -270,6 +289,9 @@ contract LabxRaffleTest is Test {
         assertEq(v.snapshotTotal, 0);
         vm.prank(seller);
         labx.cancel(id);
+        assertEq(nft.ownerOf(1), address(labx));
+        vm.prank(seller);
+        labx.reclaimPrize(id);
         assertEq(nft.ownerOf(1), seller);
     }
 
@@ -281,12 +303,12 @@ contract LabxRaffleTest is Test {
         uint256 quoted = labx.quoteEthForUsdc(total);
         assertEq(quoted, 0.015 ether);
         vm.prank(alice);
-        labx.buyPackWithEth{value: 0.02 ether}(id, 0, 1, bytes32(TERMS), 200);
+        labx.buyPackWithEth{value: 0.02 ether}(id, 0, 1, bytes32(TERMS), 200, _deadline());
         assertEq(labx.principalOf(id, alice), 25e6);
         assertEq(labx.feeOf(id, alice), 5e6);
         assertEq(usdc.balanceOf(address(labx)), 30e6);
-        // Mock router spends half of msg.value.
-        assertEq(alice.balance, 1 ether - 0.01 ether);
+        uint256 cap = (quoted * 10_200 + 9_999) / 10_000;
+        assertEq(alice.balance, 1 ether - (cap / 2));
         assertEq(address(labx).balance, 0);
     }
 
@@ -298,11 +320,11 @@ contract LabxRaffleTest is Test {
         vm.warp(4 hours);
         vm.prank(alice);
         vm.expectRevert(LabxRaffle.StalePrice.selector);
-        labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 100);
+        labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 100, _deadline());
         feed.setUpdatedAt(block.timestamp);
         vm.prank(alice);
         vm.expectRevert(LabxRaffle.InsufficientEth.selector);
-        labx.buyPackWithEth{value: 0.001 ether}(id, 0, 1, bytes32(TERMS), 0);
+        labx.buyPackWithEth{value: 0.001 ether}(id, 0, 1, bytes32(TERMS), 0, _deadline());
     }
 
     function test_amoeOneEntryAndRejectsReplay() public {
@@ -318,8 +340,14 @@ contract LabxRaffleTest is Test {
         assertEq(labx.lotCount(id), 1);
         assertTrue(labx.amoeClaimed(id, alice));
         vm.prank(alice);
-        vm.expectRevert(LabxRaffle.AmoeUsed.selector);
+        vm.expectRevert(LabxRaffle.CaptchaUsed.selector);
         labx.claimAmoe(id, captcha, deadline, sig);
+        bytes32 second = keccak256("captcha-2");
+        bytes32 digest2 = labx.hashAmoe(id, alice, second, deadline);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(signerKey, digest2);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.AmoeUsed.selector);
+        labx.claimAmoe(id, second, deadline, abi.encodePacked(r2, s2, v2));
     }
 
     function test_amoeRejectsUnknownSigner() public {
@@ -353,6 +381,11 @@ contract LabxRaffleTest is Test {
         vm.prank(alice);
         labx.refund(id);
         assertEq(usdc.balanceOf(alice), before + 30e6);
+        assertEq(labx.getRaffle(id).principalEscrow, 0);
+        assertEq(labx.getRaffle(id).feeEscrow, 0);
+        assertEq(nft.ownerOf(1), address(labx));
+        vm.prank(seller);
+        labx.reclaimPrize(id);
         assertEq(nft.ownerOf(1), seller);
         vm.prank(alice);
         vm.expectRevert(LabxRaffle.BadPhase.selector);
@@ -387,6 +420,8 @@ contract LabxRaffleTest is Test {
         labx.settle(id);
         vm.warp(block.timestamp + 7 days);
         labx.settle(id);
+        assertEq(nft.ownerOf(1), address(labx));
+        _pullSettled(id, alice);
         assertEq(nft.ownerOf(1), alice);
         assertEq(usdc.balanceOf(treasury), 5e6);
     }
@@ -404,10 +439,24 @@ contract LabxRaffleTest is Test {
     }
 
     function test_onlyCoordinatorFulfills() public {
-        vm.expectRevert(abi.encodeWithSelector(LabxRaffle.OnlyCoordinator.selector, address(this), address(vrf)));
         uint256[] memory words = new uint256[](1);
         words[0] = 1;
         labx.rawFulfillRandomWords(1, words);
+
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        vm.expectRevert(abi.encodeWithSelector(LabxRaffle.OnlyCoordinator.selector, address(this), address(vrf)));
+        labx.rawFulfillRandomWords(requestId, words);
+        vm.expectRevert(LabxRaffle.DrawInFlight.selector);
+        labx.proposeCoordinator(makeAddr("replacement"));
     }
 
     function test_pauseBlocksPurchase() public {
@@ -516,5 +565,286 @@ contract LabxRaffleTest is Test {
         assertEq(labx.principalOf(id, alice), uint256(qty) * 25e6);
         assertEq(labx.lotAt(id, 0).amount, qty);
         assertEq(labx.lotAt(id, 0).expiresAt, uint64(block.timestamp + 365 days));
+    }
+
+    function test_revertingReceiverCannotFreezeUsdc() public {
+        (uint256 id, bytes32 publicHash, bytes32 privateHash, bytes32 salt) = _create();
+        _escrowOpen(id);
+        RevertingReceiver recv = new RevertingReceiver();
+        _fund(address(recv), 100e6);
+        vm.prank(address(recv));
+        labx.buyPack(id, 0, 1, bytes32(TERMS));
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        vm.prank(seller);
+        labx.reveal(id, publicHash, privateHash, salt);
+        labx.settle(id);
+        vm.prank(seller);
+        labx.claimProceeds(id);
+        labx.claimFee(id);
+        assertEq(usdc.balanceOf(seller), 25e6);
+        assertEq(usdc.balanceOf(treasury), 5e6);
+        vm.prank(address(recv));
+        labx.claimPrize(id);
+        assertEq(nft.ownerOf(1), address(recv));
+    }
+
+    function test_stickyNftBlocksClaimButNotUsdc() public {
+        StickyERC721 sticky = new StickyERC721();
+        sticky.mint(seller, 11);
+        vm.prank(seller);
+        sticky.approve(address(labx), 11);
+        bytes32 nonce = keccak256("sticky");
+        bytes32 publicHash = keccak256("sp");
+        bytes32 privateHash = keccak256("sq");
+        bytes32 salt = keccak256("ss");
+        bytes32 commit = labx.hashCommitment(nonce, address(sticky), 11, publicHash, privateHash, salt);
+        vm.prank(seller);
+        uint256 id = labx.createRaffle(
+            address(sticky), 11, uint64(block.timestamp + 2 days), nonce, commit, "Sticky Port", _configs()
+        );
+        vm.startPrank(seller);
+        labx.escrow(id);
+        labx.open(id);
+        vm.stopPrank();
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        vm.prank(seller);
+        labx.reveal(id, publicHash, privateHash, salt);
+        labx.settle(id);
+        vm.prank(seller);
+        labx.claimProceeds(id);
+        labx.claimFee(id);
+        assertEq(usdc.balanceOf(seller), 25e6);
+        assertEq(usdc.balanceOf(treasury), 5e6);
+        vm.prank(alice);
+        vm.expectRevert(bytes("sticky"));
+        labx.claimPrize(id);
+        assertEq(sticky.ownerOf(11), address(labx));
+    }
+
+    function test_stickyNftCancelStillRefunds() public {
+        StickyERC721 sticky = new StickyERC721();
+        sticky.mint(seller, 12);
+        vm.prank(seller);
+        sticky.approve(address(labx), 12);
+        bytes32 nonce = keccak256("sticky-cancel");
+        bytes32 commit = labx.hashCommitment(nonce, address(sticky), 12, keccak256("a"), keccak256("b"), keccak256("c"));
+        vm.prank(seller);
+        uint256 id = labx.createRaffle(
+            address(sticky), 12, uint64(block.timestamp + 2 days), nonce, commit, "Sticky Cancel", _configs()
+        );
+        vm.startPrank(seller);
+        labx.escrow(id);
+        labx.open(id);
+        vm.stopPrank();
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        uint256 before = usdc.balanceOf(alice);
+        labx.cancel(id);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), before + 30e6);
+        vm.prank(seller);
+        vm.expectRevert(bytes("sticky"));
+        labx.reclaimPrize(id);
+        assertEq(sticky.ownerOf(12), address(labx));
+    }
+
+    function test_ethSpendIsCappedAtQuotePlusSlippage() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        router.setSpend(1, 1);
+        vm.deal(alice, 1 ether);
+        uint256 quoted = labx.quoteEthForUsdc(30e6);
+        vm.prank(alice);
+        labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 0, _deadline());
+        assertEq(alice.balance, 1 ether - quoted);
+        assertEq(usdc.balanceOf(address(labx)), 30e6);
+    }
+
+    function test_ethRejectsMissingOrDistantDeadline() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.BadDeadline.selector);
+        labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 0, 0);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.BadDeadline.selector);
+        labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 0, block.timestamp + 11 minutes);
+    }
+
+    function test_ethPathDisabledByOwner() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        labx.setEthPathEnabled(false);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.EthPathDisabled.selector);
+        labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 0, _deadline());
+        labx.setEthPathEnabled(true);
+        assertTrue(labx.ethPathEnabled());
+    }
+
+    function test_coordinatorTimelockAndPin() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        assertEq(labx.activeDrawings(), 0);
+        address next = makeAddr("next-coordinator");
+        labx.proposeCoordinator(next);
+        vm.expectRevert(LabxRaffle.TooEarly.selector);
+        labx.applyCoordinator();
+        vm.warp(block.timestamp + 1 days);
+        labx.applyCoordinator();
+        assertEq(labx.vrfCoordinator(), next);
+    }
+
+    function test_syncCallbackIsAppliedAfterRequestIsPinned() public {
+        SyncVRF sync = new SyncVRF();
+        LabxRaffle pinned = new LabxRaffle(
+            LabxRaffle.Init({
+                treasury: treasury,
+                usdc: address(usdc),
+                router: address(0),
+                weth: address(0),
+                ethUsdFeed: address(0),
+                poolFee: 3000,
+                vrfCoordinator: address(sync),
+                keyHash: KEY,
+                subscriptionId: 1,
+                amoeSigner: signer,
+                termsHash: bytes32(TERMS),
+                callbackGasLimit: 500_000,
+                requestConfirmations: 3,
+                amoeCap: 1
+            })
+        );
+        nft.mint(seller, 21);
+        vm.prank(seller);
+        nft.approve(address(pinned), 21);
+        bytes32 nonce = keccak256("sync");
+        bytes32 commit = pinned.hashCommitment(nonce, address(nft), 21, keccak256("a"), keccak256("b"), keccak256("c"));
+        vm.prank(seller);
+        uint256 id = pinned.createRaffle(
+            address(nft), 21, uint64(block.timestamp + 2 days), nonce, commit, "Sync Draw", _configs()
+        );
+        vm.startPrank(seller);
+        pinned.escrow(id);
+        pinned.open(id);
+        vm.stopPrank();
+        usdc.mint(alice, 100e6);
+        vm.prank(alice);
+        usdc.approve(address(pinned), type(uint256).max);
+        vm.prank(alice);
+        pinned.buyPack(id, 0, 1, bytes32(TERMS));
+        vm.prank(seller);
+        pinned.close(id);
+        pinned.snapshot(id, 5);
+        vm.prank(seller);
+        pinned.requestRandomness(id);
+        assertEq(uint256(pinned.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        assertEq(pinned.getRaffle(id).winner, alice);
+        assertEq(pinned.activeDrawings(), 0);
+        assertEq(pinned.requestCoordinator(77), address(sync));
+        assertFalse(pinned.ethPathEnabled());
+    }
+
+    function test_amoeCapAndCaptchaAreSingleUse() public {
+        LabxRaffle capped = new LabxRaffle(
+            LabxRaffle.Init({
+                treasury: treasury,
+                usdc: address(usdc),
+                router: address(router),
+                weth: address(weth),
+                ethUsdFeed: address(feed),
+                poolFee: 3000,
+                vrfCoordinator: address(vrf),
+                keyHash: KEY,
+                subscriptionId: 1,
+                amoeSigner: signer,
+                termsHash: bytes32(TERMS),
+                callbackGasLimit: 500_000,
+                requestConfirmations: 3,
+                amoeCap: 1
+            })
+        );
+        nft.mint(seller, 22);
+        vm.prank(seller);
+        nft.approve(address(capped), 22);
+        bytes32 nonce = keccak256("amoe-cap");
+        bytes32 commit = capped.hashCommitment(nonce, address(nft), 22, keccak256("a"), keccak256("b"), keccak256("c"));
+        vm.prank(seller);
+        uint256 id = capped.createRaffle(
+            address(nft), 22, uint64(block.timestamp + 2 days), nonce, commit, "Amoe Cap", _configs()
+        );
+        vm.startPrank(seller);
+        capped.escrow(id);
+        capped.open(id);
+        vm.stopPrank();
+
+        bytes32 captcha = keccak256("once");
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 digest = capped.hashAmoe(id, alice, captcha, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest);
+        vm.prank(alice);
+        capped.claimAmoe(id, captcha, deadline, abi.encodePacked(r, s, v));
+        assertEq(capped.getRaffle(id).amoeCount, 1);
+
+        bytes32 again = keccak256("twice");
+        bytes32 bobDigest = capped.hashAmoe(id, bob, again, deadline);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(signerKey, bobDigest);
+        vm.prank(bob);
+        vm.expectRevert(LabxRaffle.AmoeCap.selector);
+        capped.claimAmoe(id, again, deadline, abi.encodePacked(r2, s2, v2));
+
+        vm.prank(bob);
+        vm.expectRevert(LabxRaffle.CaptchaUsed.selector);
+        capped.claimAmoe(id, captcha, deadline, abi.encodePacked(r, s, v));
+
+        vm.prank(bob);
+        vm.expectRevert(LabxRaffle.CaptchaUsed.selector);
+        capped.claimAmoe(id, bytes32(0), deadline, abi.encodePacked(r2, s2, v2));
+    }
+
+    function test_abortDrawingLeavesNftForSellerPull() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        vm.warp(block.timestamp + 1 days);
+        labx.abortDrawing(id);
+        assertEq(labx.activeDrawings(), 0);
+        assertEq(nft.ownerOf(1), address(labx));
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), before + 30e6);
+        vm.prank(seller);
+        labx.reclaimPrize(id);
+        assertEq(nft.ownerOf(1), seller);
     }
 }

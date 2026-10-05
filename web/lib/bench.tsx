@@ -1,8 +1,10 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { Address } from "viem";
 import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, type Entry, type PackName, type Piece } from "./seed";
 import { pickWinner, snapshotLots } from "./draw";
+import { receiptMessage } from "./email";
 import { connectSepolia } from "./wallet";
 
 type Agreement = { pieceId: string; at: string; terms: boolean; rules: boolean; age: boolean };
@@ -32,7 +34,7 @@ export type Bench = State & {
     nft: string;
     tokenId: string;
   }) => Promise<string | null>;
-  mark: (id: string, action: "escrow" | "open" | "close" | "snapshot" | "draw" | "reveal" | "settle" | "cancel") => string | null;
+  mark: (id: string, action: "escrow" | "open" | "close" | "snapshot" | "draw" | "reveal" | "settle" | "cancel" | "claim") => string | null;
   saveEmail: (email: string, piece: string, pack: string, entries: number, priceUsdc: number) => Promise<string | null>;
   connect: () => Promise<void>;
   useBenchWallet: () => void;
@@ -51,7 +53,16 @@ export function BenchProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) setState({ ...initial(), ...JSON.parse(raw) });
+      if (raw) {
+        const parsed = JSON.parse(raw) as State;
+        parsed.pieces = (parsed.pieces || []).map((piece) => {
+          const { salt: _salt, privateHash: _privateHash, ...rest } = piece as Piece & { salt?: string; privateHash?: string };
+          void _salt;
+          void _privateHash;
+          return rest;
+        });
+        setState({ ...initial(), ...parsed });
+      }
     } catch {
       /* keep seed */
     }
@@ -148,8 +159,6 @@ export function BenchProvider({ children }: { children: ReactNode }) {
           commit: body.commit,
           nonce: body.nonce,
           publicHash: body.publicHash,
-          privateHash: body.privateHash,
-          salt: body.salt,
           publicSummary: body.publicSummary,
           nft: input.nft,
           tokenId: input.tokenId
@@ -174,6 +183,9 @@ export function BenchProvider({ children }: { children: ReactNode }) {
         if (action === "reveal" && !existing.commit) return "This piece has no commitment yet.";
         if (action === "settle" && existing.phase === "drawn" && !existing.revealed) {
           return "Reveal the commitment before settlement.";
+        }
+        if (action === "claim" && !(existing.escrowed && (existing.phase === "settled" || existing.phase === "cancelled"))) {
+          return "Claim the piece after settlement or cancellation.";
         }
         setState((current) => {
           const pieces = current.pieces.map((piece) => ({ ...piece }));
@@ -207,10 +219,11 @@ export function BenchProvider({ children }: { children: ReactNode }) {
           if (action === "reveal" && piece.commit) piece.revealed = true;
           if (action === "settle" && piece.phase === "drawn" && piece.revealed) {
             piece.phase = "settled";
-            piece.escrowed = false;
           }
-          if (action === "cancel" && piece.phase !== "settled") {
+          if (action === "cancel" && piece.phase !== "settled" && piece.phase !== "cancelled") {
             piece.phase = "cancelled";
+          }
+          if (action === "claim" && piece.escrowed && (piece.phase === "settled" || piece.phase === "cancelled")) {
             piece.escrowed = false;
           }
           return { ...current, pieces, banner: { tone: "ok", text: `${piece.title} updated.` } };
@@ -219,10 +232,36 @@ export function BenchProvider({ children }: { children: ReactNode }) {
       },
       saveEmail: async (email, piece, pack, entries, priceUsdc) => {
         setState((current) => ({ ...current, email }));
+        if (!state.wallet || state.wallet.toLowerCase() === DEMO_ADDRESS.toLowerCase()) {
+          return "A Sepolia wallet signature is required before a receipt can be sent.";
+        }
+        const provider = window.ethereum;
+        if (!provider) return "A Sepolia wallet signature is required before a receipt can be sent.";
+        const deadline = BigInt(Math.trunc(Date.now() / 1000) + 10 * 60);
+        const message = receiptMessage(state.wallet as Address, email, piece, pack, deadline);
+        let signature: string;
+        try {
+          signature = (await provider.request({
+            method: "personal_sign",
+            params: [message, state.wallet]
+          })) as string;
+        } catch {
+          return "The wallet refused the receipt signature.";
+        }
         const response = await fetch("/api/email/receipt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to: email, piece, pack, entries, priceUsdc, feeUsdc: LAB_FEE })
+          body: JSON.stringify({
+            address: state.wallet,
+            signature,
+            deadline: deadline.toString(),
+            to: email,
+            piece,
+            pack,
+            entries,
+            priceUsdc,
+            feeUsdc: LAB_FEE
+          })
         });
         const body = await response.json();
         if (!response.ok) return body.error || "Email was refused.";

@@ -52,7 +52,7 @@ cd contracts
 forge script script/DeploySepolia.s.sol:DeploySepolia --rpc-url "$SEPOLIA_RPC_URL" --broadcast
 ```
 
-Optional ETH route, on by default:
+Optional ETH route, off unless `WIRE_ETH_PATH=true`. Router, WETH, feed, and pool fee are fixed at deploy:
 
 | Item | Sepolia default |
 | --- | --- |
@@ -61,10 +61,10 @@ Optional ETH route, on by default:
 | ETH/USD | `0x694AA1769357215DE4FAC081bf1f309aDC325306` |
 | Pool fee | 3000 |
 
-`WIRE_ETH_PATH`  
+`WIRE_ETH_PATH` defaults to false.  
 `UNISWAP_POOL_FEE`
 
-If the WETH/USDC pool at that fee is not liquid, set `WIRE_ETH_PATH=false` and ship USDC only.
+Ship USDC only until the WETH/USDC pool at that fee is liquid and the swap deadline path has been checked on Sepolia. The owner cannot point the path at a different router later. Coordinator changes wait one day and are refused during a draw.
 
 ## 5. Vercel
 

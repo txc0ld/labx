@@ -37,7 +37,8 @@ contract DeployLocal is Script {
                 amoeSigner: amoe,
                 termsHash: terms,
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3
+                requestConfirmations: 3,
+                amoeCap: 0
             })
         );
         if (safe != deployer) labx.transferOwnership(safe);

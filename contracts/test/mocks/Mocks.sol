@@ -82,7 +82,7 @@ contract MockERC721 is IERC721 {
         emit ApprovalForAll(msg.sender, operator, approved);
     }
 
-    function transferFrom(address from, address to, uint256 id) public {
+    function transferFrom(address from, address to, uint256 id) public virtual {
         address o = ownerOf(id);
         require(o == from, "from");
         require(msg.sender == from || msg.sender == getApproved[id] || isApprovedForAll[from][msg.sender], "auth");
@@ -202,11 +202,58 @@ contract MockRouter is ISwapRouter02 {
         usdc = u;
     }
 
+    function setSpend(uint256 numerator, uint256 denominator) external {
+        spendNumerator = numerator;
+        spendDenominator = denominator;
+    }
+
     function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn) {
         amountIn = params.amountInMaximum * spendNumerator / spendDenominator;
-        if (amountIn == 0) amountIn = params.amountInMaximum;
+        if (amountIn == 0 && spendNumerator != 0) amountIn = params.amountInMaximum;
         weth.transferFrom(msg.sender, address(this), amountIn);
         usdc.mint(params.recipient, params.amountOut);
+    }
+
+    function multicall(uint256 deadline, bytes[] calldata data) external payable returns (bytes[] memory results) {
+        require(deadline >= block.timestamp, "deadline");
+        results = new bytes[](data.length);
+        for (uint256 i = 0; i < data.length; ++i) {
+            (bool ok, bytes memory ret) = address(this).delegatecall(data[i]);
+            require(ok, "multicall");
+            results[i] = ret;
+        }
+    }
+}
+
+/// @notice Accepts `transferFrom` and reverts `onERC721Received`, so a safe-transfer claim would stick.
+contract RevertingReceiver {
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        revert("nope");
+    }
+}
+
+/// @notice Escrow succeeds, then every outbound transfer reverts.
+contract StickyERC721 is MockERC721 {
+    bool public locked;
+
+    function safeTransferFrom(address from, address to, uint256 id) public override {
+        super.safeTransferFrom(from, to, id);
+        locked = true;
+    }
+
+    function transferFrom(address from, address to, uint256 id) public override {
+        require(!locked, "sticky");
+        super.transferFrom(from, to, id);
+    }
+}
+
+/// @notice Fulfills inside `requestRandomWords`, before the consumer stores the request id.
+contract SyncVRF {
+    function requestRandomWords(VRFV2PlusClient.RandomWordsRequest calldata) external returns (uint256 id) {
+        id = 77;
+        uint256[] memory words = new uint256[](1);
+        words[0] = 4;
+        LabxRaffle(payable(msg.sender)).rawFulfillRandomWords(id, words);
     }
 }
 

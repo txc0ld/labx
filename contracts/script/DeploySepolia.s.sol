@@ -25,7 +25,7 @@ contract DeploySepolia is Script {
         address amoe = vm.envAddress("AMOE_SIGNER");
         bytes32 terms = vm.envBytes32("TERMS_HASH");
         uint256 subId = vm.envUint("VRF_SUBSCRIPTION_ID");
-        bool wireEth = vm.envOr("WIRE_ETH_PATH", true);
+        bool wireEth = vm.envOr("WIRE_ETH_PATH", false);
 
         vm.startBroadcast(pk);
         LabxRaffle labx = new LabxRaffle(
@@ -42,7 +42,8 @@ contract DeploySepolia is Script {
                 amoeSigner: amoe,
                 termsHash: terms,
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3
+                requestConfirmations: 3,
+                amoeCap: 0
             })
         );
         labx.transferOwnership(safe);

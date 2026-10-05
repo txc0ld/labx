@@ -1,3 +1,5 @@
+import { verifyMessage, type Address, type Hex } from "viem";
+
 export type Receipt = {
   to: string;
   piece: string;
@@ -22,6 +24,47 @@ export function receiptBody(input: Receipt): { subject: string; html: string; te
 <p>${input.entries} bonus entries. Pack price ${input.priceUsdc} USDC. Lab fee ${input.feeUsdc} USDC to the treasury.</p>
 <p>Bonus entries expire 12 months after they are recorded.</p>`;
   return { subject, html, text };
+}
+
+const RECEIPT_WINDOW = 10n * 60n;
+const receiptHits = new Map<string, number[]>();
+
+export function receiptMessage(address: Address, to: string, piece: string, pack: string, deadline: bigint): string {
+  return `LABx receipt\n${address}\n${to}\n${piece}\n${pack}\n${deadline}`;
+}
+
+export async function verifyReceipt(args: {
+  address: Address;
+  to: string;
+  piece: string;
+  pack: string;
+  deadline: bigint;
+  signature: Hex;
+  now?: bigint;
+}): Promise<boolean> {
+  const now = args.now ?? BigInt(Math.trunc(Date.now() / 1000));
+  if (args.deadline < now || args.deadline > now + RECEIPT_WINDOW) return false;
+  return verifyMessage({
+    address: args.address,
+    message: receiptMessage(args.address, args.to, args.piece, args.pack, args.deadline),
+    signature: args.signature
+  });
+}
+
+export function allowReceipt(address: string, now = Date.now(), windowMs = 60_000, max = 5): boolean {
+  const key = address.toLowerCase();
+  const prev = (receiptHits.get(key) || []).filter((stamp) => now - stamp < windowMs);
+  if (prev.length >= max) {
+    receiptHits.set(key, prev);
+    return false;
+  }
+  prev.push(now);
+  receiptHits.set(key, prev);
+  return true;
+}
+
+export function resetReceiptRateLimit(): void {
+  receiptHits.clear();
 }
 
 export async function sendReceipt(input: Receipt, env = process.env): Promise<{ delivered: boolean; reason?: string }> {
