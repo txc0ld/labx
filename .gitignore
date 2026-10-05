@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+dist
+coverage
+.vercel
+.env
+.env.local
+web/data/store.json
+contracts/out
+contracts/cache
+contracts/broadcast
+*.log
+.DS_Store
