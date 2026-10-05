@@ -17,17 +17,21 @@ export default function PrivacyPage() {
         This notice describes records created when you use the {OPERATOR.brand} bench at {publicSiteHost()}. It is a product draft for counsel, not a legal opinion.
       </p>
       <LegalNav />
-      <article className="pearl pad stack legal-copy">
-        <h2>Who we are</h2>
-        <p>
-          {OPERATOR.brand} is operated by {OPERATOR_LINE}. This Sepolia deployment is a test bench. It is not a mainnet product and it is not a consumer promotion.
-        </p>
-
-        <h2>This Sepolia bench</h2>
-        <p>
-          Version 1.0 runs on {OPERATOR.network} only. The website refuses a mainnet wallet. Packs recorded here do not create mainnet obligations. Do not send real-value assets or treat Sepolia balances as cash.
-        </p>
-
+      <div className="piece-grid legal-surfaces">
+        <article className="pearl pad stack legal-copy">
+          <h2>Who we are</h2>
+          <p>
+            {OPERATOR.brand} is operated by {OPERATOR_LINE}. This Sepolia deployment is a test bench. It is not a mainnet product and it is not a consumer promotion.
+          </p>
+        </article>
+        <article className="terminal pad stack legal-copy">
+          <h2>This Sepolia bench</h2>
+          <p>
+            Version 1.0 runs on {OPERATOR.network} only. The website refuses a mainnet wallet. Packs recorded here do not create mainnet obligations. Do not send real-value assets or treat Sepolia balances as cash.
+          </p>
+        </article>
+      </div>
+      <article className="well pad stack legal-copy">
         <h2>What we collect</h2>
         <p>Depending on how you use the bench, we may process:</p>
         <ul>
@@ -41,7 +45,6 @@ export default function PrivacyPage() {
           <li>Server logs created by hosting, such as IP address, user agent, path, and time, used to operate and secure the site.</li>
         </ul>
         <p>We do not ask for a government identity document on this bench. We do not sell personal information.</p>
-
         <h2>Why we collect it</h2>
         <p>
           The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the Sepolia bench: recording packs and agreements, sending a receipt you asked for, gating complimentary entries, holding a studio commitment hash, stopping automated abuse, and keeping the wallet gate on Sepolia.
@@ -49,7 +52,8 @@ export default function PrivacyPage() {
         <p>
           We use and disclose it under Australian Privacy Principle 6 for that primary purpose. A secondary purpose is limited to security, abuse prevention, and a legal obligation. We do not use these records for unrelated marketing.
         </p>
-
+      </article>
+      <article className="pearl pad stack legal-copy">
         <h2>How we store it</h2>
         <p>This browser stores a local bench card so explore, studio, and profile keep working if you reload. That store is on your device. Clearing site data removes it.</p>
         <p>When persistence is configured, agreement logs, points, reserves, and complimentary-entry marks may be written to a server store. Without that store, serverless instances do not keep those records between requests.</p>

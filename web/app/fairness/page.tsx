@@ -12,7 +12,7 @@ export default function FairnessPage() {
       <h1 className="page-title">Three locks on every draw.</h1>
       <p className="lede">Escrow, a commitment hash, then VRF after the snapshot. Settlement flips phase; claims move the prize, proceeds, and fee.</p>
       <LegalNav />
-      <div className="piece-grid" style={{ marginTop: "1rem" }}>
+      <div className="piece-grid legal-surfaces">
         <article className="pearl pad">
           <h2>Escrow</h2>
           <p>The piece moves into the contract before packs open. After the settled phase, the drawn wallet claims that token with claimPrize. Pack proceeds and the lab fee are claimed separately.</p>

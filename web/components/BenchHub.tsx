@@ -39,7 +39,7 @@ export function BenchHub({
           <div className="btn-row">
             <a className="btn" href="#bench">Explore the bench</a>
             <Link className="btn btn-dark" href="/fairness">How a draw stays fair</Link>
-            <Link className="btn btn-dark" href="/about">About the lab</Link>
+            <Link className="hero-about" href="/about">About the lab</Link>
           </div>
           {banner ? <p className={`notice ${banner.tone}`} role="status">{banner.text}</p> : null}
         </article>

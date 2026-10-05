@@ -276,3 +276,63 @@ describe("hub laboratory tubing", () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.lab-tube-flow[\s\S]*animation:\s*none/);
   });
 });
+
+describe("responsive chrome and legal surfaces", () => {
+  it("keeps legal-copy from painting button labels black", () => {
+    const css = read("app/globals.css");
+    expect(css).toMatch(/\.legal-copy a:not\(\.btn\)/);
+    expect(css).toMatch(/\.legal-copy a\.btn \{[^}]*var\(--on-purple\)/);
+    expect(css).toMatch(/\.legal-copy a\.btn-dark \{[^}]*var\(--on-dark\)/);
+  });
+
+  it("sizes nav, legal nav, footer, and buttons for 44px taps", () => {
+    const css = read("app/globals.css");
+    expect(css).toMatch(/\.nav a[\s\S]*min-height:\s*44px/);
+    expect(css).toMatch(/\.legal-nav a[\s\S]*min-height:\s*44px/);
+    expect(css).toMatch(/\.site-footer nav a[\s\S]*min-height:\s*44px/);
+    expect(css).toMatch(/touch-action:\s*manipulation/);
+    expect(css).toMatch(/safe-area-inset/);
+    expect(css).toMatch(/overflow-x:\s*clip/);
+  });
+
+  it("splits privacy and terms into operator, network, and data surfaces", () => {
+    const privacy = read("app/privacy/page.tsx");
+    const legal = read("app/legal/page.tsx");
+    expect(privacy).toMatch(/className="pearl[^"]*legal-copy"/);
+    expect(privacy).toMatch(/className="terminal[^"]*legal-copy"/);
+    expect(privacy).toMatch(/className="well[^"]*legal-copy"/);
+    expect(legal).toMatch(/className="pearl[^"]*legal-copy"/);
+    expect(legal).toMatch(/className="terminal[^"]*legal-copy"/);
+    expect(legal).toMatch(/className="well[^"]*legal-copy"/);
+  });
+
+  it("publishes OG, twitter, and theme-color from the env site URL", () => {
+    const layout = read("app/layout.tsx");
+    expect(layout).toMatch(/openGraph/);
+    expect(layout).toMatch(/siteName:\s*"LABx"/);
+    expect(layout).toMatch(/hero-linked-panels\.jpg/);
+    expect(layout).toMatch(/twitter/);
+    expect(layout).toMatch(/themeColor:\s*"#E6D8FA"/);
+    expect(layout).toMatch(/viewportFit:\s*"cover"/);
+  });
+
+  it("uniques Plumbing chrome gradient ids", () => {
+    const plumbing = read("components/Plumbing.tsx");
+    expect(plumbing).toMatch(/useId/);
+    expect(plumbing).not.toMatch(/id=["']chrome["']/);
+  });
+
+  it("demotes the About hero CTA so Explore and Fairness stay on the fold", () => {
+    const hub = read("components/BenchHub.tsx");
+    expect(hub).toMatch(/Explore the bench/);
+    expect(hub).toMatch(/How a draw stays fair/);
+    expect(hub).toMatch(/className="hero-about"/);
+    expect(read("app/globals.css")).toMatch(/\.hero-about/);
+  });
+
+  it("marks OnChainStatus as bench-only with a lavender lamp", () => {
+    const status = read("components/OnChainStatus.tsx");
+    expect(status).toMatch(/lamp lavender/);
+    expect(status).toMatch(/bench only/);
+  });
+});

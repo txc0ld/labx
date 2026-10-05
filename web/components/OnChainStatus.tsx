@@ -11,5 +11,10 @@ const COPY = {
 
 export function OnChainStatus({ surface }: { surface: keyof typeof COPY }) {
   if (onChainReady()) return null;
-  return <p className="notice warning" role="status">{COPY[surface]}</p>;
+  return (
+    <p className="notice warning" role="status">
+      <span className="lamp lavender"><i /> bench only</span>
+      {COPY[surface]}
+    </p>
+  );
 }

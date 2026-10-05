@@ -24,7 +24,7 @@ export function FlowMark() {
   return (
     <Lottie
       animationData={data}
-      loop
+      loop={false}
       style={{ width: 88, height: 22 }}
       aria-hidden="true"
     />

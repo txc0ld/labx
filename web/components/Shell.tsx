@@ -54,23 +54,25 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
         <footer className="site-footer">
           <Plumbing label="Footer cable run" />
-          <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
-          <span>{OPERATOR_LINE}</span>
-          <nav aria-label="Footer">
-            <ul>
-              {FOOTER_LINKS.map((link) => (
-                <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
-                  >
-                    {link.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
-          <span>Ethereum Sepolia only. Mainnet is disabled.</span>
+          <div className="pearl pad footer-strip">
+            <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
+            <span>{OPERATOR_LINE}</span>
+            <nav aria-label="Footer">
+              <ul>
+                {FOOTER_LINKS.map((link) => (
+                  <li key={link.href}>
+                    <Link
+                      href={link.href}
+                      aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+            <span>Ethereum Sepolia only. Mainnet is disabled.</span>
+          </div>
         </footer>
       </div>
     </BenchProvider>
