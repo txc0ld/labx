@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { Sixtyfour } from "next/font/google";
+import { BrandSplash } from "@/components/BrandSplash";
 import { Shell } from "@/components/Shell";
 import { publicSiteUrl } from "@/lib/operator";
 import "./globals.css";
@@ -22,7 +23,7 @@ const heading = Sixtyfour({
 });
 
 const site = publicSiteUrl();
-const description = "Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries, Chainlink VRF, Safe treasury.";
+const description = "Membership packs, member perks and NFT raffles by LABx.";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -63,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${sans.variable} ${heading.variable}`}>
       <body>
+        <BrandSplash />
         <Shell>{children}</Shell>
       </body>
     </html>
