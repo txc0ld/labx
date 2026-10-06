@@ -10,6 +10,7 @@ import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
+import { DrawProgress } from "./DrawProgress";
 import { RaffleArtwork } from "./RaffleArtwork";
 
 export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null) => readonly ActionAvailability[];
@@ -141,10 +142,12 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           {seller
             ? <SellerActions browser={browser} snapshot={snapshot} account={account} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} />}
+          <RecoveryAlternatives browser={browser} snapshot={snapshot} availability={availability} onConfirmed={reload} />
           {seller && phase === 0 && saveCommitment ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
           <details className="workflow-details"><summary>Contract details</summary><dl className="review-list"><div><dt>Raffle contract</dt><dd className="hash">{browser.service.manifest.address}</dd></div><div><dt>NFT contract</dt><dd className="hash">{snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{snapshot.raffle.tokenId.toString()}</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
       </section>
+      <DrawProgress service={browser.service} snapshot={snapshot} />
     </>
   );
 }
@@ -214,8 +217,8 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
         payment: selectedPayment
       }
     : null;
-  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "close", "snapshot", "cancel", "abortDrawing", "settle", "claimFee"];
-  const nextRecovery = availability.find((item) => item.enabled && recoveryKinds.includes(item.kind));
+  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "abortDrawing", "settle", "cancel", "close", "snapshot", "claimFee"];
+  const nextRecovery = recoveryKinds.map(kind => availability.find(item => item.kind === kind)).find(item => item?.enabled);
   const recoveryAction: WorkflowAction | null = nextRecovery
     ? nextRecovery.kind === "snapshot"
       ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
@@ -291,7 +294,8 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   const [preflight, setPreflight] = useState<"idle" | "loading" | "error">("idle");
   const [preflightError, setPreflightError] = useState("");
   const preflightInFlight = useRef(false);
-  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "abortDrawing", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "refund", "reclaimPrize", "cancel"];
+  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "abortDrawing", "settle", "reveal", "claimPrize", "claimProceeds", "claimFee", "refund", "reclaimPrize", "cancel"];
+  if (snapshot.block.timestamp >= snapshot.raffle.salesEnd + snapshot.drawStartGrace) priority.unshift("cancel");
   const next = priority.map((kind) => availability.find((item) => item.kind === kind)).find((item) => item?.enabled);
 
   async function reviewOpeningPolicy() {
@@ -335,4 +339,14 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
     ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
     : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "abortDrawing" | "settle" | "claimPrize" | "claimProceeds" | "claimFee" | "refund" | "reclaimPrize" | "cancel", id: snapshot.id };
   return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{next.label}</h2><p>{next.reason}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} label={next.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section>;
+}
+
+function RecoveryAlternatives({ browser, snapshot, availability, onConfirmed }: {
+  browser: Extract<BrowserService, { kind: "configured" }>; snapshot: RaffleSnapshot;
+  availability: readonly ActionAvailability[]; onConfirmed: () => Promise<void>;
+}) {
+  const kinds = ["settle", "cancel", "abortDrawing", "refund", "reclaimPrize"] as const;
+  const actions = kinds.flatMap(kind => { const item = availability.find(item => item.kind === kind && item.enabled); return item ? [{ ...item, kind }] : []; });
+  if (!actions.length) return null;
+  return <section className="workflow-details stack" aria-label="Other available actions"><h3>Available recovery and settlement</h3><p>These actions do not require commitment recovery.</p>{actions.map(item => <TransactionFlow key={item.kind} service={browser.service} wallet={browser.wallet} action={{ kind: item.kind, id: snapshot.id }} label={item.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} />)}</section>;
 }

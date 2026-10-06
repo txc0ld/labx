@@ -3,16 +3,17 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserService } from "@/lib/chain/ports";
-import type { RaffleSnapshot } from "@/lib/chain/types";
+import { CATALOG_PAGE_LIMIT } from "@/lib/chain/types";
+import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
 import { formatDate, phaseLabel } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type SellerState =
   | { kind: "idle" | "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; raffles: readonly RaffleSnapshot[]; nextCursor: bigint | null; loadingMore: boolean };
+  | { kind: "ready"; raffles: readonly RaffleSnapshot[]; nextCursor: bigint | null; loadingMore: boolean; block: BlockRef };
 
-export function SellerDashboard({ browser, draftForm }: { browser: BrowserService; draftForm?: React.ReactNode }) {
+export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser: BrowserService; draftForm?: React.ReactNode; revision?: number }) {
   const wallet = useWalletSnapshot(browser.wallet);
   const [state, setState] = useState<SellerState>({ kind: "idle" });
   const request = useRef(0);
@@ -23,9 +24,9 @@ export function SellerDashboard({ browser, draftForm }: { browser: BrowserServic
     if (cursor === undefined) setState({ kind: "loading" });
     else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true } : current);
     try {
-      const page = await browser.service.listRaffles({ cursor, limit: 25 });
+      const page = await browser.service.listRaffles({ cursor, limit: CATALOG_PAGE_LIMIT, block: cursor !== undefined && state.kind === "ready" ? state.block : undefined });
       const owned = page.items.filter((item) => item.raffle.seller.toLowerCase() === wallet.account.toLowerCase());
-      if (version === request.current) setState((current) => ({ kind: "ready", raffles: cursor !== undefined && current.kind === "ready" ? [...current.raffles, ...owned] : owned, nextCursor: page.nextCursor, loadingMore: false }));
+      if (version === request.current) setState((current) => ({ kind: "ready", raffles: cursor !== undefined && current.kind === "ready" ? [...current.raffles, ...owned] : owned, nextCursor: page.nextCursor, loadingMore: false, block: page.block }));
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Seller raffles could not be loaded." });
     }
@@ -37,7 +38,7 @@ export function SellerDashboard({ browser, draftForm }: { browser: BrowserServic
     return () => { request.current += 1; };
     // Wallet revision and runtime changes invalidate the seller portfolio.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browser, wallet]);
+  }, [browser, wallet, revision]);
 
   if (browser.kind === "unavailable") return <p className="notice warning" role="status">{browser.reason}</p>;
   return (

@@ -72,3 +72,5 @@ export type WalletProvider = {
   on?(event: string, listener: (...args: unknown[]) => void): void;
   removeListener?(event: string, listener: (...args: unknown[]) => void): void;
 };
+
+export const CATALOG_PAGE_LIMIT = 24;

@@ -30,3 +30,13 @@ Call `prepare`, show the returned transaction review, then call `submit` only af
 Authenticated `api.ts` helpers request a scoped wallet signature only when called. Commitment recovery reveals hashes/salt only to the seller. Agreements are assertions, not proof of age or legal clearance. Receipt and private-record APIs verify their wallet and deployment scope. Never put recovered commitment data or authorization signatures in localStorage, analytics or logs.
 
 Artwork reads use bounded on-chain tokenURI data and safe display URLs. Remote JSON is fetched only in the browser with omitted credentials/referrer, no redirects, an 8-second timeout and a 64-KiB limit; no arbitrary metadata URL is fetched by the server. Failed/unsupported metadata returns a null image. No listings, entries or artwork are fabricated.
+
+## Pending transaction recovery
+
+Browser writes require localStorage and the Web Locks API in a secure browser context. If either is unavailable, the service refuses new writes. A deployment/runtime/account-scoped journal stores only an intent digest, nonce, starting block, public transaction hash (when known), and random record ID. It never stores calldata, reveal salt, private commitments or signatures. Normal reloads and another tab cannot bypass an unresolved intent.
+
+The wallet adapter invokes its `beforeRequest` callback only after its final session check. The service claims the journal there, immediately before the provider request. Explicit wallet rejection clears that matching record; an ambiguous post-send error keeps it. Use the wallet's actual transaction or same-nonce replacement/cancellation hash to reconcile. The website offers no manual clear shortcut. An unrelated older hash cannot overwrite or clear the pending action. Canonical mined confirmation is checked before releasing the guard; a reverted transaction or confirmed replacement also resolves its nonce.
+
+This protects normal website use, not deliberate browser-storage deletion, another device, or transactions sent outside LABx. Wallets must honor the requested sender/network/nonce. An ambiguous request with no known hash requires examining wallet activity and, if necessary, completing a same-nonce wallet replacement. Contract rules remain authoritative.
+
+For deterministic Node/Anvil tests, inject one shared `memoryPendingJournal()` into recreated service instances. It is never the browser persistence fallback.

@@ -16,6 +16,7 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     add("cancel", "Cancel draft", seller || operator, "Only the seller or operator can cancel a draft.");
   }
   if (r.phase === 1) {
+    add("approveUsdc", "Approve exact USDC", !snapshot.paused && now < r.salesEnd && snapshot.packs.some(p => p.active && p.sold < p.maxSupply), "Membership sales are paused, ended or sold out.");
     add("buyMembership", "Choose membership", !snapshot.paused && now < r.salesEnd && snapshot.packs.some(p => p.active && p.sold < p.maxSupply), "Membership sales are paused, ended or sold out.");
     add("close", "Close sales", now >= r.salesEnd, "Sales close at the published deadline.");
   }

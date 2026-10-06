@@ -12,7 +12,7 @@ export interface WalletSessionPort {
   refresh(): Promise<WalletSnapshot>;
   disconnect(): void;
   assertCurrent(expected: Extract<WalletSnapshot, { kind: "connected" }>): Promise<void>;
-  requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint }): Promise<Hex>;
+  requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint; nonce?: number }, beforeRequest?: () => Promise<void>): Promise<Hex>;
   signMessage(input: { message: string; expected: Extract<WalletSnapshot, { kind: "connected" }> }): Promise<Hex>;
 }
 
@@ -30,6 +30,7 @@ export interface RaffleService {
   prepare(input: { action: WorkflowAction; wallet: WalletSessionPort }): Promise<PreparedAction>;
   submit(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<SubmittedAction>;
   confirm(input: { transaction: SubmittedAction; timeoutMs?: number }): Promise<Confirmation>;
+  pending(input: { wallet: WalletSessionPort }): Promise<{ hash: Hex | null; nonce: number } | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort }): Promise<SubmittedAction>;
 }
 

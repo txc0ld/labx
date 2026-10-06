@@ -3,6 +3,7 @@ import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
 import type { AccountRaffleState, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, RaffleSnapshot } from "./types";
+import { CATALOG_PAGE_LIMIT } from "./types";
 import { boundedNumber, positiveId, sameAddress } from "./validation";
 
 export function createReader(client: PublicClient, manifest: DeploymentManifest) {
@@ -44,7 +45,7 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     } catch { return fallback; }
   }
   async function listRaffles({ cursor = 1n, limit = 12, block }: { cursor?: bigint; limit?: number; block?: BlockRef } = {}) {
-    positiveId(cursor); boundedNumber(limit, 1, 24); const at = await checkedBlock(block);
+    positiveId(cursor); boundedNumber(limit, 1, CATALOG_PAGE_LIMIT); const at = await checkedBlock(block);
     const nextId = await client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "nextId", blockNumber: at.number });
     if (cursor > nextId) throw new Error("Catalog cursor is outside this block snapshot.");
     const end = cursor + BigInt(limit) < nextId ? cursor + BigInt(limit) : nextId;

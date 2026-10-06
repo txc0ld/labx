@@ -1,7 +1,13 @@
+import { PUBLISHED_TERMS_HASH } from "@/lib/published-terms";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 
 const USDC_DECIMALS = 6n;
 const USDC_SCALE = 10n ** USDC_DECIMALS;
+
+export function formatUsdcInput(value: bigint) {
+  const fraction = (value % USDC_SCALE).toString().padStart(6, "0").replace(/0+$/, "");
+  return `${value / USDC_SCALE}${fraction ? `.${fraction}` : ""}`;
+}
 
 export function formatUsdc(value: bigint) {
   const whole = value / USDC_SCALE;
@@ -41,4 +47,14 @@ export function minimumActivePrice(snapshot: RaffleSnapshot) {
 
 export function shortAddress(value: string) {
   return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+export function catalogAvailability(snapshot: RaffleSnapshot) {
+  const remaining = snapshot.packs.reduce((sum, pack) => sum + (pack.active ? Math.max(0, pack.maxSupply - pack.sold) : 0), 0);
+  const ended = snapshot.raffle.phase >= 2 || snapshot.raffle.phase === 1 && (snapshot.block.timestamp >= snapshot.raffle.salesEnd || remaining === 0);
+  const label = snapshot.raffle.phase !== 1 ? phaseLabel(snapshot.raffle.phase)
+    : snapshot.block.timestamp >= snapshot.raffle.salesEnd ? "Sales ended"
+      : remaining === 0 ? "Sold out" : snapshot.paused ? "Paused"
+        : snapshot.policy.termsHash.toLowerCase() !== PUBLISHED_TERMS_HASH.toLowerCase() ? "Terms unavailable" : "Open";
+  return { label, purchasable: label === "Open", ended, remaining };
 }

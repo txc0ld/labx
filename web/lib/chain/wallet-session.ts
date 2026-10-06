@@ -46,9 +46,10 @@ export class WalletSession implements WalletSessionPort {
     const current = await this.refresh();
     if (current.kind !== "connected" || current.revision !== expected.revision || current.chainId !== expected.chainId || current.chainId !== this.chainId || !sameAddress(current.account, expected.account)) throw new Error("Wallet or network changed. Review this action again.");
   }
-  async requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: Parameters<WalletSessionPort["requestTransaction"]>[1]) {
+  async requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: Parameters<WalletSessionPort["requestTransaction"]>[1], beforeRequest?: () => Promise<void>) {
     await this.assertCurrent(expected);
-    const result = await this.requiredProvider().request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId) }] });
+    await beforeRequest?.();
+    const result = await this.requiredProvider().request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId), ...(transaction.nonce === undefined ? {} : { nonce: toHex(transaction.nonce) }) }] });
     return hash(result);
   }
   async signMessage({ message, expected }: Parameters<WalletSessionPort["signMessage"]>[0]) {
