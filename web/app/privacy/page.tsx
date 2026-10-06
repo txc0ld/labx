@@ -26,7 +26,7 @@ export default function PrivacyPage() {
         <article className="terminal pad stack legal-copy">
           <h2>This Sepolia bench</h2>
           <p>
-            Version 1.0 is intended for {OPERATOR.network} only. The website refuses a mainnet wallet. Listing and purchase tools are not connected. Do not send real-value assets or treat Sepolia balances as cash.
+            Version 2 is intended for {OPERATOR.network} only. The website refuses a mainnet wallet and enables actions only for a reviewed deployment. Do not send real-value assets or treat Sepolia balances as cash.
           </p>
         </article>
       </div>
@@ -36,6 +36,7 @@ export default function PrivacyPage() {
         <ul>
           <li>Wallet address, connected chain, and signed messages you choose to submit.</li>
           <li>An email preference, only if you choose to save one in this browser.</li>
+          <li>Commitment, agreement and receipt requests you explicitly authorize with your wallet.</li>
           <li>Existing points records tied to a wallet and UTC day. Points do not create bonus entries.</li>
           <li>Server logs created by hosting, such as IP address, user agent, path, and time, used to operate and secure the site.</li>
         </ul>
@@ -51,8 +52,8 @@ export default function PrivacyPage() {
       <article className="pearl pad stack legal-copy">
         <h2>How we store it</h2>
         <p>This browser stores only the email preference you choose to save. It does not store a wallet identity, raffle listing, purchase, entry, agreement, or draw history. Clearing site data removes the preference.</p>
-        <p>When persistence is configured, agreement logs, points and reserve records may be written to a server store. Without that store, serverless instances do not keep those records between requests.</p>
-        <p>Website listing, purchase, agreement and receipt tools are not connected. Saving an email preference does not send it to the server.</p>
+        <p>When persistence is configured, agreement logs, points, receipt status and reserve records may be written to a server store. These requests require a scoped wallet signature. The site refuses the workflow when durable storage is unavailable.</p>
+        <p>Saving an email preference does not send it to the server. The address is sent only when you explicitly request a receipt for a verified purchase.</p>
 
         <h2>On-chain and public data</h2>
         <p>Anything you send to {OPERATOR.network} is public. Wallet addresses, pack events, escrow, snapshots, VRF words, and settlement are visible to anyone who reads the chain. Do not treat a wallet as private correspondence.</p>

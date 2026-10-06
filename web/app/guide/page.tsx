@@ -14,7 +14,7 @@ export default function GuidePage() {
       <header className="guide-header">
         <h1 className="page-title">How it works.</h1>
         <p className="guide-intro">Find a piece. Choose a pack. Follow the draw.</p>
-        <p className="guide-availability"><span>Sepolia / intended flow</span>Website listing, purchase and history tools are not connected yet.</p>
+        <p className="guide-availability"><span>Sepolia test network</span>Every listing and action requires a reviewed v2 deployment.</p>
       </header>
 
       <div className="guide-grid">
@@ -28,7 +28,7 @@ export default function GuidePage() {
           </ul>
           <details className="guide-details">
             <summary>Browsing details</summary>
-            <p>When listings are connected, filter the collection by pack availability. Open a piece to see its status, closing date, prices and remaining supply.</p>
+            <p>The collection reads verified contract records. Open a raffle to see its status, deadline, membership prices and remaining supply.</p>
           </details>
           <Link className="guide-action" href="/#bench">View the collection <span aria-hidden="true">↗</span></Link>
         </article>
@@ -39,11 +39,11 @@ export default function GuidePage() {
           <p>Compare the USDC price, bonus entries and remaining supply.</p>
           <dl className="guide-facts">
             <div><dt>Lab fee / pack</dt><dd>+{LAB_FEE} <small>USDC</small></dd></div>
-            <div><dt>Quantity limit</dt><dd>1–5 <small>packs</small></dd></div>
+            <div><dt>Quantity</dt><dd>Live <small>contract limit</small></dd></div>
           </dl>
           <details className="guide-details">
             <summary>Pricing details</summary>
-            <p>A {LAB_FEE} USDC lab fee is added to each pack’s price. Quantity is limited to 1–5 packs and cannot exceed the selected pack’s remaining supply.</p>
+            <p>A {LAB_FEE} USDC lab fee is added to each pack’s price. The current contract validates quantity and remaining supply again before the wallet request.</p>
           </details>
           <Link className="guide-action" href="/fairness">Read about fairness <span aria-hidden="true">↗</span></Link>
         </article>
@@ -69,7 +69,7 @@ export default function GuidePage() {
       <section className="guide-workflow" id="workflow" aria-labelledby="workflow-title">
         <div className="guide-workflow-heading">
           <div><p className="kicker">Behind the draw</p><h2 id="workflow-title">What happens next?</h2></div>
-          <span className="guide-flow-label">Intended contract workflow</span>
+          <span className="guide-flow-label">Verified contract workflow</span>
         </div>
         <ol className="guide-timeline">
           <li><span className="guide-node" aria-hidden="true">01</span><h3>Prepare</h3><p>NFT escrow + private commitment.</p></li>
@@ -81,7 +81,7 @@ export default function GuidePage() {
           <summary>Settlement &amp; website availability</summary>
           <div className="guide-detail-body">
             <p>Studio prepares the piece, escrow and private commitment before packs open. After the draw and reveal, settlement enables separate prize, proceeds and fee claims.</p>
-            <p>The website does not currently create listings, accept purchases, request signatures, or submit these actions on-chain.</p>
+            <p>The website enables each step only when a reviewed v2 deployment, the connected wallet and current contract phase allow it. A transaction is complete only after confirmation.</p>
             <div className="guide-links"><Link href="/seller">Open Studio</Link><Link href="/profile">View profile</Link><Link href="/fairness">Inspect fairness</Link></div>
           </div>
         </details>

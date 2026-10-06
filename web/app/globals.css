@@ -1160,10 +1160,12 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
 .private-record-list>li>div { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.5rem; }
 .private-record-list span { color:var(--charcoal); font-size:.76rem; }
 .private-record-list .hash { margin:0; overflow-wrap:anywhere; font-size:.68rem; }
+.legal-section-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
 @media (max-width:760px) {
   .chain-piece-visual { position:static; }
   .history-list dl { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .pack-builder-row { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .legal-section-grid { grid-template-columns:1fr; }
 }
 @media (max-width:520px) {
   .chain-pack-grid { grid-template-columns:1fr; }

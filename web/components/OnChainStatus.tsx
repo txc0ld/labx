@@ -4,8 +4,8 @@ import React from "react";
 
 const COPY = {
   studio: "Listing tools are not connected yet.",
-  profile: "Wallet connection uses Sepolia. Membership, bonus-entry, receipt and agreement history is not connected yet.",
-  rules: "Draw and recovery actions are not connected. The current Sepolia deployment does not include the latest source protections; do not treat it as the new workflow.",
+  profile: "Wallet and account records require a reviewed raffle deployment on the configured test network.",
+  rules: "Draw and recovery controls stay disabled unless a reviewed v2 deployment is configured. Historical Sepolia bytecode does not gain these source protections.",
   piece: "Purchasing is unavailable until this raffle is connected to an authoritative listing."
 } as const;
 

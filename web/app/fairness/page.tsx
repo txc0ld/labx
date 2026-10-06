@@ -1,12 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
-import { useBench } from "@/lib/bench";
+import { FairnessRecords } from "@/components/workflow/FairnessRecords";
 
 export default function FairnessPage() {
-  const { pieces, ready } = useBench();
-  if (!ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Opening fairness records</strong><p>Checking the collection.</p></div></div></section>;
   return (
     <section className="section page-frame">
       <h1 className="page-title">The draw</h1>
@@ -27,29 +24,7 @@ export default function FairnessPage() {
         </article>
       </div>
       <div className="section table-wrap well pad">
-        {pieces.length ? <table>
-          <caption className="sr">Commitment and draw status</caption>
-          <thead>
-            <tr>
-              <th scope="col">Piece</th>
-              <th scope="col">Escrow</th>
-              <th scope="col">Commit</th>
-              <th scope="col">Snapshot</th>
-              <th scope="col">Draw</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pieces.map((piece) => (
-              <tr key={piece.id} id={piece.id}>
-                <td>{piece.title}</td>
-                <td>{piece.escrowed ? "Held" : piece.phase === "settled" || piece.phase === "cancelled" ? "Pulled" : "Not held"}</td>
-                <td className="hash">{piece.revealed ? piece.publicSummary || piece.commit : piece.commit || "—"}</td>
-                <td>{piece.snapshotTotal ?? "—"}</td>
-                <td>{piece.winner || piece.phase}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table> : <div className="stack"><h2>No raffle records available</h2><p>Commitment, snapshot and draw status will appear here after authoritative listings are connected.</p><div className="btn-row"><Link className="btn" href="/">Explore pieces</Link><Link className="btn btn-dark" href="/guide#workflow">Read the guide</Link><Link className="btn btn-lime" href="/rules">Read draw rules</Link></div></div>}
+        <FairnessRecords />
       </div>
     </section>
   );

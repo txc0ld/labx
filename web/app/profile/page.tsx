@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { AccountNav } from "@/components/AccountNav";
 import { useBench } from "@/lib/bench";
+import { ResumeTransaction } from "@/components/workflow/ResumeTransaction";
 
 type PointsState =
   | { kind: "idle" }
@@ -108,7 +109,7 @@ export default function ProfilePage() {
         <OnChainStatus surface="profile" />
         <p className="muted">Existing points records are separate from memberships and bonus entries. They do not grant an entry.</p>
         <div className="btn-row">
-          <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>
+          {bench.wallet ? <button className="btn btn-dark" type="button" onClick={() => bench.disconnect()}>Disconnect wallet</button> : <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>}
           {currentPoints.kind === "error" ? <button className="btn btn-dark" type="button" onClick={() => setPointsRetry((value) => value + 1)}>Retry points</button> : null}
         </div>
         {currentPoints.kind === "error" ? <p className="notice error" role="alert">{currentPoints.message}</p> : null}
@@ -130,9 +131,10 @@ export default function ProfilePage() {
         </div>
         <div className="pearl pad">
           <h2>Account records</h2>
-          <p className="muted">Purchase, entry and agreement records are unavailable.</p>
+          <p className="muted">Confirmed purchases and claims come from contract events. Private receipt and agreement status requires a wallet signature.</p>
           <div className="btn-row"><Link className="btn" href="/profile/history">View history</Link><Link className="btn btn-dark" href="/profile/receipts">View receipts</Link></div>
         </div>
+        <ResumeTransaction browser={bench.browser} />
       </div>
       </div>
     </section>

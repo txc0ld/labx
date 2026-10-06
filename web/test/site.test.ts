@@ -116,13 +116,13 @@ describe("required marketing routes", () => {
   });
 
   it("describes the prize, proceeds, fee, and cancellation outcomes without contract jargon", () => {
-    for (const file of ["app/legal/page.tsx", "app/rules/page.tsx"]) {
-      const text = read(file);
-      expect(text).toMatch(/winner claims the NFT/i);
-      expect(text).toMatch(/seller claims membership proceeds/i);
-      expect(text).toMatch(/treasury receives the lab fee/i);
-      expect(text).toMatch(/buyer.*membership price and lab fee/i);
-    }
+    const terms = read("lib/published-terms.ts");
+    expect(read("app/legal/page.tsx")).toMatch(/MEMBERSHIP_TERMS/);
+    expect(read("app/rules/page.tsx")).toMatch(/DRAW_RULES/);
+    expect(terms).toMatch(/winner claims the NFT/i);
+    expect(terms).toMatch(/seller claims membership proceeds/i);
+    expect(terms).toMatch(/treasury receives the lab fee/i);
+    expect(terms).toMatch(/buyer.*membership price and lab fee/i);
   });
 
   it("describes the lab and the Sepolia bench on About", () => {
@@ -260,7 +260,7 @@ describe("on-chain soft disable", () => {
       for (const surface of ["studio", "profile", "rules", "piece"] as const) {
         const markup = renderToStaticMarkup(createElement(OnChainStatus, { surface }));
         expect(markup).toContain('role="status"');
-        expect(markup).toMatch(/not connected|unavailable/);
+        expect(markup).toMatch(/not connected|unavailable|requires? a reviewed|stay disabled/);
         expect(markup.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
       }
     }
@@ -340,15 +340,15 @@ describe("responsive chrome and legal surfaces", () => {
     expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*\.site-header/);
   });
 
-  it("splits privacy and terms into operator, network, and data surfaces", () => {
+  it("splits long policy copy into readable surfaces", () => {
     const privacy = read("app/privacy/page.tsx");
     const legal = read("app/legal/page.tsx");
     expect(privacy).toMatch(/className="pearl[^"]*legal-copy"/);
     expect(privacy).toMatch(/className="terminal[^"]*legal-copy"/);
     expect(privacy).toMatch(/className="well[^"]*legal-copy"/);
     expect(legal).toMatch(/className="pearl[^"]*legal-copy"/);
-    expect(legal).toMatch(/className="terminal[^"]*legal-copy"/);
-    expect(legal).toMatch(/className="well[^"]*legal-copy"/);
+    expect(legal).toMatch(/legal-section-grid/);
+    expect(legal).toMatch(/MEMBERSHIP_TERMS\.map/);
   });
 
   it("publishes OG, twitter, and theme-color from the env site URL", () => {
@@ -431,22 +431,20 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain("Sold out");
   });
 
-  it("publishes a complete intended-flow and pack guide", () => {
+  it("publishes a complete verified-flow and membership guide", () => {
     const guide = read("app/guide/page.tsx");
-    expect(guide).toMatch(/listing, purchase and history tools are not connected/i);
-    expect(guide).toMatch(/does not currently create listings, accept purchases, request signatures/i);
+    expect(guide).toMatch(/requires a reviewed v2 deployment/i);
+    expect(guide).toMatch(/enables each step only when a reviewed v2 deployment/i);
     expect(guide).toMatch(/LAB_FEE/);
-    expect(guide).toMatch(/Quantity is limited to 1–5 packs/);
+    expect(guide).toMatch(/validates quantity and remaining supply/i);
     expect(guide).toMatch(/12-month bonus-entry expiry/);
-    expect(guide).toMatch(/intended contract workflow/i);
+    expect(guide).toMatch(/verified contract workflow/i);
     for (const href of ["/", "/fairness", "/rules", "/legal", "/profile", "/seller"]) {
       expect(guide).toContain(`href="${href}`);
     }
-    const hub = read("components/BenchHub.tsx");
-    expect(hub).toMatch(/Listings unavailable/);
-    expect(hub).toMatch(/No raffles listed/);
-    expect(hub).not.toMatch(/Ethereum mainnet is disabled/);
-    expect(read("components/PieceDesk.tsx")).toMatch(/OnChainStatus surface="piece" compact/);
+    expect(read("app/page.tsx")).toMatch(/LiveExplore/);
+    expect(read("components/workflow/RaffleCatalog.tsx")).toMatch(/No raffles listed/);
+    expect(read("app\/piece\/[id]\/page.tsx")).toMatch(/LiveRaffle/);
     expect(read("app/sitemap.ts")).toContain('"/guide"');
   });
 

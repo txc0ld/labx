@@ -75,14 +75,16 @@ describe("Studio preparation", () => {
   });
 });
 
-describe("informational empty states", () => {
+describe("account data boundaries", () => {
   it("does not claim eligibility or fabricate account records", () => {
     const eligibility = read("app/eligibility/page.tsx");
     const history = read("app/profile/history/page.tsx");
     const receipts = read("app/profile/receipts/page.tsx");
     expect(eligibility).toMatch(/does not save it or confirm that you are eligible/i);
-    expect(history).toMatch(/History is unavailable/);
-    expect(receipts).toMatch(/No receipt records available/);
-    expect(`${history}\n${receipts}`).not.toMatch(/transaction hash|receipt #|purchased on/i);
+    expect(history).toMatch(/LiveAccountHistory/);
+    expect(receipts).toMatch(/LivePrivateRecords/);
+    expect(read("components/workflow/AccountHistory.tsx")).toMatch(/service\.history/);
+    expect(read("components/workflow/PrivateRecordsPanel.tsx")).toMatch(/readRecords/);
+    expect(`${history}\n${receipts}`).not.toMatch(/receipt #|purchased on/i);
   });
 });

@@ -18,17 +18,17 @@ export default function MembershipPage() {
       </header>
       <div className="membership-facts">
         <div className="pearl pad"><span>Lab fee per pack</span><strong>+{LAB_FEE} USDC</strong></div>
-        <div className="pearl pad"><span>Quantity per purchase</span><strong>1–5 packs</strong></div>
+        <div className="pearl pad"><span>Quantity per transaction</span><strong>1–20 packs</strong></div>
         <div className="pearl pad"><span>Bonus-entry expiry</span><strong>12 months</strong></div>
       </div>
       <section className="well pad stack" aria-labelledby="tiers-title">
         <h2 id="tiers-title">Pack tiers</h2>
         <ol className="tier-list">{PACKS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}>{pack}</li>)}</ol>
-        <p className="muted">Each piece listing sets the price, bonus entries and available supply for every offered tier.</p>
+        <p className="muted">These are LABx’s visual tiers. A verified raffle can publish up to eight custom membership names, prices, bonus entries and supply limits.</p>
       </section>
       <article className="notice warning stack">
-        <strong>No packs are available to purchase on this website.</strong>
-        <span>Listings and purchase tools are not connected. Comparing a tier does not reserve a pack or place an order.</span>
+        <strong>Check the verified raffle before purchasing.</strong>
+        <span>Membership controls appear only for an open raffle on a reviewed v2 deployment. This comparison does not reserve a pack or place an order.</span>
       </article>
       <div className="btn-row">
         <Link className="btn" href="/">Explore pieces</Link>
