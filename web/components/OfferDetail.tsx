@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PartnerPass } from "@/components/PartnerPass";
 import { DiscountCode } from "@/components/DiscountCode";
 import type { PartnerOffer } from "@/lib/offers";
 
@@ -11,11 +12,8 @@ export function OfferDetail({ offer }: { offer: PartnerOffer }) {
         <h1 className="page-title">{offer.partner}</h1>
         <p className="lede">{offer.benefit}</p>
       </header>
-      <div className="workflow-grid">
-        <article className="pearl pad stack">
-          <strong className="offer-percent">5%</strong>
-          <DiscountCode />
-        </article>
+      <div className="workflow-grid partner-detail-grid">
+        <PartnerPass offer={offer}><DiscountCode /></PartnerPass>
         <article className="well pad stack">
           <h2>Redemption status</h2>
           <p className="notice warning" role="status">Redemption is unavailable. The working code and exact eligibility details are pending.</p>

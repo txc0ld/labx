@@ -1052,3 +1052,56 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
   .nav a { font-size:.68rem; }
   .discount-code-row,.review-list>div { grid-template-columns:1fr; }
 }
+
+
+/* Partner passes keep each brand's palette inside LABx's shared chrome. */
+.partner-pass { --pass-ink:#25143e; --pass-muted:#5c4772; --pass-accent:#6600ff; position:relative; isolation:isolate; overflow:hidden; border:1px solid #c7b4df; border-radius:28px; color:var(--pass-ink); background:#f3eaff; box-shadow:inset 0 2px 1px #fff9,0 14px 32px -24px #26133e80; }
+.partner-pass-face { position:relative; overflow:hidden; min-height:23rem; padding:clamp(1.4rem,3vw,2.1rem); background:radial-gradient(ellipse at 100% 0%,#bd8cff80,transparent 65%),linear-gradient(140deg,#fcfaff,#e9d8ff); }
+.partner-pass-brand { position:relative; z-index:2; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.partner-wordmark { display:inline-flex; align-items:center; font-weight:750; font-size:clamp(1.1rem,2.2vw,1.5rem); letter-spacing:-.055em; }
+.partner-pass--fantom-labs .partner-wordmark { color:#6600ff; }
+.partner-pass-tag { padding:.35rem .6rem; border:1px solid #6600ff33; border-radius:100px; font-size:.66rem; white-space:nowrap; }
+.partner-pass-art { position:absolute; inset:0; pointer-events:none; }
+.fantom-orbit { position:absolute; width:15rem; aspect-ratio:1; inset-inline-end:-3rem; top:5rem; border:1px solid #6600ff40; border-radius:50%; background:radial-gradient(circle at 36% 28%,#f1e5ff 0%,#b080ff 22%,#6600ff 56%,#32008a 82%); box-shadow:inset -12px -16px 30px #25005f60,inset 4px 4px 12px #fff8,0 16px 40px #6600ff33; transform:rotate(-18deg); transition:transform 650ms var(--ease-out); }
+.fantom-orbit::after { content:""; position:absolute; inset:-1.2rem; border:1px solid #6600ff33; border-radius:50%; transform:scaleY(.45) rotate(-35deg); }
+.fantom-spark { position:absolute; top:5.5rem; inset-inline-end:1.5rem; color:#fff; font-family:Arial,sans-serif; font-size:7rem; line-height:1; text-shadow:0 4px 12px #26006055; transform:rotate(-12deg); transition:transform 650ms var(--ease-out); }
+.partner-pass-value { position:relative; z-index:1; display:flex; align-items:baseline; gap:.6rem; margin-top:3rem; width:fit-content; }
+.partner-pass-value strong { font-size:clamp(5rem,10vw,8.5rem); line-height:.85; letter-spacing:-.075em; font-weight:750; }
+.partner-pass-value strong>span { font-size:.62em; letter-spacing:-.08em; }
+.partner-pass-off { font-size:1rem; font-weight:650; }
+.partner-pass .partner-pass-face h2 { position:relative; z-index:1; max-width:14ch; margin:1.3rem 0 .3rem; font-size:clamp(1.5rem,2.7vw,2.25rem); color:var(--pass-ink); line-height:1.1; }
+.partner-pass-scope { position:relative; z-index:1; margin:0; color:var(--pass-muted); font-size:.8rem; }
+.partner-pass-footer { position:relative; padding:1.1rem clamp(1.4rem,3vw,2.1rem) 1.4rem; border-top:1px dashed #6600ff40; }
+.partner-pass-footer>p { margin:0 0 .75rem; font-size:.75rem; color:var(--pass-muted); }
+.partner-pass-link { display:flex; justify-content:space-between; align-items:center; gap:1rem; min-height:48px; padding:.65rem .9rem; border:1px solid #ffffff40; border-radius:12px; background:var(--pass-accent); color:#fff; font-size:.9rem; font-weight:650; text-decoration:none; box-shadow:inset 0 1px 1px #fff4,0 4px 8px #20003f15; transition:transform 150ms ease-out; }
+.partner-pass-link:active { transform:scale(.96); }
+.partner-pass-link>span[aria-hidden] { transition:transform 250ms var(--ease-out); }
+.partner-pass--seatmap { --pass-ink:#f7f5f1; --pass-muted:#bdb7ac; --pass-accent:#ff5722; border-color:#48423a; background:#1d1b19; }
+.partner-pass--seatmap .partner-pass-face { background:radial-gradient(ellipse at 100% 0%,#ff572219,transparent 65%),linear-gradient(145deg,#302d28,#131210); }
+.partner-pass--seatmap .partner-pass-tag { color:#ff9a7a; border-color:#ff572260; }
+.seatmap-brand-dot { color:#ff5722; }
+.seatmap-mark { position:relative; width:1.05rem; height:1.35rem; margin-inline-end:.45rem; border-inline-start:4px solid #f7f5f1; border-bottom:4px solid #ff5722; border-radius:3px; transform:translateY(-2px); }
+.seatmap-mark::after { content:""; position:absolute; width:4px; height:5px; background:#ff5722; inset-inline-end:0; bottom:-8px; border-radius:1px; }
+.seatmap-cabin { position:absolute; top:6.1rem; inset-inline-end:1.5rem; width:8.5rem; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.55rem; transform:perspective(400px) rotateY(-20deg) rotateZ(12deg); transition:transform 650ms var(--ease-out); }
+.seatmap-seat { height:1.7rem; border:1px solid #686055; border-bottom-width:4px; border-radius:6px 6px 4px 4px; background:linear-gradient(145deg,#49443d,#27231f); box-shadow:inset 0 1px #ffffff1a,0 3px 6px #0003; }
+.seatmap-seat:nth-child(4n + 2) { margin-inline-end:.4rem; }
+.seatmap-seat:nth-child(4n + 3) { margin-inline-start:.4rem; }
+.seatmap-seat.is-highlighted { border-color:#b74420; background:linear-gradient(145deg,#ff9c61,#ff5722); box-shadow:inset 0 1px #ffc8b4,0 0 18px #ff572244; }
+.partner-pass--seatmap .partner-pass-footer { border-color:#62584a; }
+.partner-pass--seatmap .partner-pass-link { color:#131210; border-color:#ff956e; }
+.partner-pass--seatmap :focus-visible { outline-color:#ff956e; }
+.partner-pass .discount-code { border-top:0; padding-top:0; }
+.partner-pass .discount-code label { color:var(--pass-ink); font-size:.85rem; }
+.partner-pass .discount-code .muted { color:var(--pass-muted); }
+.partner-pass .discount-code input { color:#202124; }
+.partner-pass .discount-code-row { grid-template-columns:minmax(0,1fr); }
+.partner-pass .discount-code .btn { background:var(--pass-accent); color:#fff; border-color:#ffffff50; }
+.partner-pass--seatmap .discount-code .btn { color:#131210; }
+@media (hover:hover) and (prefers-reduced-motion:no-preference) {
+  .partner-pass:hover .fantom-orbit,.partner-pass:focus-within .fantom-orbit { transform:translate(-.4rem,-.4rem) rotate(12deg); }
+  .partner-pass:hover .fantom-spark,.partner-pass:focus-within .fantom-spark { transform:rotate(48deg) scale(1.06); }
+  .partner-pass:hover .seatmap-cabin,.partner-pass:focus-within .seatmap-cabin { transform:perspective(400px) rotateY(0) rotateZ(0) translateY(-.4rem); }
+  .partner-pass-link:hover>span[aria-hidden] { transform:translate(2px,-2px); }
+}
+@media (max-width:420px) { .partner-pass-face { min-height:21rem; } .fantom-orbit { width:11rem; inset-inline-end:-3.5rem; top:6rem; } .fantom-spark { font-size:5rem; inset-inline-end:.25rem; top:6.5rem; } .seatmap-cabin { width:6.5rem; inset-inline-end:.5rem; top:6.75rem; gap:.4rem; } .partner-pass-value { margin-top:3.5rem; } .partner-pass-value strong { font-size:5rem; } }
+@media (prefers-reduced-motion:reduce) { .partner-pass *, .partner-pass *::after { transition:none!important; } .partner-pass-link:active { transform:none; } }
