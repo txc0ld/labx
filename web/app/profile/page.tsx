@@ -1,18 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 
 type PointsState =
-  | { status: "idle" | "loading" }
-  | { status: "ready"; balance: number }
-  | { status: "error"; message: string };
+  | { kind: "idle" }
+  | { kind: "loading"; wallet: string }
+  | { kind: "ready"; wallet: string; balance: number }
+  | { kind: "error"; wallet: string; message: string };
+
+function pointsBody(value: unknown): { balance: number } | { error: string } {
+  if (typeof value !== "object" || value === null) return { error: "Points are unavailable." };
+  if ("balance" in value && typeof value.balance === "number" && Number.isFinite(value.balance)) {
+    return { balance: value.balance };
+  }
+  return { error: "error" in value && typeof value.error === "string" ? value.error : "Points are unavailable." };
+}
 
 export default function ProfilePage() {
   const bench = useBench();
-  const [points, setPoints] = useState<PointsState>({ status: "idle" });
+  const [points, setPoints] = useState<PointsState>({ kind: "idle" });
+  const [pointsRetry, setPointsRetry] = useState(0);
+  const pointsRequest = useRef(0);
   const [email, setEmail] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
@@ -20,27 +31,37 @@ export default function ProfilePage() {
     if (bench.ready) setEmail(bench.email);
   }, [bench.email, bench.ready]);
 
-  const loadPoints = useCallback(async () => {
-    if (!bench.wallet) {
-      setPoints({ status: "idle" });
-      return;
-    }
-    setPoints({ status: "loading" });
-    try {
-      const response = await fetch(`/api/points?address=${bench.wallet}`);
-      const body = await response.json() as { balance?: unknown; error?: unknown };
-      if (!response.ok || typeof body.balance !== "number" || !Number.isFinite(body.balance)) {
-        throw new Error(typeof body.error === "string" ? body.error : "Points are unavailable.");
-      }
-      setPoints({ status: "ready", balance: body.balance });
-    } catch (error) {
-      setPoints({ status: "error", message: error instanceof Error ? error.message : "Points are unavailable." });
-    }
-  }, [bench.wallet]);
-
   useEffect(() => {
-    void loadPoints();
-  }, [loadPoints]);
+    const request = ++pointsRequest.current;
+    const controller = new AbortController();
+    const wallet = bench.wallet;
+    if (!wallet) {
+      setPoints({ kind: "idle" });
+      return () => controller.abort();
+    }
+
+    setPoints({ kind: "loading", wallet });
+    void (async () => {
+      try {
+        const response = await fetch(`/api/points?address=${wallet}`, { signal: controller.signal });
+        const body: unknown = await response.json();
+        const parsed = pointsBody(body);
+        if (!response.ok || "error" in parsed) throw new Error("error" in parsed ? parsed.error : "Points are unavailable.");
+        if (pointsRequest.current === request && !controller.signal.aborted) {
+          setPoints({ kind: "ready", wallet, balance: parsed.balance });
+        }
+      } catch (error) {
+        if (pointsRequest.current === request && !controller.signal.aborted) {
+          setPoints({ kind: "error", wallet, message: error instanceof Error ? error.message : "Points are unavailable." });
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (pointsRequest.current === request) pointsRequest.current += 1;
+    };
+  }, [bench.wallet, pointsRetry]);
 
   if (!bench.ready) return <section className="section"><p className="pearl pad">Loading profile.</p></section>;
 
@@ -48,6 +69,10 @@ export default function ProfilePage() {
     event.preventDefault();
     setNote(bench.saveEmail(email));
   }
+
+  const currentPoints: PointsState = points.kind !== "idle" && points.wallet === bench.wallet
+    ? points
+    : { kind: "loading", wallet: bench.wallet };
 
   return (
     <section className="section split">
@@ -57,7 +82,7 @@ export default function ProfilePage() {
         <div className="terminal pad">
           <div>wallet {bench.wallet || "not connected"}</div>
           <div>
-            points {points.status === "ready" ? points.balance : points.status === "loading" ? "loading" : points.status === "error" ? "unavailable" : "connect wallet"}
+            points {!bench.wallet ? "connect wallet" : currentPoints.kind === "ready" ? currentPoints.balance : currentPoints.kind === "error" ? "unavailable" : "loading"}
           </div>
           <div>chain sepolia</div>
         </div>
@@ -65,9 +90,9 @@ export default function ProfilePage() {
         <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token.</p>
         <div className="btn-row">
           <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>
-          {points.status === "error" ? <button className="btn btn-dark" type="button" onClick={() => void loadPoints()}>Retry points</button> : null}
+          {currentPoints.kind === "error" ? <button className="btn btn-dark" type="button" onClick={() => setPointsRetry((value) => value + 1)}>Retry points</button> : null}
         </div>
-        {points.status === "error" ? <p className="notice error" role="alert">{points.message}</p> : null}
+        {currentPoints.kind === "error" ? <p className="notice error" role="alert">{currentPoints.message}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
         <form className="stack" onSubmit={savePreference}>
           <label htmlFor="email">Email preference
