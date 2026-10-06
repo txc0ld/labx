@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OnChainStatus } from "../components/OnChainStatus";
 import { ResolvedTitle } from "../components/ResolvedTitle";
 import { ScrollStory } from "../components/ScrollStory";
+import { SquishyPackCard } from "../components/ui/squishy-card-component";
+import { LAB_FEE } from "../lib/seed";
 import { raffleAddress, readRaffle, sendRaffle } from "../lib/wallet";
 import { roundedOrtho } from "../lib/tubes";
 
@@ -381,6 +383,50 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain('aria-hidden="true"');
     expect(markup).toContain('class="pixel-divider-fallback"');
     expect(markup).not.toContain("<canvas");
+  });
+
+  it("renders each squishy pack choice as a native radio with real purchase data", () => {
+    const markup = renderToStaticMarkup(createElement(SquishyPackCard, {
+      pack: { name: "Entry", priceUsdc: 25, bonusEntries: 1, remaining: 80 },
+      feeUsdc: LAB_FEE,
+      selected: true,
+      disabled: false,
+      onSelect: () => undefined
+    }));
+
+    expect(markup).toContain('type="radio"');
+    expect(markup).toContain('name="membership-pack"');
+    expect(markup).toContain('value="Entry"');
+    expect(markup).toContain('checked=""');
+    expect(markup).toContain("25");
+    expect(markup).toContain("USDC");
+    expect(markup).toContain("1 bonus entry");
+    expect(markup).toContain(`+${LAB_FEE} USDC fee`);
+    expect(markup).toContain("80 remaining");
+    expect(markup).toContain('aria-hidden="true"');
+  });
+
+  it("marks unavailable squishy packs as disabled and sold out", () => {
+    const markup = renderToStaticMarkup(createElement(SquishyPackCard, {
+      pack: { name: "Gold", priceUsdc: 250, bonusEntries: 40, remaining: 0 },
+      feeUsdc: LAB_FEE,
+      selected: false,
+      disabled: true,
+      onSelect: () => undefined
+    }));
+
+    expect(markup).toContain('value="Gold"');
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain('data-disabled="true"');
+    expect(markup).toContain("Sold out");
+  });
+
+  it("keeps pack selection separate from quantity, agreements, and purchase", () => {
+    const desk = read("components/PieceDesk.tsx");
+    expect(desk).toMatch(/<SquishyPackCard[\s\S]*disabled=\{!open \|\| item\.remaining < 1\}[\s\S]*onSelect=\{setPack\}/);
+    expect(desk).toContain("selected.priceUsdc * qty + LAB_FEE * qty");
+    expect(desk).toContain("bench.buy({ pieceId: currentPiece.id, pack, qty, terms, rules, age })");
+    expect(desk).toContain("<BookDemoButton");
   });
 
   it("publishes a complete browser-demo and pack guide", () => {

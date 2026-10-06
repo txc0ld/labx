@@ -9,6 +9,7 @@ import { useBench } from "@/lib/bench";
 import { LAB_FEE, type PackName } from "@/lib/seed";
 import { closingDate, pieceView } from "@/lib/piece-view";
 import { useBenchTime } from "@/lib/use-bench-time";
+import SquishyPackCard from "@/components/ui/squishy-card-component";
 
 export function PieceDesk({ id }: { id: string }) {
   const bench = useBench();
@@ -76,25 +77,14 @@ export function PieceDesk({ id }: { id: string }) {
           </div>
           <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
             {piece.packs.map((item) => (
-              <label
+              <SquishyPackCard
                 key={item.name}
-                className={`pack-key ${item.name === pack ? "on" : ""}`}
-              >
-                <input
-                  className="sr"
-                  type="radio"
-                  name="membership-pack"
-                  value={item.name}
-                  checked={item.name === pack}
-                  disabled={item.remaining < 1}
-                  onChange={() => setPack(item.name)}
-                />
-                <span className="pack-check" aria-hidden="true" />
-                <strong>{item.name}</strong>
-                <span className="pack-price">{item.priceUsdc}<small> USDC</small></span>
-                <span className="pack-entry-count">{item.bonusEntries} bonus {item.bonusEntries === 1 ? "entry" : "entries"}</span>
-                <small>{item.remaining} remaining · +{LAB_FEE} USDC fee</small>
-              </label>
+                pack={item}
+                feeUsdc={LAB_FEE}
+                selected={item.name === pack}
+                disabled={!open || item.remaining < 1}
+                onSelect={setPack}
+              />
             ))}
           </div>
         </section>
