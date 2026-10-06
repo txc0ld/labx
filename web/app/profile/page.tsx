@@ -25,12 +25,26 @@ export default function ProfilePage() {
   const [points, setPoints] = useState<PointsState>({ kind: "idle" });
   const [pointsRetry, setPointsRetry] = useState(0);
   const pointsRequest = useRef(0);
+  const initialEmailAnchorHandled = useRef(false);
   const [email, setEmail] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (bench.ready) setEmail(bench.email);
   }, [bench.email, bench.ready]);
+
+  useEffect(() => {
+    if (!bench.ready || initialEmailAnchorHandled.current) return;
+    if (window.location.hash !== "#email-preferences") {
+      initialEmailAnchorHandled.current = true;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("email-preferences")?.scrollIntoView({ block: "start" });
+      initialEmailAnchorHandled.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [bench.ready]);
 
   useEffect(() => {
     const request = ++pointsRequest.current;

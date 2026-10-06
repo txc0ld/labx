@@ -1022,15 +1022,16 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
 .offer-card .btn { justify-self:start; margin-top:auto; }
 .offer-percent { font-size:clamp(3.5rem,8vw,6.5rem); line-height:.85; letter-spacing:-.07em; }
 .tier-list { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.6rem; margin:0; padding:0; list-style:none; }
-.tier-list li { display:grid; place-items:center; min-height:5rem; padding:.75rem .4rem; border:1px solid var(--line-dark); border-radius:18px; background:var(--paper); font-weight:700; }
-.tier-list li[data-tier="entry"] { background:var(--lime); }
-.tier-list li[data-tier="bronze"] { background:#ce8854; color:#231208; }
-.tier-list li[data-tier="silver"] { background:#c4ccd6; color:#202124; }
-.tier-list li[data-tier="gold"] { background:#f0c84b; color:#241900; }
-.tier-list li[data-tier="platinum"] { background:#d8ef87; color:#202600; }
+.tier-list li { display:grid; place-items:center; min-height:5rem; padding:.75rem .4rem; border:1px solid rgba(0,0,0,.28); border-radius:18px; color:#000; box-shadow:inset 0 2px 2px rgba(255,255,255,.6),inset 0 -4px 7px rgba(0,0,0,.12),0 3px 7px rgba(0,0,0,.08); font-weight:700; letter-spacing:.04em; text-transform:uppercase; text-shadow:0 -1px rgba(255,255,255,.65),0 1px rgba(0,0,0,.15); }
+.tier-list li[data-tier="entry"] { background-color:#B37DF6; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,255,255,.22),transparent 60%),linear-gradient(125deg,#9E68DD 0%,#D8BAFF 45%,#B37DF6 100%); }
+.tier-list li[data-tier="bronze"] { background-color:#B8753A; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,255,255,.22),transparent 60%),linear-gradient(125deg,#B8753A 0%,#EAC098 45%,#C78A50 100%); }
+.tier-list li[data-tier="silver"] { background-color:#CCCCCC; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,255,255,.22),transparent 60%),linear-gradient(125deg,#AAAEB5 0%,#F2F3F5 45%,#C0C4CA 100%); }
+.tier-list li[data-tier="gold"] { background-color:#FDBD29; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,255,255,.22),transparent 60%),linear-gradient(125deg,#D49A19 0%,#FFE7A3 45%,#FDBD29 100%); }
+.tier-list li[data-tier="platinum"] { background-color:#CCFF00; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,255,255,.22),transparent 60%),linear-gradient(125deg,#A3CC00 0%,#E9FF91 45%,#CCFF00 100%); }
 .account-nav ul { display:flex; flex-wrap:wrap; gap:.35rem .7rem; margin:0; padding:0; list-style:none; }
 .account-nav a { display:inline-flex; align-items:center; min-height:44px; padding:.45rem .7rem; border:1px solid var(--line); border-radius:10px; background:var(--paper); font-size:.8rem; font-weight:650; text-decoration:none; }
 .account-nav a[aria-current="page"] { border-color:var(--ink); background:var(--lavender); }
+#email-preferences { scroll-margin-top:8rem; }
 .eligibility-list { display:grid; gap:.35rem; margin:0; border:1px solid var(--line); }
 .eligibility-list legend { padding:.2rem .5rem; font-weight:650; }
 .discount-code { padding-top:.6rem; border-top:1px solid var(--line); }
