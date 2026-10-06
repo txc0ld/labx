@@ -79,9 +79,9 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
           className,
         ].filter(Boolean).join(" ")}
         style={{
-          background: "linear-gradient(180deg, #1a1a1a 0%, #0a0a0a 100%)",
+          background: "linear-gradient(145deg, #48434f 0%, #242326 65%, #17151b 100%)",
           boxShadow:
-            "inset 0 1px 0 rgba(255,255,255,0.08), 0 4px 12px rgba(0,0,0,0.18)",
+            "inset 0 2px 2px rgba(255,255,255,0.2), inset 0 -3px 6px rgba(0,0,0,0.35), 0 3px 8px rgba(0,0,0,0.12)",
         }}
         {...props}
       >
@@ -111,9 +111,9 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
         </span>
 
         <span
-          className="absolute top-1 left-1 bottom-1 z-10 w-9 group-hover/btn:w-[calc(100%-0.5rem)] group-focus-visible/btn:w-[calc(100%-0.5rem)] group-active/btn:w-[calc(100%-0.5rem)] flex items-center justify-start overflow-hidden rounded-md pl-3 pr-2.5 gap-2.5 transition-[width,gap] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+          className="absolute top-1 left-1 bottom-1 z-10 w-9 group-hover/btn:w-[calc(100%-0.5rem)] group-focus-visible/btn:w-[calc(100%-0.5rem)] group-active/btn:w-[calc(100%-0.5rem)] flex items-center justify-start overflow-hidden rounded-xl pl-3 pr-2.5 gap-2.5 transition-[width,gap] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
           style={{
-            background: `linear-gradient(180deg, ${v.from} 0%, ${v.to} 100%)`,
+            background: `radial-gradient(ellipse at 25% 0%, rgba(255,255,255,0.45), transparent 70%), linear-gradient(145deg, ${v.from} 0%, ${v.to} 100%)`,
             boxShadow:
               "inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -2px 4px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08)",
           }}
