@@ -1,6 +1,6 @@
 # Artwork-first design correction
 
-Status: implementing after the user rejected the frosted-panel design as generic.
+Status: complete locally. Source, build, final headless browser checks and independent Astra High review passed. Not pushed or deployed.
 Base: 335bc56c7211eeb512ff16ad26232c55129b2950.
 Branch: design/artwork-first-20261006.
 
@@ -61,3 +61,41 @@ Text Scramble's unchanged upstream hook schedules idle RAF callbacks. Coordinato
 User requested minimal text on main pages and a dedicated how-to guide for explanations. Add SSR /guide with metadata and sitemap entry. Link it from landing, raffle detail and the second continuous scroll section; preserve the five existing footer destinations. Keep main pages focused on artwork, title, price/fee, availability/time/status and required controls. Keep one clear visible browser-demo/no-transactions disclosure, required eligibility agreements and action errors. Move explanatory copy out of hero, detail lede and continuous story bodies. Preserve the approved Text Scramble, original scroll headings, Pixel Scroll, exact solid palette and uncropped artwork. Compact OnChainStatus is allowed only as an optional presentation mode; existing other surfaces and all handlers/authorization stay unchanged. Guide explains browsing, packs, fee/quantity, eligibility, demo records and intended escrow/commit/VRF/reveal/settlement workflow without asserting deployed Safe configuration, live listings, audit or legal clearance.
 
 Verification adds guide SSR, internal links/navigation/sitemap, retained price/fee/disclosure/agreements, then source aggregate/build and affected browser screenshots. Earlier source candidates remain historical; final candidate remains pending.
+
+
+## Earlier blocked checkpoint (superseded)
+
+Source candidate: `93b9dd6a285fbb687209b2137094389277c1b7c1` on `design/artwork-first-20261006`.
+
+The guide and reduced main-page copy are implemented. Root aggregate web tests passed 122/122, TypeScript passed, and the production build passed. Evidence is in ignored `artifacts/artwork-first/web-tests-guide.txt`, `typecheck-guide.txt`, and `build-guide.txt`. The build retains the pre-existing ox/viem dependency warning. Independent Astra High source review found no blocking code/content issue, with final visual acceptance still pending.
+
+`guide-http-ssr.json` records the served guide title, demo and additional-fee copy, four section anchors, sitemap entry and nine linked routes returning HTTP 200. Artwork checksums passed. Contracts, API handlers, web/lib and public artwork remain unchanged. Earlier browser evidence is revision-labelled in `browser-functional-391.json`; it does not establish final guide layout. The dependency audit still has four pre-existing findings, three moderate and one high.
+
+Final desktop/mobile screenshots, guide anchor interaction and affected visual checks are BLOCKED. T3 `preview_open` reports available, while screenshots fail and resize requests time out or report no automation host. A synchronous guide DOM read at 1280px reported no overflow, but a native anchor click did not change URL or scroll, so interaction is not recorded as passed. User choice to reopen T3 desktop Preview or explicitly permit a headless browser is pending. Do not bypass that pending choice or mark visual review complete. Actual focus-ring appearance was also unavailable in earlier native verification.
+
+Local production server runs on port 3113 using this source candidate. No push, PR, merge, deployment or chain operation occurred. Token/cost usage is unknown. Next action is to restore browser verification, inspect final screenshots, obtain the final independent verdict and close this report. Production and the historic Vercel preview do not include these local changes.
+
+
+## Final headless verification
+
+The user explicitly approved a headless browser after the native T3 failure. Existing Playwright and installed Chromium 153.0.8010.12 verified the production build of source candidate `93b9dd6a285fbb687209b2137094389277c1b7c1`. No app dependencies or source changed during verification. The native Preview was reopened at the local homepage, but its rendering failure is not claimed repaired.
+
+PASS evidence in ignored `artifacts/artwork-first/`:
+
+- `final-browser.json`: homepage widths 320, 390, 768, 1440 and 1920 have no document overflow; all images loaded. First artwork starts at 310px/320px on the two phone widths. Final desktop/mobile home, detail and guide screenshots were inspected. Home and story guide navigation works. No page errors.
+- `final-interactions.json`: direct guide anchor text clears the sticky header, guide contents links and detail pack-guide link work. Gold quantity 2 totals 510 USDC, including 10 USDC fee and 80 bonus entries. Unchecked agreements block the action; no agreements were accepted. An exhausted Entry pack correctly reports sold out while other packs keep the piece open. The temporary fixture was restored.
+- Pixel Scroll responds in both directions at 390 and 1440px. Painted cells use alpha 255, with the exact requested lavender, pink and lime RGB values observed. Real browser reduced-motion emulation removes the canvas and character transforms, then restores the effect when disabled. Keyboard Tab produces visible 3px dark focus outline; Skip to content works. No page errors.
+- Screenshots: `final-home-{390,1440}.png`, `final-detail-{390,1440}.png`, `final-guide-{390,1440}.png`, `final-guide-anchor.png`, `final-pixel-{390,1440}.png` and `final-keyboard-focus.png`.
+
+Two browser-harness attempts failed before passing: an ambiguous alert locator also matched Next's route announcer, and an early pixel sample raced CSS smooth scrolling. The final script scopes the alert to main and uses explicit instant scroll for deterministic progress samples. Neither required an application repair. These are not hidden app-test failures.
+
+The earlier revision-labelled animation lifecycle, filter, empty/single/expired/exhausted, long-title, direct-route and footer checks remain reusable for unchanged inputs. Physical devices and Safari were not tested. Contract tests were not rerun for this frontend-only candidate; historical results remain separate. No claim of live raffle, audited custody or production readiness is made.
+
+The implementation remains local. The historical Vercel review preview and production alias have not been updated. A future publication needs specific authorization; on-chain funding, ownership, migration and unresolved contract policy decisions remain separate work.
+
+
+## Final independent verdict
+
+Independent Astra High review passed for application source `93b9dd6a285fbb687209b2137094389277c1b7c1`. The reviewer inspected the actual code, all ten final screenshots, both completed browser scripts and their recorded results. No unresolved blocking finding remains within this frontend scope. Full scoped verdict: `artifacts/artwork-first/independent-review-guide.md`. This report closeout changes documentation only and does not invalidate the source checks.
+
+Next step: user design acceptance of the local candidate, followed by specific approval if a review-branch push or deployment is wanted. This session contains no standing publication authorization for the current candidate.
