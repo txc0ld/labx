@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, type Variants } from "framer-motion";
-import React, { useState, useSyncExternalStore } from "react";
+import React, { useState, useSyncExternalStore, type CSSProperties } from "react";
 import type { Pack, PackName } from "@/lib/seed";
 
 type SquishyPackCardProps = {
@@ -12,12 +12,32 @@ type SquishyPackCardProps = {
   onSelect: (pack: PackName) => void;
 };
 
-const PACK_ACCENTS: Record<PackName, string> = {
-  Entry: "#627A00",
-  Bronze: "#7A9900",
-  Silver: "#93B800",
-  Gold: "#AFDB00",
-  Platinum: "#CCFF00"
+const PACK_STYLES: Record<PackName, CSSProperties> = {
+  Entry: {
+    backgroundColor: "#526600",
+    backgroundImage: "linear-gradient(125deg, #485B00 0%, #617800 45%, #526600 100%)",
+    color: "#FFFFFF"
+  },
+  Bronze: {
+    backgroundColor: "#B8753A",
+    backgroundImage: "linear-gradient(125deg, #B8753A 0%, #EAC098 45%, #C78A50 100%)",
+    color: "#000000"
+  },
+  Silver: {
+    backgroundColor: "#CCCCCC",
+    backgroundImage: "linear-gradient(125deg, #AAAEB5 0%, #F2F3F5 45%, #C0C4CA 100%)",
+    color: "#000000"
+  },
+  Gold: {
+    backgroundColor: "#FDBD29",
+    backgroundImage: "linear-gradient(125deg, #D49A19 0%, #FFE7A3 45%, #FDBD29 100%)",
+    color: "#000000"
+  },
+  Platinum: {
+    backgroundColor: "#CCFF00",
+    backgroundImage: "linear-gradient(125deg, #A3CC00 0%, #E9FF91 45%, #CCFF00 100%)",
+    color: "#000000"
+  }
 };
 
 const cardVariants: Variants = {
@@ -82,10 +102,7 @@ export function SquishyPackCard({
   return (
     <motion.label
       className="squishy-pack-card"
-      style={{
-        backgroundColor: PACK_ACCENTS[pack.name],
-        color: pack.name === "Entry" ? "#FFFFFF" : "#000000"
-      }}
+      style={PACK_STYLES[pack.name]}
       data-selected={selected ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
       variants={cardVariants}
