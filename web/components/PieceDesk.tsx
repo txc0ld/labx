@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import BookDemoButton from "./pixel-perfect/book-demo-button";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 import { LAB_FEE, type PackName } from "@/lib/seed";
@@ -139,7 +140,7 @@ export function PieceDesk({ id }: { id: string }) {
         {open && !available ? <p className="notice warning">Choose an available pack and a whole quantity from 1 to 5 within its remaining supply.</p> : null}
 
         <footer className="purchase-actions">
-          <button className="btn btn-lime" type="button" disabled={!open || !available} onClick={purchase}>Record demo pack <span aria-hidden="true">↗</span></button>
+          <BookDemoButton className="record-pack-button" type="button" disabled={!open || !available} onClick={purchase}>Record demo pack</BookDemoButton>
           <Link className="hero-about" href={`/fairness#${piece.id}`}>Inspect fairness</Link>
         </footer>
         <p className="hash muted commitment-line">Commitment {piece.commit || "pending"}</p>

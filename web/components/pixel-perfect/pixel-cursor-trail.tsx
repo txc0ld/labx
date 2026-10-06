@@ -28,13 +28,15 @@ const PixelCursorTrail = () => {
   useEffect(() => {
     if (blockSize <= 0) return;
 
+    const animations = new Set<Animation>();
     const colorize = (cell: HTMLDivElement) => {
-      cell.style.transition = "none";
-      cell.style.backgroundColor = "currentColor";
-      requestAnimationFrame(() => {
-        cell.style.transition = "background-color 0.6s ease-out";
-        cell.style.backgroundColor = "transparent";
-      });
+      cell.getAnimations().forEach((animation) => animation.cancel());
+      const animation = cell.animate(
+        [{ backgroundColor: getComputedStyle(cell).color }, { backgroundColor: "transparent" }],
+        { duration: 600, easing: "ease-out" },
+      );
+      animations.add(animation);
+      animation.onfinish = animation.oncancel = () => animations.delete(animation);
     };
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -44,7 +46,7 @@ const PixelCursorTrail = () => {
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+      if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return;
 
       const col = Math.floor(x / blockSize);
       const row = Math.floor(y / blockSize);
@@ -53,7 +55,11 @@ const PixelCursorTrail = () => {
     };
 
     window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      animations.forEach((animation) => animation.cancel());
+      animations.clear();
+    };
   }, [blockSize, rows]);
 
   return (

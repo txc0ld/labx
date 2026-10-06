@@ -7,7 +7,7 @@ export function CursorTrail() {
   const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
-    if (!("ResizeObserver" in window)) return;
+    if (!("ResizeObserver" in window) || !("animate" in Element.prototype)) return;
     const preference = window.matchMedia("(hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)");
     const update = () => setEnabled(preference.matches && !document.hidden);
     update();

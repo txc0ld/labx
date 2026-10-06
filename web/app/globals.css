@@ -860,7 +860,8 @@ fieldset.agreements { gap:0; padding:0; border-top:1px solid var(--line-dark); }
 fieldset.agreements label { padding:.55rem 0; border-bottom:1px solid var(--line); font-size:.76rem; }
 .notice-compact { margin:0; }
 .purchase-actions { display:flex; align-items:center; gap:.75rem; }
-.purchase-actions .btn { flex:1; }
+.purchase-actions .record-pack-button { flex:1; width:100%; min-height:54px; border:1px solid var(--ink); cursor:pointer; }
+.purchase-actions .record-pack-button:disabled { cursor:not-allowed; }
 .commitment-line { margin:0; padding-top:.7rem; border-top:1px solid var(--line); font-size:.62rem; }
 
 .scroll-stories { margin-block:clamp(5rem,10vw,10rem); border-top:1px solid var(--line-dark); }
