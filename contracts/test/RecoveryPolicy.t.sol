@@ -218,6 +218,46 @@ contract RecoveryPolicyTest is Test {
         assertEq(labx.activeDrawings(), 0);
     }
 
+    function test_revertingCoordinatorLeavesClosedRaffleRecoverableAtSalesCutoff() public {
+        uint64 salesEnd = uint64(block.timestamp + 2 days);
+        uint256 id = _newRaffle(1, salesEnd);
+        _open(id);
+        _fundAndBuy(labx, usdc, alice, id);
+        _close(id);
+        labx.snapshot(id, 5);
+        assertTrue(labx.getRaffle(id).snapshotted);
+
+        bytes memory coordinatorFailure = abi.encodeWithSignature("Error(string)", "coordinator unavailable");
+        vm.mockCallRevert(address(vrf), MockVRF.requestRandomWords.selector, coordinatorFailure);
+        vm.warp(uint256(salesEnd) + POLICY_WINDOW - 1);
+        vm.prank(seller);
+        vm.expectRevert(coordinatorFailure);
+        labx.requestRandomness(id);
+        vm.clearMockedCalls();
+
+        LabxRaffle.RaffleView memory afterFailure = labx.getRaffle(id);
+        assertEq(uint256(afterFailure.phase), uint256(LabxRaffle.Phase.Closed));
+        assertEq(afterFailure.vrfRequestId, 0);
+        assertEq(afterFailure.vrfRequestedAt, 0);
+        assertEq(labx.requestToRaffle(1), 0);
+        assertEq(labx.requestCoordinator(1), address(0));
+        assertEq(labx.activeDrawings(), 0);
+        assertEq(vrf.next(), 1);
+
+        vm.warp(uint256(salesEnd) + POLICY_WINDOW);
+        labx.setPaused(true);
+        uint256 outsiderBefore = usdc.balanceOf(outsider);
+        vm.prank(outsider);
+        labx.cancel(id);
+        assertEq(usdc.balanceOf(outsider), outsiderBefore);
+        _assertRefundAdds(id, alice, 30e6);
+        assertEq(labx.getRaffle(id).principalEscrow, 0);
+        assertEq(labx.getRaffle(id).feeEscrow, 0);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
+    }
+
     function test_callbackAndAbortDeadlinesAreDisjointAcrossBothOrderings() public {
         uint64 salesEnd = uint64(block.timestamp + 2 days);
         uint256 timelyId = _newRaffle(1, salesEnd);
