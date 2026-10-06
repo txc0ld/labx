@@ -45,3 +45,25 @@ e0ac9244c8c7eeca09df934c9afd9f88efff57d4883709d03e5c6a4877a10246  contracts/test
 One initial test-edit command used a repository-relative path from the contracts subdirectory and failed with FileNotFoundError before changing tests. It was corrected from the repository root. No test run failed.
 
 Independent verification and separate final review remain pending. The coordinator owns ABI synchronization, release documentation and the combined candidate revision. No commit, publication or live operation was performed by this implementation owner.
+
+## Final integrated result
+
+PASS for source/test candidate `ce0fd27e6421b938400806f398d24c62ea91134b` on `design/artwork-first-20261006`, against base `48135d87bb7113654c9275896a707589691e62b6`. This closeout supersedes the pending gates above. The subsequent documentation-only commit changes no tested input.
+
+Independent verification added seven recovery tests in `contracts/test/RecoveryPolicy.t.sol`. Final review identified a missing coordinator-request-revert regression; it was added and verified without a production-code repair. That test proves request rollback followed by paused public cancellation and exact-once refunds at the sales cutoff.
+
+Final observed checks, all exit 0:
+
+- `forge test --fuzz-runs 1024`: 63 tests passed, zero failures/skips, including seven fuzz tests at 1,024 runs each. `artifacts/contract-policy-20261006/candidate-aggregate-1024-final.log`.
+- Focused independent recovery suite: seven tests passed. `candidate-focused-coordinator-revert.log` in the same directory.
+- Scoped `forge fmt --check`, `forge build --sizes` and `git diff --check`: passed. Runtime is 21,897 bytes with 2,679 bytes of margin. Existing compiler/linter warnings remain.
+- `npm --prefix web test`: 140 tests passed. `npm --prefix web run build`: passed, including TypeScript checks. Logs `web-tests.log` and `web-build.log`.
+- Browser checks: all six header links across four widths, 24 route/viewport cases, transparent backgrounds, active underline, visible keyboard focus and navigation, no horizontal overflow or page errors. `menu-check.log`, `menu-check.json`, `menu-390.png`, `menu-1440.png`.
+
+The menu update removes the Explore-only exception and applies the same transparent styling to all primary links. The shared preview and local production server were refreshed on port 3113. Native preview computed styles confirmed the change, but snapshot capture failed; the previously authorized headless Chromium supplied screenshots and responsive verification. iOS simulation is unavailable on this Linux host and Android SDK is absent. No physical-device result is claimed.
+
+Independent Astra High review returned PASS for the exact candidate, inspecting changed and unchanged financial paths, synchronous fulfillment, pinning, expiry orderings, claims, the additive ABI getter, documentation and menu evidence. The reviewer independently ran formatting and diff checks. Full evidence is retained in `artifacts/contract-policy-20261006/verification.md`, `final-candidate-metadata.log` and `review.md`. Role configuration was verified; provider-level model/usage telemetry is unavailable. Root and agent token/cost usage is unknown.
+
+The web ABI adds only the compiler-matching `DRAW_START_GRACE` getter; this is not a wholesale regeneration of its pre-existing subset. Existing web consumers do not use the omitted administrative entries. No web source changed after its successful checks.
+
+No required local implementation or check remains outstanding. No push, deployment, live-chain test, funding or ownership change occurred. The immediate owner cancellation power before a draw and deadline-inclusion assumptions remain documented in `SECURITY.md`. `LAUNCH.md` records the separate release/migration plan: recheck old liabilities and billing, verify Safe authority, obtain the human release decision, deploy and verify a new Sepolia instance, then separately authorize consumer/funding/ownership actions and app configuration. Existing deployed contracts retain their old behavior. This scoped review is not a full security audit or a release authorization.
