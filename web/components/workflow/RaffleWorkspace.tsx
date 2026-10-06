@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import type { Hex } from "viem";
+import { formatEther, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
 import type { ReserveRecord } from "@/lib/reserve";
@@ -10,6 +10,7 @@ import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
+import { RaffleArtwork } from "./RaffleArtwork";
 
 export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null) => readonly ActionAvailability[];
 export type RecoverCommitment = (commit: Hex) => Promise<ReserveRecord>;
@@ -125,11 +126,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
       <section className="section piece-layout piece-console chain-piece">
         <div className="piece-visual chain-piece-visual">
           <div className="piece-visual-topline"><span>Verified on-chain raffle</span><span>#{snapshot.id.toString()}</span></div>
-          <div className="chain-art-placeholder" aria-label={`NFT contract ${snapshot.raffle.nft}, token ${snapshot.raffle.tokenId.toString()}`}>
-            <span>{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span>
-            <p>NFT {shortAddress(snapshot.raffle.nft)}</p>
-            <small>Token #{snapshot.raffle.tokenId.toString()}</small>
-          </div>
+          <RaffleArtwork service={browser.service} snapshot={snapshot} showDescription />
           <div className="piece-visual-caption"><span className="piece-escrow-status">{snapshot.raffle.escrowed ? "Escrow verified" : "Not escrowed"}</span></div>
         </div>
         <div className="purchase-console">
@@ -167,20 +164,24 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   const [agreements, setAgreements] = useState({ terms: false, rules: false, age: false });
   const [agreementState, setAgreementState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [agreementError, setAgreementError] = useState("");
+  const agreementInFlight = useRef(false);
+  const agreementGeneration = useRef(0);
   const [quote, setQuote] = useState<MembershipQuote | null>(null);
   const [quoteState, setQuoteState] = useState<"idle" | "loading" | "error">("idle");
   const [quoteError, setQuoteError] = useState("");
   const quoteRequest = useRef(0);
   const buyerWallet = useWalletSnapshot(browser.wallet);
   const selected = snapshot.packs[packId];
+  const salesOpen = Number(snapshot.raffle.phase) === 1 && snapshot.block.timestamp < snapshot.raffle.salesEnd && !snapshot.paused;
 
   useEffect(() => {
     const version = ++quoteRequest.current;
     setQuote(null);
+    agreementGeneration.current += 1;
     setAgreements({ terms: false, rules: false, age: false });
     setAgreementState("idle");
     setAgreementError("");
-    if (!selected || !Number.isSafeInteger(quantity) || quantity < 1 || !selected.active || selected.sold >= selected.maxSupply || Number(snapshot.raffle.phase) !== 1) {
+    if (!selected || !Number.isSafeInteger(quantity) || quantity < 1 || !selected.active || selected.sold >= selected.maxSupply || !salesOpen) {
       setQuoteState("idle");
       return;
     }
@@ -192,12 +193,13 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
       if (version === quoteRequest.current) { setQuoteError(error instanceof Error ? error.message : "A current quote is unavailable."); setQuoteState("error"); }
     });
     return () => { quoteRequest.current += 1; };
-  }, [browser.service, buyerWallet.revision, packId, quantity, selected, snapshot.id, snapshot.raffle.phase]);
+  }, [browser.service, buyerWallet.revision, packId, quantity, salesOpen, selected, snapshot.id]);
 
   const byKind = (kind: WorkflowAction["kind"]) => availability.find((item) => item.kind === kind);
   const termsMatch = snapshot.policy.termsHash.toLowerCase() === termsHash.toLowerCase();
   const allAgreed = agreements.terms && agreements.rules && agreements.age;
   const needsApproval = quote !== null && account !== null && account.usdcAllowance < quote.totalUsdc;
+  const insufficientUsdc = payment === "usdc" && quote !== null && account !== null && account.usdcBalance < quote.totalUsdc;
   const approval = byKind("approveUsdc");
   const purchase = byKind("buyMembership");
   const selectedPayment = payment === "usdc"
@@ -212,12 +214,36 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
         payment: selectedPayment
       }
     : null;
-  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "cancel", "abortDrawing", "settle", "claimFee"];
+  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "close", "snapshot", "cancel", "abortDrawing", "settle", "claimFee"];
   const nextRecovery = availability.find((item) => item.enabled && recoveryKinds.includes(item.kind));
+  const recoveryAction: WorkflowAction | null = nextRecovery
+    ? nextRecovery.kind === "snapshot"
+      ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
+      : { kind: nextRecovery.kind as "claimPrize" | "refund" | "close" | "cancel" | "abortDrawing" | "settle" | "claimFee", id: snapshot.id }
+    : null;
+
+  async function recordReviewedAgreement() {
+    if (!recordAgreement || agreementInFlight.current) return;
+    agreementInFlight.current = true;
+    const generation = agreementGeneration.current;
+    setAgreementState("saving");
+    setAgreementError("");
+    try {
+      await recordAgreement(snapshot.id);
+      if (generation === agreementGeneration.current) setAgreementState("saved");
+    } catch (error) {
+      if (generation === agreementGeneration.current) {
+        setAgreementError(error instanceof Error ? error.message : "Agreement storage was not acknowledged.");
+        setAgreementState("error");
+      }
+    } finally {
+      agreementInFlight.current = false;
+    }
+  }
 
   return (
     <div className="stack buyer-flow">
-      {Number(snapshot.raffle.phase) === 1 ? (
+      {salesOpen ? (
         <>
           <section className="pack-selector" aria-labelledby="pack-title">
             <div className="console-section-heading"><h2 id="pack-title">Choose membership</h2><span>Bonus entries included</span></div>
@@ -233,21 +259,21 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
             <div className="order-total" aria-live="polite"><span>Total</span><strong>{quote ? formatUsdc(quote.totalUsdc) : "—"} <small>USDC</small></strong>{quote ? <p>{formatUsdc(quote.principal)} membership + {formatUsdc(quote.fee)} lab fee · {quote.bonusEntries.toString()} bonus entries</p> : <p>{quoteState === "loading" ? "Refreshing quote…" : "Choose an available membership."}</p>}</div>
           </section>
           {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
-          {quote?.eth.kind === "available" ? <fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset> : <p className="muted">ETH payment unavailable{quote?.eth.kind === "unavailable" ? `: ${quote.eth.reason}` : "."}</p>}
+          {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd>{formatDate(quote.eth.deadline)} UTC</dd></div></dl> : null}</> : <p className="muted">ETH payment unavailable{quote?.eth.kind === "unavailable" ? `: ${quote.eth.reason}` : "."}</p>}
           {!termsMatch ? <p className="notice error" role="alert">The raffle’s published terms do not match this website version. Purchasing is blocked.</p> : (
             <fieldset className="agreements stack"><legend>Confirm before purchase</legend><label><input type="checkbox" checked={agreements.terms} onChange={(event) => setAgreements((value) => ({ ...value, terms: event.target.checked }))} /> I agree to the <Link href="/legal">membership terms</Link>.</label><label><input type="checkbox" checked={agreements.rules} onChange={(event) => setAgreements((value) => ({ ...value, rules: event.target.checked }))} /> I agree to the <Link href="/rules">draw rules</Link>.</label><label><input type="checkbox" checked={agreements.age} onChange={(event) => setAgreements((value) => ({ ...value, age: event.target.checked }))} /> I confirm I am at least 18.</label></fieldset>
           )}
           <WalletGate wallet={browser.wallet}>
-            {!account ? <p className="notice" role="status">Loading balance and allowance…</p> : needsApproval && payment === "usdc" ? (
+            {!account ? <p className="notice" role="status">Loading balance and allowance…</p> : insufficientUsdc ? <p className="notice warning" role="status">This wallet does not have enough USDC for the reviewed total.</p> : needsApproval && payment === "usdc" ? (
               approval?.enabled && quote ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label="Approve exact USDC" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
             ) : !allAgreed ? <p className="notice warning" role="status">Review and accept all three confirmations to continue.</p>
-              : agreementState !== "saved" ? <div className="stack"><button className="btn" type="button" disabled={!recordAgreement || agreementState === "saving"} onClick={() => { if (!recordAgreement) return; setAgreementState("saving"); setAgreementError(""); void recordAgreement(snapshot.id).then(() => setAgreementState("saved")).catch((error: unknown) => { setAgreementError(error instanceof Error ? error.message : "Agreement storage was not acknowledged."); setAgreementState("error"); }); }}>{agreementState === "saving" ? "Recording agreement…" : "Sign and record agreement"}</button>{!recordAgreement ? <p className="notice warning" role="status">Agreement storage is not configured. Purchasing is unavailable.</p> : null}{agreementState === "error" ? <p className="notice error" role="alert">{agreementError}</p> : null}</div>
+              : agreementState !== "saved" ? <div className="stack"><button className="btn" type="button" disabled={!recordAgreement || agreementState === "saving"} onClick={() => void recordReviewedAgreement()}>{agreementState === "saving" ? "Recording agreement…" : "Sign and record agreement"}</button>{!recordAgreement ? <p className="notice warning" role="status">Agreement storage is not configured. Purchasing is unavailable.</p> : null}{agreementState === "error" ? <p className="notice error" role="alert">{agreementError}</p> : null}</div>
                 : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{purchase?.reason || "Purchase is not available."}</p>}
           </WalletGate>
         </>
-      ) : <p className="notice" role="status">Membership sales are {phaseLabel(Number(snapshot.raffle.phase)).toLowerCase()}.</p>}
+      ) : <p className="notice" role="status">Membership sales are not open{snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.</p>}
       {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable balance</span><strong>{formatUsdc(account.principal + account.fee)} USDC</strong><small>Membership price and lab fee are claimable only when contract state allows a refund.</small></div> : null}
-      {nextRecovery ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || (nextRecovery.kind === "claimFee" ? "Anyone can send the fee to the pinned treasury; it is never paid to the caller." : "The contract currently permits this action.")}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: nextRecovery.kind as "claimPrize" | "refund" | "cancel" | "abortDrawing" | "settle" | "claimFee", id: snapshot.id }} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section> : null}
+      {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || (nextRecovery.kind === "claimFee" ? "Anyone can send the fee to the pinned treasury; it is never paid to the caller." : "The contract currently permits this action.")}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section> : null}
     </div>
   );
 }
@@ -264,22 +290,49 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   const [recovered, setRecovered] = useState<ReserveRecord | null>(null);
   const [preflight, setPreflight] = useState<"idle" | "loading" | "error">("idle");
   const [preflightError, setPreflightError] = useState("");
-  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimProceeds", "claimFee", "reclaimPrize", "cancel"];
+  const preflightInFlight = useRef(false);
+  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "abortDrawing", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "refund", "reclaimPrize", "cancel"];
   const next = priority.map((kind) => availability.find((item) => item.kind === kind)).find((item) => item?.enabled);
+
+  async function reviewOpeningPolicy() {
+    if (preflightInFlight.current) return;
+    preflightInFlight.current = true;
+    setPreflight("loading");
+    setPreflightError("");
+    try { setPolicy(await browser.service.openingPolicy()); setPreflight("idle"); }
+    catch (error) { setPreflightError(error instanceof Error ? error.message : "Opening policy could not be loaded."); setPreflight("error"); }
+    finally { preflightInFlight.current = false; }
+  }
+
+  async function recoverSavedCommitment() {
+    if (!recoverCommitment || preflightInFlight.current) return;
+    preflightInFlight.current = true;
+    setPreflight("loading");
+    setPreflightError("");
+    try {
+      const value = await recoverCommitment(snapshot.raffle.reserveCommit);
+      if (value.commit.toLowerCase() !== snapshot.raffle.reserveCommit.toLowerCase()) throw new Error("Recovered commitment does not match this raffle.");
+      setRecovered(value);
+      setPreflight("idle");
+    } catch (error) {
+      setPreflightError(error instanceof Error ? error.message : "Commitment could not be recovered.");
+      setPreflight("error");
+    } finally { preflightInFlight.current = false; }
+  }
 
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
   if (!next) return <p className="notice" role="status">No seller action is currently available. Refresh after the deadline or a pending transaction confirms.</p>;
   if (next.kind === "open") {
-    if (!policy) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Review opening policy</h2><p>Opening fixes the treasury, terms and randomness configuration for this raffle.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => { setPreflight("loading"); setPreflightError(""); void browser.service.openingPolicy().then((value) => { setPolicy(value); setPreflight("idle"); }).catch((error: unknown) => { setPreflightError(error instanceof Error ? error.message : "Opening policy could not be loaded."); setPreflight("error"); }); }}>{preflight === "loading" ? "Loading policy…" : "Review opening policy"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    if (!policy) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Review opening policy</h2><p>Opening fixes the treasury, terms and randomness configuration for this raffle.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => void reviewOpeningPolicy()}>{preflight === "loading" ? "Loading policy…" : "Review opening policy"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
     return <section className="workflow-next stack"><div><p className="kicker">Opening policy</p><h2>Open memberships</h2><p>Review the pinned recipients and terms before opening. They cannot be edited after this transaction.</p></div><dl className="review-list"><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="Open memberships" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setPolicy(null)}>Refresh policy review</button></section>;
   }
   if (next.kind === "reveal") {
     if (!recoverCommitment) return <p className="notice warning" role="status">Commitment recovery is not configured. Reveal is unavailable.</p>;
-    if (!recovered) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Recover commitment</h2><p>A wallet signature retrieves the private hashes for this raffle. Nothing is revealed until you separately review the transaction.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => { setPreflight("loading"); setPreflightError(""); void recoverCommitment(snapshot.raffle.reserveCommit).then((value) => { if (value.commit.toLowerCase() !== snapshot.raffle.reserveCommit.toLowerCase()) throw new Error("Recovered commitment does not match this raffle."); setRecovered(value); setPreflight("idle"); }).catch((error: unknown) => { setPreflightError(error instanceof Error ? error.message : "Commitment could not be recovered."); setPreflight("error"); }); }}>{preflight === "loading" ? "Opening wallet…" : "Sign to recover commitment"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    if (!recovered) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Recover commitment</h2><p>A wallet signature retrieves the private hashes for this raffle. Nothing is revealed until you separately review the transaction.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Opening wallet…" : "Sign to recover commitment"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
     return <section className="workflow-next stack"><div><p className="kicker">Commitment recovered</p><h2>Reveal commitment</h2><p>The review below submits the saved public and private hashes and salt. The original private value stays off-chain.</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label="Reveal commitment" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section>;
   }
   const action: WorkflowAction = next.kind === "snapshot"
     ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
-    : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "settle" | "claimProceeds" | "claimFee" | "reclaimPrize" | "cancel", id: snapshot.id };
+    : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "abortDrawing" | "settle" | "claimPrize" | "claimProceeds" | "claimFee" | "refund" | "reclaimPrize" | "cancel", id: snapshot.id };
   return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{next.label}</h2><p>{next.reason}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} label={next.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section>;
 }

@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import type { BrowserService } from "@/lib/chain/ports";
+import type { BrowserService, RaffleService } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import { formatDate, formatUsdc, minimumActivePrice, phaseLabel, shortAddress } from "./format";
+import { RaffleArtwork } from "./RaffleArtwork";
 
 export type CatalogState =
   | { kind: "loading" }
@@ -53,11 +54,12 @@ export function RaffleCatalog({ browser }: { browser: BrowserService }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browser]);
 
-  return <RaffleCatalogView state={state} onRetry={() => void load()} onLoadMore={(cursor) => void load(cursor)} />;
+  return <RaffleCatalogView state={state} service={browser.kind === "configured" ? browser.service : undefined} onRetry={() => void load()} onLoadMore={(cursor) => void load(cursor)} />;
 }
 
-export function RaffleCatalogView({ state, onRetry, onLoadMore }: {
+export function RaffleCatalogView({ state, service, onRetry, onLoadMore }: {
   state: CatalogState;
+  service?: RaffleService;
   onRetry: () => void;
   onLoadMore: (cursor: bigint) => void;
 }) {
@@ -81,19 +83,19 @@ export function RaffleCatalogView({ state, onRetry, onLoadMore }: {
   return (
     <section className="stack" aria-labelledby="live-raffles-title">
       <div className="collection-heading"><h2 id="live-raffles-title">Verified raffles <span className="collection-count">{state.items.length} loaded</span></h2><div className="collection-filters" role="group" aria-label="Filter raffles">{([['all','All'],['open','Open'],['finished','Finished']] as const).map(([value,label]) => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div></div>
-      {shown.length ? <ul className="capsule-grid" data-count={shown.length}>{shown.map((snapshot) => <RaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ul> : <div className="well empty-bench stack"><h3>No raffles in this view</h3><p>Choose another filter to see the verified records already loaded.</p><button className="btn btn-dark" type="button" onClick={() => setFilter("all")}>Show all</button></div>}
+      {shown.length ? <ul className="capsule-grid" data-count={shown.length}>{shown.map((snapshot) => <RaffleCard key={snapshot.id.toString()} service={service} snapshot={snapshot} />)}</ul> : <div className="well empty-bench stack"><h3>No raffles in this view</h3><p>Choose another filter to see the verified records already loaded.</p><button className="btn btn-dark" type="button" onClick={() => setFilter("all")}>Show all</button></div>}
       {state.nextCursor !== null ? <button className="btn load-more" type="button" disabled={state.loadingMore} onClick={() => onLoadMore(state.nextCursor ?? 0n)}>{state.loadingMore ? "Loading…" : "Load more raffles"}</button> : null}
     </section>
   );
 }
 
-function RaffleCard({ snapshot }: { snapshot: RaffleSnapshot }) {
+function RaffleCard({ service, snapshot }: { service?: RaffleService; snapshot: RaffleSnapshot }) {
   const price = minimumActivePrice(snapshot);
   const phase = Number(snapshot.raffle.phase);
   return (
     <li>
       <Link className="raffle-capsule chain-capsule" href={`/piece/${snapshot.id.toString()}`} aria-label={`Open ${snapshot.raffle.title}`}>
-        <div className="chain-capsule-art" aria-hidden="true"><span>{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span><small>#{snapshot.raffle.tokenId.toString()}</small></div>
+        {service ? <RaffleArtwork service={service} snapshot={snapshot} compact /> : <div className="chain-capsule-art"><span aria-hidden="true">{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span><p>NFT artwork unavailable</p><small>Token #{snapshot.raffle.tokenId.toString()}</small></div>}
         <div className="capsule-meta">
           <div className="capsule-title-row"><div><h3>{snapshot.raffle.title}</h3><p className="capsule-artist">NFT {shortAddress(snapshot.raffle.nft)}</p></div><span className={`capsule-status ${phase === 1 ? "is-open" : ""}`}>{phaseLabel(phase)}</span></div>
           <p className="capsule-price">{price === null ? "No membership available" : `From ${formatUsdc(price)} USDC`} · {snapshot.packs.length} {snapshot.packs.length === 1 ? "pack" : "packs"}</p>

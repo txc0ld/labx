@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useSyncExternalStore, useState, type ReactNode } from "react";
+import { useCallback, useRef, useSyncExternalStore, useState, type ReactNode } from "react";
 import type { WalletSessionPort } from "@/lib/chain/ports";
 import { shortAddress } from "./format";
 
@@ -14,8 +14,11 @@ export function WalletGate({ wallet, children }: { wallet: WalletSessionPort; ch
   const snapshot = useWalletSnapshot(wallet);
   const [message, setMessage] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const connectInFlight = useRef(false);
 
   async function connect() {
+    if (connectInFlight.current) return;
+    connectInFlight.current = true;
     setConnecting(true);
     setMessage(null);
     try {
@@ -24,6 +27,7 @@ export function WalletGate({ wallet, children }: { wallet: WalletSessionPort; ch
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Wallet connection failed.");
     } finally {
+      connectInFlight.current = false;
       setConnecting(false);
     }
   }

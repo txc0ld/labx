@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useSyncExternalStore, useState } from "react";
-import type { Hex } from "viem";
+import { useCallback, useEffect, useRef, useSyncExternalStore, useState } from "react";
+import { formatEther, type Hex } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "@/lib/chain/types";
 
@@ -58,6 +58,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const getWalletSnapshot = useCallback(() => walletSnapshot(wallet), [wallet]);
   const currentWallet = useSyncExternalStore(subscribe, getWalletSnapshot, getWalletSnapshot);
   const [state, setState] = useState<TransactionState>({ kind: "idle" });
+  const inFlight = useRef(false);
 
   useEffect(() => {
     setState((current) => current.kind === "review" || current.kind === "submitting"
@@ -66,12 +67,16 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }, [currentWallet.revision]);
 
   async function prepare() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setState({ kind: "preparing" });
     try {
       const prepared = await service.prepare({ action, wallet });
       setState({ kind: "review", prepared });
     } catch (error) {
       setState(errorState(error));
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -95,10 +100,12 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }
 
   async function submit(prepared: PreparedAction) {
+    if (inFlight.current) return;
     if (!sameWallet(prepared, currentWallet)) {
       setState({ kind: "error", message: "Wallet or network changed. Review the action again before signing." });
       return;
     }
+    inFlight.current = true;
     setState({ kind: "submitting", prepared });
     try {
       const submitted = await service.submit({ prepared, wallet });
@@ -106,17 +113,29 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       await waitForConfirmation(submitted);
     } catch (error) {
       setState(errorState(error));
+    } finally {
+      inFlight.current = false;
     }
   }
 
+  async function checkConfirmation(submitted: SubmittedAction) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try { await waitForConfirmation(submitted); }
+    finally { inFlight.current = false; }
+  }
+
   async function resume() {
-    if (!resumeHash) return;
+    if (!resumeHash || inFlight.current) return;
+    inFlight.current = true;
     try {
       const submitted = await service.resume({ hash: resumeHash, wallet });
       setState({ kind: "pending", submitted });
       await waitForConfirmation(submitted);
     } catch (error) {
       setState(errorState(error));
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -135,6 +154,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
           <div><dt>Wallet</dt><dd>{shortAddress(state.prepared.account)}</dd></div>
           <div><dt>Network</dt><dd>Chain {state.prepared.chainId}</dd></div>
           <div><dt>Amount</dt><dd>{formatUsdc(state.prepared.amountUsdc)} USDC</dd></div>
+          {state.prepared.value > 0n ? <div><dt>Maximum ETH</dt><dd>{formatEther(state.prepared.value)} ETH</dd></div> : null}
           <div><dt>Recipient</dt><dd className="hash">{state.prepared.recipient}</dd></div>
         </dl>
         {stale ? <p className="notice error" role="alert">Wallet or network changed. Prepare this action again.</p> : null}
@@ -152,7 +172,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         <strong>Transaction submitted</strong>
         <p>Confirmation is still pending. The hash alone is not success.</p>
         <p className="hash">{state.submitted.hash}</p>
-        <button className="btn" type="button" onClick={() => void waitForConfirmation(state.submitted)}>Check confirmation</button>
+        <button className="btn" type="button" onClick={() => void checkConfirmation(state.submitted)}>Check confirmation</button>
       </div>
     );
   }

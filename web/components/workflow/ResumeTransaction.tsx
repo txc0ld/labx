@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 
@@ -14,9 +14,11 @@ type ResumeState =
 export function ResumeTransaction({ browser, onConfirmed }: { browser: BrowserService; onConfirmed?: () => void | Promise<void> }) {
   const [hash, setHash] = useState("");
   const [state, setState] = useState<ResumeState>({ kind: "idle" });
+  const inFlight = useRef(false);
 
   async function check(event: FormEvent) {
     event.preventDefault();
+    if (inFlight.current) return;
     if (browser.kind !== "configured") {
       setState({ kind: "error", message: browser.reason });
       return;
@@ -26,6 +28,7 @@ export function ResumeTransaction({ browser, onConfirmed }: { browser: BrowserSe
       return;
     }
     const transactionHash: Hex = hash;
+    inFlight.current = true;
     setState({ kind: "checking", hash: transactionHash });
     try {
       const submitted = await browser.service.resume({ hash: transactionHash, wallet: browser.wallet });
@@ -37,6 +40,8 @@ export function ResumeTransaction({ browser, onConfirmed }: { browser: BrowserSe
       } else setState({ kind: "error", message: confirmation.reason });
     } catch (error) {
       setState({ kind: "error", message: error instanceof Error ? error.message : "The transaction could not be checked." });
+    } finally {
+      inFlight.current = false;
     }
   }
 

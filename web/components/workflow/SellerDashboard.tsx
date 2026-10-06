@@ -10,27 +10,22 @@ import { useWalletSnapshot, WalletGate } from "./WalletGate";
 type SellerState =
   | { kind: "idle" | "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; raffles: readonly RaffleSnapshot[] };
+  | { kind: "ready"; raffles: readonly RaffleSnapshot[]; nextCursor: bigint | null; loadingMore: boolean };
 
 export function SellerDashboard({ browser, draftForm }: { browser: BrowserService; draftForm?: React.ReactNode }) {
   const wallet = useWalletSnapshot(browser.wallet);
   const [state, setState] = useState<SellerState>({ kind: "idle" });
   const request = useRef(0);
 
-  async function load() {
+  async function load(cursor?: bigint) {
     if (browser.kind !== "configured" || wallet.kind !== "connected") return;
     const version = ++request.current;
-    setState({ kind: "loading" });
+    if (cursor === undefined) setState({ kind: "loading" });
+    else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true } : current);
     try {
-      const all: RaffleSnapshot[] = [];
-      let cursor: bigint | undefined;
-      for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
-        const page = await browser.service.listRaffles({ cursor, limit: 25 });
-        all.push(...page.items.filter((item) => item.raffle.seller.toLowerCase() === wallet.account.toLowerCase()));
-        if (page.nextCursor === null) break;
-        cursor = page.nextCursor;
-      }
-      if (version === request.current) setState({ kind: "ready", raffles: all });
+      const page = await browser.service.listRaffles({ cursor, limit: 25 });
+      const owned = page.items.filter((item) => item.raffle.seller.toLowerCase() === wallet.account.toLowerCase());
+      if (version === request.current) setState((current) => ({ kind: "ready", raffles: cursor !== undefined && current.kind === "ready" ? [...current.raffles, ...owned] : owned, nextCursor: page.nextCursor, loadingMore: false }));
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Seller raffles could not be loaded." });
     }
@@ -54,6 +49,7 @@ export function SellerDashboard({ browser, draftForm }: { browser: BrowserServic
           {state.kind === "error" ? <div className="notice error stack" role="alert"><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void load()}>Retry</button></div> : null}
           {state.kind === "ready" && !state.raffles.length ? <p>No raffles owned by this wallet were found on the verified deployment.</p> : null}
           {state.kind === "ready" && state.raffles.length ? <ol className="seller-raffle-list">{state.raffles.map((snapshot) => <li key={snapshot.id.toString()}><div><strong>{snapshot.raffle.title}</strong><span>{phaseLabel(Number(snapshot.raffle.phase))} · closes {formatDate(snapshot.raffle.salesEnd)} UTC</span></div><Link className="btn btn-dark" href={`/piece/${snapshot.id.toString()}`}>Open workspace</Link></li>)}</ol> : null}
+          {state.kind === "ready" && state.nextCursor !== null ? <button className="btn btn-dark" type="button" disabled={state.loadingMore} onClick={() => void load(state.nextCursor ?? undefined)}>{state.loadingMore ? "Scanning…" : "Scan more raffles"}</button> : null}
         </article>
         <article className="well pad stack">
           <div><p className="kicker">New raffle</p><h2>Prepare and review</h2></div>

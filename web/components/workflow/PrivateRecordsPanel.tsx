@@ -33,7 +33,10 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   const [state, setState] = useState<RecordsState>({ kind: "loading-history" });
   const [delivery, setDelivery] = useState<Record<string, "sending" | "delivered" | "error">>({});
   const [deliveryError, setDeliveryError] = useState("");
+  const [historyLimited, setHistoryLimited] = useState(false);
   const request = useRef(0);
+  const recordsInFlight = useRef(false);
+  const deliveryInFlight = useRef(new Set<string>());
 
   async function loadHistory() {
     if (browser.kind !== "configured" || wallet.kind !== "connected") return;
@@ -42,13 +45,15 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     try {
       const items: HistoryItem[] = [];
       let fromBlock: bigint | undefined;
+      let more = false;
       for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
         const page = await browser.service.history({ account: wallet.account, fromBlock });
         items.push(...page.items.filter((item) => item.event === "PackPurchased"));
-        if (page.nextCursor === null) break;
+        if (page.nextCursor === null) { more = false; break; }
+        more = true;
         fromBlock = page.nextCursor;
       }
-      if (version === request.current) setState({ kind: "ready-history", purchases: items });
+      if (version === request.current) { setHistoryLimited(more); setState({ kind: "ready-history", purchases: items }); }
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Purchase history could not be loaded." });
     }
@@ -65,6 +70,8 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   }, [browser, wallet]);
 
   async function loadRecords(purchases: readonly HistoryItem[]) {
+    if (recordsInFlight.current) return;
+    recordsInFlight.current = true;
     const version = ++request.current;
     setState({ kind: "loading-records", purchases });
     try {
@@ -75,11 +82,15 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
       if (version === request.current) setState({ kind: "ready", purchases, records });
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Private records could not be loaded." });
+    } finally {
+      recordsInFlight.current = false;
     }
   }
 
   async function send(transactionHash: Hex, logIndex: number) {
     const key = `${transactionHash}-${logIndex}`;
+    if (deliveryInFlight.current.has(key)) return;
+    deliveryInFlight.current.add(key);
     setDelivery((current) => ({ ...current, [key]: "sending" }));
     setDeliveryError("");
     try {
@@ -89,6 +100,8 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     } catch (error) {
       setDelivery((current) => ({ ...current, [key]: "error" }));
       setDeliveryError(error instanceof Error ? error.message : "Receipt delivery failed.");
+    } finally {
+      deliveryInFlight.current.delete(key);
     }
   }
 
@@ -99,6 +112,7 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
       {state.kind === "error" ? <div className="notice error stack" role="alert"><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void loadHistory()}>Retry</button></div> : null}
       {state.kind === "ready-history" && !state.purchases.length ? <div className="well pad stack"><h2>No confirmed purchases</h2><p>No membership purchase events were found for {wallet.kind === "connected" ? shortAddress(wallet.account) : "this wallet"}.</p><Link className="btn btn-dark" href="/">Explore raffles</Link></div> : null}
       {(state.kind === "ready-history" || state.kind === "loading-records") && state.purchases.length ? <div className="well pad stack"><h2>Load private records</h2><p>A wallet signature is required to read agreement and receipt delivery status. It does not submit a transaction.</p><button className="btn" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadRecords(state.purchases)}>{state.kind === "loading-records" ? "Opening wallet…" : "Sign to load records"}</button></div> : null}
+      {historyLimited ? <p className="notice warning" role="status">Receipt lookup is limited to the first 250 history records. Older purchases are not shown in this view.</p> : null}
       {state.kind === "ready" ? (
         <div className="workflow-grid">
           <section className="pearl pad stack"><h2>Receipts</h2>{!email ? <p className="notice warning">Add an email preference before requesting delivery. <Link href="/profile#email-preferences">Email preferences</Link></p> : null}<ol className="private-record-list">{state.purchases.map((purchase) => {

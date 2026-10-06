@@ -20,7 +20,7 @@ export function LiveExplore() {
       </section>
       {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
       <section className="capsule-collection" id="bench">
-        <RaffleCatalogView state={catalog} onRetry={() => void bench.refreshCatalog()} onLoadMore={() => void bench.loadMoreCatalog()} />
+        <RaffleCatalogView state={catalog} service={bench.browser.kind === "configured" ? bench.browser.service : undefined} onRetry={() => void bench.refreshCatalog()} onLoadMore={() => void bench.loadMoreCatalog()} />
       </section>
     </>
   );

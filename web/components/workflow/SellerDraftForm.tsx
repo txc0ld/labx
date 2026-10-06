@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { isAddress, type Address } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
@@ -74,6 +74,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 }) {
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
+  const commitmentInFlight = useRef(false);
 
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -92,6 +93,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }
 
   async function commit(action: Omit<DraftInput, "reserveNonce" | "reserveCommit">) {
+    if (commitmentInFlight.current) return;
+    commitmentInFlight.current = true;
     setState({ kind: "saving", action });
     try {
       const reserve = await saveCommitment({ nft: action.nft, tokenId: action.tokenId.toString(), publicSummary: form.publicSummary.trim(), privateCommitment: form.privateCommitment.trim() });
@@ -100,6 +103,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       setState({ kind: "committed", action, reserve });
     } catch (error) {
       setState({ kind: "error", message: error instanceof Error ? error.message : "The commitment could not be saved durably." });
+    } finally {
+      commitmentInFlight.current = false;
     }
   }
 
@@ -115,7 +120,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
             <TransactionFlow service={service} wallet={wallet} action={existing ? { kind: "updateDraft", id: existing.id, draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } } : { kind: "createDraft", draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } }} label={existing ? "Update raffle draft" : "Create raffle draft"} formatUsdc={formatUsdc} onConfirmed={onConfirmed} />
           </>
         ) : <button className="btn" type="button" disabled={state.kind === "saving"} onClick={() => void commit(action)}>{state.kind === "saving" ? "Saving commitment…" : "Sign and save commitment"}</button>}
-        <button className="text-link" type="button" onClick={() => setState({ kind: "editing" })}>Edit draft</button>
+        <button className="text-link" type="button" disabled={state.kind === "saving"} onClick={() => setState({ kind: "editing" })}>Edit draft</button>
       </div>
     );
   }
