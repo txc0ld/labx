@@ -4,8 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { generatePrivateKey } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { assertAgreements } from "../lib/agreements";
-import { issueChallenge, verifyChallenge } from "../lib/captcha";
-import { AMOE_TYPEHASH, COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
+import { COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
 import { pickWinner, snapshotLots } from "../lib/draw";
 import { receiptBody } from "../lib/email";
 import { MemoryStore as Mem } from "../lib/store";
@@ -36,9 +35,6 @@ describe("draw weights", () => {
 describe("commitment", () => {
   it("matches the Forge vector", () => {
     expect(hashCommitment(COMMIT_VECTOR)).toBe(COMMIT_VECTOR.expected);
-  });
-  it("uses the VRF-era AMOE type string", () => {
-    expect(AMOE_TYPEHASH).toBe("0xbc81dcb16048d14426e084f5bdcf5fbba5cc3ca24e5d5063c9487767d3dd9b25");
   });
 });
 
@@ -77,12 +73,7 @@ describe("bot check-in", () => {
   });
 });
 
-describe("captcha and agreements", () => {
-  it("accepts the issued answer only", () => {
-    const challenge = issueChallenge("secret", 1_700_000_000_000);
-    expect(verifyChallenge("secret", { ...challenge, answer: String(challenge.answer) }, challenge.expiresAt - 1)).toBe(true);
-    expect(verifyChallenge("secret", { ...challenge, answer: "0" }, challenge.expiresAt - 1)).toBe(false);
-  });
+describe("agreements", () => {
   it("requires every agreement", () => {
     expect(() => assertAgreements({ address: "0x1", terms: true, rules: true, age: false })).toThrow(/agreements/);
   });
@@ -173,7 +164,7 @@ describe("surface copy and materials", () => {
     expect(names).not.toMatch(/head|face|human|workstation/);
   });
 
-  it("explore discovers demo pieces through individual artwork capsules", () => {
+  it("keeps reusable artwork capsules while publishing an honest empty collection", () => {
     const page = readFileSync(path.join(root, "app/page.tsx"), "utf8");
     const hub = readFileSync(path.join(root, "components/BenchHub.tsx"), "utf8");
     const marks = readFileSync(path.join(root, "components/PieceMark.tsx"), "utf8");
@@ -183,8 +174,9 @@ describe("surface copy and materials", () => {
     expect(hub).toMatch(/shown\.map/);
     expect(hub).toMatch(/className="raffle-capsule"/);
     expect(hub).toMatch(/src=\{piece.image\}/);
-    expect(hub).toMatch(/Demo artwork/);
-    expect(hub).toMatch(/not a live raffle listing/);
+    expect(hub).toMatch(/No raffles listed/);
+    expect(hub).toMatch(/Listing tools are not connected yet/);
+    expect(hub.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
     expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
     expect(css).toMatch(/nft-capsule/);
     expect(css).toMatch(/lab-tube-liquid/);

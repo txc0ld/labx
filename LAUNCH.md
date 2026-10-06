@@ -1,111 +1,48 @@
-# LABx Sepolia launch
+# LABx v2 release and migration plan
 
-Do not deploy to Ethereum mainnet. `DeploySepolia` reverts unless chain id is 11155111. `LabxRaffle` reverts in the constructor on chain id 1.
+This is a plan for a separately authorized Sepolia release. It does not authorize publishing, deploying, transferring assets or ownership, funding a subscription, or accepting agreements. The current local workflow checkpoint is [docs/build/full-workflow-20261006.md](docs/build/full-workflow-20261006.md).
 
-## 1. Safe
+## 1. Freeze the source candidate
 
-Create a Safe on Sepolia. That address is both treasury and admin.
+Record the exact commit, clean working tree, compiler and optimizer settings, dependency locks, generated ABI and compiled creation/runtime artifacts. Require the contract regression/fuzz and size checks, web tests/build, isolated seller/buyer/recovery journeys, browser checks and independent review for that candidate. Later relevant changes require revalidation.
 
-`SAFE_ADDRESS`
+The v2 policy pins the full randomness configuration, terms and treasury when a raffle opens. Closing time and purchase economics then stay fixed. The draw-start, randomness and reveal grace periods are each seven days. There is no free-entry issuance or reroll. Global admission pause cannot block recovery or claims. Verify these properties in deployed configuration rather than inferring them from the website.
 
-The deployer key is only a proposer. After deploy it calls `transferOwnership(SAFE_ADDRESS)`. The Safe must call `acceptOwnership`.
+## 2. Inventory the historical deployment
 
-`DEPLOYER_PRIVATE_KEY`  
-`SEPOLIA_RPC_URL`
+Before any deployment decision, recheck `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` read-only. Record the block, bytecode, ownership, raffle phases, escrowed NFTs, token balances, liabilities and VRF subscription billing/funding.
 
-## 2. Chainlink VRF v2.5
+Historical observation at block 11856552 on 2026-10-06: `nextId` was 1, the owner and pending owner/treasury addresses had no code, and the VRF subscription had 0 LINK, 0.05 native ETH and zero requests. The old randomness abort constant was 86,400 seconds. These observations may change and do not establish current readiness. Native ETH does not replace LINK for a LINK-billed request.
 
-Create a subscription on the Sepolia VRF v2.5 coordinator and fund it with Sepolia LINK from the Chainlink faucet.
+Existing bytecode does not acquire v2 rules. Do not import old entries, balances or custody into a new deployment by assumption. Preserve any outstanding old claims through a separately reviewed legacy path. A frontend address change is not an on-chain migration.
 
-The live raffle `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` bills VRF in LINK (`nativePayment: false`). The current subscription may show native ETH and 0 LINK; fund LINK. Do not wait for a redeploy with `nativePayment: true` to unstick draws. Future deploys can set `nativePayment` on-chain only while no draw is in flight.
+## 3. Verify authority and dependencies
 
-| Item | Value |
-| --- | --- |
-| Coordinator | `0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B` |
-| 500 gwei key hash | `0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae` |
-| LINK | `0x779877A7B0D9E8603169DdbD7836e478b4624789` |
-| Confirmations | 3 |
-| Callback gas | 500000 |
+- Verify the intended Safe implementation, owners, threshold, modules and intended authority. The script's code-presence check alone does not prove it is a correctly configured Safe.
+- Review the exact USDC, coordinator, key hash, subscription, confirmations, callback gas, billing mode and treasury for the deployment. Confirm consumer-registration authority and fund the correct billing asset through the user's secure wallet flow.
+- Publish and approve the exact versioned terms used by the app. `TERMS_HASH` must equal the canonical published document hash. A nonzero arbitrary hash is insufficient.
+- Keep the optional ETH route disabled unless its immutable router, token, feed, pool liquidity, quote, deadline and surplus-refund paths have passed the required checks.
 
-`VRF_SUBSCRIPTION_ID`  
-`VRF_COORDINATOR` (optional, default above)  
-`VRF_KEY_HASH` (optional, default above)
+No AMOE signer, CAPTCHA or verified-person provider is part of v2. Membership purchases are the only source of bonus entries.
 
-After the raffle address exists, the subscription owner adds it as a consumer:
+## 4. Obtain the human release decision
 
-```bash
-cd contracts
-RAFFLE_ADDRESS=0x... VRF_SUBSCRIPTION_ID=... \
-  forge script script/DeploySepolia.s.sol:AddVrfConsumer --rpc-url "$SEPOLIA_RPC_URL" --broadcast
-```
+Present the frozen candidate, test/review evidence, deployment constructor values, intended Safe, subscription details, old-state inventory and remaining risks. The user must separately approve the new deployment and any funding/ownership operations. Credentials and real wallet confirmations remain in the user's secure flow; never print keys or store them in reports.
 
-## 3. USDC, terms, signer
+`DeploySepolia` accepts chain 11155111 only. `DeployLocal` accepts 31337 only and is for isolated fixtures. Mainnet is not a release target. A dry run is not a broadcast, and proposing ownership does not complete acceptance.
 
-USDC on Sepolia (Circle, 6 decimals): `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`
+## 5. Verify the deployed instance before enabling writes
 
-`TERMS_HASH` is `bytes32`, the keccak of the published terms text.  
-`AMOE_SIGNER` is the address of the server key.  
-`AMOE_SIGNER_PRIVATE_KEY` stays on the server. The contract stores only the address.
+Verify deployed runtime against the frozen compiler artifact and exact constructor immutables. Record deployment block, chain, address, runtime code hash, version and USDC in an approved manifest. Confirm the Safe has accepted ownership and the coordinator recognizes the consumer. Read all policy constants and configuration back from chain.
 
-## 4. Deploy
+Exercise a separately authorized Sepolia lifecycle with test assets: create/edit draft, approve/escrow NFT, checked opening, exact USDC approval, membership purchase, confirmed agreement/receipt, deadline close, batched snapshot, randomness, reveal/settlement, prize and separate proceeds/fee claims. Also verify timed cancellation, buyer refunds, seller NFT reclaim, paused recovery and late callbacks. Do not describe mock Anvil fulfillment as live Chainlink verification.
 
-```bash
-cd contracts
-forge script script/DeploySepolia.s.sol:DeploySepolia --rpc-url "$SEPOLIA_RPC_URL" --broadcast
-```
+Only then add the reviewed manifest and configure the intended public address/RPC. An environment address by itself does not authorize v2 actions. The historical address remains excluded from v2 transactions.
 
-Optional ETH route, off unless `WIRE_ETH_PATH=true`. Router, WETH, feed, and pool fee are fixed at deploy:
+## 6. Publish the website separately
 
-| Item | Sepolia default |
-| --- | --- |
-| SwapRouter02 | `0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E` |
-| WETH | `0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14` |
-| ETH/USD | `0x694AA1769357215DE4FAC081bf1f309aDC325306` |
-| Pool fee | 3000 |
+Use Vercel root `web`. Review the environment's public origin, selected approved manifest/RPC and both durable-storage settings. If email receipts are enabled, configure and verify the delivery provider and sender. Do not revive retired entry-signing or bot-token settings.
 
-`WIRE_ETH_PATH` defaults to false.  
-`UNISWAP_POOL_FEE`
+Confirm the exact hosted commit and deployment state. Test its catalog, direct routes, wallet/network changes, purchase/claim review screens, keyboard/mobile layouts and receipt/history recovery. Preview and production aliases are different release destinations; record each explicitly.
 
-Ship USDC only until the WETH/USDC pool at that fee is liquid and the swap deadline path has been checked on Sepolia. The owner cannot point the path at a different router later. Coordinator changes wait one day and are refused during a draw.
-
-## 5. Vercel
-
-Set the project root to `web`.
-
-`NEXT_PUBLIC_CHAIN_ID=11155111`  
-`NEXT_PUBLIC_RPC_URL`  
-`NEXT_PUBLIC_RAFFLE_ADDRESS`  
-`NEXT_PUBLIC_USDC_ADDRESS`
-
-`RESEND_API_KEY`  
-`RESEND_FROM` such as `LABx <draw@labx.art>`
-
-`BOT_CHECKIN_TOKEN`  
-`CAPTCHA_SECRET`
-
-`UPSTASH_REDIS_REST_URL`  
-`UPSTASH_REDIS_REST_TOKEN`
-
-Without Upstash, serverless instances do not keep points or commitments. Local dev uses `web/data/store.json`.
-
-## 6. Bot
-
-The check-in route is `POST /api/bot/check-in` with header `x-labx-bot-token` and a body `{ address, signature }`. The signed message is:
-
-```
-LABx bot check-in
-<address lowercase>
-<UTC day YYYY-MM-DD>
-```
-
-Each successful day adds 10 points. The website never embeds the token.
-
-## 7. Smoke
-
-- Safe is the owner.
-- Coordinator lists the raffle as a consumer.
-- A draft piece can be escrowed and opened.
-- A USDC pack pulls price + 5 USDC.
-- Close, snapshot, VRF, reveal, settle.
-- Cancel refunds a buyer.
-- A mainnet wallet sees “Mainnet is disabled.”
+Operational monitoring must cover subscription balance, pending draw deadlines, snapshot progress, failed receipts and durable-store errors. Rollback can disable new website actions but cannot reverse an on-chain transaction or rewrite an open raffle's policy. Preserve access to existing claims and recovery when changing frontend releases.

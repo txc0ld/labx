@@ -1,21 +1,18 @@
 "use client";
 
 import { LegalNav } from "@/components/LegalNav";
-import { useBench } from "@/lib/bench";
+import { FairnessRecords } from "@/components/workflow/FairnessRecords";
 
 export default function FairnessPage() {
-  const { pieces, ready } = useBench();
-  if (!ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
   return (
-    <section className="section">
-      <p className="kicker">Fairness</p>
+    <section className="section page-frame">
       <h1 className="page-title">The draw</h1>
       <p className="lede">Escrow, a commitment hash, then VRF after the snapshot. Settlement flips phase; claims move the prize, proceeds, and fee.</p>
       <LegalNav />
       <div className="piece-grid legal-surfaces">
         <article className="pearl pad">
           <h2>Escrow</h2>
-          <p>The piece moves into the contract before packs open. After the settled phase, the drawn wallet claims that token with claimPrize. Pack proceeds and the lab fee are claimed separately.</p>
+          <p>The piece moves into escrow before memberships open. After settlement, the drawn wallet claims the NFT. Membership proceeds and the lab fee remain separate claims for the seller and pinned treasury.</p>
         </article>
         <article className="pearl pad">
           <h2>Commit</h2>
@@ -27,29 +24,7 @@ export default function FairnessPage() {
         </article>
       </div>
       <div className="section table-wrap well pad">
-        <table>
-          <caption className="sr">Commitment and draw status</caption>
-          <thead>
-            <tr>
-              <th scope="col">Piece</th>
-              <th scope="col">Escrow</th>
-              <th scope="col">Commit</th>
-              <th scope="col">Snapshot</th>
-              <th scope="col">Draw</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pieces.map((piece) => (
-              <tr key={piece.id} id={piece.id}>
-                <td>{piece.title}</td>
-                <td>{piece.escrowed ? "Held" : piece.phase === "settled" || piece.phase === "cancelled" ? "Pulled" : "Not held"}</td>
-                <td className="hash">{piece.revealed ? piece.publicSummary || piece.commit : piece.commit || "—"}</td>
-                <td>{piece.snapshotTotal ?? "—"}</td>
-                <td>{piece.winner || piece.phase}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <FairnessRecords />
       </div>
     </section>
   );

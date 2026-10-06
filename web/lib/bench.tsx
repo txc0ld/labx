@@ -1,275 +1,192 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { keccak256, toBytes, type Address } from "viem";
-import { generatePrivateKey } from "viem/accounts";
-import { DEMO_ADDRESS, LAB_FEE, SEED_PIECES, withCurrentDemoArtwork, type Entry, type PackName, type Piece } from "./seed";
-import { pickWinner, snapshotLots } from "./draw";
-import { saltedPrivateHash } from "./reserve";
-import { connectSepolia, onChainReady } from "./wallet";
-import { pieceView } from "./piece-view";
+import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Piece } from "./seed";
+import { WalletSession } from "./chain/wallet-session";
+import { configuredBrowserService } from "./chain/browser";
+import type { BrowserService } from "./chain/ports";
+import type { BlockRef, RaffleSnapshot, WalletSnapshot } from "./chain/types";
 
-type Agreement = { pieceId: string; at: string; terms: boolean; rules: boolean; age: boolean };
+export const LEGACY_BENCH_KEY = "labx-bench-v1";
+export const PREFERENCE_KEY = "labx-preferences-v1";
+
+type BrowserStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+type StoredEmail = { kind: "read"; email: string } | { kind: "unavailable" };
+export type PreferenceMigration =
+  | { kind: "complete"; email: string }
+  | { kind: "cleanup-pending"; email: string }
+  | { kind: "storage-unavailable"; email: "" };
 type State = {
   pieces: Piece[];
-  entries: Entry[];
   wallet: string;
   email: string;
-  agreements: Agreement[];
   banner?: { tone: "warning" | "error" | "ok"; text: string };
 };
 
-type BuyInput = { pieceId: string; pack: PackName; qty: number; terms: boolean; rules: boolean; age: boolean };
-
-const KEY = "labx-bench-v1";
 const BenchContext = createContext<Bench | null>(null);
 
+export type CatalogState =
+  | { kind: "loading" }
+  | { kind: "unavailable" | "error"; reason: string }
+  | { kind: "ready"; items: readonly RaffleSnapshot[]; nextCursor: bigint | null; block: BlockRef };
+
 export type Bench = State & {
+  browser: BrowserService;
+  walletSession: WalletSnapshot;
+  catalog: CatalogState;
+  refreshCatalog: () => Promise<void>;
+  loadMoreCatalog: () => Promise<void>;
+  disconnect: () => void;
   ready: boolean;
-  address: string;
-  buy: (input: BuyInput) => string | null;
-  createPiece: (input: {
-    title: string;
-    publicSummary: string;
-    privateCommitment: string;
-    salesEnd: string;
-    nft: string;
-    tokenId: string;
-  }) => Promise<string | null>;
-  mark: (id: string, action: "escrow" | "open" | "close" | "snapshot" | "draw" | "reveal" | "settle" | "cancel" | "claim") => string | null;
-  saveEmail: (email: string, piece: string, pack: string, entries: number, priceUsdc: number) => Promise<string | null>;
   connect: () => Promise<void>;
-  useBenchWallet: () => void;
-  recordComplimentary: (pieceId: string) => void;
+  saveEmail: (email: string) => string;
   clearBanner: () => void;
 };
 
+function validEmail(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const email = value.trim();
+  return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
+}
+
+function emailFromJson(raw: string | null): string {
+  if (!raw) return "";
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || !("email" in parsed)) return "";
+    return validEmail(parsed.email);
+  } catch {
+    return "";
+  }
+}
+
+function readStoredEmail(storage: BrowserStorage, key: string): StoredEmail {
+  try {
+    return { kind: "read", email: emailFromJson(storage.getItem(key)) };
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+function removeLegacy(storage: BrowserStorage, email: string): PreferenceMigration {
+  try {
+    storage.removeItem(LEGACY_BENCH_KEY);
+    return { kind: "complete", email };
+  } catch {
+    return email ? { kind: "cleanup-pending", email } : { kind: "storage-unavailable", email: "" };
+  }
+}
+
+export function migrateBrowserPreference(storage: BrowserStorage): PreferenceMigration {
+  const current = readStoredEmail(storage, PREFERENCE_KEY);
+  const legacy = readStoredEmail(storage, LEGACY_BENCH_KEY);
+
+  if (current.kind === "unavailable") {
+    return legacy.kind === "read" && legacy.email
+      ? { kind: "cleanup-pending", email: legacy.email }
+      : { kind: "storage-unavailable", email: "" };
+  }
+  if (current.email) return removeLegacy(storage, current.email);
+  if (legacy.kind === "unavailable") return { kind: "storage-unavailable", email: "" };
+  if (legacy.email) {
+    try {
+      storage.setItem(PREFERENCE_KEY, JSON.stringify({ email: legacy.email }));
+    } catch {
+      return { kind: "cleanup-pending", email: legacy.email };
+    }
+    return removeLegacy(storage, legacy.email);
+  }
+  return removeLegacy(storage, "");
+}
+
 function initial(): State {
-  return { pieces: SEED_PIECES, entries: [], wallet: "", email: "", agreements: [] };
+  return { pieces: [], wallet: "", email: "" };
 }
 
 export function BenchProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(initial);
   const [ready, setReady] = useState(false);
+  const [browser, setBrowser] = useState<BrowserService>(() => ({ kind: "unavailable", reason: "Loading deployment configuration.", wallet: new WalletSession(undefined) }));
+  const [walletSession, setWalletSession] = useState<WalletSnapshot>({ kind: "disconnected", revision: 0 });
+  const [catalog, setCatalog] = useState<CatalogState>({ kind: "loading" });
+  const generation = useRef(0);
+  const loadingPage = useRef(false);
+  const refreshCatalog = useCallback(async () => {
+    const request = ++generation.current;
+    if (browser.kind !== "configured") { setCatalog({ kind: "unavailable", reason: browser.reason }); return; }
+    setCatalog({ kind: "loading" });
+    try {
+      const page = await browser.service.listRaffles();
+      if (request === generation.current) setCatalog({ kind: "ready", ...page });
+    } catch { if (request === generation.current) setCatalog({ kind: "error", reason: "Raffle data could not be loaded. Please retry." }); }
+  }, [browser]);
+  const loadMoreCatalog = useCallback(async () => {
+    if (browser.kind !== "configured" || catalog.kind !== "ready" || catalog.nextCursor === null || loadingPage.current) return;
+    loadingPage.current = true; const request = generation.current;
+    try {
+      const page = await browser.service.listRaffles({ cursor: catalog.nextCursor, block: catalog.block });
+      if (request === generation.current) setCatalog({ kind: "ready", ...page, items: [...catalog.items, ...page.items] });
+    } catch { if (request === generation.current) setState(current => ({ ...current, banner: { tone: "error", text: "More raffles could not be loaded. Refresh and retry." } })); }
+    finally { loadingPage.current = false; }
+  }, [browser, catalog]);
+  useEffect(() => { setBrowser(configuredBrowserService()); }, []);
+  useEffect(() => {
+    const update = () => { const session = browser.wallet.getSnapshot(); setWalletSession(session); setState(current => ({ ...current, wallet: session.kind === "connected" ? session.account : "" })); };
+    update(); const unsubscribe = browser.wallet.subscribe(update);
+    void browser.wallet.refresh().catch(() => {});
+    return unsubscribe;
+  }, [browser]);
+  useEffect(() => { void refreshCatalog(); return () => { generation.current++; }; }, [refreshCatalog]);
 
   useEffect(() => {
+    let migration: PreferenceMigration = { kind: "storage-unavailable", email: "" };
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as State;
-        parsed.pieces = (parsed.pieces || []).map((piece) => {
-          const { salt: _salt, privateHash: _privateHash, ...rest } = piece as Piece & { salt?: string; privateHash?: string };
-          void _salt;
-          void _privateHash;
-          const mark = rest.mark ?? (rest.id.includes("cable") ? "cable" : rest.id.includes("filter") ? "filter" : rest.id.includes("terminal") ? "terminal" : "junction");
-          return withCurrentDemoArtwork({ ...rest, mark });
-        });
-        setState({ ...initial(), ...parsed });
-      }
+      migration = migrateBrowserPreference(window.localStorage);
     } catch {
-      /* keep seed */
+      // Access to the storage object itself can be blocked by browser policy.
     }
+    const banner: State["banner"] = migration.kind === "cleanup-pending"
+      ? { tone: "warning", text: "Email restored. Old browser data cleanup will retry next time." }
+      : migration.kind === "storage-unavailable"
+        ? { tone: "error", text: "Browser storage is unavailable. Email preferences may not persist." }
+        : undefined;
+    setState((current) => ({ ...current, email: migration.email, banner }));
     setReady(true);
   }, []);
 
-  useEffect(() => {
-    if (ready) localStorage.setItem(KEY, JSON.stringify(state));
-  }, [state, ready]);
-
-  const api = useMemo<Bench>(() => {
-    const address = state.wallet || DEMO_ADDRESS;
-    return {
-      ...state,
-      ready,
-      address,
-      clearBanner: () => setState((current) => ({ ...current, banner: undefined })),
-      useBenchWallet: () => setState((current) => ({ ...current, wallet: DEMO_ADDRESS, banner: { tone: "ok", text: "Bench wallet selected." } })),
-      connect: async () => {
-        try {
-          const account = await connectSepolia();
-          setState((current) => ({ ...current, wallet: account, banner: { tone: "ok", text: "Sepolia wallet connected." } }));
-        } catch (error) {
-          const text = error instanceof Error ? error.message : "Wallet connection failed.";
-          setState((current) => ({ ...current, banner: { tone: "error", text } }));
-        }
-      },
-      buy: (input) => {
-        if (!input.terms || !input.rules || !input.age) return "All three agreements are required.";
-        const offered = state.pieces.find((piece) => piece.id === input.pieceId);
-        if (!offered || !pieceView(offered, Date.now()).isOpen) return "That pack is not open.";
-        let message: string | null = null;
-        setState((current) => {
-          const pieces = current.pieces.map((piece) => ({ ...piece, packs: piece.packs.map((pack) => ({ ...pack })) }));
-          const piece = pieces.find((item) => item.id === input.pieceId);
-          const pack = piece?.packs.find((item) => item.name === input.pack);
-          if (!piece || !pieceView(piece, Date.now()).isOpen || !pack) {
-            message = "That pack is not open.";
-            return current;
-          }
-          if (pack.remaining < input.qty) {
-            message = "That pack is fully allocated.";
-            return current;
-          }
-          pack.remaining -= input.qty;
-          const entry: Entry = {
-            id: `${piece.id}-${Date.now()}`,
-            pieceId: piece.id,
-            pieceTitle: piece.title,
-            label: pack.name,
-            count: pack.bonusEntries * input.qty,
-            expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-            kind: "pack",
-            address
-          };
-          return {
-            ...current,
-            pieces,
-            entries: [entry, ...current.entries],
-            agreements: [{ pieceId: piece.id, at: new Date().toISOString(), terms: true, rules: true, age: true }, ...current.agreements],
-            banner: { tone: "ok", text: `${pack.name} pack recorded. ${entry.count} bonus ${entry.count === 1 ? "entry" : "entries"}. Lab fee ${LAB_FEE * input.qty} USDC.` }
-          };
-        });
-        return message;
-      },
-      createPiece: async (input) => {
-        if (!input.title.trim() || !input.privateCommitment.trim()) return "Title and private commitment are required.";
-        const wired = onChainReady();
-        const benchSalt = keccak256(toBytes(generatePrivateKey()));
-        let commit = saltedPrivateHash(benchSalt, input.privateCommitment.trim());
-        let nonce: string | undefined;
-        let publicHash: string | undefined;
-        let publicSummary = input.publicSummary;
-        if (wired) {
-          const response = await fetch("/api/reserve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              seller: address,
-              nft: input.nft,
-              tokenId: input.tokenId,
-              publicSummary: input.publicSummary,
-              privateCommitment: input.privateCommitment
-            })
-          });
-          const body = await response.json();
-          if (!response.ok) return body.error || "Commitment was refused.";
-          commit = body.commit;
-          nonce = body.nonce;
-          publicHash = body.publicHash;
-          publicSummary = body.publicSummary;
-        }
-        const piece: Piece = {
-          id: `piece-${Date.now()}`,
-          title: input.title.trim(),
-          artist: "Studio",
-          mark: "filter",
-          image: "/lab/filter-panel.jpg",
-          imageAlt: "Glossy filter panel chosen for a new studio piece",
-          phase: "draft",
-          escrowed: false,
-          salesEnd: input.salesEnd,
-          packs: SEED_PIECES[0].packs.map((pack) => ({ ...pack, remaining: pack.supply })),
-          commit,
-          nonce,
-          publicHash,
-          publicSummary,
-          nft: input.nft,
-          tokenId: input.tokenId
-        };
-        setState((current) => ({
-          ...current,
-          pieces: [piece, ...current.pieces],
-          banner: wired
-            ? { tone: "ok", text: "Private commitment stored. Only the hash is public." }
-            : { tone: "warning", text: "Sepolia contract is not wired. This commit stays on this bench." }
-        }));
-        return null;
-      },
-      mark: (id, action) => {
-        const existing = state.pieces.find((item) => item.id === id);
-        if (!existing) return "That piece is not on the bench.";
-        if (action === "open" && !existing.escrowed) return "Escrow the piece first.";
-        if (action === "draw") {
-          const extra = existing as Piece & { holders?: { address: string }[] };
-          if (existing.phase !== "closed" || !extra.holders || !existing.snapshotTotal) {
-            return "Snapshot the closed piece before the draw.";
-          }
-        }
-        if (action === "reveal" && !existing.commit) return "This piece has no commitment yet.";
-        if (action === "settle" && existing.phase === "drawn" && !existing.revealed) {
-          return "Reveal the commitment before settlement.";
-        }
-        if (action === "claim" && !(existing.escrowed && (existing.phase === "settled" || existing.phase === "cancelled"))) {
-          return "Claim the piece after settlement or cancellation.";
-        }
-        setState((current) => {
-          const pieces = current.pieces.map((piece) => ({ ...piece }));
-          const piece = pieces.find((item) => item.id === id);
-          if (!piece) return current;
-          if (action === "escrow") piece.escrowed = true;
-          if (action === "open") {
-            if (!piece.escrowed) return current;
-            piece.phase = "open";
-          }
-          if (action === "close" && piece.phase === "open") piece.phase = "closed";
-          if (action === "snapshot" && piece.phase === "closed") {
-            const lots = current.entries
-              .filter((entry) => entry.pieceId === id)
-              .map((entry) => ({ address: entry.address, weight: entry.count, expiresAt: Date.parse(entry.expiresAt) }));
-            const snap = snapshotLots(lots, Date.now());
-            piece.snapshotTotal = snap.total;
-            piece.vrfNote = "Snapshot frozen. Demonstration draw uses the same cumulative weights as the contract.";
-            (piece as Piece & { cumulative?: number[]; holders?: { address: string; weight: number }[] }).cumulative = snap.cumulative;
-            (piece as Piece & { holders?: { address: string; weight: number }[] }).holders = snap.holders;
-          }
-          if (action === "draw") {
-            const extra = piece as Piece & { cumulative?: number[]; holders?: { address: string; weight: number }[] };
-            if (!extra.holders || !extra.cumulative || !piece.snapshotTotal) return current;
-            const word = BigInt(Date.now());
-            piece.randomWord = word.toString();
-            piece.winner = pickWinner(extra.cumulative, extra.holders, word);
-            piece.phase = "drawn";
-            piece.vrfNote = "Demonstration result. Sepolia asks Chainlink VRF v2.5 only after this snapshot.";
-          }
-          if (action === "reveal" && piece.commit) piece.revealed = true;
-          if (action === "settle" && piece.phase === "drawn" && piece.revealed) {
-            piece.phase = "settled";
-          }
-          if (action === "cancel" && piece.phase !== "settled" && piece.phase !== "cancelled") {
-            piece.phase = "cancelled";
-          }
-          if (action === "claim" && piece.escrowed && (piece.phase === "settled" || piece.phase === "cancelled")) {
-            piece.escrowed = false;
-          }
-          return { ...current, pieces, banner: { tone: "ok", text: `${piece.title} updated.` } };
-        });
-        return null;
-      },
-      saveEmail: async (email) => {
-        setState((current) => ({ ...current, email }));
-        return "Email saved in this browser. Demo records cannot issue receipts; a verified on-chain purchase is required.";
-      },
-      recordComplimentary: (pieceId) => {
-        const piece = state.pieces.find((item) => item.id === pieceId);
-        if (!piece) return;
-        const entry: Entry = {
-          id: `amoe-${Date.now()}`,
-          pieceId,
-          pieceTitle: piece.title,
-          label: "Complimentary",
-          count: 1,
-          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-          kind: "complimentary",
-          address
-        };
-        setState((current) => ({
-          ...current,
-          entries: [entry, ...current.entries],
-          banner: { tone: "ok", text: "Complimentary entry recorded on the bench." }
-        }));
+  const api = useMemo<Bench>(() => ({
+    ...state,
+    browser, walletSession, catalog, refreshCatalog, loadMoreCatalog,
+    disconnect: () => browser.wallet.disconnect(),
+    ready,
+    clearBanner: () => setState((current) => ({ ...current, banner: undefined })),
+    connect: async () => {
+      try {
+        const session = await browser.wallet.connect();
+        if (session.kind !== "connected") throw new Error("Wallet connection failed.");
+        setState((current) => ({ ...current, wallet: session.account, banner: { tone: "ok", text: "Test-network wallet connected." } }));
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "Wallet connection failed.";
+        setState((current) => ({ ...current, banner: { tone: "error", text } }));
       }
-    };
-  }, [state, ready]);
+    },
+    saveEmail: (value) => {
+      const email = validEmail(value);
+      if (!email) return "Enter a valid email address.";
+      try {
+        localStorage.setItem(PREFERENCE_KEY, JSON.stringify({ email }));
+      } catch {
+        return "Email preference could not be saved in this browser. Please retry.";
+      }
+      setState((current) => ({ ...current, email }));
+      try {
+        localStorage.removeItem(LEGACY_BENCH_KEY);
+      } catch {
+        return "Email preference saved. Old browser data cleanup will retry next time.";
+      }
+      return "Email preference saved in this browser.";
+    }
+  }), [state, ready, browser, walletSession, catalog, refreshCatalog, loadMoreCatalog]);
 
   return <BenchContext.Provider value={api}>{children}</BenchContext.Provider>;
 }

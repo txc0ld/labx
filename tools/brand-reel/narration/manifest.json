@@ -1,0 +1,82 @@
+{
+  "generator": "kokoro-onnx 0.6.1",
+  "voice": "af_heart",
+  "sampleRate": 48000,
+  "channels": 1,
+  "bitDepth": 16,
+  "frames": 720000,
+  "duration": 15.0,
+  "peakDbfs": -2.9999995180030155,
+  "rmsDbfs": -20.73711435474749,
+  "output": "labx-voiceover.wav",
+  "outputSha256": "2318c26980d033797a318429787005897d708af9ab7e7d73ba41a6b31280a626",
+  "modelSha256": "beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a",
+  "voicesSha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+  "cues": [
+    {
+      "start": 0.0,
+      "end": 2.8125,
+      "text": "Lab ex. Memberships and N F T raffles.",
+      "speed": 1.14,
+      "lead": 0.04,
+      "tail": 0.1,
+      "file": "python-segments/01.wav",
+      "spokenStart": 0.04,
+      "spokenEnd": 2.7039583333333335,
+      "duration": 2.6639583333333334,
+      "headroomAfter": 0.10854166666666654
+    },
+    {
+      "start": 2.8125,
+      "end": 5.625,
+      "text": "Choose your membership.",
+      "speed": 0.96,
+      "lead": 0.13,
+      "tail": 0.16,
+      "file": "python-segments/02.wav",
+      "spokenStart": 2.9425,
+      "spokenEnd": 4.2225,
+      "duration": 1.28,
+      "headroomAfter": 1.4024999999999999
+    },
+    {
+      "start": 5.625,
+      "end": 8.90625,
+      "text": "Get bonus entries for a chance to win an N F T.",
+      "speed": 1.07,
+      "lead": 0.1,
+      "tail": 0.14,
+      "file": "python-segments/03.wav",
+      "spokenStart": 5.725,
+      "spokenEnd": 8.763,
+      "duration": 3.038,
+      "headroomAfter": 0.1432500000000001
+    },
+    {
+      "start": 8.90625,
+      "end": 12.1875,
+      "text": "Plus, discounts from partner brands.",
+      "speed": 0.99,
+      "lead": 0.12,
+      "tail": 0.16,
+      "file": "python-segments/04.wav",
+      "spokenStart": 9.02625,
+      "spokenEnd": 11.095583333333334,
+      "duration": 2.0693333333333332,
+      "headroomAfter": 1.0919166666666662
+    },
+    {
+      "start": 12.1875,
+      "end": 15.0,
+      "text": "That's Lab ex.",
+      "speed": 0.92,
+      "lead": 0.16,
+      "tail": 0.34,
+      "file": "python-segments/05.wav",
+      "spokenStart": 12.3475,
+      "spokenEnd": 13.6275,
+      "duration": 1.28,
+      "headroomAfter": 1.3725000000000005
+    }
+  ]
+}

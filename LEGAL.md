@@ -1,50 +1,25 @@
-# LABx legal notes
+# LABx product notes for counsel
 
-This is a product draft for counsel. It is not a legal opinion and it is not advice to run a public promotion.
+This is an engineering/product draft, not a legal opinion or clearance to operate a public promotion. The website's canonical versioned membership terms and draw rules are in `web/lib/published-terms.ts`; editing those changes their hash and requires a reviewed publication/configuration plan.
 
-## Operator
+## Operator and product
 
-Fantom Labs Pty Ltd  
-ABN 56 702 056 166  
-ACN 702 056 166  
-Brand: LABx  
-Site: `NEXT_PUBLIC_SITE_URL` (default https://labx-two.vercel.app)
+Operator details supplied for the project: Fantom Labs Pty Ltd, ABN 56 702 056 166, ACN 702 056 166. Brand: LABx.
 
-## Network
+Customers purchase memberships associated with an individual NFT raffle. Each pack publishes its price, included bonus-entry count and supply. The fee is 5 USDC per pack. The design ladder is Entry, Bronze, Silver, Gold and Platinum; the contract also permits reviewed custom packs. Bonus entries are included with a purchase. There is no complimentary-entry route in version 2.
 
-Version 1.0 is Ethereum Sepolia only. Sepolia assets have no cash value. The contract reverts on chain id 1. The deploy script reverts on every chain id other than 11155111. The website refuses a mainnet wallet. Do not advertise this deployment as a mainnet product.
+Member discounts supplied by the user are 5% off Fantom Labs services and 5% off SeatMap Pro membership. `XXXX` is a placeholder, not a redeemable code. Availability, eligibility and partner terms still need confirmation before redemption goes live.
 
-## What is sold
+## Intended contract process
 
-A membership pack for one piece. The ladder is Entry, Bronze, Silver, Gold, Platinum. Each pack has a USDC price and a published number of bonus entries into that piece. A 5 USDC lab fee is added on top and is directed to the Safe treasury when the piece settles.
+An NFT is escrowed before memberships open. Opening fixes the economics, deadline, treasury, terms and randomness policy. After sales close, eligible entries are snapshotted and the pinned VRF coordinator supplies randomness. Entries expire after 365 days. Settlement enables separate prize, seller-proceeds and treasury-fee claims. Cancellation enables buyers to claim their principal and fee and the seller to reclaim the NFT.
 
-Packs are not marketed as tickets. Public pages do not show a floor or the private commitment. They show the pack price, the lab fee, the bonus-entry count, and the commitment hash.
+The fixed draw-start, randomness and reveal grace periods are seven days each, measured from their respective events. See `SECURITY.md` for exact boundaries and exceptions. A commitment proves recorded hashes, not a numeric reserve rule.
 
-## Draw
+## Publication and release
 
-The prize is the escrowed token. Sales close, entries are snapshotted, expired entries drop out, then Chainlink VRF v2.5 supplies the word. Bonus entries expire 12 months after they are recorded.
+The implementation is intended for Sepolia. Mainnet is disabled and no approved version 2 deployment manifest is configured. Local source changes do not change the existing Sepolia bytecode. Signed agreements are assertions, not verified age, identity or legal eligibility.
 
-If the piece is cancelled before settlement, the buyer can pull a refund of pack price and lab fee, and the token returns to the seller.
+Before non-test operation, qualified counsel must review the actual membership benefits, promotion structure, entry conditions, eligibility, jurisdiction restrictions, fees, cancellation/refund terms, privacy and partner offers. Calling a payment a membership does not itself determine its legal treatment. No legal conclusion has been supplied for this product.
 
-## Complimentary entry
-
-One complimentary bonus entry may be requested per person per piece. The route requires a bot-gated check-in (points), a captcha, and the same agreements as a paid pack. It is placed on the draw-rules page and is not promoted on the explore bench. Counsel should confirm whether that placement meets the alternative-entry rules of each jurisdiction before any production use. This Sepolia deployment is not a consumer promotion.
-
-## Agreements
-
-A pack or complimentary entry requires three confirmations: membership terms, draw rules including the 12-month expiry, and eligibility including age 18 or older.
-
-## Email
-
-Receipts are sent with Resend when configured. They describe the pack, the bonus entries, the price, the lab fee, and the expiry.
-
-## Counsel checklist before any non-test use
-
-- Trade promotion and lottery treatment in each target jurisdiction, including Australia.
-- Whether the complimentary route is prominent enough, and whether points may be required.
-- Sanctions, age, and geo restrictions.
-- Consumer copy, cooling-off, and refund wording.
-- Privacy notice for wallet, email, and server records. The published draft is `/privacy`. The operator page is `/about`. Terms are `/legal` (`/terms` redirects there).
-- Safe signer policy and key custody.
-
-Until that review, keep the system on Sepolia and describe it as a test bench.
+The user-facing routes are `/legal`, `/rules`, `/privacy`, `/about` and `/guide`; `/terms` redirects to `/legal`. Receipt emails require configured delivery and a verified finalized purchase.

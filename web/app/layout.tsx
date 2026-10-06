@@ -23,7 +23,7 @@ const heading = Sixtyfour({
 });
 
 const site = publicSiteUrl();
-const description = "Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries, Chainlink VRF, Safe treasury.";
+const description = "Membership packs, member perks and NFT raffles by LABx.";
 
 export const viewport: Viewport = {
   width: "device-width",

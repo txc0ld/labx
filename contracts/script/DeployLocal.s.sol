@@ -14,7 +14,6 @@ contract DeployLocal is Script {
         uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer = vm.addr(pk);
         address safe = vm.envOr("SAFE_ADDRESS", deployer);
-        address amoe = vm.envOr("AMOE_SIGNER", deployer);
         bytes32 terms = vm.envOr("TERMS_HASH", keccak256("labx-local-terms"));
 
         vm.startBroadcast(pk);
@@ -34,11 +33,9 @@ contract DeployLocal is Script {
                 vrfCoordinator: address(vrf),
                 keyHash: keccak256("local"),
                 subscriptionId: 1,
-                amoeSigner: amoe,
                 termsHash: terms,
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3,
-                amoeCap: 0
+                requestConfirmations: 3
             })
         );
         if (safe != deployer) labx.transferOwnership(safe);

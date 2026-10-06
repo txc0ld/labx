@@ -62,11 +62,9 @@ contract LabxRaffleTest is Test {
                 vrfCoordinator: address(vrf),
                 keyHash: KEY,
                 subscriptionId: 1,
-                amoeSigner: signer,
                 termsHash: bytes32(TERMS),
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3,
-                amoeCap: 0
+                requestConfirmations: 3
             })
         );
     }
@@ -127,6 +125,12 @@ contract LabxRaffleTest is Test {
         labx.open(id);
     }
 
+    function _close(uint256 id) internal {
+        uint256 end = labx.getRaffle(id).salesEnd;
+        if (block.timestamp < end) vm.warp(end);
+        labx.close(id);
+    }
+
     function _fund(address buyer, uint256 amount) internal {
         usdc.mint(buyer, amount);
         vm.prank(buyer);
@@ -169,7 +173,7 @@ contract LabxRaffleTest is Test {
         assertEq(nft.ownerOf(1), address(labx));
 
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 50);
         viewR = labx.getRaffle(id);
         assertTrue(viewR.snapshotted);
@@ -207,7 +211,7 @@ contract LabxRaffleTest is Test {
         _buy(bob, id, 0, 1);
         _buy(cara, id, 1, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 10);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -229,7 +233,7 @@ contract LabxRaffleTest is Test {
         _buy(bob, id, 0, 1);
         _buy(cara, id, 1, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 10);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -261,7 +265,7 @@ contract LabxRaffleTest is Test {
         _buy(bob, id, 0, 1);
         _buy(cara, id, 1, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 10);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -276,7 +280,7 @@ contract LabxRaffleTest is Test {
         _fund(bob, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         vm.prank(bob);
         vm.expectRevert(LabxRaffle.SalesClosed.selector);
         labx.buyPack(id, 0, 1, bytes32(TERMS));
@@ -290,7 +294,7 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.warp(block.timestamp + 366 days);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 10);
         LabxRaffle.RaffleView memory v = labx.getRaffle(id);
         assertTrue(v.snapshotted);
@@ -335,39 +339,50 @@ contract LabxRaffleTest is Test {
         labx.buyPackWithEth{value: 0.001 ether}(id, 0, 1, bytes32(TERMS), 0, _deadline());
     }
 
-    function test_amoeOneEntryAndRejectsReplay() public {
+    function test_legacySignedFreeEntryAlwaysRejected() public {
         (uint256 id,,,) = _create();
         _escrowOpen(id);
         bytes32 captcha = keccak256("captcha");
         uint256 deadline = block.timestamp + 1 hours;
-        bytes32 digest = labx.hashAmoe(id, alice, captcha, deadline);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest);
-        bytes memory sig = abi.encodePacked(r, s, v);
+        bytes32 domain = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("LABx"),
+                keccak256("1"),
+                block.chainid,
+                address(labx)
+            )
+        );
+        bytes32 payload = keccak256(
+            abi.encode(
+                keccak256(
+                    "AmoeClaim(uint256 raffleId,address account,bytes32 captchaDigest,uint256 deadline,bytes32 termsHash)"
+                ),
+                id,
+                alice,
+                captcha,
+                deadline,
+                bytes32(TERMS)
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 sigS) =
+            vm.sign(signerKey, keccak256(abi.encodePacked("\x19\x01", domain, payload)));
         vm.prank(alice);
-        labx.claimAmoe(id, captcha, deadline, sig);
-        assertEq(labx.lotCount(id), 1);
-        assertTrue(labx.amoeClaimed(id, alice));
-        vm.prank(alice);
-        vm.expectRevert(LabxRaffle.CaptchaUsed.selector);
-        labx.claimAmoe(id, captcha, deadline, sig);
-        bytes32 second = keccak256("captcha-2");
-        bytes32 digest2 = labx.hashAmoe(id, alice, second, deadline);
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(signerKey, digest2);
-        vm.prank(alice);
-        vm.expectRevert(LabxRaffle.AmoeUsed.selector);
-        labx.claimAmoe(id, second, deadline, abi.encodePacked(r2, s2, v2));
+        vm.expectRevert(LabxRaffle.FreeEntryDisabled.selector);
+        labx.claimAmoe(id, captcha, deadline, abi.encodePacked(r, sigS, v));
+        assertEq(labx.lotCount(id), 0);
+        assertEq(labx.contractVersion(), 2);
     }
 
-    function test_amoeRejectsUnknownSigner() public {
+    function testFuzz_freeEntrySelectorCannotCreateLots(address caller, bytes32 digest, bytes calldata signature)
+        public
+    {
         (uint256 id,,,) = _create();
         _escrowOpen(id);
-        bytes32 captcha = keccak256("captcha");
-        uint256 deadline = block.timestamp + 1 hours;
-        bytes32 bobDigest = labx.hashAmoe(id, bob, captcha, deadline);
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(uint256(0xBEEF), bobDigest);
-        vm.prank(bob);
-        vm.expectRevert(LabxRaffle.BadSignature.selector);
-        labx.claimAmoe(id, captcha, deadline, abi.encodePacked(r2, s2, v2));
+        vm.prank(caller);
+        vm.expectRevert(LabxRaffle.FreeEntryDisabled.selector);
+        labx.claimAmoe(id, digest, block.timestamp + 1 days, signature);
+        assertEq(labx.lotCount(id), 0);
     }
 
     function test_termsMustMatch() public {
@@ -385,6 +400,7 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         uint256 before = usdc.balanceOf(alice);
+        vm.warp(uint256(labx.getRaffle(id).salesEnd) + labx.DRAW_START_GRACE());
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
@@ -416,7 +432,7 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -440,7 +456,7 @@ contract LabxRaffleTest is Test {
         vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.snapshot(id, 10);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.requestRandomness(id);
@@ -456,15 +472,14 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
         uint256 requestId = labx.getRaffle(id).vrfRequestId;
-        vm.expectRevert(abi.encodeWithSelector(LabxRaffle.OnlyCoordinator.selector, address(this), address(vrf)));
         labx.rawFulfillRandomWords(requestId, words);
-        vm.expectRevert(LabxRaffle.DrawInFlight.selector);
-        labx.proposeCoordinator(makeAddr("replacement"));
+        assertEq(labx.getRaffle(id).winner, address(0));
+        labx.proposeCoordinator(address(new MockVRF()));
     }
 
     function test_pauseBlocksPurchase() public {
@@ -557,7 +572,7 @@ contract LabxRaffleTest is Test {
         _buy(alice, id, 0, 1);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 1);
         assertFalse(labx.getRaffle(id).snapshotted);
         labx.snapshot(id, 1);
@@ -586,7 +601,7 @@ contract LabxRaffleTest is Test {
         vm.prank(address(recv));
         labx.buyPack(id, 0, 1, bytes32(TERMS));
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -625,7 +640,7 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -662,6 +677,7 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         uint256 before = usdc.balanceOf(alice);
+        vm.warp(uint256(labx.getRaffle(id).salesEnd) + labx.DRAW_START_GRACE());
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
@@ -714,13 +730,13 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
         vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
         assertEq(labx.activeDrawings(), 0);
-        address next = makeAddr("next-coordinator");
+        address next = address(new MockVRF());
         labx.proposeCoordinator(next);
         vm.expectRevert(LabxRaffle.TooEarly.selector);
         labx.applyCoordinator();
@@ -742,11 +758,9 @@ contract LabxRaffleTest is Test {
                 vrfCoordinator: address(sync),
                 keyHash: KEY,
                 subscriptionId: 1,
-                amoeSigner: signer,
                 termsHash: bytes32(TERMS),
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3,
-                amoeCap: 1
+                requestConfirmations: 3
             })
         );
         nft.mint(seller, 21);
@@ -768,6 +782,7 @@ contract LabxRaffleTest is Test {
         vm.prank(alice);
         pinned.buyPack(id, 0, 1, bytes32(TERMS));
         vm.prank(seller);
+        vm.warp(pinned.getRaffle(id).salesEnd);
         pinned.close(id);
         pinned.snapshot(id, 5);
         vm.prank(seller);
@@ -775,65 +790,15 @@ contract LabxRaffleTest is Test {
         assertEq(uint256(pinned.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
         assertEq(pinned.getRaffle(id).winner, alice);
         assertEq(pinned.activeDrawings(), 0);
-        assertEq(pinned.requestCoordinator(77), address(sync));
+        assertEq(pinned.requestToRaffle(address(sync), 77), id);
         assertFalse(pinned.ethPathEnabled());
     }
 
-    function test_amoeCapAndCaptchaAreSingleUse() public {
-        LabxRaffle capped = new LabxRaffle(
-            LabxRaffle.Init({
-                treasury: treasury,
-                usdc: address(usdc),
-                router: address(router),
-                weth: address(weth),
-                ethUsdFeed: address(feed),
-                poolFee: 3000,
-                vrfCoordinator: address(vrf),
-                keyHash: KEY,
-                subscriptionId: 1,
-                amoeSigner: signer,
-                termsHash: bytes32(TERMS),
-                callbackGasLimit: 500_000,
-                requestConfirmations: 3,
-                amoeCap: 1
-            })
-        );
-        nft.mint(seller, 22);
-        vm.prank(seller);
-        nft.approve(address(capped), 22);
-        bytes32 nonce = keccak256("amoe-cap");
-        bytes32 commit = capped.hashCommitment(nonce, address(nft), 22, keccak256("a"), keccak256("b"), keccak256("c"));
-        vm.prank(seller);
-        uint256 id = capped.createRaffle(
-            address(nft), 22, uint64(block.timestamp + 2 days), nonce, commit, "Amoe Cap", _configs()
-        );
-        vm.startPrank(seller);
-        capped.escrow(id);
-        capped.open(id);
-        vm.stopPrank();
-
-        bytes32 captcha = keccak256("once");
-        uint256 deadline = block.timestamp + 1 hours;
-        bytes32 digest = capped.hashAmoe(id, alice, captcha, deadline);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest);
-        vm.prank(alice);
-        capped.claimAmoe(id, captcha, deadline, abi.encodePacked(r, s, v));
-        assertEq(capped.getRaffle(id).amoeCount, 1);
-
-        bytes32 again = keccak256("twice");
-        bytes32 bobDigest = capped.hashAmoe(id, bob, again, deadline);
-        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(signerKey, bobDigest);
-        vm.prank(bob);
-        vm.expectRevert(LabxRaffle.AmoeCap.selector);
-        capped.claimAmoe(id, again, deadline, abi.encodePacked(r2, s2, v2));
-
-        vm.prank(bob);
-        vm.expectRevert(LabxRaffle.CaptchaUsed.selector);
-        capped.claimAmoe(id, captcha, deadline, abi.encodePacked(r, s, v));
-
-        vm.prank(bob);
-        vm.expectRevert(LabxRaffle.CaptchaUsed.selector);
-        capped.claimAmoe(id, bytes32(0), deadline, abi.encodePacked(r2, s2, v2));
+    function test_freeEntryCannotBeReenabledByLegacySignerSetter() public {
+        (bool ok,) = address(labx).call(abi.encodeWithSignature("setAmoeSigner(address)", signer));
+        assertFalse(ok);
+        vm.expectRevert(LabxRaffle.FreeEntryDisabled.selector);
+        labx.claimAmoe(1, bytes32(0), type(uint256).max, "");
     }
 
     function test_abortDrawingLeavesNftForSellerPull() public {
@@ -842,11 +807,11 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
         labx.abortDrawing(id);
         assertEq(labx.activeDrawings(), 0);
         assertEq(nft.ownerOf(1), address(labx));
@@ -865,19 +830,19 @@ contract LabxRaffleTest is Test {
         _fund(alice, 100e6);
         _buy(alice, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
     }
 
-    function test_setVrfConfigRevertsWhenDrawInFlight() public {
+    function test_setVrfConfigOnlyAffectsFutureOpenings() public {
         uint256 id = _drawReady();
         labx.setVrfConfig(KEY, 2, 500_000, 3);
         assertEq(labx.subscriptionId(), 2);
 
         vm.prank(seller);
         labx.requestRandomness(id);
-        vm.expectRevert(LabxRaffle.DrawInFlight.selector);
         labx.setVrfConfig(KEY, 3, 500_000, 3);
+        assertEq(labx.getRafflePolicy(id).subscriptionId, 1);
 
         vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
         labx.setVrfConfig(KEY, 4, 400_000, 5);
@@ -891,13 +856,13 @@ contract LabxRaffleTest is Test {
         vm.prank(seller);
         labx.requestRandomness(id);
         uint256 requestId = labx.getRaffle(id).vrfRequestId;
-        assertEq(labx.requestToRaffle(requestId), id);
-        assertEq(labx.requestCoordinator(requestId), address(vrf));
+        assertEq(labx.requestToRaffle(address(vrf), requestId), id);
+        assertTrue(labx.requestUsed(address(vrf), requestId));
 
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
         labx.abortDrawing(id);
-        assertEq(labx.requestToRaffle(requestId), 0);
-        assertEq(labx.requestCoordinator(requestId), address(0));
+        assertEq(labx.requestToRaffle(address(vrf), requestId), 0);
+        assertTrue(labx.requestUsed(address(vrf), requestId));
         assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
 
         vrf.fulfill(address(labx), requestId, 0);
@@ -914,7 +879,7 @@ contract LabxRaffleTest is Test {
         _buy(alice, id, 0, 1);
         _buy(bob, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
@@ -922,15 +887,15 @@ contract LabxRaffleTest is Test {
         uint64 requestedAt = labx.getRaffle(id).vrfRequestedAt;
         uint256 nextRequest = vrf.next();
 
-        // Even after a timeout, the owner cannot discard an unfavorable pending
+        // During the callback window, the owner cannot discard an unfavorable pending
         // fulfillment and ask for a new winner over the same paid entry snapshot.
         vm.warp(block.timestamp + 2 days);
         vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
         labx.retryRandomness(id);
         assertEq(labx.getRaffle(id).vrfRequestId, originalRequest);
         assertEq(labx.getRaffle(id).vrfRequestedAt, requestedAt);
-        assertEq(labx.requestToRaffle(originalRequest), id);
-        assertEq(labx.requestCoordinator(originalRequest), address(vrf));
+        assertEq(labx.requestToRaffle(address(vrf), originalRequest), id);
+        assertTrue(labx.requestUsed(address(vrf), originalRequest));
         assertEq(labx.activeDrawings(), 1);
         assertEq(vrf.next(), nextRequest);
 
@@ -978,13 +943,13 @@ contract LabxRaffleTest is Test {
         assertEq(usdc.balanceOf(address(labx)), 0);
         assertEq(nft.ownerOf(1), seller);
         assertEq(labx.activeDrawings(), 0);
-        assertEq(labx.requestToRaffle(requestId), 0);
+        assertEq(labx.requestToRaffle(address(vrf), requestId), 0);
         vrf.fulfill(address(labx), requestId, 0);
         assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
         assertEq(labx.getRaffle(id).winner, address(0));
     }
 
-    function test_nativePaymentTogglesWhenNoActiveDrawings() public {
+    function test_nativePaymentOnlyAffectsFutureOpenings() public {
         assertFalse(labx.nativePayment());
         assertFalse(vrf.lastNativePayment());
 
@@ -993,8 +958,8 @@ contract LabxRaffleTest is Test {
         labx.requestRandomness(id);
         assertFalse(vrf.lastNativePayment());
 
-        vm.expectRevert(LabxRaffle.DrawInFlight.selector);
         labx.setNativePayment(true);
+        assertFalse(labx.getRafflePolicy(id).nativePayment);
 
         vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
         assertEq(labx.activeDrawings(), 0);
@@ -1018,7 +983,7 @@ contract LabxRaffleTest is Test {
         _fund(bob, 100e6);
         _buy(bob, id2, 0, 1);
         vm.prank(seller);
-        labx.close(id2);
+        _close(id2);
         labx.snapshot(id2, 5);
         vm.prank(seller);
         labx.requestRandomness(id2);
@@ -1039,7 +1004,7 @@ contract LabxRaffleTest is Test {
         _buy(alice, id, 0, aliceQty);
         _buy(bob, id, 1, bobQty);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 1);
         labx.snapshot(id, 1);
         uint256 total = uint256(aliceQty) + uint256(bobQty) * 5;
@@ -1083,15 +1048,15 @@ contract LabxRaffleTest is Test {
         _buy(alice, cancelled, 0, qtyA);
         _buy(bob, settled, 1, qtyB);
         _assertEscrowBacking(cancelled, settled);
-        labx.cancel(cancelled);
         vm.prank(seller);
-        labx.close(settled);
+        _close(settled);
         labx.snapshot(settled, 5);
         vm.prank(seller);
         labx.requestRandomness(settled);
         vrf.fulfill(address(labx), labx.getRaffle(settled).vrfRequestId, 0);
         vm.warp(block.timestamp + labx.REVEAL_GRACE());
         labx.settle(settled);
+        labx.cancel(cancelled);
         _assertEscrowBacking(cancelled, settled);
         if (refundFirst) {
             vm.prank(alice);
@@ -1131,16 +1096,10 @@ contract LabxRaffleTest is Test {
 
     function test_adminSettersEmitEvents() public {
         address nextTreasury = makeAddr("next-treasury");
-        address nextSigner = makeAddr("next-signer");
         vm.expectEmit(true, true, false, true);
         emit LabxRaffle.TreasurySet(treasury, nextTreasury);
         labx.setTreasury(nextTreasury);
         assertEq(labx.treasury(), nextTreasury);
-
-        vm.expectEmit(true, true, false, true);
-        emit LabxRaffle.AmoeSignerSet(signer, nextSigner);
-        labx.setAmoeSigner(nextSigner);
-        assertEq(labx.amoeSigner(), nextSigner);
 
         vm.expectEmit(false, false, false, true);
         emit LabxRaffle.VrfConfigSet(keccak256("k2"), 9, 600_000, 4);
@@ -1151,8 +1110,8 @@ contract LabxRaffleTest is Test {
         labx.setNativePayment(true);
     }
 
-    /// @dev Evidence of the documented owner cancellation trust, not a fairness guarantee.
-    function test_policyOwnerCanDiscardDelayedOutcomeAfterAbortTimeout() public {
+    /// @dev Expired words cannot win after permissionless cancellation.
+    function test_policyExpiredOutcomeCannotWinAfterPermissionlessAbort() public {
         (uint256 id,,,) = _create();
         _escrowOpen(id);
         _fund(alice, 30e6);
@@ -1160,15 +1119,15 @@ contract LabxRaffleTest is Test {
         _buy(alice, id, 0, 1);
         _buy(bob, id, 0, 1);
         vm.prank(seller);
-        labx.close(id);
+        _close(id);
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
         uint256 requestId = labx.getRaffle(id).vrfRequestId;
         vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
 
-        // Ordering model: owner aborts before a delayed fulfillment that would
-        // award Alice. The already requested outcome can no longer settle.
+        // A losing buyer can abort, but this word is already expired.
+        vm.prank(bob);
         labx.abortDrawing(id);
         vrf.fulfill(address(labx), requestId, 0);
         assertEq(labx.getRaffle(id).winner, address(0));
@@ -1184,50 +1143,199 @@ contract LabxRaffleTest is Test {
         assertEq(nft.ownerOf(1), seller);
     }
 
-    function test_policyPausedFundedSnapshotNeedsOwnerForRecovery() public {
+    function test_policyPausedFundedSnapshotAllowsBuyerRecovery() public {
         uint256 id = _drawReady();
         labx.setPaused(true);
         vm.warp(block.timestamp + 30 days);
         vm.prank(seller);
-        vm.expectRevert(LabxRaffle.Paused.selector);
+        vm.expectRevert(LabxRaffle.Expired.selector);
         labx.requestRandomness(id);
+        vm.prank(alice);
+        labx.cancel(id);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), 100e6);
+        assertEq(usdc.balanceOf(address(labx)), 0);
+    }
+
+    function test_policyUnrevealedDrawAllowsWinnerSettlementAfterGrace() public {
+        uint256 id = _drawReady();
         vm.prank(seller);
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.cancel(id);
-        vm.startPrank(alice);
-        vm.expectRevert(LabxRaffle.NotSeller.selector);
-        labx.cancel(id);
+        labx.requestRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        vm.warp(block.timestamp + labx.REVEAL_GRACE() + 30 days);
+        vm.prank(alice);
+        labx.settle(id);
+        assertEq(labx.getRaffle(id).winner, alice);
+        vm.prank(alice);
+        labx.claimPrize(id);
+        assertEq(nft.ownerOf(1), alice);
+        vm.prank(alice);
         vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.refund(id);
-        vm.stopPrank();
-        assertEq(usdc.balanceOf(address(labx)), 30e6);
-        // Owner cancellation can recover funds while paused, but inactivity has
-        // no permissionless timeout escape even after this long delay.
+    }
+
+    function test_policySevenDayConstants() public view {
+        assertEq(labx.DRAW_START_GRACE(), 7 days);
+        assertEq(labx.VRF_ABORT_AFTER(), 7 days);
+        assertEq(labx.REVEAL_GRACE(), 7 days);
+    }
+
+    function test_policyPublishedCloseSetsRequestWindow() public {
+        uint256 id = _drawReady();
+        uint256 cutoff = uint256(labx.getRaffle(id).salesEnd) + 7 days;
+        vm.warp(cutoff - 1);
+        vm.prank(cara);
+        vm.expectRevert(LabxRaffle.NotSeller.selector);
+        labx.cancel(id);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        vm.warp(cutoff + 6 days);
+        vm.prank(cara);
+        vm.expectRevert(LabxRaffle.TooEarly.selector);
+        labx.abortDrawing(id);
+        vrf.fulfill(address(labx), requestId, 0);
+        assertEq(labx.getRaffle(id).winner, alice);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function testFuzz_policyRequestCutoffDoesNotRaceRefunds(uint8 delay, bool ownerRequests) public {
+        uint256 id = _drawReady();
+        uint256 cutoff = uint256(labx.getRaffle(id).salesEnd) + 7 days;
+        vm.warp(cutoff + bound(delay, 0, 2));
+        vm.prank(ownerRequests ? address(this) : seller);
+        vm.expectRevert(LabxRaffle.Expired.selector);
+        labx.requestRandomness(id);
+        assertEq(vrf.next(), 1);
+        assertEq(labx.activeDrawings(), 0);
+        vm.prank(cara);
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
         assertEq(usdc.balanceOf(alice), 100e6);
     }
 
-    function test_policyUnrevealedDrawNeedsOwnerAfterGrace() public {
+    function testFuzz_policyRecoveryIgnoresPauseAndSnapshotProgress(uint8 progress, bool paused_) public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 60e6);
+        _buy(alice, id, 0, 1);
+        _buy(alice, id, 0, 1);
+        uint256 stage = bound(progress, 0, 3);
+        if (stage != 0) {
+            vm.prank(seller);
+            _close(id);
+            if (stage > 1) labx.snapshot(id, stage == 2 ? 1 : 2);
+        }
+        labx.setPaused(paused_);
+        uint256 cutoff = uint256(labx.getRaffle(id).salesEnd) + 7 days;
+        vm.warp(cutoff - 1);
+        vm.prank(cara);
+        vm.expectRevert(LabxRaffle.NotSeller.selector);
+        labx.cancel(id);
+        vm.warp(cutoff);
+        vm.prank(cara);
+        labx.cancel(id);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), 60e6);
+        assertEq(labx.getRaffle(id).principalEscrow, 0);
+        assertEq(labx.getRaffle(id).feeEscrow, 0);
+        vm.prank(seller);
+        labx.reclaimPrize(id);
+        assertEq(nft.ownerOf(1), seller);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
+    }
+
+    function testFuzz_policyCallbackDeadlineAndOrdering(uint8 offset, bool callbackFirst, bool paused_, uint256 word)
+        public
+    {
         uint256 id = _drawReady();
         vm.prank(seller);
         labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        uint256 cutoff = uint256(labx.getRaffle(id).vrfRequestedAt) + 7 days;
+        uint256 boundary = bound(offset, 0, 2);
+        labx.setPaused(paused_);
+        vm.warp(cutoff - 1 + boundary);
+        if (boundary == 0) {
+            vm.prank(cara);
+            vm.expectRevert(LabxRaffle.TooEarly.selector);
+            labx.abortDrawing(id);
+            vrf.fulfill(address(labx), requestId, word);
+            assertEq(labx.getRaffle(id).winner, alice);
+            vm.warp(cutoff);
+            vm.prank(cara);
+            vm.expectRevert(LabxRaffle.BadPhase.selector);
+            labx.abortDrawing(id);
+            assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        } else {
+            if (callbackFirst) {
+                vrf.fulfill(address(labx), requestId, word);
+                assertEq(labx.getRaffle(id).winner, address(0));
+                assertEq(labx.getRaffle(id).drawnAt, 0);
+                assertEq(labx.activeDrawings(), 1);
+                assertEq(labx.requestToRaffle(address(vrf), requestId), id);
+            }
+            vm.prank(cara);
+            labx.abortDrawing(id);
+            vrf.fulfill(address(labx), requestId, word);
+            assertEq(labx.getRaffle(id).winner, address(0));
+            assertEq(labx.requestToRaffle(address(vrf), requestId), 0);
+            assertTrue(labx.requestUsed(address(vrf), requestId));
+            assertEq(labx.getRaffle(id).vrfRequestId, 0);
+            vm.prank(cara);
+            vm.expectRevert(LabxRaffle.BadPhase.selector);
+            labx.abortDrawing(id);
+            vm.prank(alice);
+            labx.refund(id);
+            assertEq(usdc.balanceOf(alice), 100e6);
+            assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+        }
+        vrf.fulfill(address(labx), requestId, word ^ 1);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function testFuzz_policyAnyoneSettlesAtGrace(uint8 offset, bool revealed, bool paused_, uint8 caller) public {
+        (uint256 id, bytes32 publicHash, bytes32 privateHash, bytes32 salt) = _create();
+        _escrowOpen(id);
+        _fund(alice, 30e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        _close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
         vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
-        vm.warp(block.timestamp + labx.REVEAL_GRACE() + 30 days);
-        vm.startPrank(alice);
-        vm.expectRevert(LabxRaffle.RevealRequired.selector);
+        if (revealed) {
+            vm.prank(seller);
+            labx.reveal(id, publicHash, privateHash, salt);
+        }
+        labx.setPaused(paused_);
+        uint256 boundary = bound(offset, 0, 2);
+        vm.warp(uint256(labx.getRaffle(id).drawnAt) + 7 days - 1 + boundary);
+        address[4] memory callers = [address(this), seller, alice, cara];
+        vm.prank(callers[bound(caller, 0, 3)]);
+        if (!revealed && boundary == 0) {
+            vm.expectRevert(LabxRaffle.RevealRequired.selector);
+            labx.settle(id);
+            return;
+        }
         labx.settle(id);
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.claimPrize(id);
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.refund(id);
-        vm.stopPrank();
         assertEq(labx.getRaffle(id).winner, alice);
-        assertEq(nft.ownerOf(1), address(labx));
+        _pullSettled(id, alice);
+        assertEq(nft.ownerOf(1), alice);
+        assertEq(usdc.balanceOf(seller), 25e6);
+        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(cara), 0);
+        assertEq(usdc.balanceOf(address(labx)), 0);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.settle(id);
         vm.prank(alice);
-        labx.claimPrize(id);
-        assertEq(nft.ownerOf(1), alice);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
     }
 }

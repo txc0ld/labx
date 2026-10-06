@@ -1,6 +1,6 @@
 import { isAddress, keccak256, toBytes, type Address, type Hex } from "viem";
 import { receiptBody, type Receipt } from "./email";
-import { authorizationMessage, authorizedRequest, type RequestContext } from "./request-auth";
+import { authorizationMessage, authorizedRequest, type RequestContext, type SignatureVerifier } from "./request-auth";
 import { verifiedPurchase, type PurchaseReader } from "./purchase-proof";
 import type { Store } from "./points";
 
@@ -17,10 +17,10 @@ export function receiptAuthorizationMessage(input: ReceiptRequest, context: Requ
   });
 }
 
-export async function deliverPurchaseReceipt(store: Store, input: ReceiptRequest, context: RequestContext, reader: PurchaseReader, sender: MailSender, from: string, transportIdentity: string, now = Date.now()) {
+export async function deliverPurchaseReceipt(store: Store, input: ReceiptRequest, context: RequestContext, reader: PurchaseReader, sender: MailSender, from: string, transportIdentity: string, now = Date.now(), verifier?: SignatureVerifier) {
   if (!input || typeof input.address !== "string" || !isAddress(input.address) || typeof input.to !== "string" || input.to.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.to)) throw new Error("A valid wallet and receipt email are required.");
   if (typeof input.transactionHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(input.transactionHash) || !Number.isSafeInteger(input.logIndex) || input.logIndex < 0) throw new Error("A purchase transaction and log index are required.");
-  if (!await authorizedRequest(input.address, input.deadline, input.signature, receiptAuthorizationMessage(input, context), now)) throw new Error("Receipt authorization was refused.");
+  if (!await authorizedRequest(input.address, input.deadline, input.signature, receiptAuthorizationMessage(input, context), now, verifier)) throw new Error("Receipt authorization was refused.");
   if (!from || /[\r\n]/.test(from) || !/^[0-9a-f]{64}$/.test(transportIdentity)) throw new Error("Receipt delivery is not configured.");
   const identity = `${context.chainId}:${context.contract.toLowerCase()}:${input.transactionHash.toLowerCase()}:${input.logIndex}`;
   const key = `receipt:v2:${keccak256(toBytes(identity))}`;

@@ -1,95 +1,141 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
+import { AccountNav } from "@/components/AccountNav";
 import { useBench } from "@/lib/bench";
+import { ResumeTransaction } from "@/components/workflow/ResumeTransaction";
+
+type PointsState =
+  | { kind: "idle" }
+  | { kind: "loading"; wallet: string }
+  | { kind: "ready"; wallet: string; balance: number }
+  | { kind: "error"; wallet: string; message: string };
+
+function pointsBody(value: unknown): { balance: number } | { error: string } {
+  if (typeof value !== "object" || value === null) return { error: "Points are unavailable." };
+  if ("balance" in value && typeof value.balance === "number" && Number.isFinite(value.balance)) {
+    return { balance: value.balance };
+  }
+  return { error: "error" in value && typeof value.error === "string" ? value.error : "Points are unavailable." };
+}
 
 export default function ProfilePage() {
   const bench = useBench();
-  const [points, setPoints] = useState(0);
-  const [email, setEmail] = useState(bench.email);
+  const [points, setPoints] = useState<PointsState>({ kind: "idle" });
+  const [pointsRetry, setPointsRetry] = useState(0);
+  const pointsRequest = useRef(0);
+  const initialEmailAnchorHandled = useRef(false);
+  const [email, setEmail] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!bench.address) return;
-    fetch(`/api/points?address=${bench.address}`)
-      .then((response) => response.json())
-      .then((body) => setPoints(body.balance || 0))
-      .catch(() => setPoints(0));
-  }, [bench.address]);
+    if (bench.ready) setEmail(bench.email);
+  }, [bench.email, bench.ready]);
 
-  if (!bench.ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
-  const mine = bench.entries.filter((entry) => entry.address.toLowerCase() === bench.address.toLowerCase());
+  useEffect(() => {
+    if (!bench.ready || initialEmailAnchorHandled.current) return;
+    if (window.location.hash !== "#email-preferences") {
+      initialEmailAnchorHandled.current = true;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("email-preferences")?.scrollIntoView({ block: "start" });
+      initialEmailAnchorHandled.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [bench.ready]);
+
+  useEffect(() => {
+    const request = ++pointsRequest.current;
+    const controller = new AbortController();
+    const wallet = bench.wallet;
+    if (!wallet) {
+      setPoints({ kind: "idle" });
+      return () => controller.abort();
+    }
+
+    setPoints({ kind: "loading", wallet });
+    void (async () => {
+      try {
+        const response = await fetch(`/api/points?address=${wallet}`, { signal: controller.signal });
+        const body: unknown = await response.json();
+        const parsed = pointsBody(body);
+        if (!response.ok || "error" in parsed) throw new Error("error" in parsed ? parsed.error : "Points are unavailable.");
+        if (pointsRequest.current === request && !controller.signal.aborted) {
+          setPoints({ kind: "ready", wallet, balance: parsed.balance });
+        }
+      } catch (error) {
+        if (pointsRequest.current === request && !controller.signal.aborted) {
+          setPoints({ kind: "error", wallet, message: error instanceof Error ? error.message : "Points are unavailable." });
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (pointsRequest.current === request) pointsRequest.current += 1;
+    };
+  }, [bench.wallet, pointsRetry]);
+
+  if (!bench.ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading profile</strong><p>Opening your local account view.</p></div></div></section>;
+
+  function savePreference(event: FormEvent) {
+    event.preventDefault();
+    setNote(bench.saveEmail(email));
+  }
+
+  const currentPoints: PointsState = points.kind !== "idle" && points.wallet === bench.wallet
+    ? points
+    : { kind: "loading", wallet: bench.wallet };
 
   return (
-    <section className="section split">
-      <div className="pearl pad stack">
-        <p className="kicker">Profile</p>
-        <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>Your bench</h1>
+    <section className="section workflow-page stack">
+      <header className="workflow-header stack">
+        <h1 className="page-title">Your bench</h1>
+        <p className="lede">Wallet, account records and browser-only receipt preferences.</p>
+        <AccountNav />
+      </header>
+      <div className="split profile-grid">
+      <div className="pearl pad stack profile-primary">
         <div className="terminal pad">
-          <div>wallet {bench.wallet || "bench default"}</div>
-          <div>points {points}</div>
+          <div>wallet {bench.wallet || "not connected"}</div>
+          <div>
+            points {!bench.wallet ? "connect wallet" : currentPoints.kind === "ready" ? currentPoints.balance : currentPoints.kind === "error" ? "unavailable" : "loading"}
+          </div>
           <div>chain sepolia</div>
         </div>
         <OnChainStatus surface="profile" />
-        <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token. Receipts are described in the <Link href="/privacy">privacy policy</Link>.</p>
+        <p className="muted">Existing points records are separate from memberships and bonus entries. They do not grant an entry.</p>
         <div className="btn-row">
-          <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>
-          <button className="btn btn-dark" type="button" onClick={() => bench.useBenchWallet()}>Use bench wallet</button>
+          {bench.wallet ? <button className="btn btn-dark" type="button" onClick={() => bench.disconnect()}>Disconnect wallet</button> : <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>}
+          {currentPoints.kind === "error" ? <button className="btn btn-dark" type="button" onClick={() => setPointsRetry((value) => value + 1)}>Retry points</button> : null}
         </div>
+        {currentPoints.kind === "error" ? <p className="notice error" role="alert">{currentPoints.message}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
-        <form
-          className="stack"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const latest = mine[0];
-            const result = await bench.saveEmail(email, latest?.pieceTitle || "LABx", latest?.label || "Entry", latest?.count || 0, 25);
-            setNote(result || "Receipt request finished.");
-          }}
-        >
-          <label htmlFor="email">Receipt email
+        <form className="stack" id="email-preferences" onSubmit={savePreference}>
+          <label htmlFor="email">Email preference
             <input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
-          <p className="muted">Demo records do not send receipts. A receipt requires a verified on-chain purchase.</p>
+          <p className="muted">This address is stored only in this browser. Purchase receipts are unavailable until verified purchase history is connected. See the <Link href="/privacy">privacy policy</Link>.</p>
           <button className="btn btn-lime" type="submit">Save email in this browser</button>
           {note ? <p className="notice warning" role="status">{note}</p> : null}
         </form>
       </div>
-      <div className="stack">
+      <div className="stack profile-secondary">
         <div className="well pad">
-          <h2>Bonus entries</h2>
-          {mine.length === 0 ? <p>No entries on this wallet yet.</p> : (
-            <div className="table-wrap">
-              <table>
-                <caption className="sr">Bonus entries and expiry</caption>
-                <thead>
-                  <tr><th scope="col">Piece</th><th scope="col">Pack</th><th scope="col">Entries</th><th scope="col">Expires</th></tr>
-                </thead>
-                <tbody>
-                  {mine.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{entry.pieceTitle}</td>
-                      <td>{entry.label}</td>
-                      <td>{entry.count}</td>
-                      <td>{new Date(entry.expiresAt).toLocaleDateString("en-AU")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <h2>Membership status</h2>
+          <p>Membership status is unknown because the website is not connected to an authoritative membership source.</p>
+          <Link href="/membership">Review membership packs</Link>
         </div>
         <div className="pearl pad">
-          <h2>Agreements</h2>
-          {bench.agreements.length === 0 ? <p className="muted">None recorded in this browser yet.</p> : (
-            <ul>
-              {bench.agreements.map((item) => (
-                <li key={item.at}>{item.pieceId} · {new Date(item.at).toLocaleString("en-AU")}</li>
-              ))}
-            </ul>
-          )}
+          <h2>Account records</h2>
+          <p className="muted">Confirmed purchases and claims come from contract events. Private receipt and agreement status requires a wallet signature.</p>
+          <div className="btn-row"><Link className="btn" href="/profile/history">View history</Link><Link className="btn btn-dark" href="/profile/receipts">View receipts</Link></div>
         </div>
+        <ResumeTransaction browser={bench.browser} />
+      </div>
       </div>
     </section>
   );

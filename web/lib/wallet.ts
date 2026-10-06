@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, custom, http, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 import { sepolia } from "viem/chains";
 import abi from "./LabxRaffle.abi.json";
 
@@ -51,18 +51,4 @@ export async function readRaffle(id: bigint) {
   const address = raffleAddress();
   if (!address) throw new Error("Sepolia raffle is not wired. NEXT_PUBLIC_RAFFLE_ADDRESS is not set.");
   return publicClient().readContract({ address, abi: labxAbi, functionName: "getRaffle", args: [id] });
-}
-
-export async function sendRaffle(functionName: string, args: unknown[], account: Address) {
-  const address = raffleAddress();
-  if (!address) throw new Error("Sepolia raffle is not wired. NEXT_PUBLIC_RAFFLE_ADDRESS is not set.");
-  const hash = await walletClient().writeContract({
-    address,
-    abi: labxAbi,
-    functionName,
-    args,
-    account,
-    chain: sepolia
-  } as never);
-  return hash as Hex;
 }

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Profile",
-  description: "Sepolia wallet, bonus entries, receipts, and agreements on the LABx bench."
+  description: "Connect a Sepolia wallet, check points, and save an email preference on LABx."
 };
 
 export default function ProfileLayout({ children }: { children: React.ReactNode }) {

@@ -1,5 +1,7 @@
 # Revised LABx splash release
 
+Historical record. The full website integration in `latest-website-release-20261007.md` supersedes this splash-only release scope. Do not use this document as current publication or deployment authority.
+
 ## Scope and authority
 
 R1. The user accepted the revised film and requested "upload it" after asking to assign it as the website splash. Release the approved V2 film and its website splash integration to LABx production. This authorization covers this presentation release, not the separate unshipped financial workflow/contract changes, an on-chain deployment or any wallet operation.

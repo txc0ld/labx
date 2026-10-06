@@ -1,6 +1,7 @@
 import { isAddress, isHex, keccak256, toBytes, type Address, type Hex } from "viem";
+import { requirePublishedTerms } from "./published-terms";
 import { assertAgreements, type AgreementInput } from "./agreements";
-import { authorizationMessage, authorizedRequest, type RequestContext } from "./request-auth";
+import { authorizationMessage, authorizedRequest, type RequestContext, type SignatureVerifier } from "./request-auth";
 import type { Store } from "./points";
 
 export type AgreementRequest = AgreementInput & { pieceId: string; termsHash: Hex; deadline: string; signature: Hex };
@@ -13,13 +14,14 @@ export function agreementMessage(input: AgreementRequest, context: AgreementCont
   });
 }
 
-export async function recordAgreement(store: Store, input: AgreementRequest, context: AgreementContext, now = Date.now()) {
+export async function recordAgreement(store: Store, input: AgreementRequest, context: AgreementContext, now = Date.now(), verifier?: SignatureVerifier) {
   assertAgreements(input);
+  requirePublishedTerms(context.termsHash);
   if (!isAddress(input.address) || typeof input.pieceId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.pieceId)) throw new Error("A valid wallet and piece are required.");
   if (!isHex(context.termsHash, { strict: true }) || context.termsHash.length !== 66 || /^0x0+$/.test(context.termsHash)) throw new Error("Agreement version is not configured.");
   if (typeof input.termsHash !== "string" || input.termsHash.toLowerCase() !== context.termsHash.toLowerCase()) throw new Error("Agreement version does not match.");
   const message = agreementMessage(input, context);
-  if (!await authorizedRequest(input.address, input.deadline, input.signature, message, now)) throw new Error("Agreement authorization was refused.");
+  if (!await authorizedRequest(input.address, input.deadline, input.signature, message, now, verifier)) throw new Error("Agreement authorization was refused.");
   const identity = authorizationMessage("agreement identity", context, {
     address: input.address.toLowerCase(), pieceId: input.pieceId, termsHash: context.termsHash.toLowerCase()
   });
@@ -35,6 +37,6 @@ export async function recordAgreement(store: Store, input: AgreementRequest, con
   try { saved = JSON.parse(raw || "null") as typeof record; } catch { throw new Error("Agreement record is invalid."); }
   if (!saved || saved.version !== 2 || saved.identity !== identity || saved.address !== record.address || saved.pieceId !== record.pieceId || saved.terms !== true || saved.rules !== true || saved.age !== true || JSON.stringify(saved.context) !== JSON.stringify(context) || !Number.isFinite(Date.parse(saved.at))) throw new Error("Agreement record is invalid.");
   const expected = agreementMessage({ ...input, deadline: saved.deadline }, context);
-  if (saved.message !== expected || !await authorizedRequest(saved.address, saved.deadline, saved.signature, expected, Date.parse(saved.at))) throw new Error("Agreement record is invalid.");
+  if (saved.message !== expected || !await authorizedRequest(saved.address, saved.deadline, saved.signature, expected, Date.parse(saved.at), verifier)) throw new Error("Agreement record is invalid.");
   return { key };
 }

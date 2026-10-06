@@ -32,7 +32,7 @@ export function BenchHub({ pieces, banner }: {
           <ResolvedTitle />
         </div>
         <div className="collection-intro-actions">
-          <p className="collection-demo-label"><strong>Browser demo</strong> · No transactions</p>
+          <p className="collection-status-label"><strong>Listings unavailable</strong></p>
           <Link href="/guide" className="guide-link">How it works <span aria-hidden="true">↗</span></Link>
         </div>
       </section>
@@ -40,11 +40,11 @@ export function BenchHub({ pieces, banner }: {
       <section className="capsule-collection" id="bench" aria-labelledby="bench-title" data-reveal>
         <div className="collection-heading">
           <h2 className="sr" id="bench-title">Available pieces</h2>
-          <div className="collection-filters" role="group" aria-label="Filter demo pieces">
+          <div className="collection-filters" role="group" aria-label="Filter raffles">
             {FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value} onClick={() => setFilter(item.value)}>{item.label}</button>)}
           </div>
         </div>
-        <p className="sr" role="status">Showing {shown.length} {shown.length === 1 ? "demo piece" : "demo pieces"}. Demo artwork and status; this is not a live raffle listing.</p>
+        <p className="sr" role="status">Showing {shown.length} {shown.length === 1 ? "raffle" : "raffles"}.</p>
         {shown.length ? (
           <ul className="capsule-grid" data-count={shown.length}>
             {shown.map((piece) => <Capsule key={piece.id} piece={piece} now={now} />)}
@@ -52,8 +52,9 @@ export function BenchHub({ pieces, banner }: {
         ) : (
           <div className="well empty-bench">
             <span className="empty-port" aria-hidden="true" />
-            <h3>{pieces.length ? "No pieces in this view" : "The bench is clear"}</h3>
-            <p>{pieces.length ? "Choose All pieces to explore the available demo capsules." : "No demo pieces are available in this browser yet."}</p>
+            <h3>{pieces.length ? "No raffles in this view" : "No raffles listed"}</h3>
+            <p>{pieces.length ? "Choose All pieces to view every listed raffle." : <>Listing tools are not connected yet. Read the <Link href="/guide">guide</Link> to learn how raffles are intended to work.</>}</p>
+            {!pieces.length ? <div className="btn-row"><Link className="btn" href="/membership">Compare membership packs</Link><Link className="btn btn-dark" href="/discounts">See partner discounts</Link></div> : null}
             {filter !== "all" ? <button className="btn btn-dark" type="button" onClick={() => setFilter("all")}>Show all pieces</button> : null}
           </div>
         )}
@@ -72,7 +73,7 @@ function Capsule({ piece, now }: { piece: Piece; now: number }) {
       : "Entry pack sold out";
   return (
     <li data-reveal>
-      <Link className="raffle-capsule" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title} demo piece`}>
+      <Link className="raffle-capsule" href={`/piece/${piece.id}`} aria-label={`Open ${piece.title}`}>
         <div className="capsule-art">
           <Image src={piece.image} alt={piece.imageAlt} width={1101} height={1101} unoptimized />
         </div>

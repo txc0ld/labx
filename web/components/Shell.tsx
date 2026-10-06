@@ -5,17 +5,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { BenchProvider } from "@/lib/bench";
-import { isCurrentPath } from "@/lib/nav";
-import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
+import { isCurrentPath, PRIMARY_LINKS } from "@/lib/nav";
 import { MotionOrchestrator } from "./MotionOrchestrator";
 import { CursorTrail } from "./CursorTrail";
-
-const LINKS = [
-  { href: "/", label: "Explore" },
-  { href: "/fairness", label: "Fairness" },
-  { href: "/seller", label: "Studio" },
-  { href: "/profile", label: "Profile" }
-];
+import { Footer } from "./ui/footer-section";
 
 const FOOTER_LINKS = [
   { href: "/about", label: "About" },
@@ -23,7 +16,7 @@ const FOOTER_LINKS = [
   { href: "/rules", label: "Draw rules" },
   { href: "/legal", label: "Terms" },
   { href: "/privacy", label: "Privacy" }
-];
+] as const;
 
 export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
@@ -31,6 +24,8 @@ export function Shell({ children }: { children: ReactNode }) {
     <BenchProvider>
       <MotionOrchestrator />
       <CursorTrail />
+      <div className="noise-overlay noise-overlay-animated" aria-hidden="true" />
+      <div className="noise-overlay noise-overlay-static" aria-hidden="true" />
       <a className="skip" href="#content">Skip to content</a>
       <div className="shell">
         <header className="site-header">
@@ -47,11 +42,10 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="nav-cluster">
             <nav aria-label="Primary">
               <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {LINKS.map((link) => (
+                {PRIMARY_LINKS.map((link) => (
                   <li key={link.href}>
                     <Link
                       href={link.href}
-                      className={link.href === "/" ? "nav-explore" : undefined}
                       aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
                     >
                       {link.label}
@@ -63,27 +57,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         </header>
         <main id="content" tabIndex={-1} className="wrap">{children}</main>
-        <footer className="site-footer">
-          <div className="footer-strip">
-            <strong>{OPERATOR.brand} · {publicSiteHost()}</strong>
-            <span>{OPERATOR_LINE}</span>
-            <nav aria-label="Footer">
-              <ul>
-                {FOOTER_LINKS.map((link) => (
-                  <li key={link.href}>
-                    <Link
-                      href={link.href}
-                      aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
-                    >
-                      {link.label}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-            <span>Ethereum Sepolia only. Mainnet is disabled.</span>
-          </div>
-        </footer>
+        <Footer legalLinks={FOOTER_LINKS} />
       </div>
     </BenchProvider>
   );

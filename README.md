@@ -1,57 +1,52 @@
 # LABx
 
-Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries come with the pack. Chainlink VRF v2.5 draws after an entry snapshot. The treasury and admin are a Safe.
+Membership packs for escrowed NFTs. Each purchased pack includes its published number of bonus raffle entries. The current contract source targets Ethereum Sepolia and uses Chainlink VRF v2.5 after a completed entry snapshot. It has no free-entry issuance.
 
-Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166 · public site `NEXT_PUBLIC_SITE_URL` (default [labx-two.vercel.app](https://labx-two.vercel.app))
+Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166. The public origin is configured with `NEXT_PUBLIC_SITE_URL`.
 
-Mainnet is disabled.
+## Current status
+
+The v2 contract changes and complete website workflow are local implementation work. Their acceptance evidence and remaining checks are recorded in [the workflow checkpoint](docs/build/full-workflow-20261006.md). A passing source test does not establish that production or an existing deployed contract has the same behavior.
+
+The historical Sepolia address is not an approved v2 deployment. Its owner and pending ownership target had no deployed code at the last recorded read-only check. A correctly configured Safe remains an operational requirement, not a verified fact about that deployment. No production, ownership, funding or on-chain change is implied by this source tree.
 
 ## Layout
 
-- `contracts` Foundry: `LabxRaffle`, Sepolia and local scripts, tests
-- `web` Next.js bench: explore, piece, studio, profile, fairness, draw rules, terms, privacy, about
-- `DESIGN.md` materials and tokens
-- `SECURITY.md` threat notes
-- `LEGAL.md` counsel draft
-- `LAUNCH.md` Sepolia checklist and environment
+- `contracts`: Solidity source, Foundry tests and isolated local/Sepolia deployment scripts.
+- `web`: Next.js pages, wallet/contract services and authenticated records.
+- `docs/build`: task contracts, candidate revisions and evidence pointers.
+- `SECURITY.md`: trust boundaries and known limits.
+- `LEGAL.md`: product notes for counsel, not legal clearance.
+- `LAUNCH.md`: separate deployment and migration plan.
 
-## Contracts
+## Local checks
 
 ```bash
 cd contracts
-forge test
-slither . --config-file slither.config.json --exclude-dependencies
-forge script script/DeploySepolia.s.sol:DeploySepolia --rpc-url "$SEPOLIA_RPC_URL" --broadcast
+forge build --sizes
+forge test --fuzz-runs 1024
 ```
-
-Pack price is USDC. Each pack also charges 5 USDC to the treasury at settlement. ETH is an optional Uniswap exact-output swap priced with Chainlink ETH/USD. Entries expire after 365 days and are snapshotted before VRF.
-
-## Web
 
 ```bash
 cd web
-npm install
+npm ci
 npm test
+npm run build
 npm run dev
 ```
 
-Vercel root directory: `web`.
+Vercel's project root is `web`. A catalog without an approved deployment must show its unavailable state; do not add invented listings or wallet activity to fill it.
 
-The bench runs without a deployed contract so the console can be reviewed. Wiring `NEXT_PUBLIC_RAFFLE_ADDRESS` enables the Sepolia wallet gate. The wallet gate rejects chain id 1.
+## Contract policy
 
-## Environment
+Sellers can edit a draft. Opening fixes the prize, pack economics, closing time, terms, treasury and randomness configuration for that raffle. Sales cannot close early. Each pack charges its price plus a 5 USDC lab fee; bonus entries expire after 365 days.
 
-See `.env.example`. The launch-critical names are:
+Anyone can enable refunds if a draw has not started seven days after sales end, or if no randomness is accepted within seven days of the request. Results at or after the callback cutoff are ignored. There is no reroll. Anyone can settle a recorded winner after the seller reveals or the seven-day reveal grace expires. Prize, seller proceeds, treasury fees and buyer refunds have separate claim paths.
 
-- `SAFE_ADDRESS`
-- `DEPLOYER_PRIVATE_KEY`
-- `SEPOLIA_RPC_URL`
-- `VRF_SUBSCRIPTION_ID`
-- `AMOE_SIGNER` and `AMOE_SIGNER_PRIVATE_KEY`
-- `TERMS_HASH`
-- `RESEND_API_KEY` and `RESEND_FROM`
-- `BOT_CHECKIN_TOKEN`
-- `NEXT_PUBLIC_RAFFLE_ADDRESS`
-- `NEXT_PUBLIC_RPC_URL`
+Pausing blocks new admissions and opening, while recovery and existing claims remain available. Operator discretion, external dependencies and chain conditions remain relevant; this is not a zero-risk or formal-audit claim.
 
-`LAUNCH.md` lists the Sepolia addresses for VRF, USDC, and the optional ETH route.
+## Configuration
+
+Use `.env.example` for names, never for credentials. Durable server records require both Upstash settings on Vercel. Local file persistence is for a single development process.
+
+A public contract address alone must not enable financial actions. The v2 portal requires an approved deployment manifest and verifies chain, bytecode, contract version and payment token. Approval of a new manifest and any hosted release are separate from local source implementation. See [LAUNCH.md](LAUNCH.md).

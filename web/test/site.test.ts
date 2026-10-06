@@ -8,7 +8,7 @@ import { ResolvedTitle } from "../components/ResolvedTitle";
 import { ScrollStory } from "../components/ScrollStory";
 import { SquishyPackCard } from "../components/ui/squishy-card-component";
 import { LAB_FEE } from "../lib/seed";
-import { raffleAddress, readRaffle, sendRaffle } from "../lib/wallet";
+import { raffleAddress, readRaffle } from "../lib/wallet";
 import { roundedOrtho } from "../lib/tubes";
 
 const webRoot = path.resolve(__dirname, "..");
@@ -43,7 +43,14 @@ const STATIC_ROUTES = new Set([
   "/privacy",
   "/about",
   "/guide",
+  "/membership",
+  "/discounts",
+  "/discounts/fantom-labs",
+  "/discounts/seatmap",
+  "/eligibility",
   "/profile",
+  "/profile/history",
+  "/profile/receipts",
   "/seller"
 ]);
 const ALIAS_ROUTES = new Set(["/terms"]);
@@ -108,14 +115,14 @@ describe("required marketing routes", () => {
     expect(text).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/i);
   });
 
-  it("states settle flips phase and claims pull prize, proceeds, and fee", () => {
-    for (const file of ["app/legal/page.tsx", "app/rules/page.tsx"]) {
-      const text = read(file);
-      expect(text).toMatch(/claimPrize/);
-      expect(text).toMatch(/claimProceeds/);
-      expect(text).toMatch(/claimFee/);
-      expect(text).toMatch(/settled phase|flips the (piece|phase)|phase to settled/i);
-    }
+  it("describes the prize, proceeds, fee, and cancellation outcomes without contract jargon", () => {
+    const terms = read("lib/published-terms.ts");
+    expect(read("app/legal/page.tsx")).toMatch(/MEMBERSHIP_TERMS/);
+    expect(read("app/rules/page.tsx")).toMatch(/DRAW_RULES/);
+    expect(terms).toMatch(/winner claims the NFT/i);
+    expect(terms).toMatch(/seller claims membership proceeds/i);
+    expect(terms).toMatch(/treasury receives the lab fee/i);
+    expect(terms).toMatch(/buyer.*membership price and lab fee/i);
   });
 
   it("describes the lab and the Sepolia bench on About", () => {
@@ -169,13 +176,15 @@ describe("chrome links", () => {
         expect(
           href.startsWith("https://www.oaic.gov.au") ||
             href.startsWith("https://labx-two.vercel.app") ||
+            href.startsWith("https://www.fantomlabs.io/") ||
+            href.startsWith("https://seatmap.app/pro") ||
             href === "https://labx.art" ||
             href.startsWith("https://labx.art/")
         ).toBe(true);
         continue;
       }
       if (href.startsWith("#")) {
-        expect(["#content", "#bench", "#browse", "#packs", "#eligibility", "#workflow"].includes(href)).toBe(true);
+        expect(["#content", "#bench", "#browse", "#packs", "#eligibility", "#workflow", "#email-preferences"].includes(href)).toBe(true);
         continue;
       }
       const [pathname] = href.split("#");
@@ -185,6 +194,11 @@ describe("chrome links", () => {
       }
       if (pathname.startsWith("/fairness")) {
         expect(pageExists("app/fairness/page.tsx")).toBe(true);
+        continue;
+      }
+      if (pathname === "/discounts/${offer.slug}") {
+        expect(pageExists("app/discounts/fantom-labs/page.tsx")).toBe(true);
+        expect(pageExists("app/discounts/seatmap/page.tsx")).toBe(true);
         continue;
       }
       if (ALIAS_ROUTES.has(pathname)) {
@@ -222,12 +236,9 @@ describe("on-chain soft disable", () => {
   it("refuses on-chain reads and writes when the raffle address is missing", async () => {
     delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
     await expect(readRaffle(1n)).rejects.toThrow(/not wired|not set|not configured/i);
-    await expect(sendRaffle("getRaffle", [1n], "0x00000000000000000000000000000000000b0b01")).rejects.toThrow(
-      /not wired|not set|not configured/i
-    );
   });
 
-  it("keeps studio, profile, rules, and piece desks honest when the contract is unset", () => {
+  it("keeps unavailable customer workflows read-only", () => {
     const surfaces = [
       read("app/seller/page.tsx"),
       read("app/profile/page.tsx"),
@@ -235,23 +246,22 @@ describe("on-chain soft disable", () => {
       read("components/PieceDesk.tsx"),
       read("lib/bench.tsx")
     ].join("\n");
-    expect(surfaces).toMatch(/raffleAddress|onChainReady|OnChainStatus/);
-    expect(surfaces).toMatch(/not wired|bench only|this bench/i);
-    expect(read("lib/bench.tsx")).toMatch(/onChainReady\(\)|raffleAddress\(\)/);
-    expect(read("lib/bench.tsx")).toMatch(/saltedPrivateHash|generatePrivateKey/);
+    expect(surfaces).toMatch(/OnChainStatus/);
+    expect(surfaces).toMatch(/not connected|unavailable/i);
+    expect(read("lib/bench.tsx")).toMatch(/pieces:\s*\[\]/);
+    expect(surfaces).not.toMatch(/recordComplimentary|createPiece|bench\.buy|bench\.mark|personal_sign/);
   });
 
   it.each([undefined, "0x0000000000000000000000000000000000000001"])(
-    "keeps browser-demo disclosures visible with raffle address %s",
+    "keeps unavailable workflow disclosures visible with raffle address %s",
     (address) => {
       if (address === undefined) delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
       else process.env.NEXT_PUBLIC_RAFFLE_ADDRESS = address;
       for (const surface of ["studio", "profile", "rules", "piece"] as const) {
         const markup = renderToStaticMarkup(createElement(OnChainStatus, { surface }));
         expect(markup).toContain('role="status"');
-        expect(markup).toContain("bench only");
-        expect(markup).toMatch(/browser demo|browser\. It does not transfer/);
-        if (address) expect(markup).toContain("these controls still do not submit transactions");
+        expect(markup).toMatch(/not connected|unavailable|requires? a reviewed|stay disabled/);
+        expect(markup.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
       }
     }
   );
@@ -330,15 +340,15 @@ describe("responsive chrome and legal surfaces", () => {
     expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*\.site-header/);
   });
 
-  it("splits privacy and terms into operator, network, and data surfaces", () => {
+  it("splits long policy copy into readable surfaces", () => {
     const privacy = read("app/privacy/page.tsx");
     const legal = read("app/legal/page.tsx");
     expect(privacy).toMatch(/className="pearl[^"]*legal-copy"/);
     expect(privacy).toMatch(/className="terminal[^"]*legal-copy"/);
     expect(privacy).toMatch(/className="well[^"]*legal-copy"/);
     expect(legal).toMatch(/className="pearl[^"]*legal-copy"/);
-    expect(legal).toMatch(/className="terminal[^"]*legal-copy"/);
-    expect(legal).toMatch(/className="well[^"]*legal-copy"/);
+    expect(legal).toMatch(/legal-section-grid/);
+    expect(legal).toMatch(/MEMBERSHIP_TERMS\.map/);
   });
 
   it("publishes OG, twitter, and theme-color from the env site URL", () => {
@@ -361,7 +371,7 @@ describe("responsive chrome and legal surfaces", () => {
     const hub = read("components/BenchHub.tsx");
     expect(hub).toMatch(/<ResolvedTitle \/>/);
     expect(hub).toMatch(/className="capsule-grid"/);
-    expect(hub).toMatch(/Browser demo/);
+    expect(hub).toMatch(/Listings unavailable/);
     expect(hub).toMatch(/href="\/guide"/);
     expect(hub).not.toMatch(/hero-art-stack|hero-art-card|Explore the bench/);
   });
@@ -421,27 +431,26 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain("Sold out");
   });
 
-  it("publishes a complete browser-demo and pack guide", () => {
+  it("publishes a complete verified-flow and membership guide", () => {
     const guide = read("app/guide/page.tsx");
-    expect(guide).toMatch(/browser demo/i);
-    expect(guide).toMatch(/do not transfer USDC|do not perform those on-chain actions/i);
+    expect(guide).toMatch(/requires a reviewed v2 deployment/i);
+    expect(guide).toMatch(/enables each step only when a reviewed v2 deployment/i);
     expect(guide).toMatch(/LAB_FEE/);
-    expect(guide).toMatch(/Quantity is limited to 1–5 packs/);
+    expect(guide).toMatch(/validates quantity and remaining supply/i);
     expect(guide).toMatch(/12-month bonus-entry expiry/);
-    expect(guide).toMatch(/intended contract workflow/i);
+    expect(guide).toMatch(/verified contract workflow/i);
     for (const href of ["/", "/fairness", "/rules", "/legal", "/profile", "/seller"]) {
       expect(guide).toContain(`href="${href}`);
     }
-    const hub = read("components/BenchHub.tsx");
-    expect(hub).toMatch(/Browser demo[\s\S]*no transactions/i);
-    expect(hub).not.toMatch(/Ethereum mainnet is disabled/);
-    expect(read("components/PieceDesk.tsx")).toMatch(/OnChainStatus surface="piece" compact/);
+    expect(read("app/page.tsx")).toMatch(/LiveExplore/);
+    expect(read("components/workflow/RaffleCatalog.tsx")).toMatch(/No raffles listed/);
+    expect(read("app\/piece\/[id]\/page.tsx")).toMatch(/LiveRaffle/);
     expect(read("app/sitemap.ts")).toContain('"/guide"');
   });
 
-  it("marks OnChainStatus as bench-only with a lavender lamp", () => {
+  it("marks unavailable customer workflows explicitly", () => {
     const status = read("components/OnChainStatus.tsx");
-    expect(status).toMatch(/lamp lavender/);
-    expect(status).toMatch(/bench only/);
+    expect(status).toMatch(/Listing tools are not connected/);
+    expect(status).toMatch(/Purchasing is unavailable/);
   });
 });

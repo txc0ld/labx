@@ -10,8 +10,7 @@ export const metadata: Metadata = {
 
 export default function AboutPage() {
   return (
-    <section className="section stack">
-      <p className="kicker">About</p>
+    <section className="section stack page-frame">
       <h1 className="page-title">About LABx</h1>
       <p className="lede legal-copy">
         LABx is a membership bench for one escrowed piece at a time. Bonus entries come with the pack. After sales close, an entry snapshot freezes, then Chainlink VRF v2.5 selects the wallet.
@@ -21,7 +20,7 @@ export default function AboutPage() {
         <article className="pearl pad stack">
           <h2>Operator</h2>
           <p>{OPERATOR.brand} is operated by {OPERATOR_LINE}.</p>
-          <p>The public site is {publicSiteHost()}. The treasury and admin are a Safe multisig. Fantom Labs can pause new packs and rotate the complimentary-entry signer.</p>
+          <p>The public site is {publicSiteHost()}. The intended treasury and admin authority is a Safe multisig. Fantom Labs can pause new membership sales, while existing draw and recovery steps remain available.</p>
         </article>
         <article className="pearl pad stack">
           <h2>The bench</h2>
@@ -39,14 +38,16 @@ export default function AboutPage() {
       </div>
       <article className="pearl pad stack legal-copy">
         <h2>How a piece moves</h2>
-        <p>Studio commits a piece, escrows the token, then opens packs. Buyers confirm three agreements. Sales close, expired entries drop out of the snapshot, VRF supplies the word, the commitment can be revealed, then settlement or cancel-and-claim.</p>
-        <p>A complimentary bonus entry lives on the draw-rules page after a bot-gated check-in and a captcha. It is not promoted on explore.</p>
+        <ol className="walkthrough-list">
+          <li><strong>Prepare.</strong> The seller reviews the membership options, saves the commitment and escrows the NFT.</li>
+          <li><strong>Open.</strong> Buyers choose a membership. Its published bonus entries join that piece only.</li>
+          <li><strong>Draw.</strong> Sales close, eligible entries freeze, and Chainlink VRF supplies randomness.</li>
+          <li><strong>Finish.</strong> The winner, seller and treasury claim their respective assets. Cancellation enables buyer refunds and NFT recovery.</li>
+        </ol>
         <p>These pages are a product draft for counsel, not a legal opinion and not a consumer promotion.</p>
         <div className="btn-row">
-          <Link className="btn" href="/">Explore the bench</Link>
-          <Link className="btn btn-dark" href="/fairness">Fairness</Link>
-          <Link className="btn btn-dark" href="/legal">Terms</Link>
-          <Link className="btn btn-dark" href="/privacy">Privacy</Link>
+          <Link className="btn" href="/guide">Follow the walkthrough</Link>
+          <Link className="text-link" href="/fairness">Review draw protections</Link>
         </div>
       </article>
     </section>

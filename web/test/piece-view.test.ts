@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { pieceView, closingDate } from "../lib/piece-view";
-import { SEED_PIECES, type Piece } from "../lib/seed";
+import type { Piece } from "../lib/seed";
+import { PIECE_FIXTURE } from "./fixtures/pieces";
 
 const deadline = Date.parse("2027-06-01T00:00:00.000Z");
-const piece: Piece = { ...SEED_PIECES[0], salesEnd: new Date(deadline).toISOString() };
+const piece: Piece = { ...PIECE_FIXTURE, salesEnd: new Date(deadline).toISOString() };
 
-describe("demo piece availability", () => {
+describe("piece availability", () => {
   it("closes at the exact sales deadline even if the stored phase remains open", () => {
     expect(pieceView(piece, deadline - 1).isOpen).toBe(true);
     expect(pieceView(piece, deadline).isOpen).toBe(false);
