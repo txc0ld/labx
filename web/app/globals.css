@@ -771,6 +771,7 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
 .nav { gap:.1rem; }
 .nav a,.key { border-radius:6px; padding:.55rem .72rem; font-size:.82rem; }
 .nav a[aria-current="page"],.key.on,.nav a.nav-explore[aria-current="page"] { background:var(--lavender); color:var(--ink); box-shadow:none; }
+.nav a.nav-explore[aria-current="page"] { background:transparent; }
 main.wrap { padding-block-start:clamp(1.8rem,4vw,4rem); }
 .pearl,.well { border:1px solid var(--line); border-radius:10px; background:rgba(250,249,246,.78); box-shadow:none; }
 .terminal { border:1px solid #403f43; border-radius:10px; background:var(--terminal); box-shadow:none; }
