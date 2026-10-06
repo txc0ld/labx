@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
-import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import { Shell } from "@/components/Shell";
 import { publicSiteUrl } from "@/lib/operator";
 import "./globals.css";
@@ -12,8 +11,6 @@ const sans = localFont({
   display: "swap",
   variable: "--font-sans"
 });
-const display = Space_Grotesk({ subsets: ["latin"], variable: "--font-display" });
-const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 const site = publicSiteUrl();
 const description = "Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries, Chainlink VRF, Safe treasury.";
@@ -55,7 +52,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
+    <html lang="en" className={sans.variable}>
       <body>
         <Shell>{children}</Shell>
       </body>
