@@ -18,16 +18,16 @@ interface BookDemoButtonProps
 
 const variantStyles: Record<
   BookDemoVariant,
-  { from: string; to: string; dot: string }
+  { color: string; dot: string }
 > = {
-  lime: { from: "#b9ff87", to: "#b9ff87", dot: "#0f0f0f" },
-  sky: { from: "#a5e0ff", to: "#6bc8f5", dot: "#0a1f3a" },
-  rose: { from: "#ffc4d3", to: "#f590a5", dot: "#3a0a1f" },
-  amber: { from: "#ffd66e", to: "#f5a82e", dot: "#3a210a" },
-  emerald: { from: "#a8efc5", to: "#5fd49a", dot: "#0a2a1a" },
-  violet: { from: "#d4b9ff", to: "#a07bf5", dot: "#1f0a3a" },
-  orange: { from: "#ffb88a", to: "#f57a3a", dot: "#3a190a" },
-  magenta: { from: "#f5a8e0", to: "#e060c5", dot: "#3a0a2a" },
+  lime: { color: "#b9ff87", dot: "#0f0f0f" },
+  sky: { color: "#a5e0ff", dot: "#0a1f3a" },
+  rose: { color: "#ffc4d3", dot: "#3a0a1f" },
+  amber: { color: "#ffd66e", dot: "#3a210a" },
+  emerald: { color: "#a8efc5", dot: "#0a2a1a" },
+  violet: { color: "#b37df6", dot: "#1f0a3a" },
+  orange: { color: "#ffb88a", dot: "#3a190a" },
+  magenta: { color: "#f5a8e0", dot: "#3a0a2a" },
 };
 
 const DoubleChevron = ({ index, color }: { index: number; color: string }) => {
@@ -79,9 +79,9 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
           className,
         ].filter(Boolean).join(" ")}
         style={{
-          background: "linear-gradient(145deg, #48434f 0%, #242326 65%, #17151b 100%)",
-          boxShadow:
-            "inset 0 2px 2px rgba(255,255,255,0.2), inset 0 -3px 6px rgba(0,0,0,0.35), 0 3px 8px rgba(0,0,0,0.12)",
+          background: "#242326",
+          borderRadius: 18,
+          boxShadow: "var(--control-dark-bevel)",
         }}
         {...props}
       >
@@ -113,9 +113,9 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
         <span
           className="absolute top-1 left-1 bottom-1 z-10 w-9 group-hover/btn:w-[calc(100%-0.5rem)] group-focus-visible/btn:w-[calc(100%-0.5rem)] group-active/btn:w-[calc(100%-0.5rem)] flex items-center justify-start overflow-hidden rounded-xl pl-3 pr-2.5 gap-2.5 transition-[width,gap] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
           style={{
-            background: `radial-gradient(ellipse at 25% 0%, rgba(255,255,255,0.45), transparent 70%), linear-gradient(145deg, ${v.from} 0%, ${v.to} 100%)`,
-            boxShadow:
-              "inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -2px 4px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08)",
+            background: v.color,
+            borderRadius: 14,
+            boxShadow: "var(--control-bevel)",
           }}
         >
           <DoubleChevron index={0} color={v.dot} />
