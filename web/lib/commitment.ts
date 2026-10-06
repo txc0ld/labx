@@ -1,8 +1,6 @@
 import { encodeAbiParameters, keccak256, parseAbiParameters, toBytes, type Address, type Hex } from "viem";
 
-export const AMOE_TYPEHASH = keccak256(
-  toBytes("AmoeClaim(uint256 raffleId,address account,bytes32 captchaDigest,uint256 deadline,bytes32 termsHash)")
-);
+
 
 export function hashCommitment(args: {
   chainId: bigint;

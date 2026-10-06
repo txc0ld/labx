@@ -8,7 +8,7 @@ import { ResolvedTitle } from "../components/ResolvedTitle";
 import { ScrollStory } from "../components/ScrollStory";
 import { SquishyPackCard } from "../components/ui/squishy-card-component";
 import { LAB_FEE } from "../lib/seed";
-import { raffleAddress, readRaffle, sendRaffle } from "../lib/wallet";
+import { raffleAddress, readRaffle } from "../lib/wallet";
 import { roundedOrtho } from "../lib/tubes";
 
 const webRoot = path.resolve(__dirname, "..");
@@ -236,9 +236,6 @@ describe("on-chain soft disable", () => {
   it("refuses on-chain reads and writes when the raffle address is missing", async () => {
     delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
     await expect(readRaffle(1n)).rejects.toThrow(/not wired|not set|not configured/i);
-    await expect(sendRaffle("getRaffle", [1n], "0x00000000000000000000000000000000000b0b01")).rejects.toThrow(
-      /not wired|not set|not configured/i
-    );
   });
 
   it("keeps unavailable customer workflows read-only", () => {

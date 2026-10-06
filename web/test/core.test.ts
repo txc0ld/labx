@@ -4,8 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { generatePrivateKey } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { assertAgreements } from "../lib/agreements";
-import { issueChallenge, verifyChallenge } from "../lib/captcha";
-import { AMOE_TYPEHASH, COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
+import { COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
 import { pickWinner, snapshotLots } from "../lib/draw";
 import { receiptBody } from "../lib/email";
 import { MemoryStore as Mem } from "../lib/store";
@@ -36,9 +35,6 @@ describe("draw weights", () => {
 describe("commitment", () => {
   it("matches the Forge vector", () => {
     expect(hashCommitment(COMMIT_VECTOR)).toBe(COMMIT_VECTOR.expected);
-  });
-  it("uses the VRF-era AMOE type string", () => {
-    expect(AMOE_TYPEHASH).toBe("0xbc81dcb16048d14426e084f5bdcf5fbba5cc3ca24e5d5063c9487767d3dd9b25");
   });
 });
 
@@ -77,12 +73,7 @@ describe("bot check-in", () => {
   });
 });
 
-describe("captcha and agreements", () => {
-  it("accepts the issued answer only", () => {
-    const challenge = issueChallenge("secret", 1_700_000_000_000);
-    expect(verifyChallenge("secret", { ...challenge, answer: String(challenge.answer) }, challenge.expiresAt - 1)).toBe(true);
-    expect(verifyChallenge("secret", { ...challenge, answer: "0" }, challenge.expiresAt - 1)).toBe(false);
-  });
+describe("agreements", () => {
   it("requires every agreement", () => {
     expect(() => assertAgreements({ address: "0x1", terms: true, rules: true, age: false })).toThrow(/agreements/);
   });

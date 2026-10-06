@@ -1,3 +1,4 @@
+import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbiParameters, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -142,7 +143,7 @@ describe("verified purchase receipts", () => {
 });
 
 describe("version-bound signed agreements", () => {
-  const agreementContext = { ...context, termsHash: `0x${"ab".repeat(32)}` as Hex };
+  const agreementContext = { ...context, termsHash: PUBLISHED_TERMS_HASH };
   async function agreement(overrides: Partial<AgreementRequest> = {}): Promise<AgreementRequest> {
     const input: AgreementRequest = { address: account.address, pieceId: "piece-1", terms: true, rules: true, age: true, termsHash: agreementContext.termsHash, deadline: String(now / 1000 + 60), signature: "0x", ...overrides };
     input.signature = await account.signMessage({ message: agreementMessage(input, agreementContext) });
