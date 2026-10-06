@@ -65,7 +65,7 @@ export default function PrivacyPage() {
         <p>Public pages show commitment hashes, not the private commercial number and not the salt.</p>
 
         <h2>Cookies and local storage</h2>
-        <p>The bench uses local storage for the in-browser card. It does not use advertising cookies and it does not run a third-party ad pixel. Hosting may set a strictly necessary cookie for the application.</p>
+        <p>The bench uses local storage for the in-browser card. Session storage records whether the introductory film has been handled for the browser session. If that flag cannot be read, the film is skipped. An in-memory flag also prevents a repeat during the current page session. It does not use advertising cookies and it does not run a third-party ad pixel. Hosting may set a strictly necessary cookie for the application.</p>
 
         <h2>Who else sees a record</h2>
         <p>Infrastructure that may process data on our behalf includes the site host, an optional Redis store, an optional email sender, a wallet you install, and public Sepolia infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
