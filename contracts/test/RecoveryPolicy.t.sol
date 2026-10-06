@@ -132,8 +132,8 @@ contract RecoveryPolicyTest is Test {
         labx.claimPrize(id);
 
         assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(nextTreasury), 5e6);
-        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(usdc.balanceOf(nextTreasury), 0);
+        assertEq(usdc.balanceOf(treasury), 5e6);
         assertEq(nft.ownerOf(1), alice);
         assertEq(usdc.balanceOf(address(labx)), 0);
     }
@@ -239,8 +239,8 @@ contract RecoveryPolicyTest is Test {
         assertEq(uint256(afterFailure.phase), uint256(LabxRaffle.Phase.Closed));
         assertEq(afterFailure.vrfRequestId, 0);
         assertEq(afterFailure.vrfRequestedAt, 0);
-        assertEq(labx.requestToRaffle(1), 0);
-        assertEq(labx.requestCoordinator(1), address(0));
+        assertEq(labx.requestToRaffle(address(vrf), 1), 0);
+        assertFalse(labx.requestUsed(address(vrf), 1));
         assertEq(labx.activeDrawings(), 0);
         assertEq(vrf.next(), 1);
 
@@ -301,23 +301,23 @@ contract RecoveryPolicyTest is Test {
         assertEq(expired.winner, address(0));
         assertEq(expired.randomWord, 0);
         assertEq(expired.vrfRequestId, callbackFirstRequest);
-        assertEq(labx.requestToRaffle(callbackFirstRequest), callbackFirstId);
-        assertEq(labx.requestCoordinator(callbackFirstRequest), address(vrf));
+        assertEq(labx.requestToRaffle(address(vrf), callbackFirstRequest), callbackFirstId);
+        assertTrue(labx.requestUsed(address(vrf), callbackFirstRequest));
         assertEq(labx.activeDrawings(), 2);
 
         uint256 outsiderBefore = usdc.balanceOf(outsider);
         vm.prank(outsider);
         labx.abortDrawing(callbackFirstId);
         assertEq(usdc.balanceOf(outsider), outsiderBefore);
-        assertEq(labx.requestToRaffle(callbackFirstRequest), 0);
-        assertEq(labx.requestCoordinator(callbackFirstRequest), address(0));
+        assertEq(labx.requestToRaffle(address(vrf), callbackFirstRequest), 0);
+        assertTrue(labx.requestUsed(address(vrf), callbackFirstRequest));
         assertEq(labx.getRaffle(callbackFirstId).vrfRequestId, 0);
         assertEq(labx.activeDrawings(), 1);
 
         vm.prank(outsider);
         labx.abortDrawing(abortFirstId);
         assertEq(labx.activeDrawings(), 0);
-        assertEq(labx.requestToRaffle(abortFirstRequest), 0);
+        assertEq(labx.requestToRaffle(address(vrf), abortFirstRequest), 0);
         vrf.fulfill(address(labx), abortFirstRequest, 0);
         assertEq(uint256(labx.getRaffle(abortFirstId).phase), uint256(LabxRaffle.Phase.Cancelled));
         assertEq(labx.getRaffle(abortFirstId).winner, address(0));
@@ -403,8 +403,8 @@ contract RecoveryPolicyTest is Test {
         labx.abortDrawing(id);
         _assertRefundAdds(id, alice, 30e6);
 
-        assertEq(labx.requestToRaffle(requestId), 0);
-        assertEq(labx.requestCoordinator(requestId), address(0));
+        assertEq(labx.requestToRaffle(address(vrf), requestId), 0);
+        assertTrue(labx.requestUsed(address(vrf), requestId));
         assertEq(labx.activeDrawings(), 0);
         assertEq(labx.getRaffle(id).principalEscrow, 0);
         assertEq(labx.getRaffle(id).feeEscrow, 0);
@@ -468,11 +468,9 @@ contract RecoveryPolicyTest is Test {
                 vrfCoordinator: address(vrf),
                 keyHash: KEY,
                 subscriptionId: 1,
-                amoeSigner: signer,
                 termsHash: bytes32(TERMS),
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3,
-                amoeCap: 0
+                requestConfirmations: 3
             })
         );
     }
@@ -505,6 +503,8 @@ contract RecoveryPolicyTest is Test {
     }
 
     function _close(uint256 id) internal {
+        uint256 end = labx.getRaffle(id).salesEnd;
+        if (block.timestamp < end) vm.warp(end);
         vm.prank(seller);
         labx.close(id);
     }

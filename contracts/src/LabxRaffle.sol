@@ -6,24 +6,20 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
-import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {VRFV2PlusClient} from "./vendor/VRFV2PlusClient.sol";
 import {IVRFCoordinatorV2Plus, ISwapRouter02, IWETH9, AggregatorV3Interface} from "./interfaces/External.sol";
 
 /// @title LabxRaffle
 /// @notice Sepolia membership-pack draws for LABx. Bonus entries are not tickets.
-///         Ethereum mainnet (chain id 1) cannot be deployed. Treasury and admin are a Safe.
+///         Ethereum mainnet (chain id 1) cannot be deployed. Admin configuration needs independent review.
 /// @dev Prize NFTs are escrowed and pulled after settlement or cancellation. USDC principal
 ///      and the lab fee are pulled separately, so a reverting receiver cannot freeze them.
 ///      A server-side commitment is stored as a hash and never decoded on-chain.
 ///      Randomness is Chainlink VRF v2.5, requested only after an entry snapshot. The
-///      coordinator that accepted a request stays pinned until that draw ends.
-///      `nativePayment` defaults to false (LINK). The live Sepolia deploy
-///      `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` hardcodes that mode; fund the VRF
-///      subscription with LINK until a redeploy that can set `nativePayment` true.
-contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
+///      full randomness configuration, terms and treasury are fixed when sales open.
+///      New deployments do not change historical LABx bytecode.
+contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     using SafeERC20 for IERC20;
 
     uint256 public constant LAB_FEE = 5_000_000; // 5 USDC, 6 decimals. Charged on top of the pack price.
@@ -40,14 +36,8 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     uint256 public constant VRF_ABORT_AFTER = 7 days;
     uint256 public constant MAX_ETH_DEADLINE = 10 minutes;
     uint256 public constant COORDINATOR_DELAY = 1 days;
-    uint32 public constant DEFAULT_AMOE_CAP = 100;
-    uint32 public constant MAX_AMOE_CAP = 10_000;
     uint16 public constant MIN_CONFIRMATIONS = 3;
     uint16 public constant MAX_CONFIRMATIONS = 200;
-
-    bytes32 public constant AMOE_TYPEHASH = keccak256(
-        "AmoeClaim(uint256 raffleId,address account,bytes32 captchaDigest,uint256 deadline,bytes32 termsHash)"
-    );
 
     enum Phase {
         Draft,
@@ -104,7 +94,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         uint256 randomWord;
         address winner;
         uint8 packCount;
-        uint32 amoeCount;
         string title;
     }
 
@@ -131,8 +120,18 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         uint256 randomWord;
         address winner;
         uint8 packCount;
-        uint32 amoeCount;
         string title;
+    }
+
+    struct RafflePolicy {
+        address coordinator;
+        address treasury;
+        bytes32 termsHash;
+        bytes32 keyHash;
+        uint256 subscriptionId;
+        uint32 callbackGasLimit;
+        uint16 requestConfirmations;
+        bool nativePayment;
     }
 
     struct Init {
@@ -145,11 +144,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         address vrfCoordinator;
         bytes32 keyHash;
         uint256 subscriptionId;
-        address amoeSigner;
         bytes32 termsHash;
         uint32 callbackGasLimit;
         uint16 requestConfirmations;
-        uint32 amoeCap;
     }
 
     error MainnetDisabled();
@@ -172,7 +169,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     error RevealMismatch();
     error RevealRequired();
     error TooEarly();
-    error OnlyCoordinator(address have, address want);
     error EthPathDisabled();
     error StalePrice();
     error BadFeed();
@@ -184,23 +180,21 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     error BadWindow();
     error BadConfig();
     error UsdcDecimals();
-    error AmoeUsed();
-    error AmoeCap();
-    error CaptchaUsed();
-    error BadSignature();
     error Expired();
     error NotWinner();
     error NotClaimable();
     error BadDeadline();
-    error DrawInFlight();
     error RandomnessRetryDisabled();
+    error FreeEntryDisabled();
+    error EscrowIdentityLocked();
+    error RequestAlreadyUsed();
+    error OpeningPolicyChanged();
 
     IERC20 public immutable usdc;
 
     address public owner;
     address public pendingOwner;
     address public treasury;
-    address public amoeSigner;
     address public vrfCoordinator;
     address public pendingCoordinator;
     uint256 public coordinatorEta;
@@ -214,16 +208,12 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     uint32 public callbackGasLimit;
     uint16 public requestConfirmations;
     uint24 public immutable poolFee;
-    uint32 public amoeCap;
     bool public ethPathEnabled;
-    /// @notice VRF v2.5 extraArgs payment mode. False = LINK (default, matches Sepolia
-    ///         `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C`). True = native ETH. Owner-settable
-    ///         only while `activeDrawings == 0`. Live Sepolia must keep LINK funding until a
-    ///         redeploy can flip this.
+    /// @notice Default billing mode for future openings; false is LINK.
     bool public nativePayment;
     bool public paused;
     uint256 public nextId = 1;
-    bool private _awaitingRequest;
+    address private _awaitingCoordinator;
     uint256 private _syncRequestId;
     uint256 private _syncWord;
     bool private _syncFilled;
@@ -235,10 +225,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     mapping(uint256 => address[]) public snapshotOwners;
     mapping(uint256 => mapping(address => uint256)) public principalOf;
     mapping(uint256 => mapping(address => uint256)) public feeOf;
-    mapping(uint256 => mapping(address => bool)) public amoeClaimed;
-    mapping(bytes32 => bool) public captchaUsed;
-    mapping(uint256 => uint256) public requestToRaffle;
-    mapping(uint256 => address) public requestCoordinator;
+    mapping(uint256 => RafflePolicy) internal _policies;
+    mapping(address => mapping(uint256 => uint256)) public requestToRaffle;
+    mapping(address => mapping(uint256 => bool)) public requestUsed;
 
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -247,6 +236,8 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     );
     event Escrowed(uint256 indexed id, address indexed nft, uint256 tokenId);
     event Opened(uint256 indexed id);
+    event DraftUpdated(uint256 indexed id);
+    event PolicyPinned(uint256 indexed id, address indexed coordinator, address treasury, bytes32 termsHash);
     event Closed(uint256 indexed id);
     event PackPurchased(
         uint256 indexed id,
@@ -265,7 +256,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     event Settled(uint256 indexed id, address indexed winner, uint256 principal, uint256 fee);
     event Cancelled(uint256 indexed id);
     event Refunded(uint256 indexed id, address indexed buyer, uint256 amount);
-    event AmoeClaimed(uint256 indexed id, address indexed account);
     event TermsUpdated(bytes32 termsHash);
     event PausedSet(bool paused);
     event PrizeClaimed(uint256 indexed id, address indexed winner);
@@ -276,7 +266,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     event CoordinatorApplied(address indexed coordinator);
     event EthPathSet(bool enabled);
     event TreasurySet(address indexed previous, address indexed next);
-    event AmoeSignerSet(address indexed previous, address indexed next);
     event VrfConfigSet(bytes32 keyHash, uint256 subscriptionId, uint32 callbackGasLimit, uint16 requestConfirmations);
     event NativePaymentSet(bool nativePayment);
 
@@ -285,12 +274,11 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         _;
     }
 
-    constructor(Init memory init) EIP712("LABx", "1") {
+    constructor(Init memory init) {
         if (block.chainid == 1) revert MainnetDisabled();
-        if (
-            init.treasury == address(0) || init.usdc == address(0) || init.vrfCoordinator == address(0)
-                || init.amoeSigner == address(0)
-        ) revert ZeroAddress();
+        if (init.treasury == address(0) || init.usdc == address(0) || init.vrfCoordinator == address(0)) {
+            revert ZeroAddress();
+        }
         if (init.termsHash == bytes32(0) || init.keyHash == bytes32(0) || init.subscriptionId == 0) revert BadConfig();
         if (init.callbackGasLimit < 200_000 || init.callbackGasLimit > 2_500_000) revert BadConfig();
         if (init.requestConfirmations < MIN_CONFIRMATIONS || init.requestConfirmations > MAX_CONFIRMATIONS) {
@@ -304,8 +292,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
             }
             if (AggregatorV3Interface(init.ethUsdFeed).decimals() != 8) revert BadFeed();
         }
-        uint32 cap = init.amoeCap == 0 ? DEFAULT_AMOE_CAP : init.amoeCap;
-        if (cap > MAX_AMOE_CAP) revert BadConfig();
+        if (init.vrfCoordinator.code.length == 0) revert BadConfig();
 
         owner = msg.sender;
         treasury = init.treasury;
@@ -315,11 +302,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         ethUsdFeed = init.ethUsdFeed;
         poolFee = init.poolFee == 0 ? 3000 : init.poolFee;
         ethPathEnabled = ethConfigured;
-        amoeCap = cap;
         vrfCoordinator = init.vrfCoordinator;
         keyHash = init.keyHash;
         subscriptionId = init.subscriptionId;
-        amoeSigner = init.amoeSigner;
         termsHash = init.termsHash;
         callbackGasLimit = init.callbackGasLimit;
         requestConfirmations = init.requestConfirmations;
@@ -356,12 +341,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         treasury = next;
     }
 
-    function setAmoeSigner(address next) external onlyOwner {
-        if (next == address(0)) revert ZeroAddress();
-        emit AmoeSignerSet(amoeSigner, next);
-        amoeSigner = next;
-    }
-
     function setTermsHash(bytes32 next) external onlyOwner {
         if (next == bytes32(0)) revert TermsUnset();
         termsHash = next;
@@ -372,7 +351,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         external
         onlyOwner
     {
-        if (activeDrawings != 0) revert DrawInFlight();
         if (nextKeyHash == bytes32(0) || nextSubId == 0) revert BadConfig();
         if (gasLimit < 200_000 || gasLimit > 2_500_000) revert BadConfig();
         if (confirmations < MIN_CONFIRMATIONS || confirmations > MAX_CONFIRMATIONS) revert BadConfig();
@@ -383,30 +361,26 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit VrfConfigSet(nextKeyHash, nextSubId, gasLimit, confirmations);
     }
 
-    /// @notice Flips VRF v2.5 LINK vs native ETH billing for the *next* request.
-    ///         Refused while a draw is in flight so in-flight and retry requests cannot
-    ///         mix payment modes. ExtraArgs are snapshotted at request time.
+    /// @notice Changes the billing mode for future openings only.
     function setNativePayment(bool next) external onlyOwner {
-        if (activeDrawings != 0) revert DrawInFlight();
         nativePayment = next;
         emit NativePaymentSet(next);
     }
 
-    /// @notice Starts a one-day delay before the VRF coordinator can change.
-    ///         Refuses while a draw is in flight so the pinned coordinator cannot be swapped out.
+    /// @notice Starts a one-day delay for a coordinator used by future openings only.
     function proposeCoordinator(address next) external onlyOwner {
         if (next == address(0)) revert ZeroAddress();
-        if (activeDrawings != 0) revert DrawInFlight();
+        if (next.code.length == 0) revert BadConfig();
         pendingCoordinator = next;
         coordinatorEta = block.timestamp + COORDINATOR_DELAY;
         emit CoordinatorProposed(next, coordinatorEta);
     }
 
     function applyCoordinator() external onlyOwner {
-        if (activeDrawings != 0) revert DrawInFlight();
         address next = pendingCoordinator;
         if (next == address(0)) revert ZeroAddress();
         if (block.timestamp < coordinatorEta) revert TooEarly();
+        if (next.code.length == 0) revert BadConfig();
         vrfCoordinator = next;
         pendingCoordinator = address(0);
         coordinatorEta = 0;
@@ -431,25 +405,60 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         string calldata title,
         PackConfig[] calldata configs
     ) external returns (uint256 id) {
+        id = nextId++;
+        Raffle storage r = _raffles[id];
+        r.seller = msg.sender;
+        r.phase = Phase.Draft;
+        r.createdAt = uint64(block.timestamp);
+        _setDraft(id, nft, tokenId, salesEnd, reserveNonce, reserveCommit, title, configs);
+        emit RaffleCreated(id, msg.sender, nft, tokenId, reserveCommit);
+    }
+
+    function updateDraft(
+        uint256 id,
+        address nft,
+        uint256 tokenId,
+        uint64 salesEnd,
+        bytes32 reserveNonce,
+        bytes32 reserveCommit,
+        string calldata title,
+        PackConfig[] calldata configs
+    ) external nonReentrant {
+        Raffle storage r = _raffles[id];
+        if (msg.sender != r.seller) revert NotSeller();
+        if (r.phase != Phase.Draft) revert BadPhase();
+        if (r.escrowed && (nft != r.nft || tokenId != r.tokenId)) revert EscrowIdentityLocked();
+        _setDraft(id, nft, tokenId, salesEnd, reserveNonce, reserveCommit, title, configs);
+        emit DraftUpdated(id);
+    }
+
+    function _setDraft(
+        uint256 id,
+        address nft,
+        uint256 tokenId,
+        uint64 salesEnd,
+        bytes32 reserveNonce,
+        bytes32 reserveCommit,
+        string calldata title,
+        PackConfig[] calldata configs
+    ) internal {
         if (nft == address(0)) revert ZeroAddress();
         if (salesEnd <= block.timestamp || salesEnd > block.timestamp + SALES_WINDOW_CAP) revert BadWindow();
         if (reserveNonce == bytes32(0) || reserveCommit == bytes32(0)) revert BadConfig();
         if (bytes(title).length == 0 || bytes(title).length > 80) revert BadConfig();
         uint256 n = configs.length;
         if (n == 0 || n > MAX_PACKS) revert BadConfig();
-
-        id = nextId++;
         Raffle storage r = _raffles[id];
-        r.seller = msg.sender;
+        for (uint8 i = uint8(n); i < r.packCount; ++i) {
+            delete _packs[id][i];
+        }
         r.nft = nft;
         r.tokenId = tokenId;
         r.salesEnd = salesEnd;
-        r.createdAt = uint64(block.timestamp);
         r.reserveNonce = reserveNonce;
         r.reserveCommit = reserveCommit;
         r.title = title;
         r.packCount = uint8(n);
-        r.phase = Phase.Draft;
 
         for (uint8 i = 0; i < n; ++i) {
             PackConfig calldata cfg = configs[i];
@@ -466,7 +475,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
                 active: true
             });
         }
-        emit RaffleCreated(id, msg.sender, nft, tokenId, reserveCommit);
     }
 
     function escrow(uint256 id) external nonReentrant {
@@ -479,21 +487,51 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit Escrowed(id, r.nft, r.tokenId);
     }
 
+    /// @notice Opens against current defaults without a reviewed-policy check.
+    ///         Website clients should use openWithPolicy to bind the seller's reviewed configuration.
     function open(uint256 id) external nonReentrant {
+        _open(id);
+    }
+
+    function openWithPolicy(uint256 id, bytes32 expectedPolicyHash) external nonReentrant {
+        if (expectedPolicyHash != openingPolicyHash()) revert OpeningPolicyChanged();
+        _open(id);
+    }
+
+    function openingPolicyHash() public view returns (bytes32) {
+        return keccak256(abi.encode(block.chainid, address(this), _openingPolicy()));
+    }
+
+    function _openingPolicy() internal view returns (RafflePolicy memory) {
+        return RafflePolicy({
+            coordinator: vrfCoordinator,
+            treasury: treasury,
+            termsHash: termsHash,
+            keyHash: keyHash,
+            subscriptionId: subscriptionId,
+            callbackGasLimit: callbackGasLimit,
+            requestConfirmations: requestConfirmations,
+            nativePayment: nativePayment
+        });
+    }
+
+    function _open(uint256 id) internal {
         if (paused) revert Paused();
         Raffle storage r = _raffles[id];
         if (msg.sender != r.seller) revert NotSeller();
         if (r.phase != Phase.Draft) revert BadPhase();
         if (!r.escrowed) revert EscrowMissing();
         if (block.timestamp >= r.salesEnd) revert SalesClosed();
+        _policies[id] = _openingPolicy();
         r.phase = Phase.Open;
+        emit PolicyPinned(id, vrfCoordinator, treasury, termsHash);
         emit Opened(id);
     }
 
     function close(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Open) revert BadPhase();
-        if (msg.sender != r.seller && msg.sender != owner && block.timestamp < r.salesEnd) revert NotSeller();
+        if (block.timestamp < r.salesEnd) revert TooEarly();
         r.phase = Phase.Closed;
         emit Closed(id);
     }
@@ -527,27 +565,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (spent < msg.value) _refundEth(msg.value - spent);
     }
 
-    /// @notice One complimentary bonus entry per account per draw. Signature is produced off-chain
-    ///         after a captcha check. This path is not a pack purchase.
-    function claimAmoe(uint256 id, bytes32 captchaDigest, uint256 deadline, bytes calldata signature)
-        external
-        nonReentrant
-    {
-        if (paused) revert Paused();
-        Raffle storage r = _raffles[id];
-        if (r.phase != Phase.Open || block.timestamp >= r.salesEnd) revert SalesClosed();
-        if (block.timestamp > deadline) revert Expired();
-        if (captchaDigest == bytes32(0) || captchaUsed[captchaDigest]) revert CaptchaUsed();
-        if (amoeClaimed[id][msg.sender]) revert AmoeUsed();
-        if (r.amoeCount >= amoeCap) revert AmoeCap();
-        bytes32 digest = hashAmoe(id, msg.sender, captchaDigest, deadline);
-        (address signer, ECDSA.RecoverError err, bytes32 errArg) = ECDSA.tryRecover(digest, signature);
-        if (err != ECDSA.RecoverError.NoError || errArg != bytes32(0) || signer != amoeSigner) revert BadSignature();
-        captchaUsed[captchaDigest] = true;
-        amoeClaimed[id][msg.sender] = true;
-        r.amoeCount += 1;
-        _lots[id].push(Lot({owner: msg.sender, amount: 1, expiresAt: uint64(block.timestamp + ENTRY_EXPIRY)}));
-        emit AmoeClaimed(id, msg.sender);
+    /// @notice Legacy free-entry selector is permanently disabled, including previously signed vouchers.
+    function claimAmoe(uint256, bytes32, uint256, bytes calldata) external pure {
+        revert FreeEntryDisabled();
     }
 
     function snapshot(uint256 id, uint256 maxSteps) external nonReentrant {
@@ -572,13 +592,12 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     }
 
     function requestRandomness(uint256 id) external nonReentrant {
-        if (paused) revert Paused();
         Raffle storage r = _raffles[id];
         if (msg.sender != r.seller && msg.sender != owner) revert NotSeller();
         if (r.phase != Phase.Closed || !r.snapshotted) revert BadPhase();
         if (r.snapshotTotal == 0) revert EmptyDraw();
         if (block.timestamp >= uint256(r.salesEnd) + DRAW_START_GRACE) revert Expired();
-        (uint256 requestId, address pinned) = _requestWords();
+        (uint256 requestId, address pinned) = _requestWords(id);
         r.phase = Phase.Drawing;
         activeDrawings += 1;
         _pinRequest(id, requestId, pinned);
@@ -592,18 +611,16 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     }
 
     function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        address pinned = requestCoordinator[requestId];
-        if (pinned == address(0)) {
-            if (_awaitingRequest && msg.sender == vrfCoordinator && randomWords.length != 0) {
+        uint256 id = requestToRaffle[msg.sender][requestId];
+        if (id == 0) {
+            if (msg.sender == _awaitingCoordinator && !_syncFilled && randomWords.length != 0) {
                 _syncRequestId = requestId;
                 _syncWord = randomWords[0];
                 _syncFilled = true;
             }
             return;
         }
-        if (msg.sender != pinned) revert OnlyCoordinator(msg.sender, pinned);
-        uint256 id = requestToRaffle[requestId];
-        if (id == 0 || randomWords.length == 0) return;
+        if (randomWords.length == 0) return;
         _applyWord(id, requestId, randomWords[0]);
     }
 
@@ -655,28 +672,25 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (r.phase != Phase.Settled) revert BadPhase();
         uint256 fee = r.feeEscrow;
         if (fee == 0) revert NotClaimable();
-        address payee = treasury;
+        address payee = _policies[id].treasury;
         r.feeEscrow = 0;
         usdc.safeTransfer(payee, fee);
         emit FeeClaimed(id, payee, fee);
     }
 
-    /// @notice Anyone may cancel Open/Closed raffles after the published sales deadline plus DRAW_START_GRACE.
-    ///         Before that cutoff, the seller may cancel before funds arrive, or after an empty snapshot.
-    ///         The owner may force-cancel a funded Open/Closed raffle. That is accepted
-    ///         v1 centralization (Chain Security H-3): buyers refund, prize returns to the
-    ///         seller. A pause+timelock on this path is a follow-up, not a silent removal.
+    /// @notice Anyone may recover Open/Closed raffles after the draw-start deadline.
+    ///         Before then, seller/owner cancellation requires no lots or a completed empty snapshot.
     function cancel(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
+        if (r.seller == address(0)) revert BadPhase();
         Phase p = r.phase;
         bool admin = msg.sender == owner;
         bool expired =
             (p == Phase.Open || p == Phase.Closed) && block.timestamp >= uint256(r.salesEnd) + DRAW_START_GRACE;
         if (msg.sender != r.seller && !admin && !expired) revert NotSeller();
         if (p == Phase.Drawing || p == Phase.Drawn || p == Phase.Settled || p == Phase.Cancelled) revert BadPhase();
-        if (!admin && !expired) {
-            if (p == Phase.Open && r.principalEscrow != 0) revert SalesStarted();
-            if (p == Phase.Closed && !(r.snapshotted && r.snapshotTotal == 0)) revert BadPhase();
+        if (!expired && _lots[id].length != 0 && !(p == Phase.Closed && r.snapshotted && r.snapshotTotal == 0)) {
+            revert SalesStarted();
         }
         r.phase = Phase.Cancelled;
         emit Cancelled(id);
@@ -688,7 +702,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Drawing) revert BadPhase();
         if (block.timestamp < uint256(r.vrfRequestedAt) + VRF_ABORT_AFTER) revert TooEarly();
-        _forgetRequest(r.vrfRequestId);
+        _forgetRequest(_policies[id].coordinator, r.vrfRequestId);
         r.vrfRequestId = 0;
         r.phase = Phase.Cancelled;
         activeDrawings -= 1;
@@ -747,7 +761,6 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         v.randomWord = r.randomWord;
         v.winner = r.winner;
         v.packCount = r.packCount;
-        v.amoeCount = r.amoeCount;
         v.title = r.title;
     }
 
@@ -763,12 +776,12 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         return _lots[id][index];
     }
 
-    function hashAmoe(uint256 id, address account, bytes32 captchaDigest, uint256 deadline)
-        public
-        view
-        returns (bytes32)
-    {
-        return _hashTypedDataV4(keccak256(abi.encode(AMOE_TYPEHASH, id, account, captchaDigest, deadline, termsHash)));
+    function contractVersion() external pure returns (uint256) {
+        return 2;
+    }
+
+    function getRafflePolicy(uint256 id) external view returns (RafflePolicy memory) {
+        return _policies[id];
     }
 
     function hashCommitment(
@@ -806,7 +819,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         returns (uint256 principal, uint256 fee)
     {
         if (paused) revert Paused();
-        if (acceptedTerms != termsHash) revert TermsMismatch();
+        if (acceptedTerms != _policies[id].termsHash) revert TermsMismatch();
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Open || block.timestamp >= r.salesEnd) revert SalesClosed();
         if (qty == 0 || qty > MAX_QTY) revert BadQty();
@@ -878,22 +891,25 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (!ok) revert RefundFailed();
     }
 
-    function _requestWords() internal returns (uint256 requestId, address pinned) {
-        pinned = vrfCoordinator;
-        _awaitingRequest = true;
+    function _requestWords(uint256 id) internal returns (uint256 requestId, address pinned) {
+        RafflePolicy memory policy = _policies[id];
+        pinned = policy.coordinator;
+        _awaitingCoordinator = pinned;
         _syncFilled = false;
         requestId = IVRFCoordinatorV2Plus(pinned)
             .requestRandomWords(
                 VRFV2PlusClient.RandomWordsRequest({
-                    keyHash: keyHash,
-                    subId: subscriptionId,
-                    requestConfirmations: requestConfirmations,
-                    callbackGasLimit: callbackGasLimit,
+                    keyHash: policy.keyHash,
+                    subId: policy.subscriptionId,
+                    requestConfirmations: policy.requestConfirmations,
+                    callbackGasLimit: policy.callbackGasLimit,
                     numWords: 1,
-                    extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: nativePayment}))
+                    extraArgs: VRFV2PlusClient._argsToBytes(
+                        VRFV2PlusClient.ExtraArgsV1({nativePayment: policy.nativePayment})
+                    )
                 })
             );
-        _awaitingRequest = false;
+        _awaitingCoordinator = address(0);
         if (requestId == 0) revert BadConfig();
     }
 
@@ -901,16 +917,16 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         Raffle storage r = _raffles[id];
         r.vrfRequestId = requestId;
         r.vrfRequestedAt = uint64(block.timestamp);
-        requestToRaffle[requestId] = id;
-        requestCoordinator[requestId] = pinned;
+        if (requestUsed[pinned][requestId]) revert RequestAlreadyUsed();
+        requestUsed[pinned][requestId] = true;
+        requestToRaffle[pinned][requestId] = id;
         emit RandomnessRequested(id, requestId);
         if (_syncFilled && _syncRequestId == requestId) _applyWord(id, requestId, _syncWord);
     }
 
-    function _forgetRequest(uint256 requestId) internal {
+    function _forgetRequest(address coordinator, uint256 requestId) internal {
         if (requestId == 0) return;
-        delete requestToRaffle[requestId];
-        delete requestCoordinator[requestId];
+        delete requestToRaffle[coordinator][requestId];
     }
 
     function _applyWord(uint256 id, uint256 requestId, uint256 word) internal {

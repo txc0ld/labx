@@ -25,7 +25,6 @@ contract DeploySepolia is Script {
         address safe = vm.envAddress("SAFE_ADDRESS");
         _validateSafe(safe);
         uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address amoe = vm.envAddress("AMOE_SIGNER");
         bytes32 terms = vm.envBytes32("TERMS_HASH");
         uint256 subId = vm.envUint("VRF_SUBSCRIPTION_ID");
         bool wireEth = vm.envOr("WIRE_ETH_PATH", false);
@@ -42,11 +41,9 @@ contract DeploySepolia is Script {
                 vrfCoordinator: VRF_COORDINATOR,
                 keyHash: VRF_KEY_HASH,
                 subscriptionId: subId,
-                amoeSigner: amoe,
                 termsHash: terms,
                 callbackGasLimit: 500_000,
-                requestConfirmations: 3,
-                amoeCap: 0
+                requestConfirmations: 3
             })
         );
         labx.transferOwnership(safe);
