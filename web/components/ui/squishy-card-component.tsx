@@ -14,9 +14,9 @@ type SquishyPackCardProps = {
 
 const PACK_STYLES: Record<PackName, CSSProperties> = {
   Entry: {
-    backgroundColor: "#526600",
-    backgroundImage: "linear-gradient(125deg, #485B00 0%, #617800 45%, #526600 100%)",
-    color: "#FFFFFF"
+    backgroundColor: "#B37DF6",
+    backgroundImage: "linear-gradient(125deg, #9E68DD 0%, #D8BAFF 45%, #B37DF6 100%)",
+    color: "#000000"
   },
   Bronze: {
     backgroundColor: "#B8753A",
@@ -127,7 +127,7 @@ export function SquishyPackCard({
         <span className="squishy-pack-topline">
           <strong>{pack.name}</strong>
           <span className="squishy-pack-choice" aria-hidden="true">
-            {selected ? "Selected" : "Select"}
+            {disabled ? "Unavailable" : selected ? "Your pick" : "Pick me"}
           </span>
         </span>
         <span className="squishy-pack-body">

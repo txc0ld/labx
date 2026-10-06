@@ -72,7 +72,7 @@ export function PieceDesk({ id }: { id: string }) {
 
         <section className="pack-selector" aria-labelledby="pack-title">
           <div className="console-section-heading">
-            <div><h2 id="pack-title">Membership pack</h2></div>
+            <div><h2 id="pack-title">Pick your pack</h2></div>
             <span>Choose one</span>
           </div>
           <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
