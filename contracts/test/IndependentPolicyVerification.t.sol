@@ -3,11 +3,29 @@ pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
+import {VRFV2PlusClient} from "../src/vendor/VRFV2PlusClient.sol";
 import {MockERC20, MockERC721, MockVRF, SyncVRF} from "./mocks/Mocks.sol";
 
 contract IndependentReusableVRF is MockVRF {
     function reuse(uint256 requestId) external {
         next = requestId;
+    }
+}
+
+contract IndependentMismatchedSyncVRF is MockVRF {
+    uint256 internal constant CALLBACK_ID = 41;
+    uint256 internal constant RETURN_ID = 42;
+
+    function requestRandomWords(VRFV2PlusClient.RandomWordsRequest calldata req)
+        external
+        override
+        returns (uint256 id)
+    {
+        lastNativePayment = abi.decode(req.extraArgs[4:], (bool));
+        uint256[] memory words = new uint256[](1);
+        words[0] = 2;
+        LabxRaffle(payable(msg.sender)).rawFulfillRandomWords(CALLBACK_ID, words);
+        return RETURN_ID;
     }
 }
 
@@ -120,6 +138,70 @@ contract IndependentPolicyVerificationTest is Test {
         assertEq(target.getRaffle(secondId).vrfRequestId, 0);
         assertEq(target.requestToRaffle(address(sync), 77), firstId);
         assertEq(target.activeDrawings(), 0);
+    }
+
+    function test_mismatchedSynchronousCallbackIdCannotSelectWinnerAndReturnedIdCanFulfill() public {
+        IndependentMismatchedSyncVRF mismatch = new IndependentMismatchedSyncVRF();
+        LabxRaffle target = _deploy(address(mismatch), treasury);
+        _approve(target, alice);
+        uint256 id = _draft(target, 13, uint64(block.timestamp + 2 days));
+        _openAndBuy(target, id, alice);
+
+        _readyAndRequest(target, id);
+
+        LabxRaffle.RaffleView memory drawing = target.getRaffle(id);
+        assertEq(uint256(drawing.phase), uint256(LabxRaffle.Phase.Drawing));
+        assertEq(drawing.vrfRequestId, 42);
+        assertEq(drawing.winner, address(0));
+        assertEq(drawing.randomWord, 0);
+        assertEq(target.activeDrawings(), 1);
+        assertEq(target.requestToRaffle(address(mismatch), 41), 0);
+        assertFalse(target.requestUsed(address(mismatch), 41));
+        assertEq(target.requestToRaffle(address(mismatch), 42), id);
+        assertTrue(target.requestUsed(address(mismatch), 42));
+
+        mismatch.fulfill(address(target), 42, 0);
+        assertEq(uint256(target.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        assertEq(target.getRaffle(id).winner, alice);
+        assertEq(target.activeDrawings(), 0);
+    }
+
+    function test_foreignCallbackCannotSelectWinnerOrBlockTimedRefundAndReclaim() public {
+        uint256 id = _draft(raffle, 14, uint64(block.timestamp + 2 days));
+        _openAndBuy(raffle, id, alice);
+        _readyAndRequest(raffle, id);
+        LabxRaffle.RaffleView memory requested = raffle.getRaffle(id);
+        uint256 requestId = requested.vrfRequestId;
+        uint256[] memory words = new uint256[](1);
+        words[0] = 0;
+
+        vm.prank(outsider);
+        raffle.rawFulfillRandomWords(requestId, words);
+
+        LabxRaffle.RaffleView memory afterForeign = raffle.getRaffle(id);
+        assertEq(uint256(afterForeign.phase), uint256(LabxRaffle.Phase.Drawing));
+        assertEq(afterForeign.winner, address(0));
+        assertEq(afterForeign.randomWord, 0);
+        assertEq(afterForeign.vrfRequestId, requestId);
+        assertEq(raffle.requestToRaffle(address(vrf), requestId), id);
+        assertEq(raffle.requestToRaffle(outsider, requestId), 0);
+        assertEq(raffle.activeDrawings(), 1);
+
+        vm.warp(uint256(requested.vrfRequestedAt) + raffle.VRF_ABORT_AFTER());
+        vm.prank(outsider);
+        raffle.abortDrawing(id);
+        vrf.fulfill(address(raffle), requestId, 0);
+        assertEq(uint256(raffle.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+        assertEq(raffle.getRaffle(id).winner, address(0));
+        assertEq(raffle.activeDrawings(), 0);
+
+        vm.prank(alice);
+        raffle.refund(id);
+        vm.prank(seller);
+        raffle.reclaimPrize(id);
+        assertEq(usdc.balanceOf(alice), 1_000e6);
+        assertEq(usdc.balanceOf(address(raffle)), 0);
+        assertEq(nft.ownerOf(14), seller);
     }
 
     function test_pauseCannotBlockLifecycleClaimsOrTimedRefund() public {
