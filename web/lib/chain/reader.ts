@@ -1,4 +1,5 @@
 import { decodeEventLog, erc20Abi, erc721Abi, zeroAddress, type Address, type PublicClient } from "viem";
+import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
 import type { AccountRaffleState, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, RaffleSnapshot } from "./types";
@@ -32,6 +33,15 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     if (raffle.packCount < 1 || raffle.packCount > 8 || raffle.phase > 6) throw new Error("Raffle data is invalid.");
     const packs = await Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] })));
     return { id, block: at, raffle, packs, policy, lotCount, paused, owner, ethEnabled, labFee, drawStartGrace, randomnessGrace, revealGrace };
+  }
+  async function readArtwork({ id, block }: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata> {
+    const snapshot = await readRaffle({ id, block });
+    const fallback = { title: snapshot.raffle.title, description: "", image: null };
+    try {
+      const uri = await client.readContract({ address: snapshot.raffle.nft, abi: erc721Abi, functionName: "tokenURI", args: [snapshot.raffle.tokenId], blockNumber: snapshot.block.number });
+      const metadata = await browserArtworkMetadata(uri);
+      return metadata ? { ...metadata, title: snapshot.raffle.title } : fallback;
+    } catch { return fallback; }
   }
   async function listRaffles({ cursor = 1n, limit = 12, block }: { cursor?: bigint; limit?: number; block?: BlockRef } = {}) {
     positiveId(cursor); boundedNumber(limit, 1, 24); const at = await checkedBlock(block);
@@ -112,5 +122,5 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
       return { ...basic, eth: { kind: "available", requiredEth, maxEth: (requiredEth * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n, slippageBps, deadline: snapshot.block.timestamp + 300n } };
     } catch { return { ...basic, eth: { kind: "unavailable", reason: "A valid ETH price quote is currently unavailable." } }; }
   }
-  return { checkedBlock, readRaffle, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
+  return { checkedBlock, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
 }

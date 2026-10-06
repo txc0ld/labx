@@ -1,3 +1,4 @@
+import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
   AccountRaffleState, BlockRef, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
@@ -20,6 +21,7 @@ export interface RaffleService {
   attest(): Promise<DeploymentStatus>;
   listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   readRaffle(input: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot>;
+  readArtwork(input: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata>;
   readAccount(input: { id: bigint; account: Address; block?: BlockRef }): Promise<AccountRaffleState>;
   listLots(input: { id: bigint; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<Lot>>;
   history(input: { account: Address; fromBlock?: bigint; block?: BlockRef }): Promise<Page<HistoryItem>>;
