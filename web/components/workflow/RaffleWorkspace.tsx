@@ -5,22 +5,27 @@ import { useEffect, useRef, useState } from "react";
 import type { Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
+import type { ReserveRecord } from "@/lib/reserve";
+import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null) => readonly ActionAvailability[];
+export type RecoverCommitment = (commit: Hex) => Promise<ReserveRecord>;
 
 type WorkspaceState =
   | { kind: "loading" }
   | { kind: "unavailable" | "legacy" | "mismatch" | "missing" | "error"; message: string }
   | { kind: "ready"; snapshot: RaffleSnapshot };
 
-export function RaffleWorkspace({ browser, id, termsHash, availableActions }: {
+export function RaffleWorkspace({ browser, id, termsHash, availableActions, saveCommitment, recoverCommitment }: {
   browser: BrowserService;
   id: bigint;
   termsHash: Hex;
   availableActions: AvailabilityReader;
+  saveCommitment?: SaveCommitment;
+  recoverCommitment?: RecoverCommitment;
 }) {
   const [state, setState] = useState<WorkspaceState>({ kind: "loading" });
   const request = useRef(0);
@@ -68,14 +73,16 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions }: {
   }
 
   if (browser.kind !== "configured") return null;
-  return <LoadedRaffle browser={browser} snapshot={state.snapshot} termsHash={termsHash} availableActions={availableActions} refresh={refresh} />;
+  return <LoadedRaffle browser={browser} snapshot={state.snapshot} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} refresh={refresh} />;
 }
 
-function LoadedRaffle({ browser, snapshot, termsHash, availableActions, refresh }: {
+function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveCommitment, recoverCommitment, refresh }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   termsHash: Hex;
   availableActions: AvailabilityReader;
+  saveCommitment?: SaveCommitment;
+  recoverCommitment?: RecoverCommitment;
   refresh: () => Promise<void>;
 }) {
   const walletSnapshot = useWalletSnapshot(browser.wallet);
@@ -132,8 +139,9 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, refresh 
           {accountState === "loading" ? <p className="notice" role="status">Loading your account state…</p> : null}
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {seller
-            ? <SellerActions browser={browser} snapshot={snapshot} account={account} availability={availability} onConfirmed={reload} />
+            ? <SellerActions browser={browser} snapshot={snapshot} account={account} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} onConfirmed={reload} />}
+          {seller && phase === 0 && saveCommitment ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
           <details className="workflow-details"><summary>Contract details</summary><dl className="review-list"><div><dt>Raffle contract</dt><dd className="hash">{browser.service.manifest.address}</dd></div><div><dt>NFT contract</dt><dd className="hash">{snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{snapshot.raffle.tokenId.toString()}</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
       </section>
@@ -233,20 +241,32 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, onC
   );
 }
 
-function SellerActions({ browser, snapshot, account, availability, onConfirmed }: {
+function SellerActions({ browser, snapshot, account, availability, recoverCommitment, onConfirmed }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
+  recoverCommitment?: RecoverCommitment;
   onConfirmed: () => Promise<void>;
 }) {
+  const [policy, setPolicy] = useState<Awaited<ReturnType<typeof browser.service.openingPolicy>> | null>(null);
+  const [recovered, setRecovered] = useState<ReserveRecord | null>(null);
+  const [preflight, setPreflight] = useState<"idle" | "loading" | "error">("idle");
+  const [preflightError, setPreflightError] = useState("");
   const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimProceeds", "claimFee", "reclaimPrize", "cancel"];
   const next = priority.map((kind) => availability.find((item) => item.kind === kind)).find((item) => item?.enabled);
 
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
   if (!next) return <p className="notice" role="status">No seller action is currently available. Refresh after the deadline or a pending transaction confirms.</p>;
-  if (next.kind === "open") return <p className="notice warning" role="status">Opening requires a fresh policy review from Studio.</p>;
-  if (next.kind === "reveal") return <p className="notice warning" role="status">Reveal requires the saved private commitment. Recover it from Studio before continuing.</p>;
+  if (next.kind === "open") {
+    if (!policy) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Review opening policy</h2><p>Opening fixes the treasury, terms and randomness configuration for this raffle.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => { setPreflight("loading"); setPreflightError(""); void browser.service.openingPolicy().then((value) => { setPolicy(value); setPreflight("idle"); }).catch((error: unknown) => { setPreflightError(error instanceof Error ? error.message : "Opening policy could not be loaded."); setPreflight("error"); }); }}>{preflight === "loading" ? "Loading policy…" : "Review opening policy"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    return <section className="workflow-next stack"><div><p className="kicker">Opening policy</p><h2>Open memberships</h2><p>Review the pinned recipients and terms before opening. They cannot be edited after this transaction.</p></div><dl className="review-list"><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="Open memberships" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setPolicy(null)}>Refresh policy review</button></section>;
+  }
+  if (next.kind === "reveal") {
+    if (!recoverCommitment) return <p className="notice warning" role="status">Commitment recovery is not configured. Reveal is unavailable.</p>;
+    if (!recovered) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Recover commitment</h2><p>A wallet signature retrieves the private hashes for this raffle. Nothing is revealed until you separately review the transaction.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => { setPreflight("loading"); setPreflightError(""); void recoverCommitment(snapshot.raffle.reserveCommit).then((value) => { if (value.commit.toLowerCase() !== snapshot.raffle.reserveCommit.toLowerCase()) throw new Error("Recovered commitment does not match this raffle."); setRecovered(value); setPreflight("idle"); }).catch((error: unknown) => { setPreflightError(error instanceof Error ? error.message : "Commitment could not be recovered."); setPreflight("error"); }); }}>{preflight === "loading" ? "Opening wallet…" : "Sign to recover commitment"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    return <section className="workflow-next stack"><div><p className="kicker">Commitment recovered</p><h2>Reveal commitment</h2><p>The review below submits the saved public and private hashes and salt. The original private value stays off-chain.</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label="Reveal commitment" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section>;
+  }
   const action: WorkflowAction = next.kind === "snapshot"
     ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
     : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "settle" | "claimProceeds" | "claimFee" | "reclaimPrize" | "cancel", id: snapshot.id };

@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { isAddress, type Address } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
-import type { DraftInput } from "@/lib/chain/types";
+import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, parseUsdc, shortAddress } from "./format";
@@ -34,7 +34,7 @@ function actionFromForm(form: FormDraft): Omit<DraftInput, "reserveNonce" | "res
   if (!/^\d{1,78}$/.test(form.tokenId) || BigInt(form.tokenId) >= 2n ** 256n) throw new Error("Enter a valid NFT token ID.");
   const title = form.title.trim();
   if (!title || new TextEncoder().encode(title).length > 80) throw new Error("Title must contain 1–80 UTF-8 bytes.");
-  const closeMilliseconds = Date.parse(form.closing);
+  const closeMilliseconds = Date.parse(`${form.closing}Z`);
   if (!Number.isFinite(closeMilliseconds) || closeMilliseconds <= Date.now()) throw new Error("Choose a future closing date.");
   if (!form.publicSummary.trim()) throw new Error("Add a public commitment note without disclosing the private number.");
   if (!form.privateCommitment.trim()) throw new Error("Add the private commitment that will be recovered for reveal.");
@@ -52,13 +52,27 @@ function actionFromForm(form: FormDraft): Omit<DraftInput, "reserveNonce" | "res
   };
 }
 
-export function SellerDraftForm({ service, wallet, saveCommitment, onConfirmed }: {
+function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
+  if (!snapshot) return INITIAL;
+  return {
+    nft: snapshot.raffle.nft,
+    tokenId: snapshot.raffle.tokenId.toString(),
+    title: snapshot.raffle.title,
+    closing: new Date(Number(snapshot.raffle.salesEnd) * 1000).toISOString().slice(0, 16),
+    publicSummary: "",
+    privateCommitment: "",
+    packs: snapshot.packs.map((pack) => ({ name: pack.name, price: formatUsdc(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() }))
+  };
+}
+
+export function SellerDraftForm({ service, wallet, saveCommitment, existing, onConfirmed }: {
   service: RaffleService;
   wallet: WalletSessionPort;
   saveCommitment: SaveCommitment;
+  existing?: RaffleSnapshot;
   onConfirmed?: () => void | Promise<void>;
 }) {
-  const [form, setForm] = useState<FormDraft>(INITIAL);
+  const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
 
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
@@ -98,7 +112,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, onConfirmed }
         {state.kind === "committed" ? (
           <>
             <div className="notice ok stack" role="status"><strong>Commitment saved</strong><span>Keep this recovery hash. The private value is not shown or placed on-chain.</span><span className="hash">{state.reserve.commit}</span></div>
-            <TransactionFlow service={service} wallet={wallet} action={{ kind: "createDraft", draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } }} label="Create raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} />
+            <TransactionFlow service={service} wallet={wallet} action={existing ? { kind: "updateDraft", id: existing.id, draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } } : { kind: "createDraft", draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } }} label={existing ? "Update raffle draft" : "Create raffle draft"} formatUsdc={formatUsdc} onConfirmed={onConfirmed} />
           </>
         ) : <button className="btn" type="button" disabled={state.kind === "saving"} onClick={() => void commit(action)}>{state.kind === "saving" ? "Saving commitment…" : "Sign and save commitment"}</button>}
         <button className="text-link" type="button" onClick={() => setState({ kind: "editing" })}>Edit draft</button>
@@ -110,8 +124,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, onConfirmed }
     <form className="studio-form stack" onSubmit={review}>
       <p className="notice warning">The private commitment is signed for durable storage. It is never included in the public draft transaction.</p>
       <label htmlFor="draft-title">Raffle title<input id="draft-title" value={form.title} onChange={(event) => update("title", event.target.value)} required /></label>
-      <div className="form-pair"><label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} value={form.nft} onChange={(event) => update("nft", event.target.value.trim())} required /></label><label htmlFor="draft-token">Token ID<input id="draft-token" inputMode="numeric" value={form.tokenId} onChange={(event) => update("tokenId", event.target.value.trim())} required /></label></div>
-      <label htmlFor="draft-close">Sales deadline<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} required /></label>
+      <div className="form-pair"><label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} value={form.nft} disabled={existing?.raffle.escrowed} onChange={(event) => update("nft", event.target.value.trim())} required /></label><label htmlFor="draft-token">Token ID<input id="draft-token" inputMode="numeric" value={form.tokenId} disabled={existing?.raffle.escrowed} onChange={(event) => update("tokenId", event.target.value.trim())} required /></label></div>
+      <label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} required /></label>
       <label htmlFor="draft-public">Public commitment note<textarea id="draft-public" rows={3} maxLength={2000} value={form.publicSummary} onChange={(event) => update("publicSummary", event.target.value)} placeholder="A public description with no private number" required /></label>
       <label htmlFor="draft-private">Private commitment<textarea id="draft-private" rows={3} maxLength={8000} value={form.privateCommitment} onChange={(event) => update("privateCommitment", event.target.value)} aria-describedby="private-note" required /></label><p className="muted" id="private-note">Do not enter a wallet key, seed phrase or account password.</p>
       <fieldset className="pack-builder stack"><legend>Membership packs</legend>{form.packs.map((pack, index) => <div className="pack-builder-row" key={index}><label>Name<input value={pack.name} onChange={(event) => updatePack(index, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(index, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(index, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(index, "maxSupply", event.target.value)} required /></label>{form.packs.length > 1 ? <button className="text-link" type="button" onClick={() => { setForm((current) => ({ ...current, packs: current.packs.filter((_, packIndex) => packIndex !== index) })); setState({ kind: "editing" }); }}>Remove</button> : null}</div>)}</fieldset>
