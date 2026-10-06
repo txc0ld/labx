@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
+import { AccountNav } from "@/components/AccountNav";
 import { useBench } from "@/lib/bench";
 
 type PointsState =
@@ -75,10 +76,15 @@ export default function ProfilePage() {
     : { kind: "loading", wallet: bench.wallet };
 
   return (
-    <section className="section split">
-      <div className="pearl pad stack">
+    <section className="section workflow-page stack">
+      <header className="workflow-header stack">
         <p className="kicker">Profile</p>
         <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>Your bench</h1>
+        <p className="lede">Wallet, points and browser-only receipt preferences.</p>
+        <AccountNav />
+      </header>
+      <div className="split">
+      <div className="pearl pad stack">
         <div className="terminal pad">
           <div>wallet {bench.wallet || "not connected"}</div>
           <div>
@@ -94,7 +100,7 @@ export default function ProfilePage() {
         </div>
         {currentPoints.kind === "error" ? <p className="notice error" role="alert">{currentPoints.message}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
-        <form className="stack" onSubmit={savePreference}>
+        <form className="stack" id="email-preferences" onSubmit={savePreference}>
           <label htmlFor="email">Email preference
             <input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
@@ -105,13 +111,16 @@ export default function ProfilePage() {
       </div>
       <div className="stack">
         <div className="well pad">
-          <h2>Bonus entries</h2>
-          <p>Entry history is unavailable because the website is not connected to an authoritative raffle source.</p>
+          <h2>Membership status</h2>
+          <p>Membership status is unknown because the website is not connected to an authoritative membership source.</p>
+          <Link href="/membership">Review membership packs</Link>
         </div>
         <div className="pearl pad">
-          <h2>Agreements</h2>
-          <p className="muted">Agreement history is unavailable.</p>
+          <h2>Account records</h2>
+          <p className="muted">Purchase, entry and agreement records are unavailable.</p>
+          <div className="btn-row"><Link className="btn" href="/profile/history">View history</Link><Link className="btn btn-dark" href="/profile/receipts">View receipts</Link></div>
         </div>
+      </div>
       </div>
     </section>
   );

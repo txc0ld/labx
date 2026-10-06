@@ -54,6 +54,7 @@ export function BenchHub({ pieces, banner }: {
             <span className="empty-port" aria-hidden="true" />
             <h3>{pieces.length ? "No raffles in this view" : "No raffles listed"}</h3>
             <p>{pieces.length ? "Choose All pieces to view every listed raffle." : <>Listing tools are not connected yet. Read the <Link href="/guide">guide</Link> to learn how raffles are intended to work.</>}</p>
+            {!pieces.length ? <div className="btn-row"><Link className="btn" href="/membership">Compare membership packs</Link><Link className="btn btn-dark" href="/discounts">See partner discounts</Link></div> : null}
             {filter !== "all" ? <button className="btn btn-dark" type="button" onClick={() => setFilter("all")}>Show all pieces</button> : null}
           </div>
         )}

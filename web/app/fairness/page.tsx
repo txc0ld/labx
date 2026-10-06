@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
 import { useBench } from "@/lib/bench";
 
@@ -49,7 +50,7 @@ export default function FairnessPage() {
               </tr>
             ))}
           </tbody>
-        </table> : <div className="stack"><h2>No raffle records available</h2><p>Commitment, snapshot and draw status will appear here after authoritative listings are connected.</p></div>}
+        </table> : <div className="stack"><h2>No raffle records available</h2><p>Commitment, snapshot and draw status will appear here after authoritative listings are connected.</p><div className="btn-row"><Link className="btn" href="/">Explore pieces</Link><Link className="btn btn-dark" href="/guide#workflow">Read the guide</Link><Link className="btn btn-lime" href="/rules">Read draw rules</Link></div></div>}
       </div>
     </section>
   );

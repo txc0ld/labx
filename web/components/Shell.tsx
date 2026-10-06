@@ -5,17 +5,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { BenchProvider } from "@/lib/bench";
-import { isCurrentPath } from "@/lib/nav";
+import { isCurrentPath, PRIMARY_LINKS } from "@/lib/nav";
 import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 import { MotionOrchestrator } from "./MotionOrchestrator";
 import { CursorTrail } from "./CursorTrail";
-
-const LINKS = [
-  { href: "/", label: "Explore" },
-  { href: "/fairness", label: "Fairness" },
-  { href: "/seller", label: "Studio" },
-  { href: "/profile", label: "Profile" }
-];
 
 const FOOTER_LINKS = [
   { href: "/about", label: "About" },
@@ -47,7 +40,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="nav-cluster">
             <nav aria-label="Primary">
               <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {LINKS.map((link) => (
+                {PRIMARY_LINKS.map((link) => (
                   <li key={link.href}>
                     <Link
                       href={link.href}

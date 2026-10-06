@@ -28,6 +28,7 @@ export function PieceDesk({ id }: { id: string }) {
         <div className="btn-row">
           <Link className="btn" href="/">Back to explore</Link>
           <Link className="btn btn-dark" href="/guide">How it works</Link>
+          <Link className="btn btn-lime" href="/membership">Membership packs</Link>
         </div>
       </section>
     );

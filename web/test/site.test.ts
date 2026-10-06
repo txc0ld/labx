@@ -43,7 +43,14 @@ const STATIC_ROUTES = new Set([
   "/privacy",
   "/about",
   "/guide",
+  "/membership",
+  "/discounts",
+  "/discounts/fantom-labs",
+  "/discounts/seatmap",
+  "/eligibility",
   "/profile",
+  "/profile/history",
+  "/profile/receipts",
   "/seller"
 ]);
 const ALIAS_ROUTES = new Set(["/terms"]);
@@ -169,13 +176,15 @@ describe("chrome links", () => {
         expect(
           href.startsWith("https://www.oaic.gov.au") ||
             href.startsWith("https://labx-two.vercel.app") ||
+            href.startsWith("https://www.fantomlabs.io/") ||
+            href.startsWith("https://seatmap.app/pro") ||
             href === "https://labx.art" ||
             href.startsWith("https://labx.art/")
         ).toBe(true);
         continue;
       }
       if (href.startsWith("#")) {
-        expect(["#content", "#bench", "#browse", "#packs", "#eligibility", "#workflow"].includes(href)).toBe(true);
+        expect(["#content", "#bench", "#browse", "#packs", "#eligibility", "#workflow", "#email-preferences"].includes(href)).toBe(true);
         continue;
       }
       const [pathname] = href.split("#");
@@ -185,6 +194,11 @@ describe("chrome links", () => {
       }
       if (pathname.startsWith("/fairness")) {
         expect(pageExists("app/fairness/page.tsx")).toBe(true);
+        continue;
+      }
+      if (pathname === "/discounts/${offer.slug}") {
+        expect(pageExists("app/discounts/fantom-labs/page.tsx")).toBe(true);
+        expect(pageExists("app/discounts/seatmap/page.tsx")).toBe(true);
         continue;
       }
       if (ALIAS_ROUTES.has(pathname)) {

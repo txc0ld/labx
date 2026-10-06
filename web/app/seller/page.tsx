@@ -1,21 +1,20 @@
-import Image from "next/image";
-import Link from "next/link";
 import { OnChainStatus } from "@/components/OnChainStatus";
+import { StudioPreparation } from "@/components/StudioPreparation";
 
 export default function SellerPage() {
   return (
     <section className="section stack">
       <p className="kicker">Studio</p>
-      <h1 className="page-title">Listing tools are unavailable.</h1>
-      <div className="split legal-surfaces">
+      <h1 className="page-title">Prepare a listing.</h1>
+      <p className="lede">Draft public piece details and review them before the future escrow and publishing steps.</p>
+      <div className="workflow-grid legal-surfaces">
         <article className="pearl pad stack">
+          <h2>Current status</h2>
           <OnChainStatus surface="studio" />
-          <p>The Studio will support authoritative raffle creation after the website listing integration is ready.</p>
-          <Link className="btn" href="/guide#workflow">Read the intended workflow</Link>
+          <p>Studio does not save drafts, upload files, create listings, request signatures or publish on-chain.</p>
+          <p className="muted">A live listing still needs NFT escrow, a public commitment and an authoritative publishing connection.</p>
         </article>
-        <div className="bezel">
-          <Image src="/lab/filter-panel.jpg" alt="Glossy filter panel in the Studio" width={900} height={675} />
-        </div>
+        <article className="well pad"><StudioPreparation /></article>
       </div>
     </section>
   );
