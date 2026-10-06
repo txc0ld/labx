@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useSyncExternalStore, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useSyncExternalStore, useState } from "react";
 import { formatEther, isHex, type Hex } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "@/lib/chain/types";
@@ -55,6 +55,7 @@ function shortAddress(value: string) {
 }
 
 export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel }: TransactionFlowProps) {
+  const reviewTitleId = useId();
   const subscribe = useCallback((listener: () => void) => wallet.subscribe(listener), [wallet]);
   const getWalletSnapshot = useCallback(() => walletSnapshot(wallet), [wallet]);
   const currentWallet = useSyncExternalStore(subscribe, getWalletSnapshot, getWalletSnapshot);
@@ -166,8 +167,8 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   if (state.kind === "review" || state.kind === "submitting") {
     const stale = !sameWallet(state.prepared, currentWallet);
     return (
-      <section className="transaction-review stack" aria-labelledby="transaction-review-title">
-        <div><p className="kicker">Review transaction</p><h3 id="transaction-review-title">{state.prepared.title}</h3></div>
+      <section className="transaction-review stack" aria-labelledby={reviewTitleId}>
+        <div><p className="kicker">Review transaction</p><h3 id={reviewTitleId}>{state.prepared.title}</h3></div>
         <dl className="review-list">
           <div><dt>Wallet</dt><dd>{shortAddress(state.prepared.account)}</dd></div>
           <div><dt>Network</dt><dd>Chain {state.prepared.chainId}</dd></div>
