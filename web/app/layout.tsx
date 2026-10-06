@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
+import { Sixtyfour } from "next/font/google";
 import { Shell } from "@/components/Shell";
 import { publicSiteUrl } from "@/lib/operator";
 import "./globals.css";
@@ -12,8 +13,8 @@ const sans = localFont({
   variable: "--font-sans"
 });
 
-const heading = localFont({
-  src: "./fonts/pirulen-regular.woff2",
+const heading = Sixtyfour({
+  subsets: ["latin"],
   weight: "400",
   style: "normal",
   display: "swap",
