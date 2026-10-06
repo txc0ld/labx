@@ -814,7 +814,7 @@ main.wrap { padding-block-start:clamp(1.8rem,4vw,4rem); }
 .pack-selector,.agreements-section { display:grid; gap:.7rem; }
 .console-section-heading h2 { margin:0; font-size:1rem; }
 .console-section-heading>span { color:var(--charcoal); font:.6rem var(--font-sans),Arial,sans-serif; text-transform:uppercase; }
-.pack-keys { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:1rem; }
+.pack-keys { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:1rem; }
 .squishy-pack-card {
   --pack-selection:inset 0 0 0 0 transparent;
   position:relative;
@@ -856,8 +856,8 @@ main.wrap { padding-block-start:clamp(1.8rem,4vw,4rem); }
 .squishy-pack-card:has(input:focus-visible) { outline:3px solid var(--ink); outline-offset:2px; }
 .squishy-pack-card[data-disabled="true"] { cursor:not-allowed; border-style:dashed; border-color:currentColor; filter:grayscale(.35); }
 .squishy-pack-content { position:relative; z-index:1; display:flex; flex-direction:column; min-width:0; height:100%; }
-.squishy-pack-topline { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
-.squishy-pack-topline strong { font-size:1.625rem; line-height:1.1; font-weight:700; letter-spacing:-.04em; text-transform:lowercase; }
+.squishy-pack-topline { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; }
+.squishy-pack-topline strong { font-size:1.875rem; line-height:1.15; font-weight:700; letter-spacing:-.035em; text-transform:lowercase; -webkit-text-stroke:2.5px #24162f; paint-order:stroke fill; text-shadow:0 2px 0 #24162f; }
 .squishy-pack-choice { min-width:5.75rem; text-align:center; flex-shrink:0; padding:.3rem .6rem; border:1px solid currentColor; border-radius:999px; font:500 .875rem/1.2 var(--font-sans),Arial,sans-serif; }
 .squishy-pack-body { display:grid; grid-template-columns:minmax(0,1fr) 64px; align-items:center; gap:.75rem; flex:1; padding-block:.6rem; }
 .squishy-pack-info { display:flex; flex-direction:column; align-items:flex-start; min-width:0; }

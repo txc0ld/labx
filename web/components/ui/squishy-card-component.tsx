@@ -40,6 +40,14 @@ const PACK_STYLES: Record<PackName, CSSProperties> = {
   }
 };
 
+const PACK_HEADING_COLORS: Record<PackName, string> = {
+  Entry: "#CCFF00",
+  Bronze: "#FFE3BD",
+  Silver: "#B37DF6",
+  Gold: "#FFF4B8",
+  Platinum: "#FF79C0"
+};
+
 const cardVariants: Variants = {
   rest: { scale: 1 },
   hover: { scale: 1.025 }
@@ -125,7 +133,7 @@ export function SquishyPackCard({
 
       <span className="squishy-pack-content">
         <span className="squishy-pack-topline">
-          <strong>{pack.name}</strong>
+          <strong style={{ color: PACK_HEADING_COLORS[pack.name] }}>{pack.name}</strong>
           <span className="squishy-pack-choice" aria-hidden="true">
             {disabled ? "Unavailable" : selected ? "Your pick" : "Pick me"}
           </span>
