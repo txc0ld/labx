@@ -15,7 +15,7 @@ export default function FairnessPage() {
       <div className="piece-grid legal-surfaces">
         <article className="pearl pad">
           <h2>Escrow</h2>
-          <p>The piece moves into the contract before packs open. After the settled phase, the drawn wallet claims that token with claimPrize. Pack proceeds and the lab fee are claimed separately.</p>
+          <p>The piece moves into escrow before memberships open. After settlement, the drawn wallet claims the NFT. Membership proceeds and the lab fee remain separate claims for the seller and pinned treasury.</p>
         </article>
         <article className="pearl pad">
           <h2>Commit</h2>

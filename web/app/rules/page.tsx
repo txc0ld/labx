@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
 import { OnChainStatus } from "@/components/OnChainStatus";
 
@@ -7,16 +8,24 @@ export default function RulesPage() {
       <h1 className="page-title">How a piece is drawn.</h1>
       <LegalNav />
       <article className="pearl pad stack">
-        <p>Packs are memberships. Each pack includes a published number of bonus entries into that piece only.</p>
-        <p>Entries expire 12 months after they are recorded. Expired entries are left out of the snapshot.</p>
-        <p>The snapshot is taken before randomness is requested. Chainlink VRF v2.5 supplies the word used to walk the frozen weights.</p>
-        <p>The lab fee is 5 USDC per pack. Settlement (`settle`) flips the piece to the settled phase. The drawn wallet claims the prize with `claimPrize`. The seller claims pack proceeds with `claimProceeds`. The treasury claims the lab fee with `claimFee`. Pack price and fee are refunded if the piece is cancelled before settlement.</p>
+        <h2>Membership first</h2>
+        <p>Customers buy a membership for one piece. Bonus entries are included only with that purchased membership.</p>
+        <p>Bonus entries expire 12 months after they are recorded. Expired entries are left out of the snapshot.</p>
       </article>
-      <article className="well pad stack">
-        <h2>Complimentary entry</h2>
-        <p>The contract supports one complimentary bonus entry per person per piece, subject to the published requirements.</p>
-        <OnChainStatus surface="rules" />
-      </article>
+      <div className="workflow-grid">
+        <article className="well pad stack">
+          <h2>Before the draw</h2>
+          <p>Opening fixes the NFT, membership economics, closing time, treasury and randomness configuration. The raffle cannot close before its published deadline.</p>
+          <p>After sales close, eligible entries freeze before randomness is requested.</p>
+        </article>
+        <article className="pearl pad stack">
+          <h2>Outcome and recovery</h2>
+          <p>Chainlink VRF selects from the frozen snapshot. The winner claims the NFT, the seller claims membership proceeds, and the pinned treasury receives the lab fee.</p>
+          <p>If the raffle is cancelled, each buyer claims the membership price and lab fee they paid. The seller can reclaim the NFT.</p>
+        </article>
+      </div>
+      <OnChainStatus surface="rules" />
+      <div className="btn-row"><Link className="btn" href="/fairness">Review draw protections</Link><Link className="text-link" href="/membership">Compare memberships</Link></div>
     </section>
   );
 }

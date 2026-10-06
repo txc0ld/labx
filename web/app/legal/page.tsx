@@ -31,7 +31,8 @@ export default function LegalPage() {
       </article>
       <article className="pearl pad stack legal-copy">
         <h2>Draw and settlement</h2>
-        <p>The piece is escrowed in the contract before packs open. After sales close, an entry snapshot is frozen, then Chainlink VRF v2.5 selects the wallet. Settlement (`settle`) flips the piece to the settled phase. It does not transfer the token or USDC. The drawn wallet claims the prize with `claimPrize`. The seller claims pack proceeds with `claimProceeds`. The treasury claims the lab fee with `claimFee`.</p>
+        <p>The piece is escrowed before memberships open. After sales close, eligible bonus entries are frozen, then Chainlink VRF v2.5 selects the wallet. The winner claims the NFT, the seller claims membership proceeds, and the pinned treasury receives the lab fee.</p>
+        <p>If a raffle is cancelled before settlement, each buyer can claim the membership price and lab fee they paid. The seller can reclaim the NFT.</p>
 
         <h2>Lab fee</h2>
         <p>The lab fee is 5 USDC per pack, denominated in USDC. ETH can be used only as an optional route through Uniswap and the Chainlink ETH/USD feed. USDC is the unit of account.</p>
@@ -39,15 +40,13 @@ export default function LegalPage() {
         <h2>Commitments</h2>
         <p>A private commitment is stored as a hash. {OPERATOR.brand} does not publish that private commercial number on public pages.</p>
 
-        <h2>Complimentary entry</h2>
-        <p>One complimentary entry may be requested per person per piece from the <Link href="/rules">draw rules</Link>, after a bot-gated check-in and a captcha. That route is not promoted on the explore bench.</p>
-
         <h2>Admin</h2>
-        <p>The intended admin and treasury authority is a Safe multisig. Fantom Labs is intended to be able to pause new packs and rotate the signer. Cancellation before settlement refunds the pack price and the lab fee to the buyer.</p>
+        <p>The intended admin and treasury authority is a Safe multisig. Fantom Labs can pause new membership sales. A pause does not stop closing, drawing, settlement, claims or timed recovery for an existing raffle.</p>
 
         <h2>Privacy</h2>
         <p>Wallet, email, agreement, and server records are described in the <Link href="/privacy">privacy policy</Link>. The operator is introduced on the <Link href="/about">about</Link> page.</p>
         <p className="muted">Last updated 5 October 2026. {OPERATOR_LINE}.</p>
+        <div className="btn-row"><Link className="btn" href="/rules">Read the draw rules</Link><Link className="text-link" href="/guide">Follow the walkthrough</Link></div>
       </article>
     </section>
   );

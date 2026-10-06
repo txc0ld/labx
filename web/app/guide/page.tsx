@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { JourneyOverview } from "@/components/JourneyOverview";
 import { LAB_FEE } from "@/lib/seed";
 
 export const metadata: Metadata = {
@@ -62,6 +63,8 @@ export default function GuidePage() {
           <div className="guide-links"><Link href="/legal">Membership terms</Link><Link href="/rules">Draw rules</Link></div>
         </article>
       </div>
+
+      <JourneyOverview />
 
       <section className="guide-workflow" id="workflow" aria-labelledby="workflow-title">
         <div className="guide-workflow-heading">

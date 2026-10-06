@@ -36,13 +36,13 @@ export default function PrivacyPage() {
         <ul>
           <li>Wallet address, connected chain, and signed messages you choose to submit.</li>
           <li>An email preference, only if you choose to save one in this browser.</li>
-          <li>Bot check-in points tied to a wallet and UTC day. The website never embeds the bot token.</li>
+          <li>Existing points records tied to a wallet and UTC day. Points do not create bonus entries.</li>
           <li>Server logs created by hosting, such as IP address, user agent, path, and time, used to operate and secure the site.</li>
         </ul>
         <p>We do not ask for a government identity document on this bench. We do not sell personal information.</p>
         <h2>Why we collect it</h2>
         <p>
-          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the current Sepolia site: connecting a wallet when you ask, showing bot check-in points, saving your local email preference, stopping automated abuse, and keeping the wallet gate on Sepolia.
+          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the current Sepolia site: connecting a wallet when you ask, showing existing account records, saving your local email preference, stopping automated abuse, and keeping the wallet gate on Sepolia.
         </p>
         <p>
           We use and disclose it under Australian Privacy Principle 6 for that primary purpose. A secondary purpose is limited to security, abuse prevention, and a legal obligation. We do not use these records for unrelated marketing.
@@ -51,8 +51,8 @@ export default function PrivacyPage() {
       <article className="pearl pad stack legal-copy">
         <h2>How we store it</h2>
         <p>This browser stores only the email preference you choose to save. It does not store a wallet identity, raffle listing, purchase, entry, agreement, or draw history. Clearing site data removes the preference.</p>
-        <p>When persistence is configured, agreement logs, points, reserves, and complimentary-entry marks may be written to a server store. Without that store, serverless instances do not keep those records between requests.</p>
-        <p>Website listing, purchase, agreement, receipt and complimentary-entry tools are not connected. Saving an email preference does not send it to the server.</p>
+        <p>When persistence is configured, agreement logs, points and reserve records may be written to a server store. Without that store, serverless instances do not keep those records between requests.</p>
+        <p>Website listing, purchase, agreement and receipt tools are not connected. Saving an email preference does not send it to the server.</p>
 
         <h2>On-chain and public data</h2>
         <p>Anything you send to {OPERATOR.network} is public. Wallet addresses, pack events, escrow, snapshots, VRF words, and settlement are visible to anyone who reads the chain. Do not treat a wallet as private correspondence.</p>
@@ -73,7 +73,7 @@ export default function PrivacyPage() {
         <p>If you are not satisfied, complain to the operator first. If that does not resolve it, you may complain to the Office of the Australian Information Commissioner. The process is published at <a href="https://www.oaic.gov.au/">the OAIC</a>.</p>
 
         <h2>Children</h2>
-        <p>The bench is for people 18 or older. A pack or complimentary entry requires that confirmation. Do not use the bench if you are under 18.</p>
+        <p>The bench is for people 18 or older. A membership purchase requires that confirmation. Do not use the bench if you are under 18.</p>
 
         <h2>Changes</h2>
         <p>We may update this notice as the Sepolia bench changes. The date below is the current draft. Material changes will be posted on this page.</p>

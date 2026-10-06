@@ -115,13 +115,13 @@ describe("required marketing routes", () => {
     expect(text).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/i);
   });
 
-  it("states settle flips phase and claims pull prize, proceeds, and fee", () => {
+  it("describes the prize, proceeds, fee, and cancellation outcomes without contract jargon", () => {
     for (const file of ["app/legal/page.tsx", "app/rules/page.tsx"]) {
       const text = read(file);
-      expect(text).toMatch(/claimPrize/);
-      expect(text).toMatch(/claimProceeds/);
-      expect(text).toMatch(/claimFee/);
-      expect(text).toMatch(/settled phase|flips the (piece|phase)|phase to settled/i);
+      expect(text).toMatch(/winner claims the NFT/i);
+      expect(text).toMatch(/seller claims membership proceeds/i);
+      expect(text).toMatch(/treasury receives the lab fee/i);
+      expect(text).toMatch(/buyer.*membership price and lab fee/i);
     }
   });
 

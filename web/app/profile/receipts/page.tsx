@@ -11,7 +11,7 @@ export default function ReceiptsPage() {
       <article className="well pad stack">
         <h2>No receipt records available</h2>
         <p className="notice warning" role="status">Purchase history is not connected, so the website cannot verify or display a receipt.</p>
-        <p>A verified receipt would describe the piece, pack, bonus entries, pack price and lab fee. No purchase or delivery is inferred here.</p>
+        <p>A verified receipt would describe the piece, membership tier, included bonus entries, membership price and lab fee. No purchase or delivery is inferred here.</p>
       </article>
       <div className="btn-row"><Link className="btn" href="/profile#email-preferences">Email preferences</Link><Link className="btn btn-dark" href="/profile/history">Account history</Link></div>
     </section>

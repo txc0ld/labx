@@ -939,7 +939,31 @@ fieldset.agreements label { padding:.55rem 0; border-bottom:1px solid var(--line
 .guide-timeline h3 { font-size:1.1rem; margin-bottom:.4rem; }
 .guide-timeline p { max-width:23ch; font-size:.85rem; color:var(--charcoal); line-height:1.5; }
 .guide-detail-body { display:grid; gap:.35rem; max-width:70ch; }
+.journey-overview { display:grid; gap:1.25rem; padding:clamp(1.25rem,3vw,2rem); border:1px solid var(--line-dark); border-radius:22px; background:#ffffffb8; }
+.journey-heading { display:flex; align-items:end; justify-content:space-between; gap:1.5rem; }
+.journey-heading h2,.journey-heading p { margin:0; }
+.journey-heading>div { display:grid; gap:.55rem; }
+.journey-heading>p { max-width:42ch; color:var(--charcoal); font-size:.78rem; }
+.journey-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+.journey-card { --journey-accent:var(--lavender); display:flex; flex-direction:column; gap:1rem; min-width:0; padding:clamp(1.15rem,2.4vw,1.75rem); border:1px solid var(--line); border-radius:18px; background:rgba(250,249,246,.82); }
+.journey-card--seller { --journey-accent:var(--lime); }
+.journey-card h3 { margin:0; font-size:clamp(1.25rem,2vw,1.7rem); }
+.journey-card ol { display:grid; gap:.8rem; margin:0; padding:0; list-style:none; }
+.journey-card li { display:grid; grid-template-columns:2.2rem minmax(0,1fr); gap:.75rem; align-items:start; }
+.journey-card li>span { display:grid; place-items:center; width:2.2rem; height:2.2rem; border:1px solid var(--ink); border-radius:50%; background:var(--journey-accent); font-size:.62rem; font-variant-numeric:tabular-nums; }
+.journey-card li>div { display:grid; gap:.15rem; }
+.journey-card li p { margin:0; color:var(--charcoal); font-size:.82rem; line-height:1.5; }
+.journey-card .btn { align-self:flex-start; margin-top:auto; }
+.walkthrough-list { display:grid; gap:.65rem; margin:0; padding-inline-start:1.3rem; }
+.text-link { display:inline-flex; align-items:center; min-height:44px; padding:.45rem .2rem; color:var(--ink); font-weight:650; text-underline-offset:5px; }
+.workflow-rail { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem; margin:.5rem 0; padding:0; list-style:none; }
+.workflow-rail li { position:relative; display:grid; gap:.18rem; min-width:0; padding:.9rem; border:1px solid var(--line); border-radius:14px; background:rgba(250,249,246,.78); }
+.workflow-rail li:not(:last-child)::after { content:""; position:absolute; top:1.45rem; inset-inline-end:-.66rem; width:.65rem; height:1px; background:var(--line-dark); }
+.workflow-rail span { color:var(--charcoal); font-size:.62rem; font-variant-numeric:tabular-nums; }
+.workflow-rail strong { font-size:.9rem; }
+.workflow-rail small { color:var(--charcoal); font-size:.68rem; }
 @media (max-width:960px) { .guide-grid { grid-template-columns:1fr; } .guide-section { display:grid; grid-template-columns:1fr 1fr; column-gap:2rem; } .guide-step-label,.guide-section h2,.guide-section>p { grid-column:1; } .guide-section>p { min-height:0; } .guide-checklist,.guide-facts { grid-column:2; grid-row:1/4; align-self:center; } .guide-section .guide-details { grid-column:1/-1; } }
+@media (max-width:760px) { .journey-heading { display:grid; } .journey-grid { grid-template-columns:1fr; } .workflow-rail { grid-template-columns:1fr; } .workflow-rail li { grid-template-columns:2rem 1fr; align-items:baseline; } .workflow-rail li small { grid-column:2; } .workflow-rail li:not(:last-child)::after { top:auto; bottom:-.66rem; inset-inline-start:1.85rem; width:1px; height:.65rem; } }
 @media (max-width:560px) { .guide-section { display:flex; gap:.8rem; } .guide-step-label { margin-bottom:.25rem; } .guide-facts,.guide-checklist { min-height:4rem; align-self:stretch; } .guide-timeline { grid-template-columns:1fr; gap:0; } .guide-timeline li { padding-block-end:1.4rem; padding-inline:3.2rem 0; } .guide-timeline li:last-child { padding-block-end:0; } .guide-node { position:absolute; inset-inline-start:0; top:0; } .guide-timeline li:not(:last-child)::before { inset-inline-start:1.1rem; inset-inline-end:auto; top:2.2rem; height:calc(100% - 2.2rem); width:1px; } .guide-timeline p { max-width:none; } }
 
 html[data-motion="enabled"] [data-reveal] { opacity:0; transform:translateY(16px); transition:opacity 600ms var(--ease-out),transform 600ms var(--ease-out); }

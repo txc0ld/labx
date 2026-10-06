@@ -93,7 +93,7 @@ export default function ProfilePage() {
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
         <h1 className="page-title">Your bench</h1>
-        <p className="lede">Wallet, points and browser-only receipt preferences.</p>
+        <p className="lede">Wallet, account records and browser-only receipt preferences.</p>
         <AccountNav />
       </header>
       <div className="split profile-grid">
@@ -106,7 +106,7 @@ export default function ProfilePage() {
           <div>chain sepolia</div>
         </div>
         <OnChainStatus surface="profile" />
-        <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token.</p>
+        <p className="muted">Existing points records are separate from memberships and bonus entries. They do not grant an entry.</p>
         <div className="btn-row">
           <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>
           {currentPoints.kind === "error" ? <button className="btn btn-dark" type="button" onClick={() => setPointsRetry((value) => value + 1)}>Retry points</button> : null}
