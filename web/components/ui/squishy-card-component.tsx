@@ -84,7 +84,7 @@ export function SquishyPackCard({
       className="squishy-pack-card"
       style={{
         backgroundColor: PACK_ACCENTS[pack.name],
-        color: pack.name === "Entry" ? "#FFFFFF" : "var(--ink)"
+        color: pack.name === "Entry" ? "#FFFFFF" : "#000000"
       }}
       data-selected={selected ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
