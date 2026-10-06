@@ -41,11 +41,11 @@ const PACK_STYLES: Record<PackName, CSSProperties> = {
 };
 
 const PACK_HEADING_COLORS: Record<PackName, string> = {
-  Entry: "#CCFF00",
-  Bronze: "#FFE3BD",
-  Silver: "#B37DF6",
-  Gold: "#FFF4B8",
-  Platinum: "#FF79C0"
+  Entry: "#46206E",
+  Bronze: "#53290C",
+  Silver: "#444B56",
+  Gold: "#614100",
+  Platinum: "#3C4B00"
 };
 
 const cardVariants: Variants = {
