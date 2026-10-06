@@ -1132,6 +1132,10 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
 .footer-shortcuts nav ul { gap:.7rem; }
 .footer-shortcuts nav a { display:grid; place-items:center; width:44px; height:44px; padding:0; border:1px solid #454549; border-radius:50%; color:#aaa9ad; }
 .footer-shortcuts nav a:hover,.footer-shortcuts nav a:focus-visible,.footer-shortcuts nav a[aria-current="page"] { border-color:#aaa9ad; color:#fff; box-shadow:none; }
+.site-footer nav a:focus-visible { outline:3px solid var(--purple); outline-offset:4px; }
+@media (forced-colors:active) {
+  .site-footer nav a:focus-visible { outline-color:Highlight; }
+}
 .footer-shortcuts svg { width:1.1rem; height:1.1rem; stroke-width:1.6; }
 .footer-copyright p { margin:.1rem 0 0; color:#929296; font-size:.7rem; }
 .footer-animated:focus-within { opacity:1!important; filter:none!important; transform:none!important; }
