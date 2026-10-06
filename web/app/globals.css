@@ -1135,13 +1135,28 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
 .account-balance strong { font-size:1.5rem; font-variant-numeric:tabular-nums; }
 .account-balance small { color:var(--charcoal); }
 .load-more { justify-self:center; }
+.history-list,.seller-raffle-list { display:grid; gap:.75rem; margin:0; padding:0; list-style:none; }
+.history-list>li,.seller-raffle-list>li { display:grid; gap:.75rem; padding:1rem; border:1px solid var(--line); border-radius:16px; background:rgba(250,249,246,.78); }
+.history-list>li>div>p { margin:.2rem 0 0; color:var(--charcoal); font-size:.78rem; }
+.history-list dl { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.65rem; margin:0; }
+.history-list dl>div { display:grid; gap:.2rem; }
+.history-list dt { color:var(--charcoal); font-size:.68rem; }
+.history-list dd { margin:0; font-weight:650; font-variant-numeric:tabular-nums; }
+.history-list details { font-size:.72rem; }
+.history-list summary { display:flex; align-items:center; min-height:44px; cursor:pointer; font-weight:650; }
+.history-list .hash { overflow-wrap:anywhere; }
+.seller-raffle-list>li { grid-template-columns:minmax(0,1fr) auto; align-items:center; }
+.seller-raffle-list>li>div { display:grid; gap:.2rem; }
+.seller-raffle-list span { color:var(--charcoal); font-size:.72rem; }
 @media (max-width:760px) {
   .chain-piece-visual { position:static; }
+  .history-list dl { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media (max-width:520px) {
   .chain-pack-grid { grid-template-columns:1fr; }
   .chain-capsule .capsule-foot { display:grid; }
   .chain-capsule .capsule-foot>span:first-child { max-width:none; }
+  .seller-raffle-list>li { grid-template-columns:1fr; }
 }
 @media (max-width:420px) { .partner-pass-face { min-height:21rem; } .fantom-orbit { width:11rem; inset-inline-end:-3.5rem; top:6rem; } .fantom-spark { font-size:5rem; inset-inline-end:.25rem; top:6.5rem; } .seatmap-cabin { width:6.5rem; inset-inline-end:.5rem; top:6.75rem; gap:.4rem; } .partner-pass-value { margin-top:3.5rem; } .partner-pass-value strong { font-size:5rem; } }
 @media (prefers-reduced-motion:reduce) { .partner-pass *, .partner-pass *::after { transition:none!important; } .partner-pass-link:active { transform:none; } }
