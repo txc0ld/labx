@@ -12,12 +12,12 @@ type SquishyPackCardProps = {
   onSelect: (pack: PackName) => void;
 };
 
-const PACK_ACCENTS: Record<PackName, "#b9ff87" | "#b37df6" | "#ff79c0"> = {
-  Entry: "#b9ff87",
-  Bronze: "#b37df6",
-  Silver: "#ff79c0",
-  Gold: "#b9ff87",
-  Platinum: "#b37df6"
+const PACK_ACCENTS: Record<PackName, string> = {
+  Entry: "#FFFFFF",
+  Bronze: "#A05822",
+  Silver: "#CCCCCC",
+  Gold: "#FDBD29",
+  Platinum: "#D4D5D9"
 };
 
 const cardVariants: Variants = {
@@ -82,7 +82,10 @@ export function SquishyPackCard({
   return (
     <motion.label
       className="squishy-pack-card"
-      style={{ backgroundColor: PACK_ACCENTS[pack.name] }}
+      style={{
+        backgroundColor: PACK_ACCENTS[pack.name],
+        color: pack.name === "Bronze" ? "#FFFFFF" : "var(--ink)"
+      }}
       data-selected={selected ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
       variants={cardVariants}
