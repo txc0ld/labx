@@ -1,10 +1,11 @@
+import { workflowRequestBody } from "@/lib/chain/request-body";
 import { activeStore } from "@/lib/store";
 import { serverWorkflow } from "@/lib/chain/server";
 import { parseEnvelope, recoverAuthenticatedCommitment } from "@/lib/workflow-records";
 import { hash } from "@/lib/chain/validation";
 export async function POST(request: Request) {
   try {
-    const body = parseEnvelope(await request.json());
+    const body = parseEnvelope(await workflowRequestBody(request));
     if (!body.input || typeof body.input !== "object" || !("commit" in body.input)) throw new Error("A commitment hash is required.");
     const input = { commit: hash(body.input.commit) };
     const { context, client } = await serverWorkflow();

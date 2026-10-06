@@ -1,3 +1,4 @@
+import { workflowRequestBody } from "@/lib/chain/request-body";
 import { activeStore } from "@/lib/store";
 import { serverWorkflow } from "@/lib/chain/server";
 import { parseCommitmentInput, parseEnvelope, saveAuthenticatedCommitment } from "@/lib/workflow-records";
@@ -5,8 +6,7 @@ import { erc721Abi } from "viem";
 import { sameAddress } from "@/lib/chain/validation";
 export async function POST(request: Request) {
   try {
-    if (Number(request.headers.get("content-length")) > 24_000) throw new Error("Request is too large.");
-    const body = parseEnvelope(await request.json()), input = parseCommitmentInput(body.input);
+    const body = parseEnvelope(await workflowRequestBody(request)), input = parseCommitmentInput(body.input);
     const { context, client, block } = await serverWorkflow();
     const owner = await client.readContract({ address: input.nft, abi: erc721Abi, functionName: "ownerOf", args: [BigInt(input.tokenId)], blockNumber: block.number });
     if (!sameAddress(owner, body.address)) throw new Error("The connected seller must own the NFT.");

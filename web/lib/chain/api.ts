@@ -1,5 +1,5 @@
 "use client";
-import { isHex, type Hex } from "viem";
+import { keccak256, toBytes, type Hex } from "viem";
 import { configuredBrowserService } from "./browser";
 import { address, hash, sameAddress } from "./validation";
 import { workflowMessage } from "./messages";
@@ -46,7 +46,7 @@ export async function createCommitment(wallet: WalletSessionPort, input: Commitm
   const signature = await wallet.signMessage({ message: workflowMessage("commitment", context, expected.account, normalized, deadline), expected });
   const result = publicReserve(await request("/api/reserve", { address: expected.account, input: normalized, deadline, signature }));
   await wallet.assertCurrent(expected);
-  if (!sameAddress(result.seller, expected.account) || !sameAddress(result.labx, context.contract) || result.chainId !== String(context.chainId) || !sameAddress(result.nft, normalized.nft) || result.tokenId !== normalized.tokenId || result.publicSummary !== normalized.publicSummary) throw new Error("Stored commitment does not match the reviewed request.");
+  if (!sameAddress(result.seller, expected.account) || !sameAddress(result.labx, context.contract) || result.chainId !== String(context.chainId) || !sameAddress(result.nft, normalized.nft) || result.tokenId !== normalized.tokenId || result.publicSummary !== normalized.publicSummary || result.publicHash !== keccak256(toBytes(normalized.publicSummary))) throw new Error("Stored commitment does not match the reviewed request.");
   return result;
 }
 export async function recoverCommitment(wallet: WalletSessionPort, input: { commit: Hex }): Promise<ReserveRecord> {

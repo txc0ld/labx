@@ -1,4 +1,5 @@
-import type { Address, Hex, PublicClient } from "viem";
+import { decodeFunctionData, erc20Abi, erc721Abi, type Address, type Hex, type PublicClient } from "viem";
+import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { actionBuilder } from "./actions";
@@ -68,6 +69,28 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     await reader.checkedBlock(); hash(txHash); const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const tx = await client.getTransaction({ hash: txHash });
     if (!tx.to || !sameAddress(tx.from, session.account)) throw new Error("This transaction is not from the connected wallet.");
+    const target = tx.to;
+    if (sameAddress(target, manifest.address)) {
+      const decoded = decodeFunctionData({ abi: raffleAbi, data: tx.input });
+      const allowed = new Set(["createRaffle", "updateDraft", "escrow", "openWithPolicy", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "cancel", "abortDrawing", "reclaimPrize", "refund", "buyPack", "buyPackWithEth"]);
+      if (!allowed.has(decoded.functionName) || decoded.functionName !== "buyPackWithEth" && tx.value !== 0n) throw new Error("This is not a supported LABx workflow transaction.");
+    } else if (sameAddress(tx.to, manifest.usdc)) {
+      const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.input });
+      if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || decoded.args[1] <= 0n || decoded.args[1] > 20_000_100_000_000n || tx.value !== 0n) throw new Error("This is not a bounded LABx payment approval.");
+    } else {
+      const decoded = decodeFunctionData({ abi: erc721Abi, data: tx.input });
+      if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || tx.value !== 0n) throw new Error("This is not a LABx NFT approval.");
+      // Recovery has no stored draft ID. Resolve the exact NFT/token/seller against paginated chain records.
+      let cursor: bigint | undefined = 1n, found = false;
+      const at = await reader.checkedBlock();
+      while (cursor !== undefined && !found) {
+        const page = await reader.listRaffles({ cursor, limit: 24, block: at });
+        found = page.items.some(item => sameAddress(item.raffle.seller, session.account) && sameAddress(item.raffle.nft, target) && item.raffle.tokenId === decoded.args[1]);
+        cursor = page.nextCursor ?? undefined;
+      }
+      if (!found) throw new Error("No seller draft matches this NFT approval.");
+    }
+    await wallet.assertCurrent(session);
     const result: SubmittedAction = { hash: tx.hash, account: session.account, chainId: manifest.chainId, to: tx.to, data: tx.input, value: tx.value };
     pending.set(session.account.toLowerCase(), result); return result;
   }

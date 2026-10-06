@@ -16,10 +16,9 @@ export function parseCommitmentInput(input: unknown): CommitmentInput {
 }
 export async function saveAuthenticatedCommitment(store: Store, request: SignedWorkflowInput<CommitmentInput>, context: WorkflowContext, verify: WorkflowVerifier): Promise<PublicReserve> {
   const input = parseCommitmentInput(request.input);
-  const message = await verifyWorkflowAuthorization({ operation: "commitment", context, account: request.address, input, deadline: request.deadline, signature: request.signature, verify });
+  await verifyWorkflowAuthorization({ operation: "commitment", context, account: request.address, input, deadline: request.deadline, signature: request.signature, verify });
   // Deadline-independent identity makes retries recover the same durable commitment.
   const identity = keccak256(toBytes(JSON.stringify([context.chainId, context.contract.toLowerCase(), request.address.toLowerCase(), input])));
-  void message;
   const record = await createReserve(store, { ...input, seller: request.address, chainId: BigInt(context.chainId), labx: context.contract, requestIdentity: identity });
   if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId)) throw new Error("Commitment identity does not match.");
   return record;

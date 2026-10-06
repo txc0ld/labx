@@ -46,6 +46,7 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   async function listRaffles({ cursor = 1n, limit = 12, block }: { cursor?: bigint; limit?: number; block?: BlockRef } = {}) {
     positiveId(cursor); boundedNumber(limit, 1, 24); const at = await checkedBlock(block);
     const nextId = await client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "nextId", blockNumber: at.number });
+    if (cursor > nextId) throw new Error("Catalog cursor is outside this block snapshot.");
     const end = cursor + BigInt(limit) < nextId ? cursor + BigInt(limit) : nextId;
     const ids: bigint[] = []; for (let id = cursor; id < end; id++) ids.push(id);
     const items = await Promise.all(ids.map(id => readRaffle({ id, block: at })));
@@ -68,6 +69,7 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   async function listLots({ id, cursor = 0n, limit = 50, block }: { id: bigint; cursor?: bigint; limit?: number; block?: BlockRef }) {
     if (cursor < 0n) throw new Error("Invalid cursor."); boundedNumber(limit, 1, 100);
     const snapshot = await readRaffle({ id, block });
+    if (cursor > snapshot.lotCount) throw new Error("Entry cursor is outside this block snapshot.");
     const end = cursor + BigInt(limit) < snapshot.lotCount ? cursor + BigInt(limit) : snapshot.lotCount;
     const indexes: bigint[] = []; for (let i = cursor; i < end; i++) indexes.push(i);
     const items = await Promise.all(indexes.map(index => client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "lotAt", args: [id, index], blockNumber: snapshot.block.number })));

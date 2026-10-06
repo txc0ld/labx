@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeFunctionData, erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
+import { decodeFunctionData, encodeFunctionData, erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { createRaffleService } from "../lib/chain/service";
 import { raffleAbi } from "../lib/chain/abi";
@@ -130,5 +130,45 @@ run("isolated Anvil seller and membership journeys", () => {
     await act({ kind: "settle", id }, stranger); await act({ kind: "claimPrize", id }, buyer);
     expect((await chain.service.readRaffle({ id })).raffle.revealed).toBe(false);
   }, 30_000);
+
+  it("distinguishes wallet replacement from a successful reviewed action", async () => {
+    const { id } = await draft(7n); await open(id);
+    await chain.rpc("evm_setAutomine", [false]);
+    try {
+      const review = await chain.service.prepare({ action: { kind: "approveUsdc", id, packId: 0, quantity: 1 }, wallet: buyer });
+      const pending = await chain.service.submit({ prepared: review, wallet: buyer });
+      const original = await chain.client.getTransaction({ hash: pending.hash });
+      const confirming = chain.service.confirm({ transaction: pending, timeoutMs: 5000 });
+      await new Promise(done => setTimeout(done, 100));
+      const gasPrice = 100_000_000_000n;
+      await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.buyer, value: "0x0", nonce: `0x${original.nonce.toString(16)}`, gasPrice: `0x${gasPrice.toString(16)}`, gas: "0x5208" }]);
+      await chain.mine(); await new Promise(done => setTimeout(done, 150)); await chain.mine();
+      expect((await confirming).kind).toBe("replaced");
+    } finally { await chain.rpc("evm_setAutomine", [true]); }
+  }, 15_000);
+  it("reports a mined reverted transaction when recovering wallet activity", async () => {
+    const hash = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.raffle.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "claimPrize", args: [999n] }), gas: "0x186a0" }]);
+    if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("Missing reverted fixture transaction");
+    const recovered = await chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer }); await chain.mine();
+    expect((await chain.service.confirm({ transaction: recovered, timeoutMs: 3000 })).kind).toBe("reverted");
+  });
+
+  it("pins pagination to one block and rejects invalid cursors or replaced block hashes", async () => {
+    const first = await chain.service.listRaffles({ limit: 2 }); expect(first.nextCursor).toBe(3n);
+    await chain.mine(); const second = await chain.service.listRaffles({ cursor: 3n, limit: 2, block: first.block });
+    expect(second.block.hash).toBe(first.block.hash); expect(second.items.map(item => item.id)).toEqual([3n, 4n]);
+    expect(second.items.every(item => item.block.hash === first.block.hash)).toBe(true);
+    await expect(chain.service.listRaffles({ cursor: 2n ** 80n })).rejects.toThrow(/cursor/);
+    await expect(chain.service.listLots({ id: 1n, cursor: 2n ** 80n })).rejects.toThrow(/cursor/);
+    await expect(chain.service.listRaffles({ block: { ...first.block, hash: keccak256(toBytes("different block")) } })).rejects.toThrow(/Chain state changed/);
+  });
+  it("rejects recovery of unrelated wallet transfers and retired free-entry calls", async () => {
+    const transfer = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.buyer, value: "0x0" }]);
+    const voucher = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.raffle.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "claimAmoe", args: [1n, PUBLISHED_TERMS_HASH, 0n, "0x"] }), gas: "0x186a0" }]);
+    for (const hash of [transfer, voucher]) {
+      if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("Missing fixture transaction");
+      await expect(chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer })).rejects.toThrow();
+    }
+  });
 
 });
