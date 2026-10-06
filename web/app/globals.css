@@ -894,7 +894,7 @@ fieldset.agreements label { padding:.55rem 0; border-bottom:1px solid var(--line
 .guide-toc { display:flex; flex-wrap:wrap; gap:.25rem 1.25rem; }
 .guide-toc a,.guide-section a { min-height:44px; display:inline-flex; align-items:center; color:var(--ink); font-weight:650; text-underline-offset:5px; }
 .guide-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); border-top:1px solid var(--line-dark); }
-.guide-section { display:grid; align-content:start; gap:.65rem; padding:clamp(1.25rem,3vw,2.5rem); border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
+.guide-section { display:grid; align-content:start; gap:.65rem; padding:clamp(1.25rem,3vw,2.5rem); border-right:1px solid var(--line); border-bottom:1px solid var(--line); scroll-margin-top:6rem; }
 .guide-section:nth-child(2n) { border-right:0; }
 .guide-section h2,.guide-section p { margin:0; }
 .guide-section h2 { font-size:clamp(1.45rem,2.5vw,2.2rem); letter-spacing:-.045em; }
