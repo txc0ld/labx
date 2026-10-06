@@ -77,4 +77,23 @@ run("pending purchase repair on isolated Anvil", () => {
       await c.mine(); await c.mine(); expect((await service.confirm({ transaction, timeoutMs: 3000 })).kind).toBe("confirmed");
     } finally { await c.rpc("evm_setAutomine", [true]); }
   });
+  it.each(["account", "chain"])("clears only the prepared journal when %s changes while the callback waits", async kind => {
+    const control = c.wallet(c.buyer); await control.session.connect();
+    const send = control.session.requestTransaction.bind(control.session);
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let providerInvocations = 0;
+    control.session.requestTransaction = (expected, transaction, prepareJournal, providerStarted) => send(expected, transaction, async () => {
+      await prepareJournal?.(); entered(); await gate;
+    }, () => { providerInvocations += 1; providerStarted?.(); });
+    const prepared = await service.prepare({ action: purchase, wallet: control.session });
+    const rejected = expect(service.submit({ prepared, wallet: control.session })).rejects.toThrow(/changed/);
+    await started; expect(journal.read(c.buyer)).not.toBeNull();
+    if (kind === "account") control.changeAccount(c.stranger); else control.changeChain("0x1");
+    release(); await rejected;
+    expect(providerInvocations).toBe(0); expect(journal.read(c.buyer)).toBeNull();
+    await execute(purchase); expect(journal.read(c.buyer)).toBeNull();
+  });
+
 });

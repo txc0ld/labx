@@ -46,8 +46,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
           intent = { id: crypto.randomUUID(), intentHash: transactionIntent(entry.transaction), nonce, startedBlock: fresh.block.number.toString(), hash: null };
           journal.write(account, intent);
         });
-        walletRequested = true;
-      });
+      }, () => { walletRequested = true; });
       if (!walletRequested) throw new Error("Wallet adapter did not establish transaction recovery protection.");
       await journal.exclusive(account, async () => {
         const current = journal.read(account);

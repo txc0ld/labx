@@ -12,7 +12,7 @@ export interface WalletSessionPort {
   refresh(): Promise<WalletSnapshot>;
   disconnect(): void;
   assertCurrent(expected: Extract<WalletSnapshot, { kind: "connected" }>): Promise<void>;
-  requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint; nonce?: number }, beforeRequest?: () => Promise<void>): Promise<Hex>;
+  requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint; nonce?: number }, beforeRequest?: () => Promise<void>, onProviderRequest?: () => void): Promise<Hex>;
   signMessage(input: { message: string; expected: Extract<WalletSnapshot, { kind: "connected" }> }): Promise<Hex>;
 }
 

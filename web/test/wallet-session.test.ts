@@ -28,4 +28,20 @@ describe("wallet session revision boundary", () => {
     f.listeners.get("accountsChanged")?.([account]); expect((await f.wallet.refresh()).kind).toBe("disconnected");
     f.setAccounts([]); await expect(f.wallet.connect()).rejects.toThrow(/Connect/);
   });
+  it.each(["account", "chain", "disconnect"])("does not invoke the provider if %s changes while journal acquisition waits", async (kind) => {
+    const f = fixture(); const expected = await f.wallet.connect(); if (expected.kind !== "connected") throw new Error("Missing session");
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let providerInvoked = false;
+    const sending = f.wallet.requestTransaction(expected, { to: account, data: "0x", value: 0n }, async () => { entered(); await gate; }, () => { providerInvoked = true; });
+    const rejected = expect(sending).rejects.toThrow(/changed/);
+    await started;
+    if (kind === "account") f.setAccounts(["0x2222222222222222222222222222222222222222"]);
+    else if (kind === "chain") f.setChain("0x1");
+    else f.wallet.disconnect();
+    release(); await rejected;
+    expect(providerInvoked).toBe(false); expect(f.calls).not.toContain("eth_sendTransaction");
+  });
+
 });
