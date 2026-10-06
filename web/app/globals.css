@@ -61,6 +61,7 @@ body {
   font-size: 17px;
   line-height: 1.45;
 }
+h1 { font-family:var(--font-heading),var(--font-sans),sans-serif; font-weight:400; font-synthesis:none; overflow-wrap:anywhere; }
 img { max-width: 100%; height: auto; display: block; }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -310,9 +311,9 @@ label:has(input[type="checkbox"]) {
 
 .hero-copy { padding: 1.3rem 1.25rem 1.15rem; display: flex; flex-direction: column; gap: 0.8rem; }
 .hero h1, .bench-hero h1, .page-title {
-  font-size: clamp(2.4rem, 5vw, 4.4rem);
-  line-height: 0.9;
-  letter-spacing: -0.055em;
+  font-size: clamp(1.75rem, 3.8vw, 3.8rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
   margin: 0;
   text-wrap: balance;
 }
@@ -776,8 +777,8 @@ input:not([type="checkbox"]):not([type="radio"]),select,textarea { border:1px so
 .lamp,.lamp.lavender,.lamp.purple,.lamp.lime,.lamp.pink,.lamp.mint { border-radius:5px; box-shadow:none; }
 
 .collection-intro { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(17rem,.85fr); align-items:end; gap:2rem; padding-block:.25rem 1.2rem; border-bottom:1px solid var(--line-dark); }
-.collection-title-block { display:grid; gap:.65rem; min-width:0; }
-.resolved-title { max-width:100%; margin:0; overflow:hidden; font-size:clamp(2.8rem,6.4vw,6.6rem); font-weight:600; line-height:.9; letter-spacing:-.07em; }
+.collection-title-block { display:grid; gap:.65rem; min-width:0; container-type:inline-size; }
+.resolved-title { max-width:100%; margin:0; overflow:hidden; font-size:clamp(1rem,8.3cqw,5.5rem); font-weight:400; line-height:1.15; letter-spacing:0; }
 .resolved-title-slot { position:relative; display:inline-block; max-width:100%; overflow:hidden; }
 .resolved-title-measure { visibility:hidden; }
 .resolved-title-visual { position:absolute; inset:0; white-space:nowrap; }
@@ -828,7 +829,7 @@ input:not([type="checkbox"]):not([type="radio"]),select,textarea { border:1px so
 .purchase-console { display:grid; gap:1.25rem; }
 .purchase-header { display:grid; gap:.65rem; padding-bottom:1.2rem; border-bottom:1px solid var(--line-dark); }
 .purchase-eyebrow,.console-section-heading { display:flex; align-items:center; justify-content:space-between; gap:.75rem; }
-.purchase-header .page-title { font-size:clamp(2.4rem,4.7vw,5rem); font-weight:600; }
+.purchase-header .page-title { font-size:clamp(1.75rem,3.6vw,3.5rem); font-weight:400; }
 .purchase-header .lede { font-size:.9rem; }
 .piece-deadline { margin:0; color:var(--charcoal); font:.67rem var(--font-sans),Arial,sans-serif; }
 .pack-selector,.agreements-section { display:grid; gap:.7rem; }
@@ -953,7 +954,6 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
   .nav a { width:100%; padding-inline:.25rem; font-size:.72rem; }
   main.wrap { padding-top:.9rem; }
   .collection-intro { grid-template-columns:1fr; gap:.35rem; padding-block:.2rem .55rem; }
-  .resolved-title { font-size:clamp(2.35rem,13vw,4rem); }
   .collection-intro-actions { width:100%; justify-content:space-between; gap:.5rem; justify-self:start; }
   .collection-demo-label { font-size:.7rem; }
   .capsule-collection { margin-top:.45rem; }

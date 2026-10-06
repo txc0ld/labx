@@ -26,7 +26,7 @@ export default function ProfilePage() {
     <section className="section split">
       <div className="pearl pad stack">
         <p className="kicker">Profile</p>
-        <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>Your bench card</h1>
+        <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>Your bench</h1>
         <div className="terminal pad">
           <div>wallet {bench.wallet || "bench default"}</div>
           <div>points {points}</div>

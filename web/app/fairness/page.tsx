@@ -9,7 +9,7 @@ export default function FairnessPage() {
   return (
     <section className="section">
       <p className="kicker">Fairness</p>
-      <h1 className="page-title">Three locks on every draw.</h1>
+      <h1 className="page-title">The draw</h1>
       <p className="lede">Escrow, a commitment hash, then VRF after the snapshot. Settlement flips phase; claims move the prize, proceeds, and fee.</p>
       <LegalNav />
       <div className="piece-grid legal-surfaces">

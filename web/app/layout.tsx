@@ -12,6 +12,14 @@ const sans = localFont({
   variable: "--font-sans"
 });
 
+const heading = localFont({
+  src: "./fonts/pirulen-regular.woff2",
+  weight: "400",
+  style: "normal",
+  display: "swap",
+  variable: "--font-heading"
+});
+
 const site = publicSiteUrl();
 const description = "Membership packs for escrowed pieces on Ethereum Sepolia. Bonus entries, Chainlink VRF, Safe treasury.";
 
@@ -52,7 +60,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={sans.variable}>
+    <html lang="en" className={`${sans.variable} ${heading.variable}`}>
       <body>
         <Shell>{children}</Shell>
       </body>

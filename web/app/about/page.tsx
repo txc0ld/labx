@@ -12,7 +12,7 @@ export default function AboutPage() {
   return (
     <section className="section stack">
       <p className="kicker">About</p>
-      <h1 className="page-title">The lab behind the bench.</h1>
+      <h1 className="page-title">About LABx</h1>
       <p className="lede legal-copy">
         LABx is a membership bench for one escrowed piece at a time. Bonus entries come with the pack. After sales close, an entry snapshot freezes, then Chainlink VRF v2.5 selects the wallet.
       </p>
