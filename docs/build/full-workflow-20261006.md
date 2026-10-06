@@ -61,3 +61,11 @@ Fresh combined review of `5e932f3` is CHANGES_REQUIRED. Its nine findings cover 
 Critical repair ownership is assigned to Astra in isolated `work/workflow-review-repairs-20261007`, base `5e932f3`. The approved repair design persists only deployment/account-scoped nonsecret transaction metadata, guards duplicate submission across reload, reconciles canonical chain outcomes, and never lets an unrelated historical hash replace a pending intent. Private commitment material/signatures remain excluded from browser persistence. Independent regressions and actual rendered seller/buyer journeys are mandatory after freeze, followed by fresh review.
 
 The separate visual slice passed at `9cce5a4`. The brand reel is being revised after user feedback, tracked in `docs/build/brand-reel-20261006.md`. No release, real wallet transaction, funding or on-chain change has occurred. Version 2 deployment identity, verified Safe authority, VRF funding and a human release decision remain operational prerequisites. Provider usage/cost is unknown.
+
+### Repair checkpoint, 7 October
+
+Root integrated first repairs as `56fe63e`; its production build and TypeScript passed. The aggregate run found 162 passes and two failures: the environment documentation lacked an expected unset-address explanation, and the independent test wallet adapter had not forwarded the new lifecycle callback. Both were corrected in `a958e43` and `cdd8965`. No aggregate pass is claimed until rerun.
+
+Fresh review and independent reproduction then found wallet/account drift during awaited journal acquisition. The critical owner's post-journal check and explicit provider-invocation marker were integrated as `ddd2f39`. Privacy storage disclosure was corrected in `b8e9f44`. The remaining UI repair exposes reconciliation even after a sold-out purchase or final claim removes all other actions. Independent full browser/Anvil journeys and final review remain pending.
+
+Root contract run at `3feeaab` passed 79 tests with ten fuzz cases at 1,024 runs each, exit 0; source is unchanged by these frontend repairs. Evidence: `artifacts/full-workflow-20261006/combined-contracts-3feeaab.log`. The V2 film/splash separately passed its complete scoped gate; see the brand-reel record. Local port 3113 currently serves the `56fe63e` build. No publication or live chain action.
