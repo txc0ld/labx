@@ -1,10 +1,18 @@
 import type { Metadata, Viewport } from "next";
+import localFont from "next/font/local";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import { Shell } from "@/components/Shell";
 import { publicSiteUrl } from "@/lib/operator";
 import "./globals.css";
 
-const sans = Space_Grotesk({ subsets: ["latin"], variable: "--font-sans" });
+const sans = localFont({
+  src: "./fonts/basetica-regular.woff2",
+  weight: "400",
+  style: "normal",
+  display: "swap",
+  variable: "--font-sans"
+});
+const display = Space_Grotesk({ subsets: ["latin"], variable: "--font-display" });
 const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 const site = publicSiteUrl();
@@ -47,7 +55,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
+    <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <Shell>{children}</Shell>
       </body>

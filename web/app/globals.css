@@ -57,10 +57,11 @@ body {
   background-color: #f8f9fa;
   background-image: radial-gradient(rgba(0, 0, 0, 0.12) 1px, transparent 1px);
   background-size: 24px 24px;
-  font-family: var(--font-sans), "Space Grotesk", sans-serif;
+  font-family: var(--font-sans), Arial, sans-serif;
   font-size: 17px;
   line-height: 1.45;
 }
+h1, h2, h3, h4, h5, h6 { font-family: var(--font-display), "Space Grotesk", sans-serif; }
 img { max-width: 100%; height: auto; display: block; }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; color: inherit; }
