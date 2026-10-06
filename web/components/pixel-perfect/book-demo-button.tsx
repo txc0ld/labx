@@ -107,7 +107,7 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
         `}</style>
 
         <span className="absolute inset-y-0 right-4 flex items-center text-white font-medium text-[14px] tracking-tight transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/btn:translate-x-2 group-hover/btn:opacity-0 group-focus-visible/btn:translate-x-2 group-focus-visible/btn:opacity-0 motion-reduce:transition-none">
-          {children || "Book a demo"}
+          {children || "Continue"}
         </span>
 
         <span

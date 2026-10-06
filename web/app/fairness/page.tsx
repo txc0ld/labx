@@ -27,7 +27,7 @@ export default function FairnessPage() {
         </article>
       </div>
       <div className="section table-wrap well pad">
-        <table>
+        {pieces.length ? <table>
           <caption className="sr">Commitment and draw status</caption>
           <thead>
             <tr>
@@ -49,7 +49,7 @@ export default function FairnessPage() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table> : <div className="stack"><h2>No raffle records available</h2><p>Commitment, snapshot and draw status will appear here after authoritative listings are connected.</p></div>}
       </div>
     </section>
   );

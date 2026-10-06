@@ -227,7 +227,7 @@ describe("on-chain soft disable", () => {
     );
   });
 
-  it("keeps studio, profile, rules, and piece desks honest when the contract is unset", () => {
+  it("keeps unavailable customer workflows read-only", () => {
     const surfaces = [
       read("app/seller/page.tsx"),
       read("app/profile/page.tsx"),
@@ -235,23 +235,22 @@ describe("on-chain soft disable", () => {
       read("components/PieceDesk.tsx"),
       read("lib/bench.tsx")
     ].join("\n");
-    expect(surfaces).toMatch(/raffleAddress|onChainReady|OnChainStatus/);
-    expect(surfaces).toMatch(/not wired|bench only|this bench/i);
-    expect(read("lib/bench.tsx")).toMatch(/onChainReady\(\)|raffleAddress\(\)/);
-    expect(read("lib/bench.tsx")).toMatch(/saltedPrivateHash|generatePrivateKey/);
+    expect(surfaces).toMatch(/OnChainStatus/);
+    expect(surfaces).toMatch(/not connected|unavailable/i);
+    expect(read("lib/bench.tsx")).toMatch(/pieces:\s*\[\]/);
+    expect(surfaces).not.toMatch(/recordComplimentary|createPiece|bench\.buy|bench\.mark|personal_sign/);
   });
 
   it.each([undefined, "0x0000000000000000000000000000000000000001"])(
-    "keeps browser-demo disclosures visible with raffle address %s",
+    "keeps unavailable workflow disclosures visible with raffle address %s",
     (address) => {
       if (address === undefined) delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
       else process.env.NEXT_PUBLIC_RAFFLE_ADDRESS = address;
       for (const surface of ["studio", "profile", "rules", "piece"] as const) {
         const markup = renderToStaticMarkup(createElement(OnChainStatus, { surface }));
         expect(markup).toContain('role="status"');
-        expect(markup).toContain("bench only");
-        expect(markup).toMatch(/browser demo|browser\. It does not transfer/);
-        if (address) expect(markup).toContain("these controls still do not submit transactions");
+        expect(markup).toMatch(/not connected|unavailable/);
+        expect(markup.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
       }
     }
   );
@@ -361,7 +360,7 @@ describe("responsive chrome and legal surfaces", () => {
     const hub = read("components/BenchHub.tsx");
     expect(hub).toMatch(/<ResolvedTitle \/>/);
     expect(hub).toMatch(/className="capsule-grid"/);
-    expect(hub).toMatch(/Browser demo/);
+    expect(hub).toMatch(/Listings unavailable/);
     expect(hub).toMatch(/href="\/guide"/);
     expect(hub).not.toMatch(/hero-art-stack|hero-art-card|Explore the bench/);
   });
@@ -421,10 +420,10 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain("Sold out");
   });
 
-  it("publishes a complete browser-demo and pack guide", () => {
+  it("publishes a complete intended-flow and pack guide", () => {
     const guide = read("app/guide/page.tsx");
-    expect(guide).toMatch(/browser demo/i);
-    expect(guide).toMatch(/do not transfer USDC|do not perform those on-chain actions/i);
+    expect(guide).toMatch(/listing, purchase and history tools are not connected/i);
+    expect(guide).toMatch(/does not currently create listings, accept purchases, request signatures/i);
     expect(guide).toMatch(/LAB_FEE/);
     expect(guide).toMatch(/Quantity is limited to 1–5 packs/);
     expect(guide).toMatch(/12-month bonus-entry expiry/);
@@ -433,15 +432,16 @@ describe("responsive chrome and legal surfaces", () => {
       expect(guide).toContain(`href="${href}`);
     }
     const hub = read("components/BenchHub.tsx");
-    expect(hub).toMatch(/Browser demo[\s\S]*no transactions/i);
+    expect(hub).toMatch(/Listings unavailable/);
+    expect(hub).toMatch(/No raffles listed/);
     expect(hub).not.toMatch(/Ethereum mainnet is disabled/);
     expect(read("components/PieceDesk.tsx")).toMatch(/OnChainStatus surface="piece" compact/);
     expect(read("app/sitemap.ts")).toContain('"/guide"');
   });
 
-  it("marks OnChainStatus as bench-only with a lavender lamp", () => {
+  it("marks unavailable customer workflows explicitly", () => {
     const status = read("components/OnChainStatus.tsx");
-    expect(status).toMatch(/lamp lavender/);
-    expect(status).toMatch(/bench only/);
+    expect(status).toMatch(/Listing tools are not connected/);
+    expect(status).toMatch(/Purchasing is unavailable/);
   });
 });

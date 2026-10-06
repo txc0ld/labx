@@ -21,7 +21,7 @@ export default function AboutPage() {
         <article className="pearl pad stack">
           <h2>Operator</h2>
           <p>{OPERATOR.brand} is operated by {OPERATOR_LINE}.</p>
-          <p>The public site is {publicSiteHost()}. The treasury and admin are a Safe multisig. Fantom Labs can pause new packs and rotate the complimentary-entry signer.</p>
+          <p>The public site is {publicSiteHost()}. The intended treasury and admin authority is a Safe multisig. Fantom Labs is intended to be able to pause new packs and rotate the complimentary-entry signer.</p>
         </article>
         <article className="pearl pad stack">
           <h2>The bench</h2>

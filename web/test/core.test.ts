@@ -173,7 +173,7 @@ describe("surface copy and materials", () => {
     expect(names).not.toMatch(/head|face|human|workstation/);
   });
 
-  it("explore discovers demo pieces through individual artwork capsules", () => {
+  it("keeps reusable artwork capsules while publishing an honest empty collection", () => {
     const page = readFileSync(path.join(root, "app/page.tsx"), "utf8");
     const hub = readFileSync(path.join(root, "components/BenchHub.tsx"), "utf8");
     const marks = readFileSync(path.join(root, "components/PieceMark.tsx"), "utf8");
@@ -183,8 +183,9 @@ describe("surface copy and materials", () => {
     expect(hub).toMatch(/shown\.map/);
     expect(hub).toMatch(/className="raffle-capsule"/);
     expect(hub).toMatch(/src=\{piece.image\}/);
-    expect(hub).toMatch(/Demo artwork/);
-    expect(hub).toMatch(/not a live raffle listing/);
+    expect(hub).toMatch(/No raffles listed/);
+    expect(hub).toMatch(/Listing tools are not connected yet/);
+    expect(hub.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
     expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
     expect(css).toMatch(/nft-capsule/);
     expect(css).toMatch(/lab-tube-liquid/);

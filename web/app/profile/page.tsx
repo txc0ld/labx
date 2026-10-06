@@ -1,26 +1,53 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
 
+type PointsState =
+  | { status: "idle" | "loading" }
+  | { status: "ready"; balance: number }
+  | { status: "error"; message: string };
+
 export default function ProfilePage() {
   const bench = useBench();
-  const [points, setPoints] = useState(0);
-  const [email, setEmail] = useState(bench.email);
+  const [points, setPoints] = useState<PointsState>({ status: "idle" });
+  const [email, setEmail] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!bench.address) return;
-    fetch(`/api/points?address=${bench.address}`)
-      .then((response) => response.json())
-      .then((body) => setPoints(body.balance || 0))
-      .catch(() => setPoints(0));
-  }, [bench.address]);
+    if (bench.ready) setEmail(bench.email);
+  }, [bench.email, bench.ready]);
 
-  if (!bench.ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
-  const mine = bench.entries.filter((entry) => entry.address.toLowerCase() === bench.address.toLowerCase());
+  const loadPoints = useCallback(async () => {
+    if (!bench.wallet) {
+      setPoints({ status: "idle" });
+      return;
+    }
+    setPoints({ status: "loading" });
+    try {
+      const response = await fetch(`/api/points?address=${bench.wallet}`);
+      const body = await response.json() as { balance?: unknown; error?: unknown };
+      if (!response.ok || typeof body.balance !== "number" || !Number.isFinite(body.balance)) {
+        throw new Error(typeof body.error === "string" ? body.error : "Points are unavailable.");
+      }
+      setPoints({ status: "ready", balance: body.balance });
+    } catch (error) {
+      setPoints({ status: "error", message: error instanceof Error ? error.message : "Points are unavailable." });
+    }
+  }, [bench.wallet]);
+
+  useEffect(() => {
+    void loadPoints();
+  }, [loadPoints]);
+
+  if (!bench.ready) return <section className="section"><p className="pearl pad">Loading profile.</p></section>;
+
+  function savePreference(event: FormEvent) {
+    event.preventDefault();
+    setNote(bench.saveEmail(email));
+  }
 
   return (
     <section className="section split">
@@ -28,30 +55,25 @@ export default function ProfilePage() {
         <p className="kicker">Profile</p>
         <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>Your bench</h1>
         <div className="terminal pad">
-          <div>wallet {bench.wallet || "bench default"}</div>
-          <div>points {points}</div>
+          <div>wallet {bench.wallet || "not connected"}</div>
+          <div>
+            points {points.status === "ready" ? points.balance : points.status === "loading" ? "loading" : points.status === "error" ? "unavailable" : "connect wallet"}
+          </div>
           <div>chain sepolia</div>
         </div>
         <OnChainStatus surface="profile" />
-        <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token. Receipts are described in the <Link href="/privacy">privacy policy</Link>.</p>
+        <p className="muted">Points come from the lab bot check-in. They are not for sale. The website does not hold the bot token.</p>
         <div className="btn-row">
           <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>
-          <button className="btn btn-dark" type="button" onClick={() => bench.useBenchWallet()}>Use bench wallet</button>
+          {points.status === "error" ? <button className="btn btn-dark" type="button" onClick={() => void loadPoints()}>Retry points</button> : null}
         </div>
+        {points.status === "error" ? <p className="notice error" role="alert">{points.message}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
-        <form
-          className="stack"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const latest = mine[0];
-            const result = await bench.saveEmail(email, latest?.pieceTitle || "LABx", latest?.label || "Entry", latest?.count || 0, 25);
-            setNote(result || "Receipt request finished.");
-          }}
-        >
-          <label htmlFor="email">Receipt email
+        <form className="stack" onSubmit={savePreference}>
+          <label htmlFor="email">Email preference
             <input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
-          <p className="muted">Demo records do not send receipts. A receipt requires a verified on-chain purchase.</p>
+          <p className="muted">This address is stored only in this browser. Purchase receipts are unavailable until verified purchase history is connected. See the <Link href="/privacy">privacy policy</Link>.</p>
           <button className="btn btn-lime" type="submit">Save email in this browser</button>
           {note ? <p className="notice warning" role="status">{note}</p> : null}
         </form>
@@ -59,36 +81,11 @@ export default function ProfilePage() {
       <div className="stack">
         <div className="well pad">
           <h2>Bonus entries</h2>
-          {mine.length === 0 ? <p>No entries on this wallet yet.</p> : (
-            <div className="table-wrap">
-              <table>
-                <caption className="sr">Bonus entries and expiry</caption>
-                <thead>
-                  <tr><th scope="col">Piece</th><th scope="col">Pack</th><th scope="col">Entries</th><th scope="col">Expires</th></tr>
-                </thead>
-                <tbody>
-                  {mine.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{entry.pieceTitle}</td>
-                      <td>{entry.label}</td>
-                      <td>{entry.count}</td>
-                      <td>{new Date(entry.expiresAt).toLocaleDateString("en-AU")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <p>Entry history is unavailable because the website is not connected to an authoritative raffle source.</p>
         </div>
         <div className="pearl pad">
           <h2>Agreements</h2>
-          {bench.agreements.length === 0 ? <p className="muted">None recorded in this browser yet.</p> : (
-            <ul>
-              {bench.agreements.map((item) => (
-                <li key={item.at}>{item.pieceId} · {new Date(item.at).toLocaleString("en-AU")}</li>
-              ))}
-            </ul>
-          )}
+          <p className="muted">Agreement history is unavailable.</p>
         </div>
       </div>
     </section>

@@ -1,0 +1,18 @@
+# Remove sample data and wording
+
+Status: implementation pending. Base/source and main release `024f4d983d9c6d7b6a579b8da9fbc2fecbae00b5`. Current request is to remove all demo data and wording from the website. The previous main push is complete; this change has no new explicit publication instruction.
+
+R1 removal of simulated frontend behavior. Root Astra High owns this contract; one Sol builder owns the bounded implementation and tests, followed by fresh independent Astra High review. No contract, backend API, authorization, receipt or server-storage changes. No chain transactions or new live integration. Earlier unresolved real-value policy decisions remain separate.
+
+## Acceptance contract
+
+- Runtime catalog starts empty. Remove bundled synthetic raffles, fallback wallet, synthetic entries, winners, commitment values and simulated lifecycle/purchase writers. No relabeling sample data as live. Move any necessary test records to test-only fixtures.
+- Stop reading arbitrary listings/activity/agreements from legacy labx-bench-v1. On load remove those saved simulated records. Preserve only a validated string email preference in a separate preference key, retaining an already saved newer preference on repeated migration. Never restore old wallet identity as a connected wallet. Malformed/unavailable storage must not crash or restore samples.
+- Preserve supplied artwork files and existing responsive design, logo, fonts, animations and reusable raffle/pack components. Empty collection uses concise 'No raffles listed' copy and guide link. Existing sample detail URLs show an honest unavailable state. Unconnected workflows cannot create records or ask for agreement/signature/payment.
+- Remove customer-visible demo/demonstration wording, including ARIA labels, metadata, guide and generic animated button fallback. Source-only vendor component names, historical reports and test fixture names are not customer wording and need not be mechanically renamed.
+- Studio shows concise unavailability for listing tools; remove fake preset NFT/date and simulated phase controls. Rules retain rules copy and an unavailable complimentary-entry state until a real listing integration exists. Do not modify authenticated backend AMOE APIs. Profile keeps actual Sepolia wallet connect and email preference only; it must not invent balances, entries or agreements. Unretrieved history is unavailable, not an asserted zero. Points errors/loading remain distinct from a fetched zero.
+- Keep the developed detail/pack layout for future authoritative records, but disable/remove its simulated purchase callback. Any retained CTA says purchasing is unavailable and cannot record a success. Preserve native accessibility.
+- Guide describes the intended contract flow and clearly states website listing/purchase/history tools are not connected yet without using demo wording or claiming launch readiness. Fairness has an explicit empty state. Update privacy's browser-storage description to match email-only preferences. Correct any touched unverified Safe configuration claim to intended authority, without broad legal rewrites.
+- Verify migration fresh/legacy/malformed/storage-unavailable/idempotent cases, existing web aggregate tests/build/audit, browser empty states/all routes/no customer-visible demo wording/old URLs/refresh/back/mobile/keyboard/navigation, and no synthetic records or signatures/transactions created. Reuse unchanged contract evidence from main release.
+
+Evidence: artifacts/remove-samples-20261006/. Usage/cost unknown. No subagent may spawn agents; one source writer at a time.

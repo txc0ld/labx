@@ -21,7 +21,7 @@ export default function LegalPage() {
         </article>
         <article className="terminal pad stack legal-copy">
           <h2>Network</h2>
-          <p>This deployment is {OPERATOR.network} only. It is a test network. Packs recorded here do not create mainnet obligations. Mainnet deployment is disabled in the contract and in the wallet gate.</p>
+          <p>This deployment is intended for {OPERATOR.network} only. It is a test network. The current website does not accept pack purchases. Mainnet deployment is disabled in the contract and in the wallet gate.</p>
         </article>
       </div>
       <article className="well pad stack legal-copy">
@@ -44,7 +44,7 @@ export default function LegalPage() {
         <p>One complimentary entry may be requested per person per piece from the <Link href="/rules">draw rules</Link>, after a bot-gated check-in and a captcha. That route is not promoted on the explore bench.</p>
 
         <h2>Admin</h2>
-        <p>The admin and treasury are a Safe multisig. Fantom Labs can pause new packs and rotate the signer. Cancellation before settlement refunds the pack price and the lab fee to the buyer.</p>
+        <p>The intended admin and treasury authority is a Safe multisig. Fantom Labs is intended to be able to pause new packs and rotate the signer. Cancellation before settlement refunds the pack price and the lab fee to the buyer.</p>
 
         <h2>Privacy</h2>
         <p>Wallet, email, agreement, and server records are described in the <Link href="/privacy">privacy policy</Link>. The operator is introduced on the <Link href="/about">about</Link> page.</p>
