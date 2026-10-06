@@ -61,7 +61,6 @@ export function Footer({ legalLinks }: FooterProps) {
                 className="footer-texture-toggle"
                 aria-label={texturePaused ? "Animate background texture" : "Pause background texture"}
                 title={texturePaused ? "Animate background texture" : "Pause background texture"}
-                aria-pressed={texturePaused}
                 onClick={() => setTexturePaused((paused) => !paused)}
               >
                 {texturePaused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
