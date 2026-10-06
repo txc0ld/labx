@@ -183,16 +183,19 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, onC
   const needsApproval = quote !== null && account !== null && account.usdcAllowance < quote.totalUsdc;
   const approval = byKind("approveUsdc");
   const purchase = byKind("buyMembership");
-  const purchaseAction: WorkflowAction | null = quote && selected && allAgreed && termsMatch
+  const selectedPayment = payment === "usdc"
+    ? { kind: "usdc" as const }
+    : quote?.eth.kind === "available"
+      ? { kind: "eth" as const, maxEth: quote.eth.maxEth, slippageBps: quote.eth.slippageBps, deadline: quote.eth.deadline }
+      : null;
+  const purchaseAction: WorkflowAction | null = quote && selected && allAgreed && termsMatch && selectedPayment
     ? {
         kind: "buyMembership", id: snapshot.id, packId, quantity, acceptedTerms: termsHash,
         agreements: { terms: true, rules: true, age: true },
-        payment: payment === "usdc" ? { kind: "usdc" } : quote.eth.kind === "available"
-          ? { kind: "eth", maxEth: quote.eth.maxEth, slippageBps: quote.eth.slippageBps, deadline: quote.eth.deadline }
-          : { kind: "usdc" }
+        payment: selectedPayment
       }
     : null;
-  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "abortDrawing", "settle"];
+  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "cancel", "abortDrawing", "settle", "claimFee"];
   const nextRecovery = availability.find((item) => item.enabled && recoveryKinds.includes(item.kind));
 
   return (
@@ -225,7 +228,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, onC
         </>
       ) : <p className="notice" role="status">Membership sales are {phaseLabel(Number(snapshot.raffle.phase)).toLowerCase()}.</p>}
       {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable balance</span><strong>{formatUsdc(account.principal + account.fee)} USDC</strong><small>Membership price and lab fee are claimable only when contract state allows a refund.</small></div> : null}
-      {nextRecovery ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: nextRecovery.kind as "claimPrize" | "refund" | "abortDrawing" | "settle", id: snapshot.id }} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section> : null}
+      {nextRecovery ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || (nextRecovery.kind === "claimFee" ? "Anyone can send the fee to the pinned treasury; it is never paid to the caller." : "The contract currently permits this action.")}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: nextRecovery.kind as "claimPrize" | "refund" | "cancel" | "abortDrawing" | "settle" | "claimFee", id: snapshot.id }} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section> : null}
     </div>
   );
 }
@@ -237,7 +240,7 @@ function SellerActions({ browser, snapshot, account, availability, onConfirmed }
   availability: readonly ActionAvailability[];
   onConfirmed: () => Promise<void>;
 }) {
-  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimProceeds", "reclaimPrize", "cancel"];
+  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimProceeds", "claimFee", "reclaimPrize", "cancel"];
   const next = priority.map((kind) => availability.find((item) => item.kind === kind)).find((item) => item?.enabled);
 
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
@@ -246,6 +249,6 @@ function SellerActions({ browser, snapshot, account, availability, onConfirmed }
   if (next.kind === "reveal") return <p className="notice warning" role="status">Reveal requires the saved private commitment. Recover it from Studio before continuing.</p>;
   const action: WorkflowAction = next.kind === "snapshot"
     ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
-    : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "settle" | "claimProceeds" | "reclaimPrize" | "cancel", id: snapshot.id };
+    : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "settle" | "claimProceeds" | "claimFee" | "reclaimPrize" | "cancel", id: snapshot.id };
   return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{next.label}</h2><p>{next.reason}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} label={next.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section>;
 }
