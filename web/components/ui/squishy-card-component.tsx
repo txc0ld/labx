@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, type Variants } from "framer-motion";
-import React, { useState, useSyncExternalStore, type CSSProperties } from "react";
+import React, { useId, useState, useSyncExternalStore, type CSSProperties } from "react";
 import type { Pack, PackName } from "@/lib/seed";
 
 type SquishyPackCardProps = {
@@ -15,27 +15,27 @@ type SquishyPackCardProps = {
 const PACK_STYLES: Record<PackName, CSSProperties> = {
   Entry: {
     backgroundColor: "#B37DF6",
-    backgroundImage: "linear-gradient(125deg, #9E68DD 0%, #D8BAFF 45%, #B37DF6 100%)",
+    backgroundImage: "radial-gradient(ellipse at 20% 0%, rgba(255,255,255,.22), transparent 60%), linear-gradient(125deg, #9E68DD 0%, #D8BAFF 45%, #B37DF6 100%)",
     color: "#000000"
   },
   Bronze: {
     backgroundColor: "#B8753A",
-    backgroundImage: "linear-gradient(125deg, #B8753A 0%, #EAC098 45%, #C78A50 100%)",
+    backgroundImage: "radial-gradient(ellipse at 20% 0%, rgba(255,255,255,.22), transparent 60%), linear-gradient(125deg, #B8753A 0%, #EAC098 45%, #C78A50 100%)",
     color: "#000000"
   },
   Silver: {
     backgroundColor: "#CCCCCC",
-    backgroundImage: "linear-gradient(125deg, #AAAEB5 0%, #F2F3F5 45%, #C0C4CA 100%)",
+    backgroundImage: "radial-gradient(ellipse at 20% 0%, rgba(255,255,255,.22), transparent 60%), linear-gradient(125deg, #AAAEB5 0%, #F2F3F5 45%, #C0C4CA 100%)",
     color: "#000000"
   },
   Gold: {
     backgroundColor: "#FDBD29",
-    backgroundImage: "linear-gradient(125deg, #D49A19 0%, #FFE7A3 45%, #FDBD29 100%)",
+    backgroundImage: "radial-gradient(ellipse at 20% 0%, rgba(255,255,255,.22), transparent 60%), linear-gradient(125deg, #D49A19 0%, #FFE7A3 45%, #FDBD29 100%)",
     color: "#000000"
   },
   Platinum: {
     backgroundColor: "#CCFF00",
-    backgroundImage: "linear-gradient(125deg, #A3CC00 0%, #E9FF91 45%, #CCFF00 100%)",
+    backgroundImage: "radial-gradient(ellipse at 20% 0%, rgba(255,255,255,.22), transparent 60%), linear-gradient(125deg, #A3CC00 0%, #E9FF91 45%, #CCFF00 100%)",
     color: "#000000"
   }
 };
@@ -96,6 +96,7 @@ export function SquishyPackCard({
   disabled,
   onSelect
 }: SquishyPackCardProps) {
+  const bubbleFillId = useId();
   const reduceMotion = useSyncExternalStore(
     subscribeToReducedMotion,
     reducedMotionSnapshot,
@@ -157,11 +158,20 @@ export function SquishyPackCard({
             variants={backgroundVariants}
             transition={transition}
           >
+            <defs>
+              <radialGradient id={bubbleFillId} cx="32%" cy="24%" r="78%">
+                <stop offset="0%" stopColor="#626262" />
+                <stop offset="24%" stopColor="#272727" />
+                <stop offset="68%" stopColor="#020202" />
+                <stop offset="88%" stopColor="#000000" />
+                <stop offset="100%" stopColor="#171717" />
+              </radialGradient>
+            </defs>
             <motion.circle
               cx="80"
               cy="58"
               r="52"
-              fill="#000000"
+              fill={`url(#${bubbleFillId})`}
               variants={circleVariants}
               transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
             />
@@ -170,7 +180,7 @@ export function SquishyPackCard({
               cy="152"
               rx="52"
               ry="23"
-              fill="#000000"
+              fill={`url(#${bubbleFillId})`}
               variants={ellipseVariants}
               transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
             />
