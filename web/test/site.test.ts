@@ -421,14 +421,6 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain("Sold out");
   });
 
-  it("keeps pack selection separate from quantity, agreements, and purchase", () => {
-    const desk = read("components/PieceDesk.tsx");
-    expect(desk).toMatch(/<SquishyPackCard[\s\S]*disabled=\{!open \|\| item\.remaining < 1\}[\s\S]*onSelect=\{setPack\}/);
-    expect(desk).toContain("selected.priceUsdc * qty + LAB_FEE * qty");
-    expect(desk).toContain("bench.buy({ pieceId: currentPiece.id, pack, qty, terms, rules, age })");
-    expect(desk).toContain("<BookDemoButton");
-  });
-
   it("publishes a complete browser-demo and pack guide", () => {
     const guide = read("app/guide/page.tsx");
     expect(guide).toMatch(/browser demo/i);

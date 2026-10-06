@@ -1,7 +1,7 @@
 "use client";
 
-import { motion, useReducedMotion, type Variants } from "framer-motion";
-import React, { useState } from "react";
+import { motion, type Variants } from "framer-motion";
+import React, { useState, useSyncExternalStore } from "react";
 import type { Pack, PackName } from "@/lib/seed";
 
 type SquishyPackCardProps = {
@@ -45,6 +45,22 @@ const springyTransition = {
   ease: "backInOut" as const
 };
 
+const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
+
+function subscribeToReducedMotion(onChange: () => void) {
+  const mediaQuery = window.matchMedia(reducedMotionQuery);
+  mediaQuery.addEventListener("change", onChange);
+  return () => mediaQuery.removeEventListener("change", onChange);
+}
+
+function reducedMotionSnapshot() {
+  return window.matchMedia(reducedMotionQuery).matches;
+}
+
+function serverReducedMotionSnapshot() {
+  return false;
+}
+
 export function SquishyPackCard({
   pack,
   feeUsdc,
@@ -52,10 +68,15 @@ export function SquishyPackCard({
   disabled,
   onSelect
 }: SquishyPackCardProps) {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useSyncExternalStore(
+    subscribeToReducedMotion,
+    reducedMotionSnapshot,
+    serverReducedMotionSnapshot
+  );
   const [focused, setFocused] = useState(false);
   const activeVariant = !reduceMotion && !disabled && focused ? "hover" : "rest";
   const interactiveVariant = !reduceMotion && !disabled ? "hover" : undefined;
+  const transition = reduceMotion ? { duration: 0, delay: 0 } : springyTransition;
   const entriesLabel = pack.bonusEntries === 1 ? "entry" : "entries";
 
   return (
@@ -68,7 +89,7 @@ export function SquishyPackCard({
       initial="rest"
       animate={activeVariant}
       whileHover={interactiveVariant}
-      transition={springyTransition}
+      transition={transition}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={() => setFocused(false)}
     >
@@ -109,7 +130,7 @@ export function SquishyPackCard({
         aria-hidden="true"
         focusable="false"
         variants={backgroundVariants}
-        transition={springyTransition}
+        transition={transition}
       >
         <motion.circle
           cx="160"
@@ -117,7 +138,7 @@ export function SquishyPackCard({
           r="76"
           fill="#f8f9fa"
           variants={circleVariants}
-          transition={{ ...springyTransition, delay: 0.12 }}
+          transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
         />
         <motion.ellipse
           cx="160"
@@ -126,7 +147,7 @@ export function SquishyPackCard({
           ry="34"
           fill="#f8f9fa"
           variants={ellipseVariants}
-          transition={{ ...springyTransition, delay: 0.12 }}
+          transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
         />
       </motion.svg>
     </motion.label>
