@@ -110,46 +110,49 @@ export function SquishyPackCard({
             {selected ? "Selected" : "Select"}
           </span>
         </span>
-        <span className="squishy-pack-price">
-          {pack.priceUsdc}
-          <small> USDC</small>
-        </span>
-        <span className="squishy-pack-entries">
-          {pack.bonusEntries} bonus {entriesLabel}
+        <span className="squishy-pack-body">
+          <span className="squishy-pack-info">
+            <span className="squishy-pack-price">
+              {pack.priceUsdc}
+              <small> USDC</small>
+            </span>
+            <span className="squishy-pack-entries">
+              {pack.bonusEntries} bonus {entriesLabel}
+            </span>
+          </span>
+          <motion.svg
+            className="squishy-pack-background"
+            viewBox="0 0 160 200"
+            preserveAspectRatio="xMidYMid meet"
+            aria-hidden="true"
+            focusable="false"
+            variants={backgroundVariants}
+            transition={transition}
+          >
+            <motion.circle
+              cx="80"
+              cy="58"
+              r="52"
+              fill="#000000"
+              variants={circleVariants}
+              transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
+            />
+            <motion.ellipse
+              cx="80"
+              cy="152"
+              rx="52"
+              ry="23"
+              fill="#000000"
+              variants={ellipseVariants}
+              transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
+            />
+          </motion.svg>
         </span>
         <span className="squishy-pack-details">
           <span>+{feeUsdc} USDC fee</span>
           <span>{pack.remaining > 0 ? `${pack.remaining} remaining` : "Sold out"}</span>
         </span>
       </span>
-
-      <motion.svg
-        className="squishy-pack-background"
-        viewBox="0 0 320 240"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-        focusable="false"
-        variants={backgroundVariants}
-        transition={transition}
-      >
-        <motion.circle
-          cx="160"
-          cy="72"
-          r="76"
-          fill="#f8f9fa"
-          variants={circleVariants}
-          transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
-        />
-        <motion.ellipse
-          cx="160"
-          cy="190"
-          rx="78"
-          ry="34"
-          fill="#f8f9fa"
-          variants={ellipseVariants}
-          transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
-        />
-      </motion.svg>
     </motion.label>
   );
 }
