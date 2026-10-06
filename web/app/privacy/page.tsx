@@ -36,6 +36,7 @@ export default function PrivacyPage() {
         <ul>
           <li>Wallet address, connected chain, and signed messages you choose to submit.</li>
           <li>An email preference, only if you choose to save one in this browser.</li>
+          <li>A local pending-transaction record linked to your wallet and deployment, used to prevent accidental repeat submissions.</li>
           <li>Commitment, agreement and receipt requests you explicitly authorize with your wallet.</li>
           <li>Existing points records tied to a wallet and UTC day. Points do not create bonus entries.</li>
           <li>Server logs created by hosting, such as IP address, user agent, path, and time, used to operate and secure the site.</li>
@@ -43,7 +44,7 @@ export default function PrivacyPage() {
         <p>We do not ask for a government identity document on this bench. We do not sell personal information.</p>
         <h2>Why we collect it</h2>
         <p>
-          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the current Sepolia site: connecting a wallet when you ask, showing existing account records, saving your local email preference, stopping automated abuse, and keeping the wallet gate on Sepolia.
+          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the current Sepolia site: connecting a wallet when you ask, showing existing account records, saving your local email preference, recovering pending transactions without accidental repeat submissions, stopping automated abuse, and keeping the wallet gate on Sepolia.
         </p>
         <p>
           We use and disclose it under Australian Privacy Principle 6 for that primary purpose. A secondary purpose is limited to security, abuse prevention, and a legal obligation. We do not use these records for unrelated marketing.
@@ -51,8 +52,8 @@ export default function PrivacyPage() {
       </article>
       <article className="pearl pad stack legal-copy">
         <h2>How we store it</h2>
-        <p>This browser stores only the email preference you choose to save. It does not store a wallet identity, raffle listing, purchase, entry, agreement, or draw history. Clearing site data removes the preference.</p>
-        <p>When persistence is configured, agreement logs, points, receipt status and reserve records may be written to a server store. These requests require a scoped wallet signature. The site refuses the workflow when durable storage is unavailable.</p>
+        <p>This browser stores your optional email preference and a pending-transaction record. The transaction record is linked to your wallet, chain and contract deployment. It contains an intent digest, transaction nonce, starting block, random record ID and transaction hash when known. It does not contain private commitment text, reveal salt, wallet signatures or transaction calldata.</p>
+        <p>Agreement logs, points, receipt status and private commitment records may be written to a server store. Commitment, agreement, receipt and private-record requests require a scoped wallet signature. The site refuses these workflows when required durable storage is unavailable.</p>
         <p>Saving an email preference does not send it to the server. The address is sent only when you explicitly request a receipt for a verified purchase.</p>
 
         <h2>On-chain and public data</h2>
@@ -60,14 +61,14 @@ export default function PrivacyPage() {
         <p>Public pages show commitment hashes, not the private commercial number and not the salt.</p>
 
         <h2>Cookies and local storage</h2>
-        <p>The bench uses local storage for the email preference. It does not use advertising cookies and it does not run a third-party ad pixel. Hosting may set a strictly necessary cookie for the application.</p>
+        <p>The bench uses local storage for your email preference and pending-transaction recovery. Session storage remembers whether the introductory film has been handled, so it does not repeat during ordinary navigation. It does not use advertising cookies and it does not run a third-party ad pixel. Hosting may set a strictly necessary cookie for the application.</p>
 
         <h2>Who else sees a record</h2>
         <p>Infrastructure that may process data on our behalf includes the site host, an optional Redis store, an optional email sender, a wallet you install, and public Sepolia infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
         <p>We do not publish a country-by-country storage map. Hosting, optional persistence, and optional mail may process a record outside Australia. Use of the bench is use of those processors.</p>
 
         <h2>Retention</h2>
-        <p>The browser email preference stays until you replace it or clear site data. Server points are kept to enforce one check-in award per wallet and UTC day. Public chain records cannot be deleted by {OPERATOR.brand}.</p>
+        <p>The browser email preference stays until you replace it or clear site data. A pending-transaction record stays until the website reconciles a mined outcome or receives a definite pre-submission failure or wallet rejection. Clearing browser site data also removes that record and its duplicate-submission protection, so check wallet activity before retrying an unresolved transaction. The intro flag lasts for the browser session. Server points are kept to enforce one check-in award per wallet and UTC day. Public chain records cannot be deleted by {OPERATOR.brand}.</p>
 
         <h2>Your rights</h2>
         <p>You may ask {OPERATOR.name} for access to personal information we hold about you, and you may ask for a correction. You may ask us to delete server-side records that are not required to keep the bench honest. We cannot rewrite a public chain event.</p>
@@ -82,7 +83,7 @@ export default function PrivacyPage() {
         <h2>Contact</h2>
         {/* TODO: add a published privacy mailbox when counsel assigns one. Do not invent an address. */}
         <p>Privacy contact via the site operator (Fantom Labs Pty Ltd). Use the operator published on {publicSiteHost()}. Do not send wallet keys, seed phrases, or a private commitment in that correspondence.</p>
-        <p className="muted">Last updated 5 October 2026. {OPERATOR_LINE}.</p>
+        <p className="muted">Last updated 7 October 2026. {OPERATOR_LINE}.</p>
         <div className="btn-row">
           <Link className="btn" href="/legal">Terms</Link>
           <Link className="btn btn-dark" href="/about">About</Link>
