@@ -61,7 +61,7 @@ body {
   font-size: 17px;
   line-height: 1.45;
 }
-h1 { font-family:var(--font-heading),var(--font-sans),sans-serif; font-weight:400; font-synthesis:none; overflow-wrap:anywhere; }
+h1 { font-family:var(--font-heading),var(--font-sans),sans-serif; font-weight:400; font-synthesis:none; overflow-wrap:anywhere; text-transform:uppercase; }
 img { max-width: 100%; height: auto; display: block; }
 a { color: inherit; }
 button, input, select, textarea { font: inherit; color: inherit; }
