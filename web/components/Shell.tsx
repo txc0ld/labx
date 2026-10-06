@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
@@ -31,9 +32,8 @@ export function Shell({ children }: { children: ReactNode }) {
       <a className="skip" href="#content">Skip to content</a>
       <div className="shell">
         <header className="site-header">
-          <Link className="brand" href="/">
-            <span className="brand-mark" aria-hidden="true" />
-            <span className="word">LAB<i>x</i></span>
+          <Link className="brand" href="/" aria-label="LABx home">
+            <Image className="brand-logo" src="/brand/labx-logo.png" alt="LABx" width={1500} height={500} unoptimized priority />
           </Link>
           <div className="nav-cluster">
             <nav aria-label="Primary">
