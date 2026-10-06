@@ -72,7 +72,7 @@ export async function localChain() {
     const session = new WalletSession(provider, 31337);
     return { session, reject(value: boolean) { refusal = value; }, changeAccount(value: Address) { current = value; for (const fn of listeners.get("accountsChanged") ?? []) fn([value]); }, changeChain(value: string) { chain = value; for (const fn of listeners.get("chainChanged") ?? []) fn(value); } };
   }
-  return { client, rpc, operator, seller, buyer, treasury, stranger, usdc, nft, vrf, weth, router, feed, raffle, manifest, write, wallet,
+  return { client, url, rpc, operator, seller, buyer, treasury, stranger, usdc, nft, vrf, weth, router, feed, raffle, manifest, write, wallet,
     service: createRaffleService(client, manifest), async mine() { await rpc("evm_mine"); }, async warp(timestamp: bigint) { await rpc("evm_setNextBlockTimestamp", [Number(timestamp)]); await rpc("evm_mine"); },
     close() { node.kill(); } };
 }
