@@ -304,8 +304,8 @@ run("independent service verification on isolated Anvil", () => {
       disconnect: () => controlled.session.disconnect(),
       assertCurrent: expected => controlled.session.assertCurrent(expected),
       signMessage: input => controlled.session.signMessage(input),
-      async requestTransaction(expected, transaction) {
-        captured.push(await controlled.session.requestTransaction(expected, transaction));
+      async requestTransaction(expected, transaction, beforeRequest, onProviderRequest) {
+        captured.push(await controlled.session.requestTransaction(expected, transaction, beforeRequest, onProviderRequest));
         throw new Error("provider timed out after accepting transaction");
       }
     };
