@@ -13,19 +13,21 @@ import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null) => readonly ActionAvailability[];
 export type RecoverCommitment = (commit: Hex) => Promise<ReserveRecord>;
+export type RecordAgreement = (raffleId: bigint) => Promise<void>;
 
 type WorkspaceState =
   | { kind: "loading" }
   | { kind: "unavailable" | "legacy" | "mismatch" | "missing" | "error"; message: string }
   | { kind: "ready"; snapshot: RaffleSnapshot };
 
-export function RaffleWorkspace({ browser, id, termsHash, availableActions, saveCommitment, recoverCommitment }: {
+export function RaffleWorkspace({ browser, id, termsHash, availableActions, saveCommitment, recoverCommitment, recordAgreement }: {
   browser: BrowserService;
   id: bigint;
   termsHash: Hex;
   availableActions: AvailabilityReader;
   saveCommitment?: SaveCommitment;
   recoverCommitment?: RecoverCommitment;
+  recordAgreement?: RecordAgreement;
 }) {
   const [state, setState] = useState<WorkspaceState>({ kind: "loading" });
   const request = useRef(0);
@@ -73,16 +75,17 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
   }
 
   if (browser.kind !== "configured") return null;
-  return <LoadedRaffle browser={browser} snapshot={state.snapshot} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} refresh={refresh} />;
+  return <LoadedRaffle browser={browser} snapshot={state.snapshot} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} recordAgreement={recordAgreement} refresh={refresh} />;
 }
 
-function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveCommitment, recoverCommitment, refresh }: {
+function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveCommitment, recoverCommitment, recordAgreement, refresh }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   termsHash: Hex;
   availableActions: AvailabilityReader;
   saveCommitment?: SaveCommitment;
   recoverCommitment?: RecoverCommitment;
+  recordAgreement?: RecordAgreement;
   refresh: () => Promise<void>;
 }) {
   const walletSnapshot = useWalletSnapshot(browser.wallet);
@@ -140,7 +143,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {seller
             ? <SellerActions browser={browser} snapshot={snapshot} account={account} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} />
-            : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} onConfirmed={reload} />}
+            : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} />}
           {seller && phase === 0 && saveCommitment ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
           <details className="workflow-details"><summary>Contract details</summary><dl className="review-list"><div><dt>Raffle contract</dt><dd className="hash">{browser.service.manifest.address}</dd></div><div><dt>NFT contract</dt><dd className="hash">{snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{snapshot.raffle.tokenId.toString()}</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
@@ -149,28 +152,34 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
   );
 }
 
-function BuyerActions({ browser, snapshot, account, availability, termsHash, onConfirmed }: {
+function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
   termsHash: Hex;
+  recordAgreement?: RecordAgreement;
   onConfirmed: () => Promise<void>;
 }) {
   const [packId, setPackId] = useState(() => Math.max(0, snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply)));
   const [quantity, setQuantity] = useState(1);
   const [payment, setPayment] = useState<"usdc" | "eth">("usdc");
   const [agreements, setAgreements] = useState({ terms: false, rules: false, age: false });
+  const [agreementState, setAgreementState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [agreementError, setAgreementError] = useState("");
   const [quote, setQuote] = useState<MembershipQuote | null>(null);
   const [quoteState, setQuoteState] = useState<"idle" | "loading" | "error">("idle");
   const [quoteError, setQuoteError] = useState("");
   const quoteRequest = useRef(0);
+  const buyerWallet = useWalletSnapshot(browser.wallet);
   const selected = snapshot.packs[packId];
 
   useEffect(() => {
     const version = ++quoteRequest.current;
     setQuote(null);
     setAgreements({ terms: false, rules: false, age: false });
+    setAgreementState("idle");
+    setAgreementError("");
     if (!selected || !Number.isSafeInteger(quantity) || quantity < 1 || !selected.active || selected.sold >= selected.maxSupply || Number(snapshot.raffle.phase) !== 1) {
       setQuoteState("idle");
       return;
@@ -183,7 +192,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, onC
       if (version === quoteRequest.current) { setQuoteError(error instanceof Error ? error.message : "A current quote is unavailable."); setQuoteState("error"); }
     });
     return () => { quoteRequest.current += 1; };
-  }, [browser.service, packId, quantity, selected, snapshot.id, snapshot.raffle.phase]);
+  }, [browser.service, buyerWallet.revision, packId, quantity, selected, snapshot.id, snapshot.raffle.phase]);
 
   const byKind = (kind: WorkflowAction["kind"]) => availability.find((item) => item.kind === kind);
   const termsMatch = snapshot.policy.termsHash.toLowerCase() === termsHash.toLowerCase();
@@ -231,7 +240,9 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, onC
           <WalletGate wallet={browser.wallet}>
             {!account ? <p className="notice" role="status">Loading balance and allowance…</p> : needsApproval && payment === "usdc" ? (
               approval?.enabled && quote ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label="Approve exact USDC" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
-            ) : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{!allAgreed ? "Review and accept all three confirmations to continue." : purchase?.reason || "Purchase is not available."}</p>}
+            ) : !allAgreed ? <p className="notice warning" role="status">Review and accept all three confirmations to continue.</p>
+              : agreementState !== "saved" ? <div className="stack"><button className="btn" type="button" disabled={!recordAgreement || agreementState === "saving"} onClick={() => { if (!recordAgreement) return; setAgreementState("saving"); setAgreementError(""); void recordAgreement(snapshot.id).then(() => setAgreementState("saved")).catch((error: unknown) => { setAgreementError(error instanceof Error ? error.message : "Agreement storage was not acknowledged."); setAgreementState("error"); }); }}>{agreementState === "saving" ? "Recording agreement…" : "Sign and record agreement"}</button>{!recordAgreement ? <p className="notice warning" role="status">Agreement storage is not configured. Purchasing is unavailable.</p> : null}{agreementState === "error" ? <p className="notice error" role="alert">{agreementError}</p> : null}</div>
+                : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{purchase?.reason || "Purchase is not available."}</p>}
           </WalletGate>
         </>
       ) : <p className="notice" role="status">Membership sales are {phaseLabel(Number(snapshot.raffle.phase)).toLowerCase()}.</p>}

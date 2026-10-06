@@ -26,7 +26,7 @@ export type TransactionFlowProps = {
   label: string;
   formatUsdc: AmountFormatter;
   resumeHash?: Hex;
-  onConfirmed?: () => void | Promise<void>;
+  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>) => void | Promise<void>;
   onCancel?: () => void;
 };
 
@@ -84,7 +84,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       }
       if (confirmation.kind === "confirmed") {
         setState({ kind: "confirmed", confirmation });
-        await onConfirmed?.();
+        await onConfirmed?.(confirmation);
         return;
       }
       if (confirmation.kind === "reverted") setState({ kind: "reverted", confirmation });
