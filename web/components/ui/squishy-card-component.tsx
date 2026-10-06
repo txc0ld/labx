@@ -135,9 +135,11 @@ export function SquishyPackCard({
       <span className="squishy-pack-content">
         <span className="squishy-pack-topline">
           <strong style={{ color: PACK_HEADING_COLORS[pack.name] }}>{pack.name}</strong>
-          <span className="squishy-pack-choice" aria-hidden="true">
-            {disabled ? "Unavailable" : selected ? "Your pick" : "Pick me"}
-          </span>
+          {(selected || disabled) && (
+            <span className="squishy-pack-choice" aria-hidden="true">
+              {disabled ? "Unavailable" : "Your pick"}
+            </span>
+          )}
         </span>
         <span className="squishy-pack-body">
           <span className="squishy-pack-info">
