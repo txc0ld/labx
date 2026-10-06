@@ -189,6 +189,7 @@ export function BrandSplash() {
   return (
     <dialog
       aria-label="LABx introduction"
+      aria-describedby="brand-intro-description"
       className={styles.dialog}
       onCancel={(event) => {
         event.preventDefault();
@@ -196,6 +197,9 @@ export function BrandSplash() {
       }}
       ref={dialogRef}
     >
+      <p className={styles.description} id="brand-intro-description">
+        LABx memberships include bonus entries into NFT raffles and discounts from partner brands. Winning is a chance, not a guarantee. Partner redemption is coming soon.
+      </p>
       <div className={styles.stage}>
         <video
           aria-hidden="true"

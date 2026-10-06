@@ -1,0 +1,6 @@
+.venv/
+python-model/
+python-segments/
+__pycache__/
+labx-final-mix.wav
+mix-report.json

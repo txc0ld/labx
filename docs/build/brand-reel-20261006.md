@@ -8,4 +8,12 @@ Contract: show the 15-second intro only on an initial homepage visit, once per b
 
 Acceptance: inspect composed frames and exported desktop/mobile video; verify duration, dimensions, codec, sound peak and decoded-frame count; run existing web tests/build; independently test splash eligibility, skip/end/error/rejection, session persistence/storage failure, direct routes, keyboard/focus, reduced motion, audio control, mobile orientation and media requests. Fresh Astra review of actual integrated source and evidence before calling the feature complete.
 
-Status: rendering in progress; splash implementation delegated. Final evidence belongs in `artifacts/brand-reel-20261006/`. No push or deployment. Effective root model is GPT-6 Astra with ultra effort; builder role is configured Sol Medium. Provider usage/cost telemetry is unavailable.
+## Current checkpoint
+
+The first cut was rejected because it did not explain LABx. The replacement explicitly shows membership purchase, bonus NFT raffle entries and partner discounts, using the supplied artwork and membership-card design. The approved partner offer amounts are shown with redemption marked coming soon. Generic local narration supports the same on-screen message.
+
+Both full-resolution 60fps masters and optimized website copies have been rendered under `artifacts/brand-reel-20261006/v2/` and `web/public/brand/`. V1 artifacts remain only as historical evidence. Root visually inspected key composed frames at both aspect ratios. Independent Astra review passed the actual V2 frames and amended splash source with no blocker; its report includes exact hashes in `v2/review/V2-FRAMES-SOURCE-REVIEW.md`.
+
+Native Preview played the V2 widescreen master to 15.00s, with 900 frames and zero dropped frames. Full media decode verification and integrated website browser checks are being finalized. Narration was generated locally with Kokoro ONNX and measured separately from its ducked stereo mix. Subjective human listening approval is not claimed.
+
+The source splash has once-per-session eligibility, muted autoplay, Sound/Skip controls, a screen-reader description and theme-matched controls. No push or deployment has occurred. Effective root model is GPT-6 Astra with ultra effort; implementation role was configured Sol Medium and independent reviewer Astra High. Provider usage/cost telemetry is unknown.

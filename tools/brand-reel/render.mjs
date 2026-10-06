@@ -52,7 +52,6 @@ const smooth = (t) => {
   return t * t * (3 - 2 * t);
 };
 const spring = (t) => 1 - Math.exp(-7 * clamp(t)) * Math.cos(11 * clamp(t));
-const out = (t, end, d = 0.22) => 1 - ease((t - (end - d)) / d);
 const unit = Math.min(W, H) / 1080;
 function rounded(x, y, w, h, r, fill) {
   ctx.beginPath();
@@ -86,10 +85,16 @@ function type(
   y,
   size,
   color,
-  { font = "Basetica", align = "center", stroke = 0, maxWidth = Infinity } = {},
+  {
+    font = "Basetica",
+    weight = 400,
+    align = "center",
+    stroke = 0,
+    maxWidth = Infinity,
+  } = {},
 ) {
   ctx.save();
-  ctx.font = `${size}px ${font}`;
+  ctx.font = `${weight} ${size}px ${font}`;
   ctx.textAlign = align;
   ctx.textBaseline = "middle";
   const width = ctx.measureText(text).width;
@@ -112,28 +117,6 @@ function logoAt(x, y, width, rotation = 0, alpha = 1) {
   ctx.translate(x, y);
   ctx.rotate(rotation);
   ctx.drawImage(logo, -width / 2, -width / 6, width, width / 3);
-  ctx.restore();
-}
-function cross(x, y, size, color, angle = 0, thickness = 0.27) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  rounded(
-    -size / 2,
-    (-size * thickness) / 2,
-    size,
-    size * thickness,
-    size * 0.11,
-    color,
-  );
-  rounded(
-    (-size * thickness) / 2,
-    -size / 2,
-    size * thickness,
-    size,
-    size * 0.11,
-    color,
-  );
   ctx.restore();
 }
 function pill3d(x, y, w, h, color, rotation = 0) {
@@ -160,18 +143,6 @@ function pill3d(x, y, w, h, color, rotation = 0) {
   );
   ctx.restore();
 }
-function extruded(text, x, y, size, color, depth = 16, rotation = 0) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rotation);
-  for (let d = depth; d > 0; d -= 2)
-    type(text, d * unit, d * unit, size, "#161518", {
-      font: "Sixtyfour",
-      maxWidth: W * 0.87,
-    });
-  type(text, 0, 0, size, color, { font: "Sixtyfour", maxWidth: W * 0.87 });
-  ctx.restore();
-}
 const grain = createCanvas(240, 240);
 const gc = grain.getContext("2d");
 const gd = gc.createImageData(240, 240);
@@ -191,142 +162,6 @@ function texture(frame) {
   ctx.fillRect(0, 0, W + 480, H + 480);
   ctx.restore();
 }
-function brandCorner(alpha = 1) {
-  logoAt(W * 0.085, H * 0.08, W * 0.105, 0, alpha);
-}
-
-// Each shot uses the same 128 BPM grid as the original audio sting.
-function hook(t) {
-  bg(C.purple);
-  dotGrid(t, "rgba(17,17,19,.2)");
-  const u = clamp(t / 0.48),
-    z = lerp(3.8, 1, ease(u));
-  ctx.save();
-  ctx.translate(W / 2, H / 2);
-  ctx.scale(z, z);
-  ctx.rotate(lerp(-0.28, 0.035, ease(u)));
-  const radius = Math.min(W, H) * 0.38;
-  ctx.lineWidth = radius * 0.24;
-  ctx.strokeStyle = C.lime;
-  ctx.beginPath();
-  ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  ctx.stroke();
-  cross(radius * 0.8, -radius * 0.7, radius * 0.4, C.pink, t * 1.8);
-  ctx.restore();
-  if (t < 0.94) {
-    const textIn = spring(t / 0.35);
-    ctx.save();
-    ctx.translate(W / 2, H / 2);
-    ctx.scale(textIn, textIn);
-    extruded("READY?", 0, 0, Math.min(W * 0.19, H * 0.27), C.paper, 14, -0.05);
-    ctx.restore();
-  } else {
-    const s = spring((t - 0.94) / 0.45);
-    ctx.save();
-    ctx.translate(W / 2, H / 2);
-    ctx.scale(s, s);
-    logoAt(0, 0, W * (portrait ? 0.95 : 0.7), -0.035 + Math.sin(t * 4) * 0.015);
-    ctx.restore();
-  }
-  const mask = ease((t - 1.63) / 0.245);
-  if (mask > 0) {
-    ctx.fillStyle = C.ink;
-    ctx.beginPath();
-    ctx.moveTo(0, H);
-    ctx.lineTo(W, H);
-    ctx.lineTo(W, H - H * mask * 1.5);
-    ctx.lineTo(0, H - H * mask * 1.5 + H * 0.35);
-    ctx.closePath();
-    ctx.fill();
-  }
-}
-function kinetic(t) {
-  const lt = t - 4 * BEAT;
-  bg(C.ink);
-  const shift = lt / (6 * BEAT);
-  const word = "MEMBERSHIP";
-  const size = portrait ? W * 0.19 : H * 0.205;
-  for (let row = -2; row < 4; row++) {
-    const yy = H * 0.34 + row * size * 1.25 - lt * 50 * unit;
-    type(
-      word,
-      W / 2 + Math.sin(lt * 1.4 + row) * W * 0.08,
-      yy,
-      size,
-      row === 0 ? C.purple : "#343437",
-      {
-        font: "Sixtyfour",
-        stroke: row === 0 ? 0 : 1.5 * unit,
-        maxWidth: W * 1.12,
-      },
-    );
-  }
-  const enter = ease((lt - 0.75) / 0.3);
-  ctx.save();
-  ctx.translate(lerp(W * 1.2, W * 0.5, enter), H * 0.6);
-  ctx.rotate(lerp(0.18, -0.045, enter));
-  const pw = W * (portrait ? 0.91 : 0.66),
-    ph = H * (portrait ? 0.26 : 0.32);
-  rounded(-pw / 2, -ph / 2, pw, ph, 35 * unit, C.lime);
-  type("WITH", 0, -ph * 0.2, ph * 0.36, C.ink, {
-    font: "Sixtyfour",
-    maxWidth: pw * 0.88,
-  });
-  type("MORE.", 0, ph * 0.22, ph * 0.42, C.ink, {
-    font: "Sixtyfour",
-    maxWidth: pw * 0.88,
-  });
-  ctx.restore();
-  if (lt > 1.85) {
-    let p = ease((lt - 1.85) / 0.55);
-    cross(W * 0.83, H * 0.25, Math.min(W, H) * 0.25 * p, C.pink, p * 1.6);
-  }
-  brandCorner();
-  const wipe = ease((lt - 2.57) / 0.2425);
-  if (wipe > 0) circle(W / 2, H / 2, Math.hypot(W, H) * wipe, C.lime);
-}
-function shapes(t) {
-  const lt = t - 10 * BEAT;
-  const seg = Math.min(2, Math.floor(lt / (2 * BEAT)));
-  const st = lt - seg * 2 * BEAT;
-  const colors = [C.lime, C.purple, C.pink];
-  bg(colors[seg]);
-  const R = Math.min(W, H) * 0.27;
-  const spin = lt * 1.7;
-  for (let i = 0; i < 8; i++) {
-    const a = (i * Math.PI) / 4 + spin;
-    const burst = 1 + 0.11 * Math.sin((st / BEAT) * Math.PI * 2);
-    const x = W / 2 + Math.cos(a) * R * burst * (portrait ? 1 : 1.6),
-      y = H / 2 + Math.sin(a) * R * burst;
-    if (i % 2) pill3d(x, y, R * 0.85, R * 0.32, colors[(seg + 1) % 3], a + lt);
-    else cross(x, y, R * 0.6, C.ink, a + 0.3, 0.24);
-  }
-  const text = ["ART.", "PERKS.", "EXTRA."][seg];
-  let s = lerp(0.65, 1, spring(st / 0.32));
-  ctx.save();
-  ctx.translate(W / 2, H / 2);
-  ctx.scale(s, s);
-  extruded(
-    text,
-    0,
-    0,
-    Math.min(W * 0.2, H * 0.28),
-    C.paper,
-    12,
-    Math.sin(st * 3) * 0.015,
-  );
-  ctx.restore();
-  brandCorner();
-  // One circular match cut joins the orbit to the membership-card carousel.
-  if (lt > 2.61)
-    circle(
-      W * 0.5,
-      H * 0.5,
-      Math.hypot(W, H) * ease((lt - 2.61) / 0.2025),
-      C.paper,
-    );
-}
-
 function cardTexture(title, color, index) {
   const p = createCanvas(650, 880),
     q = p.getContext("2d");
@@ -455,104 +290,365 @@ function plane(img, cx, cy, w, h, ry, rz, depth) {
       );
     }
 }
-function carousel(t) {
-  const lt = t - 16 * BEAT;
-  bg(C.paper);
-  dotGrid(t, "rgba(0,0,0,.13)");
-  const entrance = ease(lt / 0.4);
-  const fan = smooth(lt / (4 * BEAT));
-  const pan = Math.sin(lt * 1.65) * 0.38;
-  const cw = portrait ? W * 0.58 : H * 0.43,
-    ch = (cw * 880) / 650;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,.14)";
-  ctx.shadowBlur = 35 * unit;
-  ctx.fillStyle = "rgba(0,0,0,.07)";
-  ctx.beginPath();
-  ctx.ellipse(W / 2, H * 0.8, W * 0.3, H * 0.028, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  for (const i of [0, 4, 1, 3, 2]) {
-    const offset = i - 2;
-    const cx = W / 2 + offset * (portrait ? W * 0.115 : W * 0.115) * entrance;
-    const cy =
-      H * (portrait ? 0.53 : 0.52) +
-      Math.abs(offset) * H * 0.045 +
-      (1 - entrance) * H;
-    plane(
-      cards[i],
-      cx,
-      cy,
-      cw * (1 + fan * 0.09),
-      ch * (1 + fan * 0.09),
-      offset * 0.25 - pan,
-      offset * 0.075 * (1 - fan * 0.2),
-      Math.abs(offset) * 85 * unit,
-    );
-  }
-  const line = portrait ? "FIND YOUR" : "A LITTLE EXTRA.";
-  type(line, W / 2, H * 0.12, Math.min(W * 0.072, H * 0.072), C.ink, {
-    font: "Sixtyfour",
-    maxWidth: W * 0.88,
-  });
-  if (portrait)
-    type("NEXT THING.", W / 2, H * 0.19, W * 0.075, C.ink, {
-      font: "Sixtyfour",
-      maxWidth: W * 0.88,
-    });
-  // Tilt the camera through the central card, then a clean color wipe.
-  if (lt > 2.39) {
-    const p = ease((lt - 2.39) / 0.4225);
-    rounded(
-      -W * 0.2 + W * 0.2 * p,
-      H * (1 - p) * 1.1,
-      W * 1.4,
-      H * 1.3,
-      100 * unit,
-      C.purple,
-    );
+// The narrative stays literal: membership purchase, bonus NFT raffle entries,
+// and the two partner discounts supplied by the user. Nothing is a live listing.
+function artTexture(image) {
+  const canvas = createCanvas(700, 800),
+    q = canvas.getContext("2d");
+  q.fillStyle = C.paper;
+  q.beginPath();
+  q.roundRect(8, 8, 684, 784, 34);
+  q.fill();
+  q.save();
+  q.beginPath();
+  q.roundRect(24, 24, 652, 652, 20);
+  q.clip();
+  q.imageSmoothingEnabled = false;
+  q.drawImage(image, 24, 24, 652, 652);
+  q.restore();
+  q.fillStyle = C.ink;
+  q.font = "36px Basetica";
+  q.fillText("NFT ART", 34, 746);
+  q.drawImage(logo, 480, 698, 180, 60);
+  return canvas;
+}
+const artImages = await Promise.all(
+  ["argonaut-7297.png", "demo-portrait-03.png", "demo-portrait-04.png"].map(
+    (name) => loadImage(path.join(ROOT, "web/public/artwork", name)),
+  ),
+);
+const artCards = artImages.map(artTexture);
+function heading(text, x, y, size, color, opts = {}) {
+  type(text, x, y, size, color, { font: "Basetica", weight: 700, ...opts });
+}
+function sweep(t, start, duration, color) {
+  const p = ease((t - start) / duration);
+  if (p > 0) {
+    ctx.save();
+    ctx.translate(W * (1 - p) * 1.25, 0);
+    ctx.rotate(-0.08);
+    rounded(-W * 0.06, -H * 0.2, W * 1.35, H * 1.5, 70 * unit, color);
+    ctx.restore();
   }
 }
-function build(t) {
-  const lt = t - 22 * BEAT;
-  bg(C.purple);
-  const texts = portrait ? ["GO", "LABx"] : ["GO", "LABx"];
-  const s = lt < BEAT ? 0 : 1;
-  const st = lt - s * BEAT;
-  if (s === 0) {
-    for (let i = 0; i < 5; i++)
-      type(
-        "GO",
-        W / 2 + (i - 2) * W * 0.34 - lt * W * 0.4,
-        H / 2,
-        Math.min(W * 0.5, H * 0.68),
-        i === 2 ? C.lime : C.ink,
-        { font: "Sixtyfour", stroke: i === 2 ? 0 : 3 * unit },
-      );
-  } else {
-    const rot = lerp(-0.15, 0.03, ease(st / 0.65));
-    logoAt(
-      W / 2,
-      H / 2,
-      W * (portrait ? 1.13 : 0.82) * (1 + 0.04 * Math.sin(st * 8)),
-      rot,
+function overview(t) {
+  bg(C.paper);
+  dotGrid(t, "rgba(0,0,0,.13)");
+  const x = portrait ? W * 0.5 : W * 0.07;
+  const y = portrait ? H * 0.19 : H * 0.34;
+  const size = portrait ? W * 0.088 : H * 0.103;
+  const gap = portrait ? H * 0.071 : H * 0.125;
+  const max = portrait ? W * 0.9 : W * 0.51;
+  logoAt(
+    portrait ? W / 2 : W * 0.137,
+    portrait ? H * 0.075 : H * 0.105,
+    portrait ? W * 0.27 : W * 0.135,
+  );
+  // The opening artwork is already visible at frame zero; a short dolly reveals the story.
+  for (const i of [0, 2, 1]) {
+    const k = i - 1;
+    const p = ease((t - Math.abs(k) * 0.07) / 0.55);
+    const aw = portrait ? W * 0.45 : H * 0.48;
+    plane(
+      artCards[i],
+      (portrait ? W * 0.5 : W * 0.78) + k * (portrait ? W * 0.19 : W * 0.065),
+      H * (portrait ? 0.66 : 0.55) +
+        Math.abs(k) * H * 0.03 +
+        (1 - p) * H * 0.08,
+      aw * (1 + 0.05 * (1 - p)),
+      (aw * 800) / 700,
+      k * 0.18 + Math.sin(t * 1.5) * 0.04,
+      k * 0.115,
+      Math.abs(k) * 65 * unit,
     );
-    for (let i = 0; i < 10; i++) {
-      const a = (i * Math.PI) / 5 + st;
-      const r = lerp(
-        Math.min(W, H) * 0.13,
-        Math.max(W, H) * 0.62,
-        ease(st / 0.7),
-      );
-      circle(
-        W / 2 + Math.cos(a) * r,
-        H / 2 + Math.sin(a) * r,
-        15 * unit,
-        [C.lime, C.pink, C.paper][i % 3],
-      );
-    }
   }
-  const iris = ease((lt - 1.59) / 0.285);
+  ["MEMBERSHIPS.", "NFT RAFFLES.", "PARTNER PERKS."].forEach((line, i) => {
+    const p = ease((t - i * 0.095) / 0.38);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.25, p);
+    heading(
+      line,
+      x + (portrait ? 0 : (1 - p) * -W * 0.025),
+      y + i * gap + (1 - p) * 25 * unit,
+      size,
+      C.ink,
+      { align: portrait ? "center" : "left", maxWidth: max },
+    );
+    ctx.restore();
+  });
+  if (!portrait) {
+    rounded(W * 0.073, H * 0.735, W * 0.35, 8 * unit, 4 * unit, C.lime);
+    circle(W * 0.458, H * 0.739, 12 * unit, C.pink);
+  }
+  sweep(t, 2.55, 0.2625, C.lime);
+}
+function chooseMembership(t) {
+  const lt = t - 6 * BEAT;
+  bg(C.lime);
+  dotGrid(t, "rgba(0,0,0,.12)");
+  const titleSize = portrait ? W * 0.1 : H * 0.102;
+  heading(
+    "BUY A MEMBERSHIP.",
+    W / 2,
+    H * (portrait ? 0.17 : 0.16),
+    titleSize,
+    C.ink,
+    { maxWidth: W * 0.9 },
+  );
+  const cw = portrait ? W * 0.49 : H * 0.36,
+    ch = (cw * 880) / 650;
+  const enter = ease(lt / 0.35),
+    sway = Math.sin(lt * 1.5) * 0.24;
+  for (const i of [0, 4, 1, 3, 2]) {
+    const offset = i - 2;
+    const x = W / 2 + offset * (portrait ? W * 0.12 : W * 0.12) * enter;
+    plane(
+      cards[i],
+      x,
+      H * (portrait ? 0.56 : 0.59) +
+        Math.abs(offset) * H * 0.035 +
+        (1 - enter) * H * 0.48,
+      cw,
+      ch,
+      offset * 0.2 - sway,
+      offset * 0.06,
+      Math.abs(offset) * 60 * unit,
+    );
+  }
+  type(
+    "BONUS NFT RAFFLE ENTRIES INCLUDED",
+    W / 2,
+    H * (portrait ? 0.84 : 0.93),
+    portrait ? W * 0.032 : H * 0.032,
+    C.ink,
+    { maxWidth: W * 0.89, weight: 600 },
+  );
+  const last = ease((lt - 2.53) / 0.2825);
+  if (last > 0) circle(W * 0.5, H * 0.6, Math.hypot(W, H) * last, C.pink);
+}
+function arrow(x1, y1, x2, y2, p = 1) {
+  ctx.save();
+  ctx.strokeStyle = C.ink;
+  ctx.lineWidth = 4 * unit;
+  ctx.setLineDash([6 * unit, 12 * unit]);
+  ctx.lineDashOffset = -p * 40 * unit;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.bezierCurveTo(
+    lerp(x1, x2, 0.4),
+    y1 - 50 * unit,
+    lerp(x1, x2, 0.6),
+    y2 - 50 * unit,
+    x2,
+    y2,
+  );
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x2 - 14 * unit, y2 - 14 * unit);
+  ctx.lineTo(x2, y2);
+  ctx.lineTo(x2 - 20 * unit, y2 + 6 * unit);
+  ctx.stroke();
+  ctx.restore();
+}
+function bonusEntries(t) {
+  const lt = t - 12 * BEAT;
+  bg(C.pink);
+  dotGrid(t, "rgba(0,0,0,.11)");
+  const sy = portrait ? H * 0.18 : H * 0.13;
+  type(
+    "BONUS RAFFLE ENTRIES",
+    W / 2,
+    sy,
+    portrait ? W * 0.042 : H * 0.041,
+    C.ink,
+    { weight: 600, maxWidth: W * 0.87 },
+  );
+  heading(
+    "A CHANCE TO",
+    W / 2,
+    sy + H * 0.085,
+    portrait ? W * 0.102 : H * 0.087,
+    C.ink,
+    { maxWidth: W * 0.92 },
+  );
+  heading(
+    "WIN AN NFT.",
+    W / 2,
+    sy + H * 0.176,
+    portrait ? W * 0.115 : H * 0.095,
+    C.ink,
+    { maxWidth: W * 0.92 },
+  );
+  const p = ease(lt / 0.42),
+    stageY = portrait ? H * 0.65 : H * 0.69;
+  const pw = portrait ? W * 0.32 : H * 0.29;
+  const aw = portrait ? W * 0.51 : H * 0.42;
+  plane(
+    cards[2],
+    W * (portrait ? 0.22 : 0.24) - (1 - p) * W * 0.2,
+    stageY,
+    pw,
+    (pw * 880) / 650,
+    -0.23 + 0.04 * Math.sin(t),
+    -0.055,
+    0,
+  );
+  plane(
+    artCards[0],
+    W * (portrait ? 0.7 : 0.76) + (1 - p) * W * 0.25,
+    stageY,
+    aw,
+    (aw * 800) / 700,
+    0.18 - 0.06 * Math.sin(lt * 2),
+    0.035,
+    0,
+  );
+  const a = W * (portrait ? 0.405 : 0.4),
+    b = W * (portrait ? 0.438 : 0.585);
+  arrow(a, stageY, b, stageY, lt);
+  for (let i = 0; i < 4; i++) {
+    const progress = (lt * 0.55 + i * 0.25) % 1;
+    const x = lerp(
+      W * (portrait ? 0.36 : 0.35),
+      W * (portrait ? 0.46 : 0.62),
+      progress,
+    );
+    const y = stageY - H * 0.08 - Math.sin(progress * Math.PI) * H * 0.05;
+    pill3d(
+      x,
+      y,
+      portrait ? W * 0.047 : 54 * unit,
+      portrait ? W * 0.047 : 54 * unit,
+      [C.lime, C.purple, C.paper, C.mint][i],
+      lt * 0.5,
+    );
+  }
+  sweep(lt, 3.04, 0.24125, C.purple);
+}
+function offerPanel(x, y, w, h, kind, rotation = 0) {
+  const dark = kind === "seatmap";
+  const foreground = dark ? "#f7f5f1" : "#241738";
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.shadowColor = "rgba(20,12,30,.19)";
+  ctx.shadowBlur = 25 * unit;
+  ctx.shadowOffsetY = 18 * unit;
+  rounded(-w / 2, -h / 2, w, h, 40 * unit, dark ? "#1d1b19" : "#f8f4ff");
+  ctx.shadowColor = "transparent";
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 40 * unit);
+  ctx.clip();
+  if (dark) {
+    for (let row = 0; row < 3; row++)
+      for (let col = 0; col < 3; col++)
+        rounded(
+          w * 0.26 + col * w * 0.052,
+          -h * 0.12 + row * h * 0.13,
+          w * 0.044,
+          h * 0.09,
+          7 * unit,
+          row === 1 && col === 1 ? "#ff5722" : "#49443d",
+        );
+  } else {
+    const g = ctx.createRadialGradient(
+      w * 0.37,
+      -h * 0.04,
+      0,
+      w * 0.4,
+      0,
+      w * 0.16,
+    );
+    g.addColorStop(0, "#ddbcff");
+    g.addColorStop(0.45, "#9b55ff");
+    g.addColorStop(1, "#4500ad");
+    circle(w * 0.4, 0, w * 0.16, g);
+  }
+  ctx.restore();
+  heading(
+    dark ? "SeatMap" : "Fantom Labs",
+    -w * 0.41,
+    -h * 0.31,
+    h * 0.105,
+    dark ? "#f7f5f1" : "#6600ff",
+    { align: "left", maxWidth: w * 0.71 },
+  );
+  heading("5% OFF", -w * 0.41, h * 0.005, h * 0.25, foreground, {
+    align: "left",
+    maxWidth: w * 0.6,
+  });
+  type(
+    dark ? "Pro membership" : "Any service",
+    -w * 0.41,
+    h * 0.31,
+    h * 0.093,
+    foreground,
+    { align: "left", maxWidth: w * 0.76 },
+  );
+  ctx.restore();
+}
+function memberPerks(t) {
+  const lt = t - 19 * BEAT;
+  bg(C.purple);
+  dotGrid(t, "rgba(0,0,0,.13)");
+  heading(
+    "MEMBER DISCOUNTS.",
+    W / 2,
+    H * (portrait ? 0.17 : 0.18),
+    portrait ? W * 0.083 : H * 0.105,
+    C.ink,
+    { maxWidth: W * 0.9 },
+  );
+  if (portrait) {
+    const w = W * 0.84,
+      h = H * 0.225;
+    offerPanel(
+      W / 2 + (1 - ease(lt / 0.38)) * W,
+      H * 0.405,
+      w,
+      h,
+      "fantom",
+      -0.035,
+    );
+    offerPanel(
+      W / 2 - (1 - ease((lt - 0.14) / 0.42)) * W,
+      H * 0.675,
+      w,
+      h,
+      "seatmap",
+      0.035,
+    );
+  } else {
+    const w = W * 0.4,
+      h = H * 0.47;
+    offerPanel(
+      W * 0.28,
+      H * 0.55 + (1 - ease(lt / 0.38)) * H,
+      w,
+      h,
+      "fantom",
+      -0.035,
+    );
+    offerPanel(
+      W * 0.72,
+      H * 0.55 + (1 - ease((lt - 0.14) / 0.42)) * H,
+      w,
+      h,
+      "seatmap",
+      0.035,
+    );
+  }
+  type(
+    "Redemption coming soon.",
+    W / 2,
+    H * (portrait ? 0.87 : 0.91),
+    portrait ? W * 0.031 : H * 0.031,
+    C.ink,
+    { maxWidth: W * 0.85 },
+  );
+  const iris = ease((lt - 3.06) / 0.22125);
   if (iris > 0) circle(W / 2, H / 2, Math.hypot(W, H) * iris, C.paper);
 }
 function finale(t) {
@@ -563,43 +659,48 @@ function finale(t) {
   const lw = W * (portrait ? 0.89 : 0.62);
   logoAt(
     W / 2,
-    H * (portrait ? 0.44 : 0.43),
+    H * (portrait ? 0.39 : 0.4),
     lw * lerp(0.88, 1, settle),
     lerp(-0.04, 0, ease(lt / 0.6)),
   );
-  const p = ease((lt - 0.24) / 0.6);
-  ctx.globalAlpha = p;
-  type(
-    "MEMBERSHIP. WITH MORE.",
-    W / 2,
-    H * (portrait ? 0.57 : 0.65),
-    Math.min(W * 0.044, H * 0.047),
-    C.ink,
-    { font: "Basetica", maxWidth: W * 0.83 },
-  );
+  ctx.globalAlpha = ease((lt - 0.18) / 0.4);
+  if (portrait) {
+    ["MEMBERSHIPS.", "NFT RAFFLES.", "PARTNER PERKS."].forEach((line, i) =>
+      heading(line, W / 2, H * (0.535 + i * 0.046), W * 0.052, C.ink, {
+        maxWidth: W * 0.88,
+      }),
+    );
+  } else
+    heading(
+      "MEMBERSHIPS. NFT RAFFLES. PARTNER PERKS.",
+      W / 2,
+      H * 0.63,
+      H * 0.047,
+      C.ink,
+      { maxWidth: W * 0.85 },
+    );
   ctx.globalAlpha = 1;
-  const dotY = H * (portrait ? 0.65 : 0.77);
   for (let i = 0; i < 3; i++) {
     const dp = spring((lt - 0.2 - i * 0.065) / 0.5);
     circle(
       W / 2 + (i - 1) * 35 * unit,
-      dotY + 35 * unit * (1 - dp),
+      H * (portrait ? 0.73 : 0.77) + 35 * unit * (1 - dp),
       8 * unit,
       [C.lime, C.purple, C.pink][i],
     );
   }
 }
+
 function frame(n) {
   const t = n / FPS;
   ctx.resetTransform();
   ctx.globalAlpha = 1;
   ctx.shadowColor = "transparent";
   ctx.clearRect(0, 0, W, H);
-  if (t < 4 * BEAT) hook(t);
-  else if (t < 10 * BEAT) kinetic(t);
-  else if (t < 16 * BEAT) shapes(t);
-  else if (t < 22 * BEAT) carousel(t);
-  else if (t < 26 * BEAT) build(t);
+  if (t < 6 * BEAT) overview(t);
+  else if (t < 12 * BEAT) chooseMembership(t);
+  else if (t < 19 * BEAT) bonusEntries(t);
+  else if (t < 26 * BEAT) memberPerks(t);
   else finale(t);
   texture(n);
 }
