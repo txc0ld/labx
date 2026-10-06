@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { BadgePercent, Compass, Layers3, UserRound } from "lucide-react";
+import { BadgePercent, Compass, Layers3, Pause, Play, UserRound } from "lucide-react";
 import { motion } from "motion/react";
 import { isCurrentPath } from "@/lib/nav";
 
@@ -20,6 +20,12 @@ type FooterProps = {
 
 export function Footer({ legalLinks }: FooterProps) {
   const path = usePathname();
+  const [texturePaused, setTexturePaused] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.dataset.noisePaused = String(texturePaused);
+    return () => { delete document.documentElement.dataset.noisePaused; };
+  }, [texturePaused]);
   const footerLinks = [{ href: "/guide", label: "How it works" }, ...legalLinks];
 
   return (
@@ -49,6 +55,18 @@ export function Footer({ legalLinks }: FooterProps) {
                 </li>
               );
             })}
+            <li>
+              <button
+                type="button"
+                className="footer-texture-toggle"
+                aria-label={texturePaused ? "Animate background texture" : "Pause background texture"}
+                title={texturePaused ? "Animate background texture" : "Pause background texture"}
+                aria-pressed={texturePaused}
+                onClick={() => setTexturePaused((paused) => !paused)}
+              >
+                {texturePaused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
+              </button>
+            </li>
           </ul>
         </nav>
       </AnimatedContainer>
