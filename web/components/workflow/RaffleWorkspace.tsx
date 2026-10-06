@@ -10,6 +10,7 @@ import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
+import { ResumeTransaction } from "./ResumeTransaction";
 import { DrawProgress } from "./DrawProgress";
 import { RaffleArtwork } from "./RaffleArtwork";
 
@@ -124,6 +125,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
   return (
     <>
       <div className="detail-path"><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to explore</Link><button className="text-link" type="button" onClick={() => void refresh()}>Refresh state</button></div>
+      <ResumeTransaction browser={browser} pendingOnly onConfirmed={refresh} />
       <section className="section piece-layout piece-console chain-piece">
         <div className="piece-visual chain-piece-visual">
           <div className="piece-visual-topline"><span>Verified on-chain raffle</span><span>#{snapshot.id.toString()}</span></div>

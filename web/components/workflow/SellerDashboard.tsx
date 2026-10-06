@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BrowserService } from "@/lib/chain/ports";
 import { CATALOG_PAGE_LIMIT } from "@/lib/chain/types";
 import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
+import { ResumeTransaction } from "./ResumeTransaction";
 import { formatDate, phaseLabel } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
@@ -43,6 +44,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
   if (browser.kind === "unavailable") return <p className="notice warning" role="status">{browser.reason}</p>;
   return (
     <WalletGate wallet={browser.wallet}>
+      <ResumeTransaction browser={browser} pendingOnly onConfirmed={() => load()} />
       <section className="workflow-grid seller-workspace">
         <article className="pearl pad stack">
           <div><p className="kicker">Your raffles</p><h2>Continue on-chain work</h2></div>
