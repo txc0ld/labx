@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatUsdc, phaseLabel } from "../components/workflow/format";
+import { formatDate, formatUsdc, parseUsdc, phaseLabel } from "../components/workflow/format";
 
 describe("workflow value presentation", () => {
   it("formats atomic USDC exactly without floating-point rounding", () => {
@@ -7,6 +7,14 @@ describe("workflow value presentation", () => {
     expect(formatUsdc(1n)).toBe("0.000001");
     expect(formatUsdc(1_250_000n)).toBe("1.25");
     expect(formatUsdc(9_007_199_254_740_993_123_456n)).toBe("9,007,199,254,740,993.123456");
+  });
+
+  it("parses human USDC without accepting rounding or scientific notation", () => {
+    expect(parseUsdc("1")).toBe(1_000_000n);
+    expect(parseUsdc("1.000001")).toBe(1_000_001n);
+    expect(() => parseUsdc("1.0000001")).toThrow(/6 decimal/);
+    expect(() => parseUsdc("1e3")).toThrow(/USDC/);
+    expect(() => parseUsdc("0")).toThrow(/greater than zero/);
   });
 
   it("labels every contract phase and does not invent unknown states", () => {

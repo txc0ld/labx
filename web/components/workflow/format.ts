@@ -9,6 +9,15 @@ export function formatUsdc(value: bigint) {
   return fraction ? `${whole.toLocaleString("en-US")}.${fraction}` : whole.toLocaleString("en-US");
 }
 
+export function parseUsdc(value: string) {
+  const normalized = value.trim();
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(normalized)) throw new Error("Enter a positive USDC amount with up to 6 decimal places.");
+  const [whole, fraction = ""] = normalized.split(".");
+  const atomic = BigInt(whole) * USDC_SCALE + BigInt(fraction.padEnd(Number(USDC_DECIMALS), "0"));
+  if (atomic <= 0n) throw new Error("Membership price must be greater than zero.");
+  return atomic;
+}
+
 export function formatDate(timestamp: bigint) {
   const milliseconds = Number(timestamp) * 1000;
   if (!Number.isSafeInteger(milliseconds)) return "Invalid deadline";
