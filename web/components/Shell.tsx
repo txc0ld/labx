@@ -44,7 +44,6 @@ export function Shell({ children }: { children: ReactNode }) {
                   <li key={link.href}>
                     <Link
                       href={link.href}
-                      className={link.href === "/" ? "nav-explore" : undefined}
                       aria-current={isCurrentPath(path, link.href) ? "page" : undefined}
                     >
                       {link.label}

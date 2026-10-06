@@ -2,6 +2,20 @@
 
 Do not deploy to Ethereum mainnet. `DeploySepolia` reverts unless chain id is 11155111. `LabxRaffle` reverts in the constructor on chain id 1.
 
+## Recovery policy release boundary
+
+The locally approved source uses seven days after `salesEnd` to start a draw, seven days after the request to accept randomness, and the existing seven-day reveal grace before anyone can settle without a reveal. A result at or after its callback cutoff cannot win. Anyone can enable refunds after a missed request or callback deadline, even while paused; buyers claim individually.
+
+These source changes do not update existing deployed bytecode. Before any separately authorized deployment:
+
+- Recheck the old address, raffle states and outstanding liabilities read-only. Record its bytecode and current billing mode. Do not copy balances, entries or custody records into a new contract by assumption.
+- Verify the intended Safe implementation, owners, threshold and authority. Code presence alone is insufficient.
+- Freeze the reviewed revision and compiler settings; deploy a new Sepolia instance only after the human release decision. Verify the deployed bytecode and all three seven-day constants.
+- Separately authorize ownership acceptance, VRF consumer registration and funding in the correct billing asset. Keep secrets and wallet transactions in the user's secure flow.
+- Exercise a Sepolia lifecycle and recovery checks before pointing the app/indexer at the new address. Preserve access to old raffle claims and label old/new contract policies separately. A frontend configuration change cannot migrate an old raffle.
+
+No deployment or migration was performed as part of the local policy implementation.
+
 ## 1. Safe
 
 Create a Safe on Sepolia. That address is both treasury and admin.

@@ -36,7 +36,8 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     uint256 public constant SALES_WINDOW_CAP = 180 days;
     uint256 public constant PRICE_STALE_AFTER = 3 hours;
     uint256 public constant REVEAL_GRACE = 7 days;
-    uint256 public constant VRF_ABORT_AFTER = 1 days;
+    uint256 public constant DRAW_START_GRACE = 7 days;
+    uint256 public constant VRF_ABORT_AFTER = 7 days;
     uint256 public constant MAX_ETH_DEADLINE = 10 minutes;
     uint256 public constant COORDINATOR_DELAY = 1 days;
     uint32 public constant DEFAULT_AMOE_CAP = 100;
@@ -576,6 +577,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         if (msg.sender != r.seller && msg.sender != owner) revert NotSeller();
         if (r.phase != Phase.Closed || !r.snapshotted) revert BadPhase();
         if (r.snapshotTotal == 0) revert EmptyDraw();
+        if (block.timestamp >= uint256(r.salesEnd) + DRAW_START_GRACE) revert Expired();
         (uint256 requestId, address pinned) = _requestWords();
         r.phase = Phase.Drawing;
         activeDrawings += 1;
@@ -584,8 +586,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
 
     /// @notice Disabled: replacing a pending request permits selective winner rerolls.
     ///         Retained for ABI compatibility; always reverts without changing the request.
-    ///         A failed callback must use the existing timed abort/refund path. That path
-    ///         remains an owner cancellation power; it does not guarantee draw liveness.
+    ///         After the fulfillment deadline, anyone may use the timed abort/refund path.
     function retryRandomness(uint256) external view onlyOwner {
         revert RandomnessRetryDisabled();
     }
@@ -622,9 +623,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     function settle(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Drawn) revert BadPhase();
-        if (!r.revealed) {
-            if (msg.sender != owner || block.timestamp < uint256(r.drawnAt) + REVEAL_GRACE) revert RevealRequired();
-        }
+        if (!r.revealed && block.timestamp < uint256(r.drawnAt) + REVEAL_GRACE) revert RevealRequired();
         r.phase = Phase.Settled;
         emit Settled(id, r.winner, r.principalEscrow, r.feeEscrow);
     }
@@ -662,7 +661,8 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit FeeClaimed(id, payee, fee);
     }
 
-    /// @notice Seller may cancel before funds arrive, or after an empty snapshot.
+    /// @notice Anyone may cancel Open/Closed raffles after the published sales deadline plus DRAW_START_GRACE.
+    ///         Before that cutoff, the seller may cancel before funds arrive, or after an empty snapshot.
     ///         The owner may force-cancel a funded Open/Closed raffle. That is accepted
     ///         v1 centralization (Chain Security H-3): buyers refund, prize returns to the
     ///         seller. A pause+timelock on this path is a follow-up, not a silent removal.
@@ -670,9 +670,11 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         Raffle storage r = _raffles[id];
         Phase p = r.phase;
         bool admin = msg.sender == owner;
-        if (msg.sender != r.seller && !admin) revert NotSeller();
+        bool expired =
+            (p == Phase.Open || p == Phase.Closed) && block.timestamp >= uint256(r.salesEnd) + DRAW_START_GRACE;
+        if (msg.sender != r.seller && !admin && !expired) revert NotSeller();
         if (p == Phase.Drawing || p == Phase.Drawn || p == Phase.Settled || p == Phase.Cancelled) revert BadPhase();
-        if (!admin) {
+        if (!admin && !expired) {
             if (p == Phase.Open && r.principalEscrow != 0) revert SalesStarted();
             if (p == Phase.Closed && !(r.snapshotted && r.snapshotTotal == 0)) revert BadPhase();
         }
@@ -680,9 +682,9 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
         emit Cancelled(id);
     }
 
-    /// @notice Owner cancels a stuck Drawing after `VRF_ABORT_AFTER`. Clears `requestToRaffle`
-    ///         so a late coordinator callback cannot land on this raffle.
-    function abortDrawing(uint256 id) external onlyOwner nonReentrant {
+    /// @notice Anyone may cancel a Drawing at its fulfillment deadline. Expired words cannot win,
+    ///         even before this call clears the request mappings and enables buyer refunds.
+    function abortDrawing(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Drawing) revert BadPhase();
         if (block.timestamp < uint256(r.vrfRequestedAt) + VRF_ABORT_AFTER) revert TooEarly();
@@ -914,6 +916,7 @@ contract LabxRaffle is ReentrancyGuard, EIP712, IERC721Receiver {
     function _applyWord(uint256 id, uint256 requestId, uint256 word) internal {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Drawing || r.vrfRequestId != requestId) return;
+        if (block.timestamp >= uint256(r.vrfRequestedAt) + VRF_ABORT_AFTER) return;
         activeDrawings -= 1;
         r.randomWord = word;
         r.winner = _select(id, word);

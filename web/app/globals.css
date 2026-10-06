@@ -173,17 +173,18 @@ label:has(input[type="checkbox"]) {
   min-width: 44px;
   padding: 0.65rem 0.9rem;
 }
-.nav a[aria-current="page"], .key.on {
+.key.on {
   background: linear-gradient(180deg, #f3ffd8, var(--lime) 55%, #8adf62);
   color: var(--ink);
   box-shadow: inset 0 1px 0 #fff;
 }
-.nav a.nav-explore[aria-current="page"] {
-  box-shadow:
-    inset 0 1px 0 #fff,
-    0 0 0 2px #f8f9fc,
-    0 0 0 4px #9aa6b8,
-    0 0 0 5px #ffffff;
+.nav a[aria-current="page"] {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: none;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.3em;
 }
 
 
@@ -743,8 +744,7 @@ dialog .pearl { padding: 1rem; width: min(440px, 92vw); }
 .nav-cluster { gap:.6rem; padding:0; border-radius:0; background:none; box-shadow:none; }
 .nav { gap:.1rem; }
 .nav a,.key { border-radius:6px; padding:.55rem .72rem; font-size:.82rem; }
-.nav a[aria-current="page"],.key.on,.nav a.nav-explore[aria-current="page"] { background:var(--lavender); color:var(--ink); box-shadow:none; }
-.nav a.nav-explore[aria-current="page"] { background:transparent; }
+.key.on { background:var(--lavender); color:var(--ink); box-shadow:none; }
 main.wrap { padding-block-start:clamp(2.5rem,5vw,4.5rem); }
 main.wrap>.section:first-child { margin-block-start:0; }
 .pearl,.well { border:1px solid var(--line); border-radius:10px; background:rgba(250,249,246,.78); box-shadow:none; }

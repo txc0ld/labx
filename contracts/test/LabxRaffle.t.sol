@@ -846,7 +846,7 @@ contract LabxRaffleTest is Test {
         labx.snapshot(id, 5);
         vm.prank(seller);
         labx.requestRandomness(id);
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
         labx.abortDrawing(id);
         assertEq(labx.activeDrawings(), 0);
         assertEq(nft.ownerOf(1), address(labx));
@@ -894,7 +894,7 @@ contract LabxRaffleTest is Test {
         assertEq(labx.requestToRaffle(requestId), id);
         assertEq(labx.requestCoordinator(requestId), address(vrf));
 
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
         labx.abortDrawing(id);
         assertEq(labx.requestToRaffle(requestId), 0);
         assertEq(labx.requestCoordinator(requestId), address(0));
@@ -922,7 +922,7 @@ contract LabxRaffleTest is Test {
         uint64 requestedAt = labx.getRaffle(id).vrfRequestedAt;
         uint256 nextRequest = vrf.next();
 
-        // Even after a timeout, the owner cannot discard an unfavorable pending
+        // During the callback window, the owner cannot discard an unfavorable pending
         // fulfillment and ask for a new winner over the same paid entry snapshot.
         vm.warp(block.timestamp + 2 days);
         vm.expectRevert(LabxRaffle.RandomnessRetryDisabled.selector);
@@ -1151,8 +1151,8 @@ contract LabxRaffleTest is Test {
         labx.setNativePayment(true);
     }
 
-    /// @dev Evidence of the documented owner cancellation trust, not a fairness guarantee.
-    function test_policyOwnerCanDiscardDelayedOutcomeAfterAbortTimeout() public {
+    /// @dev Expired words cannot win after permissionless cancellation.
+    function test_policyExpiredOutcomeCannotWinAfterPermissionlessAbort() public {
         (uint256 id,,,) = _create();
         _escrowOpen(id);
         _fund(alice, 30e6);
@@ -1167,8 +1167,8 @@ contract LabxRaffleTest is Test {
         uint256 requestId = labx.getRaffle(id).vrfRequestId;
         vm.warp(block.timestamp + labx.VRF_ABORT_AFTER());
 
-        // Ordering model: owner aborts before a delayed fulfillment that would
-        // award Alice. The already requested outcome can no longer settle.
+        // A losing buyer can abort, but this word is already expired.
+        vm.prank(bob);
         labx.abortDrawing(id);
         vrf.fulfill(address(labx), requestId, 0);
         assertEq(labx.getRaffle(id).winner, address(0));
@@ -1184,50 +1184,199 @@ contract LabxRaffleTest is Test {
         assertEq(nft.ownerOf(1), seller);
     }
 
-    function test_policyPausedFundedSnapshotNeedsOwnerForRecovery() public {
+    function test_policyPausedFundedSnapshotAllowsBuyerRecovery() public {
         uint256 id = _drawReady();
         labx.setPaused(true);
         vm.warp(block.timestamp + 30 days);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.Paused.selector);
         labx.requestRandomness(id);
+        vm.prank(alice);
+        labx.cancel(id);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), 100e6);
+        assertEq(usdc.balanceOf(address(labx)), 0);
+    }
+
+    function test_policyUnrevealedDrawAllowsWinnerSettlementAfterGrace() public {
+        uint256 id = _drawReady();
         vm.prank(seller);
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.cancel(id);
-        vm.startPrank(alice);
-        vm.expectRevert(LabxRaffle.NotSeller.selector);
-        labx.cancel(id);
+        labx.requestRandomness(id);
+        vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
+        vm.warp(block.timestamp + labx.REVEAL_GRACE() + 30 days);
+        vm.prank(alice);
+        labx.settle(id);
+        assertEq(labx.getRaffle(id).winner, alice);
+        vm.prank(alice);
+        labx.claimPrize(id);
+        assertEq(nft.ownerOf(1), alice);
+        vm.prank(alice);
         vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.refund(id);
-        vm.stopPrank();
-        assertEq(usdc.balanceOf(address(labx)), 30e6);
-        // Owner cancellation can recover funds while paused, but inactivity has
-        // no permissionless timeout escape even after this long delay.
+    }
+
+    function test_policySevenDayConstants() public view {
+        assertEq(labx.DRAW_START_GRACE(), 7 days);
+        assertEq(labx.VRF_ABORT_AFTER(), 7 days);
+        assertEq(labx.REVEAL_GRACE(), 7 days);
+    }
+
+    function test_policyEarlyCloseDoesNotShortenRequestWindow() public {
+        uint256 id = _drawReady();
+        uint256 cutoff = uint256(labx.getRaffle(id).salesEnd) + 7 days;
+        vm.warp(cutoff - 1);
+        vm.prank(cara);
+        vm.expectRevert(LabxRaffle.NotSeller.selector);
+        labx.cancel(id);
+        vm.prank(seller);
+        labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        vm.warp(cutoff + 6 days);
+        vm.prank(cara);
+        vm.expectRevert(LabxRaffle.TooEarly.selector);
+        labx.abortDrawing(id);
+        vrf.fulfill(address(labx), requestId, 0);
+        assertEq(labx.getRaffle(id).winner, alice);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function testFuzz_policyRequestCutoffDoesNotRaceRefunds(uint8 delay, bool ownerRequests) public {
+        uint256 id = _drawReady();
+        uint256 cutoff = uint256(labx.getRaffle(id).salesEnd) + 7 days;
+        vm.warp(cutoff + bound(delay, 0, 2));
+        vm.prank(ownerRequests ? address(this) : seller);
+        vm.expectRevert(LabxRaffle.Expired.selector);
+        labx.requestRandomness(id);
+        assertEq(vrf.next(), 1);
+        assertEq(labx.activeDrawings(), 0);
+        vm.prank(cara);
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
         assertEq(usdc.balanceOf(alice), 100e6);
     }
 
-    function test_policyUnrevealedDrawNeedsOwnerAfterGrace() public {
+    function testFuzz_policyRecoveryIgnoresPauseAndSnapshotProgress(uint8 progress, bool paused_) public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 60e6);
+        _buy(alice, id, 0, 1);
+        _buy(alice, id, 0, 1);
+        uint256 stage = bound(progress, 0, 3);
+        if (stage != 0) {
+            vm.prank(seller);
+            labx.close(id);
+            if (stage > 1) labx.snapshot(id, stage == 2 ? 1 : 2);
+        }
+        labx.setPaused(paused_);
+        uint256 cutoff = uint256(labx.getRaffle(id).salesEnd) + 7 days;
+        vm.warp(cutoff - 1);
+        vm.prank(cara);
+        vm.expectRevert(LabxRaffle.NotSeller.selector);
+        labx.cancel(id);
+        vm.warp(cutoff);
+        vm.prank(cara);
+        labx.cancel(id);
+        vm.prank(alice);
+        labx.refund(id);
+        assertEq(usdc.balanceOf(alice), 60e6);
+        assertEq(labx.getRaffle(id).principalEscrow, 0);
+        assertEq(labx.getRaffle(id).feeEscrow, 0);
+        vm.prank(seller);
+        labx.reclaimPrize(id);
+        assertEq(nft.ownerOf(1), seller);
+        vm.prank(alice);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
+    }
+
+    function testFuzz_policyCallbackDeadlineAndOrdering(uint8 offset, bool callbackFirst, bool paused_, uint256 word)
+        public
+    {
         uint256 id = _drawReady();
         vm.prank(seller);
         labx.requestRandomness(id);
+        uint256 requestId = labx.getRaffle(id).vrfRequestId;
+        uint256 cutoff = uint256(labx.getRaffle(id).vrfRequestedAt) + 7 days;
+        uint256 boundary = bound(offset, 0, 2);
+        labx.setPaused(paused_);
+        vm.warp(cutoff - 1 + boundary);
+        if (boundary == 0) {
+            vm.prank(cara);
+            vm.expectRevert(LabxRaffle.TooEarly.selector);
+            labx.abortDrawing(id);
+            vrf.fulfill(address(labx), requestId, word);
+            assertEq(labx.getRaffle(id).winner, alice);
+            vm.warp(cutoff);
+            vm.prank(cara);
+            vm.expectRevert(LabxRaffle.BadPhase.selector);
+            labx.abortDrawing(id);
+            assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Drawn));
+        } else {
+            if (callbackFirst) {
+                vrf.fulfill(address(labx), requestId, word);
+                assertEq(labx.getRaffle(id).winner, address(0));
+                assertEq(labx.getRaffle(id).drawnAt, 0);
+                assertEq(labx.activeDrawings(), 1);
+                assertEq(labx.requestToRaffle(requestId), id);
+            }
+            vm.prank(cara);
+            labx.abortDrawing(id);
+            vrf.fulfill(address(labx), requestId, word);
+            assertEq(labx.getRaffle(id).winner, address(0));
+            assertEq(labx.requestToRaffle(requestId), 0);
+            assertEq(labx.requestCoordinator(requestId), address(0));
+            assertEq(labx.getRaffle(id).vrfRequestId, 0);
+            vm.prank(cara);
+            vm.expectRevert(LabxRaffle.BadPhase.selector);
+            labx.abortDrawing(id);
+            vm.prank(alice);
+            labx.refund(id);
+            assertEq(usdc.balanceOf(alice), 100e6);
+            assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Cancelled));
+        }
+        vrf.fulfill(address(labx), requestId, word ^ 1);
+        assertEq(labx.activeDrawings(), 0);
+    }
+
+    function testFuzz_policyAnyoneSettlesAtGrace(uint8 offset, bool revealed, bool paused_, uint8 caller) public {
+        (uint256 id, bytes32 publicHash, bytes32 privateHash, bytes32 salt) = _create();
+        _escrowOpen(id);
+        _fund(alice, 30e6);
+        _buy(alice, id, 0, 1);
+        vm.prank(seller);
+        labx.close(id);
+        labx.snapshot(id, 5);
+        vm.prank(seller);
+        labx.requestRandomness(id);
         vrf.fulfill(address(labx), labx.getRaffle(id).vrfRequestId, 0);
-        vm.warp(block.timestamp + labx.REVEAL_GRACE() + 30 days);
-        vm.startPrank(alice);
-        vm.expectRevert(LabxRaffle.RevealRequired.selector);
+        if (revealed) {
+            vm.prank(seller);
+            labx.reveal(id, publicHash, privateHash, salt);
+        }
+        labx.setPaused(paused_);
+        uint256 boundary = bound(offset, 0, 2);
+        vm.warp(uint256(labx.getRaffle(id).drawnAt) + 7 days - 1 + boundary);
+        address[4] memory callers = [address(this), seller, alice, cara];
+        vm.prank(callers[bound(caller, 0, 3)]);
+        if (!revealed && boundary == 0) {
+            vm.expectRevert(LabxRaffle.RevealRequired.selector);
+            labx.settle(id);
+            return;
+        }
         labx.settle(id);
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.claimPrize(id);
-        vm.expectRevert(LabxRaffle.BadPhase.selector);
-        labx.refund(id);
-        vm.stopPrank();
         assertEq(labx.getRaffle(id).winner, alice);
-        assertEq(nft.ownerOf(1), address(labx));
+        _pullSettled(id, alice);
+        assertEq(nft.ownerOf(1), alice);
+        assertEq(usdc.balanceOf(seller), 25e6);
+        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(cara), 0);
+        assertEq(usdc.balanceOf(address(labx)), 0);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
         labx.settle(id);
         vm.prank(alice);
-        labx.claimPrize(id);
-        assertEq(nft.ownerOf(1), alice);
+        vm.expectRevert(LabxRaffle.BadPhase.selector);
+        labx.refund(id);
     }
 }
