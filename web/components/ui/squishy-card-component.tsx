@@ -13,11 +13,11 @@ type SquishyPackCardProps = {
 };
 
 const PACK_ACCENTS: Record<PackName, string> = {
-  Entry: "#FFFFFF",
-  Bronze: "#A05822",
-  Silver: "#CCCCCC",
-  Gold: "#FDBD29",
-  Platinum: "#D4D5D9"
+  Entry: "#627A00",
+  Bronze: "#7A9900",
+  Silver: "#93B800",
+  Gold: "#AFDB00",
+  Platinum: "#CCFF00"
 };
 
 const cardVariants: Variants = {
@@ -84,7 +84,7 @@ export function SquishyPackCard({
       className="squishy-pack-card"
       style={{
         backgroundColor: PACK_ACCENTS[pack.name],
-        color: pack.name === "Bronze" ? "#FFFFFF" : "var(--ink)"
+        color: pack.name === "Entry" ? "#FFFFFF" : "var(--ink)"
       }}
       data-selected={selected ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
