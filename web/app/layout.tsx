@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   title: { default: "LABx", template: "%s · LABx" },
   description,
   metadataBase: new URL(site),
-  icons: { icon: "/favicon.svg" },
+  icons: { icon: { url: "/favicon.png", type: "image/png", sizes: "32x32" } },
   openGraph: {
     siteName: "LABx",
     title: "LABx",
