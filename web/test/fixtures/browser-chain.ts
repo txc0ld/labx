@@ -31,7 +31,7 @@ async function waitForServer(baseUrl: string, process: ChildProcess, output: str
   throw new Error(`Next fixture did not start.\n${output.join("")}`);
 }
 
-export async function browserChain(chain: LocalChain, initialAccount: Address = chain.seller) {
+export async function browserChain(chain: LocalChain, initialAccount: Address = chain.seller, mineConfirmation = true) {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const output: string[] = [];
@@ -60,22 +60,28 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
   const { chromium } = require(playwrightPackage) as { chromium: { launch(input: unknown): Promise<any> } };
   const browser = await chromium.launch({ executablePath: chromiumExecutable, headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext();
-  await context.exposeFunction("__labxRpc", (input: { method: string; params?: readonly unknown[] }) =>
-    chain.rpc(input.method, input.params ?? [])
-  );
-  await context.addInitScript(({ account, chainId }: { account: string; chainId: number }) => {
+  let selectedAccount: string = initialAccount;
+  await context.exposeFunction("__labxRpc", async (input: { method: string; params?: readonly unknown[] }) => {
+    const result = await chain.rpc(input.method, input.params ?? []);
+    if (mineConfirmation && input.method === "eth_sendTransaction") await chain.mine();
+    return result;
+  });
+  await context.exposeFunction("__labxSelectedAccount", () => selectedAccount);
+  await context.exposeFunction("__labxSelectAccount", (account: string) => { selectedAccount = account; });
+  await context.addInitScript(({ chainId }: { chainId: number }) => {
     type Listener = (...args: unknown[]) => void;
     type FixtureWindow = Window & {
       __labxRpc: (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
-      __labxSetAccount: (next: string) => void;
+      __labxSelectedAccount: () => Promise<string>;
+      __labxSelectAccount: (next: string) => Promise<void>;
+      __labxSetAccount: (next: string) => Promise<void>;
       ethereum?: unknown;
     };
     const fixture = window as unknown as FixtureWindow;
     const listeners = new Map<string, Set<Listener>>();
-    let selected = account;
     const provider = {
       async request(input: { method: string; params?: readonly unknown[] }) {
-        if (input.method === "eth_accounts" || input.method === "eth_requestAccounts") return [selected];
+        if (input.method === "eth_accounts" || input.method === "eth_requestAccounts") return [await fixture.__labxSelectedAccount()];
         if (input.method === "eth_chainId") return `0x${chainId.toString(16)}`;
         if (input.method === "wallet_switchEthereumChain") return null;
         return fixture.__labxRpc(input);
@@ -89,12 +95,12 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
         listeners.get(event)?.delete(listener);
       }
     };
-    fixture.__labxSetAccount = next => {
-      selected = next;
+    fixture.__labxSetAccount = async next => {
+      await fixture.__labxSelectAccount(next);
       for (const listener of listeners.get("accountsChanged") ?? []) listener([next]);
     };
     Object.defineProperty(fixture, "ethereum", { configurable: true, value: provider });
-  }, { account: initialAccount, chainId: chain.manifest.chainId });
+  }, { chainId: chain.manifest.chainId });
   const page = await context.newPage();
 
   return {
@@ -104,8 +110,8 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
     page,
     serverOutput: output,
     async switchAccount(account: Address) {
-      await page.evaluate((next: string) =>
-        (window as unknown as Window & { __labxSetAccount(next: string): void }).__labxSetAccount(next), account);
+      await page.evaluate(async (next: string) =>
+        (window as unknown as Window & { __labxSetAccount(next: string): Promise<void> }).__labxSetAccount(next), account);
     },
     async close() {
       await browser.close();
