@@ -6,10 +6,9 @@ import { useBench } from "@/lib/bench";
 
 export default function FairnessPage() {
   const { pieces, ready } = useBench();
-  if (!ready) return <section className="section"><p className="pearl pad">Opening the bench.</p></section>;
+  if (!ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Opening fairness records</strong><p>Checking the collection.</p></div></div></section>;
   return (
-    <section className="section">
-      <p className="kicker">Fairness</p>
+    <section className="section page-frame">
       <h1 className="page-title">The draw</h1>
       <p className="lede">Escrow, a commitment hash, then VRF after the snapshot. Settlement flips phase; claims move the prize, proceeds, and fee.</p>
       <LegalNav />

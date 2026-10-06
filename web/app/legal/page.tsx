@@ -10,8 +10,7 @@ export const metadata: Metadata = {
 
 export default function LegalPage() {
   return (
-    <section className="section stack">
-      <p className="kicker">Terms</p>
+    <section className="section stack page-frame">
       <h1 className="page-title">Membership terms.</h1>
       <LegalNav />
       <div className="piece-grid legal-surfaces">

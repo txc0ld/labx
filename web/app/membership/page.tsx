@@ -13,7 +13,6 @@ export default function MembershipPage() {
   return (
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
-        <p className="kicker">Membership</p>
         <h1 className="page-title">Membership.</h1>
         <p className="lede">Each pack is a membership for one piece. A live listing must publish its price, bonus entries and remaining supply.</p>
       </header>

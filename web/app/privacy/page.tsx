@@ -10,8 +10,7 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <section className="section stack">
-      <p className="kicker">Privacy</p>
+    <section className="section stack page-frame">
       <h1 className="page-title">Your data</h1>
       <p className="lede legal-copy">
         This notice describes records created when you use the {OPERATOR.brand} bench at {publicSiteHost()}. It is a product draft for counsel, not a legal opinion.

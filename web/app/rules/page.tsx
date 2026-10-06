@@ -3,8 +3,7 @@ import { OnChainStatus } from "@/components/OnChainStatus";
 
 export default function RulesPage() {
   return (
-    <section className="section stack">
-      <p className="kicker">Draw rules</p>
+    <section className="section stack page-frame">
       <h1 className="page-title">How a piece is drawn.</h1>
       <LegalNav />
       <article className="pearl pad stack">

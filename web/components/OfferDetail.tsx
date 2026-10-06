@@ -8,7 +8,6 @@ export function OfferDetail({ offer }: { offer: PartnerOffer }) {
     <section className="section workflow-page stack">
       <div className="detail-path"><Link href="/discounts" className="detail-back"><span aria-hidden="true">←</span> Back to partner discounts</Link></div>
       <header className="workflow-header stack">
-        <p className="kicker">Partner discount</p>
         <h1 className="page-title">{offer.partner}</h1>
         <p className="lede">{offer.benefit}</p>
       </header>

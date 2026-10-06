@@ -12,7 +12,6 @@ export default function DiscountsPage() {
   return (
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
-        <p className="kicker">Member benefits</p>
         <h1 className="page-title">Discounts.</h1>
         <p className="lede">A little extra from our partners.</p>
       </header>

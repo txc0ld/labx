@@ -3,8 +3,7 @@ import { StudioPreparation } from "@/components/StudioPreparation";
 
 export default function SellerPage() {
   return (
-    <section className="section stack">
-      <p className="kicker">Studio</p>
+    <section className="section stack page-frame">
       <h1 className="page-title">Prepare a listing.</h1>
       <p className="lede">Draft public piece details and review them before the future escrow and publishing steps.</p>
       <div className="workflow-grid legal-surfaces">

@@ -11,7 +11,6 @@ export default function GuidePage() {
   return (
     <section className="section guide-page">
       <header className="guide-header">
-        <p className="kicker">The quick guide</p>
         <h1 className="page-title">How it works.</h1>
         <p className="guide-intro">Find a piece. Choose a pack. Follow the draw.</p>
         <p className="guide-availability"><span>Sepolia / intended flow</span>Website listing, purchase and history tools are not connected yet.</p>

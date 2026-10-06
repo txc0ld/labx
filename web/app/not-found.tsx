@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 export default function NotFound() {
   return (
-    <section className="section stack">
+    <section className="section stack missing-state">
       <p className="kicker">404</p>
       <h1 className="page-title">Page not found.</h1>
       <article className="pearl pad stack">

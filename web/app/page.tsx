@@ -10,7 +10,7 @@ export default function HomePage() {
     <>
       {ready
         ? <BenchHub pieces={pieces} banner={banner} />
-        : <section className="section" id="bench"><p className="pearl pad">Opening the bench.</p></section>}
+        : <section className="section state-section" id="bench"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Opening the bench</strong><p>Preparing the collection.</p></div></div></section>}
       <ScrollStory />
     </>
   );

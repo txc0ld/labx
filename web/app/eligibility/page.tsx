@@ -10,7 +10,6 @@ export default function EligibilityPage() {
   return (
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
-        <p className="kicker">Before a purchase</p>
         <h1 className="page-title">Eligibility.</h1>
         <p className="lede">Use this checklist to review the published requirements. It does not verify eligibility, record an agreement or grant access.</p>
       </header>

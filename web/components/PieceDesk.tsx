@@ -18,11 +18,10 @@ export function PieceDesk({ id }: { id: string }) {
   const [pack, setPack] = useState<PackName>("Entry");
   const [qty, setQty] = useState(1);
 
-  if (!bench.ready) return <section className="section"><p className="pearl pad">Loading raffle.</p></section>;
+  if (!bench.ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading raffle</strong><p>Checking the collection.</p></div></div></section>;
   if (!piece) {
     return (
-      <section className="section stack">
-        <p className="kicker">Raffle unavailable</p>
+      <section className="section stack missing-state">
         <h1 className="page-title">This raffle is not listed.</h1>
         <p className="lede">The website does not have an authoritative listing for this address.</p>
         <div className="btn-row">

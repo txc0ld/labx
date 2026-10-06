@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Purchase receipts" };
 export default function ReceiptsPage() {
   return (
     <section className="section workflow-page stack">
-      <header className="workflow-header stack"><p className="kicker">Profile / Purchases</p><h1 className="page-title">Receipts.</h1><p className="lede">Verified purchases will supply the receipt records shown here.</p><AccountNav /></header>
+      <header className="workflow-header stack"><h1 className="page-title">Receipts.</h1><p className="lede">Verified purchases will supply the receipt records shown here.</p><AccountNav /></header>
       <article className="well pad stack">
         <h2>No receipt records available</h2>
         <p className="notice warning" role="status">Purchase history is not connected, so the website cannot verify or display a receipt.</p>

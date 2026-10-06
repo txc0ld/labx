@@ -78,7 +78,7 @@ export default function ProfilePage() {
     };
   }, [bench.wallet, pointsRetry]);
 
-  if (!bench.ready) return <section className="section"><p className="pearl pad">Loading profile.</p></section>;
+  if (!bench.ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading profile</strong><p>Opening your local account view.</p></div></div></section>;
 
   function savePreference(event: FormEvent) {
     event.preventDefault();
@@ -92,13 +92,12 @@ export default function ProfilePage() {
   return (
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
-        <p className="kicker">Profile</p>
-        <h1 className="page-title" style={{ fontSize: "clamp(2rem, 4vw, 3.4rem)" }}>Your bench</h1>
+        <h1 className="page-title">Your bench</h1>
         <p className="lede">Wallet, points and browser-only receipt preferences.</p>
         <AccountNav />
       </header>
-      <div className="split">
-      <div className="pearl pad stack">
+      <div className="split profile-grid">
+      <div className="pearl pad stack profile-primary">
         <div className="terminal pad">
           <div>wallet {bench.wallet || "not connected"}</div>
           <div>
@@ -123,7 +122,7 @@ export default function ProfilePage() {
           {note ? <p className="notice warning" role="status">{note}</p> : null}
         </form>
       </div>
-      <div className="stack">
+      <div className="stack profile-secondary">
         <div className="well pad">
           <h2>Membership status</h2>
           <p>Membership status is unknown because the website is not connected to an authoritative membership source.</p>
