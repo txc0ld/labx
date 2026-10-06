@@ -1,0 +1,251 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import type { Hex } from "viem";
+import type { BrowserService } from "@/lib/chain/ports";
+import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
+import { TransactionFlow } from "./TransactionFlow";
+import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
+import { useWalletSnapshot, WalletGate } from "./WalletGate";
+
+export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null) => readonly ActionAvailability[];
+
+type WorkspaceState =
+  | { kind: "loading" }
+  | { kind: "unavailable" | "legacy" | "mismatch" | "missing" | "error"; message: string }
+  | { kind: "ready"; snapshot: RaffleSnapshot };
+
+export function RaffleWorkspace({ browser, id, termsHash, availableActions }: {
+  browser: BrowserService;
+  id: bigint;
+  termsHash: Hex;
+  availableActions: AvailabilityReader;
+}) {
+  const [state, setState] = useState<WorkspaceState>({ kind: "loading" });
+  const request = useRef(0);
+
+  async function refresh() {
+    if (browser.kind === "unavailable") {
+      setState({ kind: "unavailable", message: browser.reason });
+      return;
+    }
+    const version = ++request.current;
+    setState({ kind: "loading" });
+    try {
+      const deployment = await browser.service.attest();
+      if (version !== request.current) return;
+      if (deployment.kind !== "verified") {
+        setState({ kind: deployment.kind, message: deployment.reason });
+        return;
+      }
+      const snapshot = await browser.service.readRaffle({ id });
+      if (version === request.current) setState({ kind: "ready", snapshot });
+    } catch (error) {
+      if (version !== request.current) return;
+      const message = error instanceof Error ? error.message : "The raffle could not be loaded.";
+      setState({ kind: /not found|does not exist|unknown raffle/i.test(message) ? "missing" : "error", message });
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    return () => { request.current += 1; };
+    // A new runtime or route ID invalidates the previous authoritative read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browser, id]);
+
+  if (state.kind === "loading") return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading raffle</strong><p>Reading the verified contract state.</p></div></div></section>;
+  if (state.kind !== "ready") {
+    return (
+      <section className="section stack missing-state">
+        <h1 className="page-title">{state.kind === "missing" ? "This raffle was not found." : state.kind === "legacy" ? "Legacy raffle detected." : "Raffle unavailable."}</h1>
+        <p className="notice warning" role={state.kind === "error" ? "alert" : "status"}>{state.message}</p>
+        <p>No purchase or claim is available without a verified current deployment.</p>
+        <div className="btn-row"><Link className="btn" href="/">Back to explore</Link><button className="btn btn-dark" type="button" onClick={() => void refresh()}>Retry</button></div>
+      </section>
+    );
+  }
+
+  if (browser.kind !== "configured") return null;
+  return <LoadedRaffle browser={browser} snapshot={state.snapshot} termsHash={termsHash} availableActions={availableActions} refresh={refresh} />;
+}
+
+function LoadedRaffle({ browser, snapshot, termsHash, availableActions, refresh }: {
+  browser: Extract<BrowserService, { kind: "configured" }>;
+  snapshot: RaffleSnapshot;
+  termsHash: Hex;
+  availableActions: AvailabilityReader;
+  refresh: () => Promise<void>;
+}) {
+  const walletSnapshot = useWalletSnapshot(browser.wallet);
+  const [account, setAccount] = useState<AccountRaffleState | null>(null);
+  const [accountState, setAccountState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [accountError, setAccountError] = useState("");
+  const accountRequest = useRef(0);
+
+  useEffect(() => {
+    const version = ++accountRequest.current;
+    setAccount(null);
+    setAccountError("");
+    if (walletSnapshot.kind !== "connected") {
+      setAccountState("idle");
+      return;
+    }
+    setAccountState("loading");
+    void browser.service.readAccount({ id: snapshot.id, account: walletSnapshot.account }).then((next) => {
+      if (version === accountRequest.current) { setAccount(next); setAccountState("ready"); }
+    }).catch((error: unknown) => {
+      if (version === accountRequest.current) {
+        setAccountError(error instanceof Error ? error.message : "Account state could not be loaded.");
+        setAccountState("error");
+      }
+    });
+    return () => { accountRequest.current += 1; };
+  }, [browser.service, snapshot.id, walletSnapshot]);
+
+  const availability = availableActions(snapshot, account);
+  const phase = Number(snapshot.raffle.phase);
+  const seller = walletSnapshot.kind === "connected" && walletSnapshot.account.toLowerCase() === snapshot.raffle.seller.toLowerCase();
+  const reload = async () => { await refresh(); };
+
+  return (
+    <>
+      <div className="detail-path"><Link href="/" className="detail-back"><span aria-hidden="true">←</span> Back to explore</Link><button className="text-link" type="button" onClick={() => void refresh()}>Refresh state</button></div>
+      <section className="section piece-layout piece-console chain-piece">
+        <div className="piece-visual chain-piece-visual">
+          <div className="piece-visual-topline"><span>Verified on-chain raffle</span><span>#{snapshot.id.toString()}</span></div>
+          <div className="chain-art-placeholder" aria-label={`NFT contract ${snapshot.raffle.nft}, token ${snapshot.raffle.tokenId.toString()}`}>
+            <span>{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span>
+            <p>NFT {shortAddress(snapshot.raffle.nft)}</p>
+            <small>Token #{snapshot.raffle.tokenId.toString()}</small>
+          </div>
+          <div className="piece-visual-caption"><span className="piece-escrow-status">{snapshot.raffle.escrowed ? "Escrow verified" : "Not escrowed"}</span></div>
+        </div>
+        <div className="purchase-console">
+          <header className="purchase-header">
+            <div className="purchase-eyebrow"><p className="kicker">Seller {shortAddress(snapshot.raffle.seller)}</p><span className="piece-status">{phaseLabel(phase)}</span></div>
+            <h1 className="page-title">{snapshot.raffle.title}</h1>
+            <p className="piece-deadline">Sales deadline {formatDate(snapshot.raffle.salesEnd)} UTC · {snapshot.lotCount.toString()} recorded lots</p>
+            <Link className="guide-link" href="/fairness">Draw protections <span aria-hidden="true">↗</span></Link>
+          </header>
+          {accountState === "loading" ? <p className="notice" role="status">Loading your account state…</p> : null}
+          {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
+          {seller
+            ? <SellerActions browser={browser} snapshot={snapshot} account={account} availability={availability} onConfirmed={reload} />
+            : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} onConfirmed={reload} />}
+          <details className="workflow-details"><summary>Contract details</summary><dl className="review-list"><div><dt>Raffle contract</dt><dd className="hash">{browser.service.manifest.address}</dd></div><div><dt>NFT contract</dt><dd className="hash">{snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{snapshot.raffle.tokenId.toString()}</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function BuyerActions({ browser, snapshot, account, availability, termsHash, onConfirmed }: {
+  browser: Extract<BrowserService, { kind: "configured" }>;
+  snapshot: RaffleSnapshot;
+  account: AccountRaffleState | null;
+  availability: readonly ActionAvailability[];
+  termsHash: Hex;
+  onConfirmed: () => Promise<void>;
+}) {
+  const [packId, setPackId] = useState(() => Math.max(0, snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply)));
+  const [quantity, setQuantity] = useState(1);
+  const [payment, setPayment] = useState<"usdc" | "eth">("usdc");
+  const [agreements, setAgreements] = useState({ terms: false, rules: false, age: false });
+  const [quote, setQuote] = useState<MembershipQuote | null>(null);
+  const [quoteState, setQuoteState] = useState<"idle" | "loading" | "error">("idle");
+  const [quoteError, setQuoteError] = useState("");
+  const quoteRequest = useRef(0);
+  const selected = snapshot.packs[packId];
+
+  useEffect(() => {
+    const version = ++quoteRequest.current;
+    setQuote(null);
+    setAgreements({ terms: false, rules: false, age: false });
+    if (!selected || !Number.isSafeInteger(quantity) || quantity < 1 || !selected.active || selected.sold >= selected.maxSupply || Number(snapshot.raffle.phase) !== 1) {
+      setQuoteState("idle");
+      return;
+    }
+    setQuoteState("loading");
+    setQuoteError("");
+    void browser.service.quoteMembership({ id: snapshot.id, packId, quantity }).then((next) => {
+      if (version === quoteRequest.current) { setQuote(next); setQuoteState("idle"); }
+    }).catch((error: unknown) => {
+      if (version === quoteRequest.current) { setQuoteError(error instanceof Error ? error.message : "A current quote is unavailable."); setQuoteState("error"); }
+    });
+    return () => { quoteRequest.current += 1; };
+  }, [browser.service, packId, quantity, selected, snapshot.id, snapshot.raffle.phase]);
+
+  const byKind = (kind: WorkflowAction["kind"]) => availability.find((item) => item.kind === kind);
+  const termsMatch = snapshot.policy.termsHash.toLowerCase() === termsHash.toLowerCase();
+  const allAgreed = agreements.terms && agreements.rules && agreements.age;
+  const needsApproval = quote !== null && account !== null && account.usdcAllowance < quote.totalUsdc;
+  const approval = byKind("approveUsdc");
+  const purchase = byKind("buyMembership");
+  const purchaseAction: WorkflowAction | null = quote && selected && allAgreed && termsMatch
+    ? {
+        kind: "buyMembership", id: snapshot.id, packId, quantity, acceptedTerms: termsHash,
+        agreements: { terms: true, rules: true, age: true },
+        payment: payment === "usdc" ? { kind: "usdc" } : quote.eth.kind === "available"
+          ? { kind: "eth", maxEth: quote.eth.maxEth, slippageBps: quote.eth.slippageBps, deadline: quote.eth.deadline }
+          : { kind: "usdc" }
+      }
+    : null;
+  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "abortDrawing", "settle"];
+  const nextRecovery = availability.find((item) => item.enabled && recoveryKinds.includes(item.kind));
+
+  return (
+    <div className="stack buyer-flow">
+      {Number(snapshot.raffle.phase) === 1 ? (
+        <>
+          <section className="pack-selector" aria-labelledby="pack-title">
+            <div className="console-section-heading"><h2 id="pack-title">Choose membership</h2><span>Bonus entries included</span></div>
+            <div className="chain-pack-grid" role="radiogroup" aria-label="Membership packs">
+              {snapshot.packs.map((pack, index) => {
+                const remaining = Math.max(0, Number(pack.maxSupply) - Number(pack.sold));
+                return <label className="chain-pack" data-selected={index === packId} data-disabled={!pack.active || remaining === 0} key={`${index}-${pack.name}`}><input type="radio" name="pack" value={index} checked={index === packId} disabled={!pack.active || remaining === 0} onChange={() => setPackId(index)} /><strong>{pack.name}</strong><span>{formatUsdc(pack.priceUsdc)} USDC</span><small>{pack.bonusEntries} bonus entries · {remaining} left</small></label>;
+              })}
+            </div>
+          </section>
+          <section className="order-panel" aria-labelledby="order-title">
+            <div className="quantity-control"><label htmlFor="membership-qty"><span id="order-title">Quantity</span><input id="membership-qty" inputMode="numeric" type="number" min={1} step={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></label><span>Validated against live supply</span></div>
+            <div className="order-total" aria-live="polite"><span>Total</span><strong>{quote ? formatUsdc(quote.totalUsdc) : "—"} <small>USDC</small></strong>{quote ? <p>{formatUsdc(quote.principal)} membership + {formatUsdc(quote.fee)} lab fee · {quote.bonusEntries.toString()} bonus entries</p> : <p>{quoteState === "loading" ? "Refreshing quote…" : "Choose an available membership."}</p>}</div>
+          </section>
+          {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
+          {quote?.eth.kind === "available" ? <fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset> : <p className="muted">ETH payment unavailable{quote?.eth.kind === "unavailable" ? `: ${quote.eth.reason}` : "."}</p>}
+          {!termsMatch ? <p className="notice error" role="alert">The raffle’s published terms do not match this website version. Purchasing is blocked.</p> : (
+            <fieldset className="agreements stack"><legend>Confirm before purchase</legend><label><input type="checkbox" checked={agreements.terms} onChange={(event) => setAgreements((value) => ({ ...value, terms: event.target.checked }))} /> I agree to the <Link href="/legal">membership terms</Link>.</label><label><input type="checkbox" checked={agreements.rules} onChange={(event) => setAgreements((value) => ({ ...value, rules: event.target.checked }))} /> I agree to the <Link href="/rules">draw rules</Link>.</label><label><input type="checkbox" checked={agreements.age} onChange={(event) => setAgreements((value) => ({ ...value, age: event.target.checked }))} /> I confirm I am at least 18.</label></fieldset>
+          )}
+          <WalletGate wallet={browser.wallet}>
+            {!account ? <p className="notice" role="status">Loading balance and allowance…</p> : needsApproval && payment === "usdc" ? (
+              approval?.enabled && quote ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label="Approve exact USDC" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
+            ) : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /> : <p className="notice warning" role="status">{!allAgreed ? "Review and accept all three confirmations to continue." : purchase?.reason || "Purchase is not available."}</p>}
+          </WalletGate>
+        </>
+      ) : <p className="notice" role="status">Membership sales are {phaseLabel(Number(snapshot.raffle.phase)).toLowerCase()}.</p>}
+      {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable balance</span><strong>{formatUsdc(account.principal + account.fee)} USDC</strong><small>Membership price and lab fee are claimable only when contract state allows a refund.</small></div> : null}
+      {nextRecovery ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: nextRecovery.kind as "claimPrize" | "refund" | "abortDrawing" | "settle", id: snapshot.id }} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section> : null}
+    </div>
+  );
+}
+
+function SellerActions({ browser, snapshot, account, availability, onConfirmed }: {
+  browser: Extract<BrowserService, { kind: "configured" }>;
+  snapshot: RaffleSnapshot;
+  account: AccountRaffleState | null;
+  availability: readonly ActionAvailability[];
+  onConfirmed: () => Promise<void>;
+}) {
+  const priority: WorkflowAction["kind"][] = ["approvePrize", "escrow", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimProceeds", "reclaimPrize", "cancel"];
+  const next = priority.map((kind) => availability.find((item) => item.kind === kind)).find((item) => item?.enabled);
+
+  if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
+  if (!next) return <p className="notice" role="status">No seller action is currently available. Refresh after the deadline or a pending transaction confirms.</p>;
+  if (next.kind === "open") return <p className="notice warning" role="status">Opening requires a fresh policy review from Studio.</p>;
+  if (next.kind === "reveal") return <p className="notice warning" role="status">Reveal requires the saved private commitment. Recover it from Studio before continuing.</p>;
+  const action: WorkflowAction = next.kind === "snapshot"
+    ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
+    : { kind: next.kind as "approvePrize" | "escrow" | "close" | "requestRandomness" | "settle" | "claimProceeds" | "reclaimPrize" | "cancel", id: snapshot.id };
+  return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{next.label}</h2><p>{next.reason}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} label={next.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section>;
+}

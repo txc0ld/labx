@@ -1101,6 +1101,48 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
   .partner-pass:hover .seatmap-cabin,.partner-pass:focus-within .seatmap-cabin { transform:perspective(400px) rotateY(0) rotateZ(0) translateY(-.4rem); }
   .partner-pass-link:hover>span[aria-hidden] { transform:translate(2px,-2px); }
 }
+
+/* Verified raffle workflow */
+.chain-capsule-art,.chain-art-placeholder { display:grid; place-content:center; justify-items:center; gap:.55rem; aspect-ratio:1; border:1px solid var(--line-dark); border-radius:18px; background:var(--lavender); color:var(--ink); text-align:center; box-shadow:inset 0 2px 2px rgba(255,255,255,.58),inset 0 -8px 14px rgba(49,25,81,.12),0 12px 30px -24px rgba(34,24,48,.48); }
+.chain-capsule-art>span,.chain-art-placeholder>span { font-family:var(--font-heading),monospace; font-size:clamp(2rem,6vw,5rem); line-height:1; }
+.chain-capsule-art small,.chain-art-placeholder small { font-variant-numeric:tabular-nums; }
+.chain-capsule .capsule-foot>span:first-child { max-width:68%; }
+.chain-piece-visual { position:sticky; top:6.5rem; align-self:start; }
+.chain-art-placeholder { width:100%; min-height:20rem; padding:2rem; }
+.chain-art-placeholder p { margin:0; font-size:.8rem; }
+.wallet-identity { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem .75rem; width:fit-content; margin:0; padding:.45rem .7rem; border:1px solid var(--line-dark); border-radius:999px; background:var(--paper); font-size:.7rem; }
+.wallet-identity strong { font-variant-numeric:tabular-nums; }
+.workflow-gate { align-items:start; }
+.workflow-gate h3,.workflow-gate p { margin:0; }
+.chain-pack-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.7rem; }
+.chain-pack { position:relative; display:grid; gap:.35rem; min-width:0; min-height:9rem; padding:1rem; border:1px solid var(--line-dark); border-radius:20px; background:var(--paper); box-shadow:inset 0 2px 2px rgba(255,255,255,.85),inset 0 -5px 8px rgba(34,24,48,.08),0 8px 18px -16px rgba(34,24,48,.4); cursor:pointer; }
+.chain-pack[data-selected="true"] { background:var(--lavender); border-color:var(--ink); }
+.chain-pack[data-disabled="true"] { color:var(--charcoal); cursor:not-allowed; opacity:.68; }
+.chain-pack input { position:absolute; inset:.85rem .85rem auto auto; width:1.1rem; height:1.1rem; }
+.chain-pack strong { max-width:calc(100% - 1.7rem); font-size:1.15rem; overflow-wrap:anywhere; }
+.chain-pack>span { margin-top:auto; font-size:1.1rem; font-weight:700; font-variant-numeric:tabular-nums; }
+.chain-pack small { color:var(--charcoal); }
+.payment-choice { display:flex; flex-wrap:wrap; gap:.55rem 1.25rem; margin:0; padding:.8rem 0; border:0; border-block:1px solid var(--line); }
+.payment-choice legend { padding:0 .65rem 0 0; font-weight:700; }
+.payment-choice label { display:flex; flex-direction:row; align-items:center; gap:.45rem; }
+.transaction-review,.transaction-state,.workflow-next { padding:1rem; border:1px solid var(--line-dark); border-radius:18px; background:rgba(250,249,246,.86); }
+.transaction-review h3,.transaction-review p,.transaction-state p,.workflow-next h2,.workflow-next p { margin:0; }
+.transaction-review details,.workflow-details { font-size:.78rem; }
+.transaction-review summary,.workflow-details summary { min-height:44px; display:flex; align-items:center; cursor:pointer; font-weight:650; }
+.transaction-review .hash,.workflow-details .hash { word-break:break-all; }
+.workflow-next { align-items:start; }
+.account-balance { display:grid; gap:.25rem; padding:.9rem 0; border-block:1px solid var(--line); }
+.account-balance strong { font-size:1.5rem; font-variant-numeric:tabular-nums; }
+.account-balance small { color:var(--charcoal); }
+.load-more { justify-self:center; }
+@media (max-width:760px) {
+  .chain-piece-visual { position:static; }
+}
+@media (max-width:520px) {
+  .chain-pack-grid { grid-template-columns:1fr; }
+  .chain-capsule .capsule-foot { display:grid; }
+  .chain-capsule .capsule-foot>span:first-child { max-width:none; }
+}
 @media (max-width:420px) { .partner-pass-face { min-height:21rem; } .fantom-orbit { width:11rem; inset-inline-end:-3.5rem; top:6rem; } .fantom-spark { font-size:5rem; inset-inline-end:.25rem; top:6.5rem; } .seatmap-cabin { width:6.5rem; inset-inline-end:.5rem; top:6.75rem; gap:.4rem; } .partner-pass-value { margin-top:3.5rem; } .partner-pass-value strong { font-size:5rem; } }
 @media (prefers-reduced-motion:reduce) { .partner-pass *, .partner-pass *::after { transition:none!important; } .partner-pass-link:active { transform:none; } }
 
