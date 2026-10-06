@@ -75,7 +75,7 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
       <button
         ref={ref}
         className={[
-          "group/btn bd-root disabled:pointer-events-none disabled:opacity-50 relative inline-flex h-11 w-36 rounded-[12px] overflow-hidden transition-transform active:scale-[0.97]",
+          "group/btn bd-root disabled:pointer-events-none disabled:opacity-50 relative inline-flex min-h-11 w-36 rounded-[12px] overflow-hidden transition-transform active:scale-[0.97]",
           className,
         ].filter(Boolean).join(" ")}
         style={{
@@ -106,7 +106,7 @@ const BookDemoButton = React.forwardRef<HTMLButtonElement, BookDemoButtonProps>(
           }
         `}</style>
 
-        <span className="absolute inset-y-0 right-4 flex items-center text-white font-medium text-[14px] tracking-tight transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/btn:translate-x-2 group-hover/btn:opacity-0 group-focus-visible/btn:translate-x-2 group-focus-visible/btn:opacity-0 motion-reduce:transition-none">
+        <span className="relative ml-14 mr-4 flex min-w-0 flex-1 items-center justify-center py-2 text-center text-white font-medium text-[14px] leading-tight break-words tracking-tight transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/btn:translate-x-2 group-hover/btn:opacity-0 group-focus-visible/btn:translate-x-2 group-focus-visible/btn:opacity-0 motion-reduce:transition-none">
           {children || "Continue"}
         </span>
 
