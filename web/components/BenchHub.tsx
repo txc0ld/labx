@@ -3,7 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { LAB_FEE, type Piece } from "@/lib/seed";
+import type { Piece } from "@/lib/seed";
+import { BUYER_FEE_BPS } from "@/lib/chain/fees";
 import { pieceView } from "@/lib/piece-view";
 import { useBenchTime } from "@/lib/use-bench-time";
 import { ResolvedTitle } from "./ResolvedTitle";
@@ -82,7 +83,7 @@ function Capsule({ piece, now }: { piece: Piece; now: number }) {
             <div><h3>{piece.title}</h3><p className="capsule-artist">{piece.artist}</p></div>
             <span className={`capsule-status ${view.isOpen ? "is-open" : ""}`}>{view.status}</span>
           </div>
-          <p className="capsule-price">{entrySummary} · +{LAB_FEE} USDC fee</p>
+          <p className="capsule-price">{entrySummary} · +{BUYER_FEE_BPS / 100}% purchase fee</p>
           <div className="capsule-foot"><span>{view.timing}</span><span className="capsule-open" aria-hidden="true">View piece ↗</span></div>
         </div>
       </Link>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { JourneyOverview } from "@/components/JourneyOverview";
-import { LAB_FEE } from "@/lib/seed";
+import { BUYER_FEE_BPS, SELLER_FEE_BPS } from "@/lib/chain/fees";
 
 export const metadata: Metadata = {
   title: "How LABx works",
@@ -14,7 +14,7 @@ export default function GuidePage() {
       <header className="guide-header">
         <h1 className="page-title">How it works.</h1>
         <p className="guide-intro">Find a piece. Choose a pack. Follow the draw.</p>
-        <p className="guide-availability"><span>Sepolia test network</span>Every listing and action requires a reviewed v2 deployment.</p>
+        <p className="guide-availability"><span>Sepolia test network</span>Every listing and action requires an approved deployment.</p>
       </header>
 
       <div className="guide-grid">
@@ -38,12 +38,13 @@ export default function GuidePage() {
           <h2>Pick your pack.</h2>
           <p>Compare the USDC price, bonus entries and remaining supply.</p>
           <dl className="guide-facts">
-            <div><dt>Lab fee / pack</dt><dd>+{LAB_FEE} <small>USDC</small></dd></div>
+            <div><dt>Purchase fee</dt><dd>+{BUYER_FEE_BPS / 100}<small>%</small></dd></div>
             <div><dt>Quantity</dt><dd>Live <small>contract limit</small></dd></div>
           </dl>
           <details className="guide-details">
             <summary>Pricing details</summary>
-            <p>A {LAB_FEE} USDC lab fee is added to each pack’s price. The current contract validates quantity and remaining supply again before the wallet request.</p>
+            <p>The new contract version adds a {BUYER_FEE_BPS / 100}% fee to the membership subtotal. The contract validates quantity and remaining supply again before the wallet request. Each purchase fee rounds down to the nearest 0.000001 USDC.</p>
+            <p>If a raffle is cancelled, you can claim the membership price and the purchase fee you paid. Historical contracts keep their original fees.</p>
           </details>
           <Link className="guide-action" href="/fairness">Read about fairness <span aria-hidden="true">↗</span></Link>
         </article>
@@ -80,8 +81,8 @@ export default function GuidePage() {
         <details className="guide-details guide-workflow-details">
           <summary>Settlement &amp; website availability</summary>
           <div className="guide-detail-body">
-            <p>Studio prepares the piece, escrow and private commitment before packs open. After the draw and reveal, settlement enables separate prize, proceeds and fee claims.</p>
-            <p>The website enables each step only when a reviewed v2 deployment, the connected wallet and current contract phase allow it. A transaction is complete only after confirmation.</p>
+            <p>Studio prepares the piece, escrow and private commitment before packs open. After the draw and reveal, settlement enables separate prize, proceeds and fee claims. The new contract version deducts a {SELLER_FEE_BPS / 100}% seller fee from total membership revenue at settlement, rounded down to the nearest 0.000001 USDC. This is separate from the buyer’s purchase fee. No seller fee applies to a cancelled raffle.</p>
+            <p>The website enables each step only when an approved deployment, the connected wallet and current contract phase allow it. A transaction is complete only after confirmation.</p>
             <div className="guide-links"><Link href="/seller">Open Studio</Link><Link href="/profile">View profile</Link><Link href="/fairness">Inspect fairness</Link></div>
           </div>
         </details>

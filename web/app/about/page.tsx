@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalNav } from "@/components/LegalNav";
 import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
+import { BUYER_FEE_BPS, SELLER_FEE_BPS } from "@/lib/chain/fees";
 
 export const metadata: Metadata = {
   title: "About",
@@ -24,7 +25,8 @@ export default function AboutPage() {
         </article>
         <article className="pearl pad stack">
           <h2>The bench</h2>
-          <p>What is sold is a membership pack for a single piece. The ladder is Entry through Platinum. Each pack publishes its USDC price, bonus-entry count, remaining supply, and the 5 USDC lab fee.</p>
+          <p>What is sold is a membership pack for a single piece. The ladder is Entry through Platinum. Each pack publishes its USDC price, bonus-entry count and remaining supply.</p>
+          <p>The new contract version adds a {BUYER_FEE_BPS / 100}% purchase fee and deducts a separate {SELLER_FEE_BPS / 100}% seller fee at settlement. Cancelled raffles return the membership price and purchase fee to buyers. Historical contracts keep their original fees.</p>
           <p>Public pages do not publish a private commitment. They show the outer hash, the escrow lamp, and the draw phase.</p>
         </article>
         <article className="terminal pad stack">

@@ -34,5 +34,3 @@ export type Piece = {
   nft: string;
   tokenId: string;
 };
-
-export const LAB_FEE = 5;

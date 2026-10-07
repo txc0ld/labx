@@ -7,7 +7,6 @@ import { OnChainStatus } from "../components/OnChainStatus";
 import { ResolvedTitle } from "../components/ResolvedTitle";
 import { ScrollStory } from "../components/ScrollStory";
 import { SquishyPackCard } from "../components/ui/squishy-card-component";
-import { LAB_FEE } from "../lib/seed";
 import { raffleAddress, readRaffle } from "../lib/wallet";
 import { roundedOrtho } from "../lib/tubes";
 
@@ -120,9 +119,9 @@ describe("required marketing routes", () => {
     expect(read("app/legal/page.tsx")).toMatch(/MEMBERSHIP_TERMS/);
     expect(read("app/rules/page.tsx")).toMatch(/DRAW_RULES/);
     expect(terms).toMatch(/winner claims the NFT/i);
-    expect(terms).toMatch(/seller claims membership proceeds/i);
-    expect(terms).toMatch(/treasury receives the lab fee/i);
-    expect(terms).toMatch(/buyer.*membership price and lab fee/i);
+    expect(terms).toMatch(/seller claims net membership proceeds/i);
+    expect(terms).toMatch(/treasury receives buyer fees and the seller commission/i);
+    expect(terms).toMatch(/buyer.*actual membership principal and buyer fees/i);
   });
 
   it("describes the lab and the Sepolia bench on About", () => {
@@ -398,7 +397,7 @@ describe("responsive chrome and legal surfaces", () => {
   it("renders each squishy pack choice as a native radio with real purchase data", () => {
     const markup = renderToStaticMarkup(createElement(SquishyPackCard, {
       pack: { name: "Entry", priceUsdc: 25, bonusEntries: 1, remaining: 80 },
-      feeUsdc: LAB_FEE,
+      feeUsdc: 0.5,
       selected: true,
       disabled: false,
       onSelect: () => undefined
@@ -411,7 +410,7 @@ describe("responsive chrome and legal surfaces", () => {
     expect(markup).toContain("25");
     expect(markup).toContain("USDC");
     expect(markup).toContain("1 bonus entry");
-    expect(markup).toContain(`+${LAB_FEE} USDC fee`);
+    expect(markup).toContain("+0.5 USDC fee");
     expect(markup).toContain("80 remaining");
     expect(markup).toContain('aria-hidden="true"');
   });
@@ -419,7 +418,7 @@ describe("responsive chrome and legal surfaces", () => {
   it("marks unavailable squishy packs as disabled and sold out", () => {
     const markup = renderToStaticMarkup(createElement(SquishyPackCard, {
       pack: { name: "Gold", priceUsdc: 250, bonusEntries: 40, remaining: 0 },
-      feeUsdc: LAB_FEE,
+      feeUsdc: 5,
       selected: false,
       disabled: true,
       onSelect: () => undefined
@@ -433,9 +432,11 @@ describe("responsive chrome and legal surfaces", () => {
 
   it("publishes a complete verified-flow and membership guide", () => {
     const guide = read("app/guide/page.tsx");
-    expect(guide).toMatch(/requires a reviewed v2 deployment/i);
-    expect(guide).toMatch(/enables each step only when a reviewed v2 deployment/i);
-    expect(guide).toMatch(/LAB_FEE/);
+    expect(guide).toMatch(/requires an approved deployment/i);
+    expect(guide).toMatch(/enables each step only when an approved deployment/i);
+    expect(guide).toMatch(/BUYER_FEE_BPS/);
+    expect(guide).toMatch(/SELLER_FEE_BPS/);
+    expect(guide).toMatch(/Historical contracts keep their original fees/);
     expect(guide).toMatch(/validates quantity and remaining supply/i);
     expect(guide).toMatch(/12-month bonus-entry expiry/);
     expect(guide).toMatch(/verified contract workflow/i);

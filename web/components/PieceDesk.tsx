@@ -6,7 +6,10 @@ import { useState } from "react";
 import BookDemoButton from "./pixel-perfect/book-demo-button";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { useBench } from "@/lib/bench";
-import { LAB_FEE, type PackName } from "@/lib/seed";
+import type { PackName } from "@/lib/seed";
+import { formatUnits, parseUnits } from "viem";
+import { buyerFee, BUYER_FEE_BPS } from "@/lib/chain/fees";
+import { formatUsdc } from "@/components/workflow/format";
 import { closingDate, pieceView } from "@/lib/piece-view";
 import { useBenchTime } from "@/lib/use-bench-time";
 import SquishyPackCard from "@/components/ui/squishy-card-component";
@@ -34,7 +37,9 @@ export function PieceDesk({ id }: { id: string }) {
   }
 
   const selected = piece.packs.find((item) => item.name === pack);
-  const total = selected ? selected.priceUsdc * qty + LAB_FEE * qty : 0;
+  const principal = selected ? parseUnits(String(selected.priceUsdc), 6) * BigInt(qty) : 0n;
+  const fee = buyerFee(principal, BUYER_FEE_BPS);
+  const total = principal + fee;
   const entries = selected ? selected.bonusEntries * qty : 0;
   const view = pieceView(piece, now);
 
@@ -57,7 +62,7 @@ export function PieceDesk({ id }: { id: string }) {
           <section className="pack-selector" aria-labelledby="pack-title">
             <div className="console-section-heading"><div><h2 id="pack-title">Pick your pack</h2></div><span>Choose one</span></div>
             <div className="pack-keys" role="radiogroup" aria-label="Membership packs">
-              {piece.packs.map((item) => <SquishyPackCard key={item.name} pack={item} feeUsdc={LAB_FEE} selected={item.name === pack} disabled onSelect={setPack} />)}
+              {piece.packs.map((item) => <SquishyPackCard key={item.name} pack={item} feeUsdc={Number(formatUnits(buyerFee(parseUnits(String(item.priceUsdc), 6), BUYER_FEE_BPS), 6))} selected={item.name === pack} disabled onSelect={setPack} />)}
             </div>
           </section>
           <section className="order-panel" aria-labelledby="order-title">
@@ -65,7 +70,7 @@ export function PieceDesk({ id }: { id: string }) {
               <label htmlFor="qty"><span id="order-title">Quantity</span><input id="qty" type="number" min={1} max={5} value={qty} onChange={(event) => setQty(Number(event.target.value))} disabled /></label>
               <span>1–5 packs</span>
             </div>
-            <div className="order-total" aria-live="polite"><span>Total</span><strong>{total} <small>USDC</small></strong><p>Includes {LAB_FEE * qty} USDC fee · {entries} bonus {entries === 1 ? "entry" : "entries"}</p></div>
+            <div className="order-total" aria-live="polite"><span>Total</span><strong>{formatUsdc(total)} <small>USDC</small></strong><p>Includes {formatUsdc(fee)} USDC purchase fee · {entries} bonus {entries === 1 ? "entry" : "entries"}</p></div>
           </section>
           <OnChainStatus surface="piece" compact />
           <footer className="purchase-actions">

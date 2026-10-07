@@ -81,8 +81,8 @@ describe("agreements", () => {
 
 describe("receipt", () => {
   it("states the lab fee and expiry", () => {
-    const body = receiptBody({ to: "a@labx.art", piece: "Junction Array", pack: "Entry", entries: 1, priceUsdc: 25, feeUsdc: 5 });
-    expect(body.text).toContain("5 USDC");
+    const body = receiptBody({ to: "a@labx.art", piece: "Junction Array", pack: "Entry", entries: 1, priceUsdc: 25, feeUsdc: 0.5 });
+    expect(body.text).toContain("0.5 USDC");
     expect(body.text).toContain("12 months");
     expect(body.text.toLowerCase()).not.toMatch(/\btickets?\b/);
   });
