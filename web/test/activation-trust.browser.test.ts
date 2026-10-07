@@ -161,18 +161,22 @@ run("activation drift beside browser recovery", () => {
     await c.write(c.usdc, "mint", [c.stranger, 100_000_000n]);
     await c.write(c.usdc, "approve", [c.raffle.address, 27_500_000n], c.stranger);
     const cancellationHash = hash(await c.rpc("eth_sendTransaction", [{ from: c.stranger, to: c.stranger, value: "0x0", data: "0x", gas: "0x5208" }]));
+    const cancellationReceipt = await c.client.waitForTransactionReceipt({ hash: cancellationHash });
     await c.mine();
+    expect(await c.client.getBlockNumber({ cacheTime: 0 })).toBeGreaterThanOrEqual(cancellationReceipt.blockNumber + 1n);
     const cancelled = await c.client.getTransaction({ hash: cancellationHash });
     const key = `labx:pending:v1:${c.manifest.chainId}:${c.manifest.address.toLowerCase()}:${c.manifest.runtimeCodeHash.toLowerCase()}:${c.stranger.toLowerCase()}`;
-    const oldJournal = { id: "delayed-empty-journal", intentHash: transactionIntent({ to: c.stranger, data: "0x", value: 0n }), nonce: cancelled.nonce, startedBlock: (await c.client.getBlockNumber()).toString(), hash: cancellationHash };
+    const oldJournal = { id: "delayed-empty-journal", intentHash: transactionIntent({ to: c.stranger, data: "0x", value: 0n }), nonce: cancelled.nonce, startedBlock: cancellationReceipt.blockNumber.toString(), hash: cancellationHash };
     const newerHash = keccak256("0x9999");
     const newerJournal = JSON.stringify({ ...oldJournal, id: "newer-wallet-activity", nonce: cancelled.nonce + 1, hash: newerHash });
-    await visit("/piece/2", c.stranger);
     const outcomeKey = `labx:outcome:v1:${c.manifest.chainId}:${c.manifest.address.toLowerCase()}:${c.manifest.runtimeCodeHash.toLowerCase()}:${c.stranger.toLowerCase()}:${cancellationHash}`;
-    await fixture.page.evaluate(({ key, txHash }) => {
-      localStorage.setItem(key, txHash);
-      window.dispatchEvent(new StorageEvent("storage", { key, newValue: txHash, storageArea: localStorage }));
-    }, { key: outcomeKey, txHash: cancellationHash });
+    await fixture.page.addInitScript(({ key, txHash }) => localStorage.setItem(key, txHash), { key: outcomeKey, txHash: cancellationHash });
+    await visit("/piece/2", c.stranger);
+    const identity = fixture.page.locator(".wallet-identity", { hasText: `${c.stranger.slice(0, 6)}…${c.stranger.slice(-4)}` });
+    const connect = fixture.page.getByRole("button", { name: "Browser wallet", exact: true });
+    await expect.poll(async () => await identity.isVisible() || await connect.isVisible(), { timeout: 15_000 }).toBe(true);
+    if (await connect.isVisible()) await connect.click();
+    await identity.waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: cancellationHash }).getByText("Transaction confirmed", { exact: true }).waitFor({ timeout: 15_000 });
     await fixture.page.waitForLoadState("networkidle");
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key, value: JSON.stringify(oldJournal) });
