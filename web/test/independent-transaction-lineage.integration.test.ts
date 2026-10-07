@@ -161,14 +161,17 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     const fixture = await replacementFixture(storage);
     const entered = deferred();
     const release = deferred();
+    let firstH1Read = true;
     const delayedClient = {
       ...chain.client,
       async getTransaction(input: Parameters<typeof chain.client.getTransaction>[0]) {
-        entered.resolve();
-        await release.promise;
-        return input.hash?.toLowerCase() === fixture.h1.toLowerCase()
-          ? fixture.h1Transaction
-          : chain.client.getTransaction(input);
+        if (firstH1Read && input.hash?.toLowerCase() === fixture.h1.toLowerCase()) {
+          firstH1Read = false;
+          entered.resolve();
+          await release.promise;
+          return fixture.h1Transaction;
+        }
+        return chain.client.getTransaction(input);
       }
     } as typeof chain.client;
     const delayedService = createRaffleService(delayedClient, chain.manifest, fixture.journal);
@@ -203,14 +206,30 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     const fixture = await replacementFixture(storage);
     const entered = deferred();
     const release = deferred();
-    let delayedH1 = true;
+    let h1Inspections = 0;
     const cold = createTransactionOutcomes({
       ...fixture.service,
       async inspectOutcome(input: Parameters<RaffleService["inspectOutcome"]>[0]) {
-        if (delayedH1 && input.hash.toLowerCase() === fixture.h1.toLowerCase()) {
-          delayedH1 = false;
-          entered.resolve();
-          await release.promise;
+        if (input.hash.toLowerCase() === fixture.h1.toLowerCase()) {
+          h1Inspections += 1;
+          if (h1Inspections === 1) return {
+            kind: "pending" as const,
+            hash: fixture.h1,
+            reason: "unmined" as const,
+            transaction: {
+              hash: fixture.h1,
+              account: fixture.h1Transaction.from,
+              chainId: chain.manifest.chainId,
+              to: fixture.h1Transaction.to,
+              data: fixture.h1Transaction.input,
+              value: fixture.h1Transaction.value,
+              nonce: fixture.h1Transaction.nonce
+            }
+          };
+          if (h1Inspections === 2) {
+            entered.resolve();
+            await release.promise;
+          }
         }
         return fixture.service.inspectOutcome(input);
       }
@@ -230,6 +249,12 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
     const stop = cold.observe(chain.buyer);
     try {
+      await expect.poll(() => cold.getSnapshot(chain.buyer), { timeout: 5_000 }).toMatchObject([
+        { kind: "unverified", hash: fixture.h1 }
+      ]);
+      const h1Entry = [...map.entries()].find(([, value]) => includesHash(value, fixture.h1));
+      if (!h1Entry) throw new Error("H1 was not available for the second cold inspection.");
+      for (const listener of listeners.get("storage") ?? []) listener({ key: h1Entry[0], newValue: h1Entry[1], storageArea: storage });
       await entered.promise;
       const canonical = await fixture.tabB.resume(fixture.h2, fixture.wallet);
       expect(canonical).toMatchObject({ kind: "terminal", submitted: { hash: fixture.h2 } });
@@ -238,6 +263,7 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
       for (const listener of listeners.get("storage") ?? []) listener({ key: entry[0], newValue: entry[1], storageArea: storage });
       await fixture.tabB.acknowledge(canonical, fixture.wallet);
       expect(map.size).toBe(0);
+      for (const listener of listeners.get("storage") ?? []) listener({ key: entry[0], newValue: null, storageArea: storage });
 
       release.resolve();
       await expect.poll(() => cold.getSnapshot(chain.buyer), { timeout: 10_000 }).toMatchObject([
