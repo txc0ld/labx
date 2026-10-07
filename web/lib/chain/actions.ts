@@ -37,6 +37,18 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
         if (!sameAddress(owner, session.account) && !(state.raffle.escrowed && sameAddress(owner, manifest.address) && sameAddress(draft.nft, state.raffle.nft) && draft.tokenId === state.raffle.tokenId)) throw new Error("This NFT is not owned or escrowed by the seller.");
         data = encodeFunctionData({ abi: raffleAbi, functionName: "updateDraft", args: [action.id, draft.nft, draft.tokenId, draft.salesEnd, draft.reserveNonce, draft.reserveCommit, draft.title, draft.packs] });
       }
+    } else if (action.kind === "approveRaffle" || action.kind === "revokeRaffleApproval") {
+      const review = await reader.readAdmission({ id: action.id, block: at });
+      const { snapshot } = review;
+      if (!sameAddress(snapshot.owner, session.account) || snapshot.raffle.phase !== 0) throw new Error("Only the current owner can review a draft.");
+      if (hash(action.expectedReviewHash) !== snapshot.admission.reviewHash) throw new Error("Draft review changed. Review it again.");
+      if (action.kind === "approveRaffle") {
+        if (action.attestations?.canonicalProvenance !== true || action.attestations?.transferRestrictions !== true || action.attestations?.drawFunding !== true) throw new Error("Review canonical provenance, transfer restrictions and draw funding first.");
+        if (!snapshot.raffle.escrowed || review.custody.kind !== "held" || review.nftCodeHash === null || at.timestamp >= snapshot.raffle.salesEnd) throw new Error("Approval requires current NFT custody and a future closing time.");
+        requirePublishedTerms(review.policy.termsHash);
+      }
+      data = encodeFunctionData({ abi: raffleAbi, functionName: action.kind, args: [action.id, action.expectedReviewHash] });
+      title = action.kind === "approveRaffle" ? "Approve prize and draw funding" : "Revoke draft approval";
     } else {
       positiveId(action.id); const state = await reader.readAccount({ id: action.id, account: session.account, block: at });
       const snapshot = state.snapshot, r = snapshot.raffle;
@@ -47,7 +59,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
         const pack = snapshot.packs[action.packId];
         if (!pack.active || pack.maxSupply - pack.sold < action.quantity) throw new Error("The selected membership quantity is no longer available.");
         const principal = pack.priceUsdc * BigInt(action.quantity);
-        amountUsdc = principal + buyerFee(principal, snapshot.policy.buyerFeeBps);
+        amountUsdc = principal + buyerFee(principal, snapshot.policy.buyerFeeBps, snapshot.policy.minBuyerFeeUsdc);
         if (action.kind === "approveUsdc") {
           to = manifest.usdc; title = "Approve exact membership total";
           data = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [manifest.address, amountUsdc] });
@@ -84,7 +96,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
           case "claimPrize": recipient = r.winner; data = encodeFunctionData({ abi: raffleAbi, functionName: "claimPrize", args: [action.id] }); break;
           case "claimProceeds": recipient = r.seller; amountUsdc = r.principalEscrow; data = encodeFunctionData({ abi: raffleAbi, functionName: "claimProceeds", args: [action.id] }); break;
           case "claimFee": recipient = snapshot.policy.treasury; amountUsdc = r.feeEscrow; data = encodeFunctionData({ abi: raffleAbi, functionName: "claimFee", args: [action.id] }); break;
-          case "refund": recipient = session.account; amountUsdc = state.principal + state.fee; data = encodeFunctionData({ abi: raffleAbi, functionName: "refund", args: [action.id] }); break;
+          case "refund": recipient = session.account; amountUsdc = state.principal; data = encodeFunctionData({ abi: raffleAbi, functionName: "refund", args: [action.id] }); break;
           case "reclaimPrize": recipient = r.seller; data = encodeFunctionData({ abi: raffleAbi, functionName: "reclaimPrize", args: [action.id] }); break;
           case "escrow": case "close": case "requestRandomness": case "settle": case "cancel": case "abortDrawing": data = encodeFunctionData({ abi: raffleAbi, functionName: action.kind, args: [action.id] }); break;
           default: { const exhaustive: never = action; throw new Error(`Unsupported action: ${exhaustive}`); }

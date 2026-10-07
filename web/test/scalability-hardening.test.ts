@@ -109,7 +109,7 @@ function readerFixture(options: {
         requestConfirmations: 3,
         nativePayment: true,
         buyerFeeBps: 200,
-        sellerFeeBps: 200
+        sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n
       };
       case "lotCount": return 0n;
       case "paused": return false;
@@ -267,8 +267,9 @@ function snapshot(id: bigint): RaffleSnapshot {
     id,
     block: BLOCK,
     raffle: raffle(id),
+    admission: { status: "opened", reviewHash: null, record: { reviewRevision: 1n, approvedReviewHash: zeroHash, approvedBy: OWNER, approvedAtOpening: true } },
     packs: [],
-    policy: { treasury: OWNER, termsHash: zeroHash, coordinator: OWNER, keyHash: zeroHash, subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3, nativePayment: true, buyerFeeBps: 200, sellerFeeBps: 200 },
+    policy: { treasury: OWNER, termsHash: zeroHash, coordinator: OWNER, keyHash: zeroHash, subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3, nativePayment: true, buyerFeeBps: 200, sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n },
     lotCount: 0n,
     paused: false,
     owner: OWNER,

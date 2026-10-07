@@ -4,6 +4,27 @@ import type { raffleAbi } from "./abi";
 export type Raffle = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffle">;
 export type RaffleAccounting = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffleAccounting">;
 export type Pack = ContractFunctionReturnType<typeof raffleAbi, "view", "getPack">;
+export type RaffleAdmissionRecord = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffleAdmission">;
+export type AdmissionStatus =
+  | { status: "pending" | "changed" | "approved"; reviewHash: Hex; record: RaffleAdmissionRecord }
+  | { status: "opened" | "not-opened"; reviewHash: null; record: RaffleAdmissionRecord };
+export type OwnerReviewAttestations = { canonicalProvenance: true; transferRestrictions: true; drawFunding: true };
+export type OwnerAction =
+  | { kind: "approveRaffle"; id: bigint; expectedReviewHash: Hex; attestations: OwnerReviewAttestations }
+  | { kind: "revokeRaffleApproval"; id: bigint; expectedReviewHash: Hex };
+export type AdmissionReview = {
+  snapshot: RaffleSnapshot; policy: RafflePolicy; policyHash: Hex | null;
+  ownerGeneration: bigint; openingPolicyGeneration: bigint;
+  nftCodeHash: Hex | null;
+  custody: { kind: "held" | "not-held"; owner: Address } | { kind: "unknown" };
+};
+export type OwnerExecutionIntent = {
+  action: OwnerAction; chainId: number; from: Address; to: Address; value: 0n; data: Hex;
+  reviewBlock: BlockRef; ownerGeneration: bigint; openingPolicyGeneration: bigint; reviewRevision: bigint;
+};
+export type OwnerExecutionConfirmation =
+  | { kind: "pending"; hash: Hex }
+  | { kind: "executed"; hash: Hex; blockNumber: bigint; state: "approved" | "revoked" | "stale"; review: AdmissionReview };
 export type RafflePolicy = ContractFunctionReturnType<typeof raffleAbi, "view", "getRafflePolicy">;
 export type Lot = ContractFunctionReturnType<typeof raffleAbi, "view", "lotAt">;
 export type BlockRef = { number: bigint; hash: Hex; timestamp: bigint };
@@ -21,6 +42,7 @@ export type DeploymentStatus =
 export type RaffleSnapshot = {
   id: bigint; block: BlockRef; raffle: Raffle; packs: readonly Pack[]; policy: RafflePolicy;
   lotCount: bigint; paused: boolean; owner: Address; ethEnabled: boolean;
+  admission: AdmissionStatus;
   accounting: RaffleAccounting; drawStartGrace: bigint; randomnessGrace: bigint; revealGrace: bigint;
 };
 export type Page<T, Cursor = bigint> = { items: readonly T[]; nextCursor: Cursor | null; block: BlockRef };
@@ -38,6 +60,7 @@ export type DraftInput = {
   packs: readonly { name: string; priceUsdc: bigint; bonusEntries: number; maxSupply: number }[];
 };
 export type WorkflowAction =
+  | OwnerAction
   | { kind: "createDraft"; draft: DraftInput }
   | { kind: "updateDraft"; id: bigint; draft: DraftInput }
   | { kind: "approvePrize" | "escrow" | "close" | "requestRandomness" | "settle" | "claimPrize" | "claimProceeds" | "claimFee" | "cancel" | "abortDrawing" | "reclaimPrize" | "refund"; id: bigint }

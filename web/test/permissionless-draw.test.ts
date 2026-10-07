@@ -12,9 +12,10 @@ function fixture(): AccountRaffleState {
       reserveNonce: zeroHash, reserveCommit: zeroHash, publicHash: zeroHash, lotCursor: 2n, snapshotTotal: 2n,
       principalEscrow: 2_000_000n, feeEscrow: 40_000n, vrfRequestId: 0n, randomWord: 0n, winner: zeroAddress, packCount: 1, title: "Fixture"
     },
+    admission: { status: "opened", reviewHash: null, record: { reviewRevision: 1n, approvedReviewHash: zeroHash, approvedBy: zeroAddress, approvedAtOpening: true } },
     packs: [], policy: {
       treasury: zeroAddress, termsHash: zeroHash, coordinator: zeroAddress, keyHash: zeroHash,
-      subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3, nativePayment: true, buyerFeeBps: 200, sellerFeeBps: 200
+      subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3, nativePayment: true, buyerFeeBps: 200, sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n
     },
     lotCount: 2n, paused: false, owner: "0x3333333333333333333333333333333333333333", ethEnabled: false,
     accounting: { grossPrincipal: 2_000_000n, buyerFees: 40_000n }, drawStartGrace: 604800n, randomnessGrace: 604800n, revealGrace: 604800n

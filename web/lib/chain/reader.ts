@@ -1,10 +1,10 @@
-import { decodeEventLog, erc20Abi, erc721Abi, zeroAddress, type Address, type PublicClient } from "viem";
+import { decodeEventLog, erc20Abi, erc721Abi, keccak256, zeroAddress, zeroHash, type Address, type PublicClient } from "viem";
 import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
 import { buyerFee } from "./fees";
 import { requirePublishedTerms } from "../published-terms";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
-import type { AccountRaffleState, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
+import type { AccountRaffleState, AdmissionReview, AdmissionStatus, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
 import { CATALOG_PAGE_LIMIT } from "./types";
 import { boundedNumber, positiveId, sameAddress } from "./validation";
 
@@ -43,13 +43,18 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   }
   async function assembleRaffle(id: bigint, at: BlockRef, raffle: Raffle, globals: PageGlobals): Promise<RaffleSnapshot> {
     const base = baseAt(at);
-    const [policy, lotCount, accounting, packs] = await Promise.all([
+    const [policy, lotCount, accounting, packs, record, reviewHash] = await Promise.all([
       client.readContract({ ...base, functionName: "getRafflePolicy", args: [id] }),
       client.readContract({ ...base, functionName: "lotCount", args: [id] }),
       client.readContract({ ...base, functionName: "getRaffleAccounting", args: [id] }),
-      Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] })))
+      Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] }))),
+      client.readContract({ ...base, functionName: "getRaffleAdmission", args: [id] }),
+      raffle.phase === 0 ? client.readContract({ ...base, functionName: "draftReviewHash", args: [id] }) : Promise.resolve(null)
     ]);
-    return { id, block: at, raffle, packs, policy, lotCount, accounting, ...globals };
+    const admission: AdmissionStatus = reviewHash === null
+      ? { status: record.approvedAtOpening ? "opened" : "not-opened", reviewHash: null, record }
+      : { status: record.approvedReviewHash === zeroHash ? "pending" : record.approvedReviewHash === reviewHash && sameAddress(record.approvedBy, globals.owner) ? "approved" : "changed", reviewHash, record };
+    return { id, block: at, raffle, packs, policy, lotCount, accounting, admission, ...globals };
   }
   async function readRaffle({ id, block }: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot> {
     positiveId(id); const at = await checkedBlock(block);
@@ -71,14 +76,14 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     await checkedBlock(at);
     return artwork;
   }
-  async function paginateRaffles({ cursor = 1n, limit = 12, block, seller }: { cursor?: bigint; limit?: number; block?: BlockRef; seller?: Address } = {}): Promise<Page<RaffleSnapshot>> {
+  async function paginateRaffles({ cursor = 1n, limit = 12, block, seller, draftOnly = false }: { cursor?: bigint; limit?: number; block?: BlockRef; seller?: Address; draftOnly?: boolean } = {}): Promise<Page<RaffleSnapshot>> {
     positiveId(cursor); boundedNumber(limit, 1, CATALOG_PAGE_LIMIT); const at = await checkedBlock(block);
     const nextId = await client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "nextId", blockNumber: at.number });
     if (cursor > nextId) throw new Error("Catalog cursor is outside this block snapshot.");
     const end = cursor + BigInt(limit) < nextId ? cursor + BigInt(limit) : nextId;
     const ids: bigint[] = []; for (let id = cursor; id < end; id++) ids.push(id);
     const tuples = await Promise.all(ids.map(async id => ({ id, raffle: await readRaffleTuple(id, at) })));
-    const selected = seller === undefined ? tuples : tuples.filter(item => sameAddress(item.raffle.seller, seller));
+    const selected = tuples.filter(item => (seller === undefined || sameAddress(item.raffle.seller, seller)) && (!draftOnly || item.raffle.phase === 0));
     const items = selected.length === 0
       ? []
       : await readPageGlobals(at).then(globals => Promise.all(selected.map(item => assembleRaffle(item.id, at, item.raffle, globals))));
@@ -139,16 +144,35 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   }
   async function openingPolicy({ block }: { block?: BlockRef } = {}) {
     const at = await checkedBlock(block); const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number };
-    const [coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps, hash] = await Promise.all([
+    const [coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps, minBuyerFeeUsdc, hash] = await Promise.all([
       client.readContract({ ...base, functionName: "vrfCoordinator" }), client.readContract({ ...base, functionName: "treasury" }),
       client.readContract({ ...base, functionName: "termsHash" }), client.readContract({ ...base, functionName: "keyHash" }),
       client.readContract({ ...base, functionName: "subscriptionId" }), client.readContract({ ...base, functionName: "callbackGasLimit" }),
       client.readContract({ ...base, functionName: "requestConfirmations" }), client.readContract({ ...base, functionName: "nativePayment" }),
       client.readContract({ ...base, functionName: "BUYER_FEE_BPS" }),
       client.readContract({ ...base, functionName: "SELLER_FEE_BPS" }),
+      client.readContract({ ...base, functionName: "MIN_BUYER_FEE_USDC" }),
       client.readContract({ ...base, functionName: "openingPolicyHash" })
     ]);
-    return { policy: { coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps }, hash, block: at };
+    await checkedBlock(at);
+    return { policy: { coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps, minBuyerFeeUsdc }, hash, block: at };
+  }
+  async function listOwnerQueue(input: { cursor?: bigint; limit?: number; block?: BlockRef } = {}) {
+    return paginateRaffles({ ...input, limit: input.limit ?? CATALOG_PAGE_LIMIT, draftOnly: true });
+  }
+  async function readAdmission({ id, block }: { id: bigint; block?: BlockRef }): Promise<AdmissionReview> {
+    const snapshot = await readRaffle({ id, block }); const at = snapshot.block;
+    const [opening, ownerGeneration, openingPolicyGeneration, code, custodyOwner] = await Promise.all([
+      snapshot.raffle.phase === 0 ? openingPolicy({ block: at }) : Promise.resolve(null),
+      client.readContract({ ...baseAt(at), functionName: "ownerGeneration" }),
+      client.readContract({ ...baseAt(at), functionName: "openingPolicyGeneration" }),
+      client.getCode({ address: snapshot.raffle.nft, blockNumber: at.number }).catch(() => undefined),
+      client.readContract({ address: snapshot.raffle.nft, abi: erc721Abi, functionName: "ownerOf", args: [snapshot.raffle.tokenId], blockNumber: at.number }).catch(() => null)
+    ]);
+    await checkedBlock(at);
+    return { snapshot, policy: opening?.policy ?? snapshot.policy, policyHash: opening?.hash ?? null,
+      ownerGeneration, openingPolicyGeneration, nftCodeHash: code && code !== "0x" ? keccak256(code) : null,
+      custody: custodyOwner === null ? { kind: "unknown" } : { kind: sameAddress(custodyOwner, manifest.address) ? "held" : "not-held", owner: custodyOwner } };
   }
   async function quoteMembership({ id, packId, quantity, slippageBps = 100 }: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote> {
     const snapshot = await readRaffle({ id }); boundedNumber(packId, 0, snapshot.packs.length - 1); boundedNumber(quantity, 1, 20); boundedNumber(slippageBps, 0, 1000);
@@ -156,7 +180,7 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     requirePublishedTerms(snapshot.policy.termsHash);
     const pack = snapshot.packs[packId];
     if (!pack.active || pack.maxSupply - pack.sold < quantity) throw new Error("This membership quantity is unavailable.");
-    const principal = pack.priceUsdc * BigInt(quantity), fee = buyerFee(principal, snapshot.policy.buyerFeeBps), totalUsdc = principal + fee;
+    const principal = pack.priceUsdc * BigInt(quantity), fee = buyerFee(principal, snapshot.policy.buyerFeeBps, snapshot.policy.minBuyerFeeUsdc), totalUsdc = principal + fee;
     const basic = { principal, fee, totalUsdc, bonusEntries: BigInt(pack.bonusEntries) * BigInt(quantity), block: snapshot.block };
     if (!snapshot.ethEnabled) return { ...basic, eth: { kind: "unavailable", reason: "ETH payment is disabled for this deployment." } };
     try {
@@ -164,5 +188,5 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
       return { ...basic, eth: { kind: "available", requiredEth, maxEth: (requiredEth * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n, slippageBps, deadline: snapshot.block.timestamp + 300n } };
     } catch { return { ...basic, eth: { kind: "unavailable", reason: "A valid ETH price quote is currently unavailable." } }; }
   }
-  return { checkedBlock, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
+  return { checkedBlock, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
 }

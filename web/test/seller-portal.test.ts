@@ -55,6 +55,7 @@ function snapshot(input: {
       packCount: 1,
       title: `Raffle ${input.id}`
     },
+    admission: { status: "opened", reviewHash: null, record: { reviewRevision: 1n, approvedReviewHash: zeroHash, approvedBy: zeroAddress, approvedAtOpening: true } },
     packs: [],
     policy: {
       treasury: zeroAddress,
@@ -66,7 +67,7 @@ function snapshot(input: {
       requestConfirmations: 3,
       nativePayment: true,
       buyerFeeBps: 200,
-      sellerFeeBps: 200
+      sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n
     },
     accounting: {
       grossPrincipal: input.grossPrincipal ?? 0n,

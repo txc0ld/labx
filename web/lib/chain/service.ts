@@ -4,11 +4,12 @@ import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
+import { ownerExecutionConfirmer } from "./owner-execution";
 import { actionBuilder } from "./actions";
 import { MAX_MEMBERSHIP_TOTAL_USDC } from "./fees";
 import { hash, sameAddress } from "./validation";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { DeploymentManifest, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
+import type { DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
 function connected(wallet: WalletSessionPort, chainId: number) {
   const session = wallet.getSnapshot();
   if (session.kind !== "connected" || session.chainId !== chainId) throw new Error("Connect the approved test network before continuing.");
@@ -29,6 +30,19 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const prepared = { ...result, action: structuredClone(copy) };
     reviews.set(prepared, { action: copy, session, transaction: result, used: false }); return prepared;
   }
+  async function exportOwnerExecution({ prepared, wallet }: Parameters<RaffleService["exportOwnerExecution"]>[0]): Promise<OwnerExecutionIntent> {
+    const entry = reviews.get(prepared);
+    if (!entry || entry.used || (entry.action.kind !== "approveRaffle" && entry.action.kind !== "revokeRaffleApproval")) throw new Error("Review an owner approval action first.");
+    await wallet.assertCurrent(entry.session);
+    const fresh = await build(entry.action, entry.session);
+    if (!sameTransaction(fresh, entry.transaction)) throw new Error("Owner execution changed. Review again.");
+    const review = await reader.readAdmission({ id: entry.action.id, block: fresh.block });
+    await wallet.assertCurrent(entry.session);
+    entry.used = true;
+    return { action: structuredClone(entry.action), chainId: manifest.chainId, from: entry.session.account, to: manifest.address,
+      value: 0n, data: fresh.data, reviewBlock: fresh.block, ownerGeneration: review.ownerGeneration,
+      openingPolicyGeneration: review.openingPolicyGeneration, reviewRevision: review.snapshot.admission.record.reviewRevision };
+  }
   async function submit({ prepared, wallet }: Parameters<RaffleService["submit"]>[0]) {
     const entry = reviews.get(prepared);
     if (!entry || entry.used) throw new Error("This review is invalid or already submitted. Review again.");
@@ -41,6 +55,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await wallet.assertCurrent(entry.session);
       const fresh = await build(entry.action, entry.session);
       if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
+      if ((entry.action.kind === "approveRaffle" || entry.action.kind === "revokeRaffleApproval") && await client.getCode({ address: account }) !== undefined) throw new Error("Contract owners must export the reviewed payload for external execution and reconcile its execution hash.");
       const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
       await wallet.assertCurrent(entry.session);
       const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce }, async () => {
@@ -105,7 +120,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       // A replacement/cancellation may use different calldata. Only the exact unresolved nonce can reconcile it.
     } else if (sameAddress(target, manifest.address)) {
       const decoded = decodeFunctionData({ abi: raffleAbi, data: tx.input });
-      const allowed = new Set(["createRaffle", "updateDraft", "escrow", "openWithPolicy", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "cancel", "abortDrawing", "reclaimPrize", "refund", "buyPack", "buyPackWithEth"]);
+      const allowed = new Set(["createRaffle", "updateDraft", "approveRaffle", "revokeRaffleApproval", "escrow", "openWithPolicy", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "cancel", "abortDrawing", "reclaimPrize", "refund", "buyPack", "buyPackWithEth"]);
       if (!allowed.has(decoded.functionName) || decoded.functionName !== "buyPackWithEth" && tx.value !== 0n) throw new Error("This is not a supported LABx workflow transaction.");
     } else if (sameAddress(tx.to, manifest.usdc)) {
       const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.input });
@@ -136,5 +151,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, prepare, submit, confirm, resume };
+  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

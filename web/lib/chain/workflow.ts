@@ -12,7 +12,7 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     if (!r.escrowed) {
       add("approvePrize", "Approve NFT", seller && !!account?.nftOwner && sameAddress(account.nftOwner, r.seller) && !account.nftApproved, "The seller must own this NFT; an existing approval needs no repeat.");
       add("escrow", "Escrow NFT", seller && !!account?.nftApproved, "Approve the NFT before escrow.");
-    } else add("open", "Open memberships", seller && !snapshot.paused && now < r.salesEnd, "The seller can open before the closing time while admissions are enabled.");
+    } else add("open", "Open memberships", seller && snapshot.admission.status === "approved" && !snapshot.paused && now < r.salesEnd, "LABx must approve the current draft before the seller opens sales.");
     add("cancel", "Cancel draft", seller || operator, "Only the seller or operator can cancel a draft.");
   }
   if (r.phase === 1) {
@@ -34,7 +34,8 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     add("claimFee", "Send protocol fees", r.feeEscrow > 0n, "The protocol fees have already been claimed.");
   }
   if (r.phase === 6) {
-    add("refund", "Claim refund", !!account && account.principal + account.fee > 0n, "This wallet has no remaining refund.");
+    add("claimFee", "Send retained processing fees", r.feeEscrow > 0n, "The processing fees have already been claimed.");
+    add("refund", "Claim refund", !!account && account.principal > 0n, "This wallet has no remaining refund.");
     add("reclaimPrize", "Reclaim NFT", seller && r.escrowed, "Only the seller can reclaim an unclaimed NFT.");
   }
   return actions;

@@ -235,6 +235,19 @@ export const raffleAbi = [
   },
   {
     "type": "function",
+    "name": "MIN_BUYER_FEE_USDC",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MIN_CONFIRMATIONS",
     "inputs": [],
     "outputs": [
@@ -348,6 +361,24 @@ export const raffleAbi = [
     "type": "function",
     "name": "applyCoordinator",
     "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "approveRaffle",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expectedReviewHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -646,6 +677,25 @@ export const raffleAbi = [
   },
   {
     "type": "function",
+    "name": "draftReviewHash",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "escrow",
     "inputs": [
       {
@@ -932,6 +982,47 @@ export const raffleAbi = [
   },
   {
     "type": "function",
+    "name": "getRaffleAdmission",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct LabxRaffle.RaffleAdmission",
+        "components": [
+          {
+            "name": "reviewRevision",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "approvedReviewHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "approvedBy",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "approvedAtOpening",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getRafflePolicy",
     "inputs": [
       {
@@ -995,6 +1086,11 @@ export const raffleAbi = [
             "name": "sellerFeeBps",
             "type": "uint16",
             "internalType": "uint16"
+          },
+          {
+            "name": "minBuyerFeeUsdc",
+            "type": "uint256",
+            "internalType": "uint256"
           }
         ]
       }
@@ -1211,6 +1307,19 @@ export const raffleAbi = [
   },
   {
     "type": "function",
+    "name": "openingPolicyGeneration",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "openingPolicyHash",
     "inputs": [],
     "outputs": [
@@ -1231,6 +1340,19 @@ export const raffleAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ownerGeneration",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1495,6 +1617,24 @@ export const raffleAbi = [
       },
       {
         "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revokeRaffleApproval",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expectedReviewHash",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -2186,6 +2326,62 @@ export const raffleAbi = [
   },
   {
     "type": "event",
+    "name": "RaffleApprovalRevoked",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "approver",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "reviewHash",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "nextRevision",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaffleApproved",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "approver",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "reviewHash",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "RaffleCreated",
     "inputs": [
       {
@@ -2436,6 +2632,11 @@ export const raffleAbi = [
   },
   {
     "type": "error",
+    "name": "AdmissionRequired",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "BadConfig",
     "inputs": []
   },
@@ -2586,6 +2787,11 @@ export const raffleAbi = [
   },
   {
     "type": "error",
+    "name": "ReviewChanged",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "SafeERC20FailedOperation",
     "inputs": [
       {
@@ -2643,6 +2849,11 @@ export const raffleAbi = [
   {
     "type": "error",
     "name": "UsdcDecimals",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UsdcReceiptMismatch",
     "inputs": []
   },
   {

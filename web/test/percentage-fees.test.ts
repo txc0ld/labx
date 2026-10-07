@@ -16,7 +16,8 @@ function snapshot(phase: number, principalEscrow: bigint, feeEscrow: bigint): Ra
       randomWord: 0n, winner: zeroAddress, packCount: 1, title: "Fees" },
     packs: [], policy: { coordinator: zeroAddress, treasury: zeroAddress, termsHash: PUBLISHED_TERMS_HASH,
       keyHash: zeroHash, subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3,
-      nativePayment: false, buyerFeeBps: 200, sellerFeeBps: 200 },
+      nativePayment: false, buyerFeeBps: 200, sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n },
+    admission: { status: "opened", reviewHash: null, record: { reviewRevision: 1n, approvedReviewHash: zeroHash, approvedBy: zeroAddress, approvedAtOpening: true } },
     accounting: { grossPrincipal: 247n, buyerFees: 2n }, lotCount: 4n, paused: false, owner: zeroAddress,
     ethEnabled: false, drawStartGrace: 604800n, randomnessGrace: 604800n, revealGrace: 604800n
   };
@@ -28,15 +29,15 @@ describe("percentage fee arithmetic and seller accounting", () => {
     [50n, 1, 1n], [50n, 20, 20n], [51n, 1, 1n], [51n, 20, 20n],
     [1_000_000_000_000n, 20, 400_000_000_000n]
   ])("price %s and quantity %s round the transaction fee to %s", (price, quantity, fee) => {
-    expect(buyerFee(price * BigInt(quantity), BUYER_FEE_BPS)).toBe(fee);
+    expect(buyerFee(price * BigInt(quantity), BUYER_FEE_BPS, 2_500_000n)).toBe(fee);
   });
   it("keeps split-purchase fees separate and the maximum approval exact", () => {
-    expect(buyerFee(49n, 200) * 2n).toBe(0n);
-    expect(buyerFee(98n, 200)).toBe(1n);
-    expect(20_000_000_000_000n + buyerFee(20_000_000_000_000n, 200)).toBe(MAX_MEMBERSHIP_TOTAL_USDC);
+    expect(buyerFee(49n, 200, 2_500_000n) * 2n).toBe(0n);
+    expect(buyerFee(98n, 200, 2_500_000n)).toBe(1n);
+    expect(20_000_000_000_000n + buyerFee(20_000_000_000_000n, 200, 2_500_000n)).toBe(MAX_MEMBERSHIP_TOTAL_USDC);
     expect(SELLER_FEE_BPS).toBe(200);
-    expect(() => buyerFee(-1n, 200)).toThrow();
-    for (const bps of [-1, 0.5, NaN, Infinity, 65536]) expect(() => buyerFee(1n, bps)).toThrow();
+    expect(() => buyerFee(-1n, 200, 2_500_000n)).toThrow();
+    for (const bps of [-1, 0.5, NaN, Infinity, 65536]) expect(() => buyerFee(1n, bps, 2_500_000n)).toThrow();
   });
   it.each([1, 2, 3, 4])("does not book revenue during phase %s", phase => {
     expect(sellerAccounting(snapshot(phase, 247n, 2n))).toMatchObject({

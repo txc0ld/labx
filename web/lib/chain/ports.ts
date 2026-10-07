@@ -1,7 +1,7 @@
 import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
-  AccountRaffleState, BlockRef, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
+  AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
@@ -27,6 +27,10 @@ export interface RaffleService {
   listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   listSellerRaffles(input: { seller: Address; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   listRaffleActivity(input: { id: bigint; cursor?: bigint; block?: BlockRef }): Promise<Page<SellerRaffleActivity>>;
+  listOwnerQueue(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
+  readAdmission(input: { id: bigint; block?: BlockRef }): Promise<AdmissionReview>;
+  exportOwnerExecution(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<OwnerExecutionIntent>;
+  confirmOwnerExecution(input: { intent: OwnerExecutionIntent; hash: Hex; timeoutMs?: number }): Promise<OwnerExecutionConfirmation>;
   readRaffle(input: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot>;
   readArtwork(input: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata>;
   readAccount(input: { id: bigint; account: Address; block?: BlockRef }): Promise<AccountRaffleState>;
