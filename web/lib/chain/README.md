@@ -1,6 +1,6 @@
 # Workflow service configuration and evidence
 
-The browser uses `configuredBrowserService()`. A public raffle address alone does not authorize writes. `APPROVED_DEPLOYMENTS` in `deployment.ts` is intentionally empty until a separately approved deployment is reviewed. Its manifest binds chain ID, contract address, runtime hash, version 2, deployment block and USDC address. RPC reads and simulations use explicit block numbers; pagination retains the block hash. The historical Sepolia address remains unavailable for writes.
+The browser uses `configuredBrowserService()`. A public raffle address alone does not authorize writes. `APPROVED_DEPLOYMENTS` in `deployment.ts` is intentionally empty until a separately approved deployment is reviewed. Its manifest binds chain ID, contract address, runtime hash, version 3, deployment block and USDC address. RPC reads and simulations use explicit block numbers; pagination retains the block hash. The historical Sepolia address remains unavailable for writes.
 
 Manifest review must also verify the real coordinator and subscription, LINK/native billing and funding, owners/threshold/authority, treasury, USDC, router/oracle, published terms hash and monitoring/recovery procedures. Runtime attestation is not a Safe or trusted-dependency audit. Existing contracts do not inherit source changes.
 
@@ -30,6 +30,16 @@ Call `prepare`, show the returned transaction review, then call `submit` only af
 Authenticated `api.ts` helpers request a scoped wallet signature only when called. Commitment recovery reveals hashes/salt only to the seller. Agreements are assertions, not proof of age or legal clearance. Receipt and private-record APIs verify their wallet and deployment scope. Never put recovered commitment data or authorization signatures in localStorage, analytics or logs.
 
 Artwork reads use bounded on-chain tokenURI data and safe display URLs. Remote JSON is fetched only in the browser with omitted credentials/referrer, no redirects, an 8-second timeout and a 64-KiB limit; no arbitrary metadata URL is fetched by the server. Failed/unsupported metadata returns a null image. No listings, entries or artwork are fabricated.
+
+## Admission and processing fees
+
+Before opening, the current owner reviews the exact NFT collection/token, custody, transfer restrictions, draft economics and use of draw funding. Draft revisions, owner generations and opening-policy generations invalidate an earlier review even if values are restored. Both opening selectors enforce the same contract approval. Approval becomes historical after opening and never gates buyer recovery or claims.
+
+`readOwner` and `readAdmission` pin their reads to a canonical block. `/review` scans bounded pages, including empty filtered pages with a next cursor. The page does not infer NFT authenticity from its name, artwork, code presence or `ownerOf`. Human review remains necessary.
+
+A Safe owner prepares the two admission actions, exports the exact zero-value payload for external Safe execution, then supplies the actual Ethereum execution hash. Public persisted intents are decoded through `parseOwnerExecutionIntent`; no private commitments or signatures belong in this storage. Confirmation requires the exact raffle event, matching owner/digest/revision, sufficient confirmations and canonical review/receipt/state blocks. A Safe proposal hash is not an Ethereum execution hash. This path does not submit a Safe proposal or replace the EOA financial journal.
+
+For each successful purchase call, the processing fee is `max(2_500_000, floor(principal * buyerFeeBps / 10_000))` USDC atomic units under the pinned policy. Principal is pack price multiplied by quantity. Each separate call incurs its own minimum. Cancelled raffles return principal only; historical `feeOf` remains nonrefundable and must never enable another refund. Treasury collects retained processing fees only after settlement or cancellation. The separate seller commission is charged only at settlement. Current terms define rounding and ETH-route refund denomination; archived v2 terms retain their original policy.
 
 ## Pending transaction recovery
 
