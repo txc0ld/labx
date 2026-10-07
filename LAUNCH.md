@@ -19,9 +19,10 @@ Existing bytecode does not acquire v2 rules. Do not import old entries, balances
 ## 3. Verify authority and dependencies
 
 - Verify the intended Safe implementation, owners, threshold, modules and intended authority. The script's code-presence check alone does not prove it is a correctly configured Safe.
-- Review the exact USDC, coordinator, key hash, subscription, confirmations, callback gas, billing mode and treasury for the deployment. Confirm consumer-registration authority and fund the correct billing asset through the user's secure wallet flow.
+- Review the exact USDC, coordinator, key hash, subscription, confirmations, callback gas, billing mode and treasury for the deployment. `DeploySepolia` explicitly sets `nativePayment=true` before proposing Safe ownership. Fund the subscription with native Sepolia ETH through the user's secure wallet flow and check the coordinator's required reservation for these request parameters. A recorded balance such as 0.05 ETH alone does not prove sufficient funding.
+- The subscription owner must register the new raffle as a consumer. Recheck `getSubscription` to identify that owner; the current inventory identifies the deployer, not the intended Safe. `AddVrfConsumer` uses `DEPLOYER_PRIVATE_KEY` and only works when that signer owns the subscription. The Safe separately calls `acceptOwnership` on the raffle.
 - Publish and approve the exact versioned terms used by the app. `TERMS_HASH` must equal the canonical published document hash. A nonzero arbitrary hash is insufficient.
-- Keep the optional ETH route disabled unless its immutable router, token, feed, pool liquidity, quote, deadline and surplus-refund paths have passed the required checks.
+- Keep `WIRE_ETH_PATH=false` unless the optional ETH membership-purchase route's immutable router, token, feed, pool liquidity, quote, deadline and surplus-refund paths have passed the required checks. Native VRF billing does not enable ETH purchases; membership purchases remain in USDC.
 
 No AMOE signer, CAPTCHA or verified-person provider is part of v2. Membership purchases are the only source of bonus entries.
 
@@ -33,7 +34,7 @@ Present the frozen candidate, test/review evidence, deployment constructor value
 
 ## 5. Verify the deployed instance before enabling writes
 
-Verify deployed runtime against the frozen compiler artifact and exact constructor immutables. Record deployment block, chain, address, runtime code hash, version and USDC in an approved manifest. Confirm the Safe has accepted ownership and the coordinator recognizes the consumer. Read all policy constants and configuration back from chain.
+Verify deployed runtime against the frozen compiler artifact and exact constructor immutables. Record deployment block, chain, address, runtime code hash, version and USDC in an approved manifest. Confirm the Safe has accepted ownership and the coordinator recognizes the consumer. Read all policy constants and configuration back from chain, including `nativePayment=true`, `ethPathEnabled=false`, subscription funding and the pinned VRF request parameters. Stop activation if any deployment transaction is incomplete. Changing the default billing mode later only affects future openings; existing raffles retain their opening policy and recovery deadlines.
 
 Exercise a separately authorized Sepolia lifecycle with test assets: create/edit draft, approve/escrow NFT, checked opening, exact USDC approval, membership purchase, confirmed agreement/receipt, deadline close, batched snapshot, randomness, reveal/settlement, prize and separate proceeds/fee claims. Also verify timed cancellation, buyer refunds, seller NFT reclaim, paused recovery and late callbacks. Do not describe mock Anvil fulfillment as live Chainlink verification.
 

@@ -14,7 +14,6 @@ contract DeploySepolia is Script {
     address internal constant USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     address internal constant VRF_COORDINATOR = 0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B;
     bytes32 internal constant VRF_KEY_HASH = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae;
-    address internal constant LINK = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
     address internal constant SWAP_ROUTER_02 = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
     address internal constant WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
     address internal constant ETH_USD_FEED = 0x694AA1769357215DE4FAC081bf1f309aDC325306;
@@ -46,14 +45,16 @@ contract DeploySepolia is Script {
                 requestConfirmations: 3
             })
         );
+        labx.setNativePayment(true);
         labx.transferOwnership(safe);
         vm.stopBroadcast();
 
         console2.log("LabxRaffle", address(labx));
         console2.log("USDC", USDC);
-        console2.log("LINK", LINK);
+        console2.log("VRF billing: native Sepolia ETH from the subscription");
         console2.log("VRF coordinator", VRF_COORDINATOR);
-        console2.log("Safe must acceptOwnership and addConsumer on the VRF subscription");
+        console2.log("Safe must call acceptOwnership on LabxRaffle");
+        console2.log("VRF subscription owner must add LabxRaffle as a consumer");
     }
 
     /// @dev Rejects an EOA or an undeployed counterfactual Safe before broadcasting.
@@ -63,7 +64,8 @@ contract DeploySepolia is Script {
     }
 }
 
-/// @notice Safe (or the subscription owner) adds the raffle as a VRF consumer. Sepolia only.
+/// @notice The subscription owner adds the raffle as a VRF consumer. Sepolia only.
+///         DEPLOYER_PRIVATE_KEY must belong to the subscription owner for this helper.
 contract AddVrfConsumer is Script {
     function run() external {
         if (block.chainid != 11155111) revert("LABx: Sepolia only. Mainnet is disabled.");
