@@ -183,9 +183,9 @@ run("independent transaction outcome ownership", () => {
     await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await purchased(2n, chain.stranger)).toHaveLength(1);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
-    const buyerText = await fixture.page.locator(".buyer-flow").innerText();
-    expect(buyerText).toContain(hash!);
-    expect(buyerText).toMatch(/purchase confirmed/i);
+    const workspaceText = await fixture.page.locator("#content").innerText();
+    expect(workspaceText).toContain(hash!);
+    expect(workspaceText).toMatch(/purchase confirmed/i);
   }, 75_000);
 
   it("surfaces a late purchase hash only after an A-B-A wallet prompt returns to its original wallet", async () => {
@@ -238,7 +238,7 @@ run("independent transaction outcome ownership", () => {
 
     const saved = await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.treasury));
     expect(saved).toContain(hash);
-    const originalWalletText = await fixture.page.locator(".buyer-flow").innerText();
+    const originalWalletText = await fixture.page.locator("#content").innerText();
     expect(originalWalletText).toContain(hash);
   }, 75_000);
 });
