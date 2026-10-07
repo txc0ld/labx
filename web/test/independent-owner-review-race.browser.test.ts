@@ -13,7 +13,7 @@ run("independent owner review race verification", () => {
     chain = await localChain();
     const block = await chain.client.getBlock();
     const commitment = keccak256(toBytes("independent-owner-review-race"));
-    for (const id of [1n, 2n, 3n, 4n]) {
+    for (const id of [1n, 2n, 3n, 4n, 5n]) {
       const tokenId = 880n + id;
       await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
       await chain.write(chain.raffle, "createRaffle", [
@@ -236,5 +236,38 @@ run("independent owner review race verification", () => {
     await fixture.page.getByRole("button", { name: "Confirm recorded revocation", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await ownerStorageKeys()).toEqual([]);
+  }, 30_000);
+
+  it("keeps a confirmed approval receipt historical after the seller changes the draft", async () => {
+    await openChecklist(5n);
+    await prepareApproval();
+    const review = await chain.service.readAdmission({ id: 5n });
+    if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
+    const receipt = await chain.write(chain.raffle, "approveRaffle", [5n, review.snapshot.admission.reviewHash]);
+    await chain.mine();
+    await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
+    await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
+    const approvalHeading = fixture.page.getByRole("heading", { name: "Approval recorded", exact: true });
+    await approvalHeading.waitFor({ state: "visible", timeout: 15_000 });
+
+    const beforeEdit = await chain.service.readAdmission({ id: 5n });
+    await chain.write(chain.raffle, "updateDraft", [
+      5n,
+      chain.nft.address,
+      885n,
+      beforeEdit.snapshot.raffle.salesEnd,
+      beforeEdit.snapshot.raffle.reserveNonce,
+      beforeEdit.snapshot.raffle.reserveCommit,
+      "Edited after approval receipt",
+      [{ name: "Membership", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]
+    ], chain.seller);
+    await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
+    await fixture.page.getByText("Changed since review", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+
+    const receiptPanel = approvalHeading.locator("..");
+    expect(await receiptPanel.getByText("Approval execution was confirmed at the block below. Check the current draft status above before opening.", { exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByText(/current draft remains approved and can be opened/i).count()).toBe(0);
+    expect(await receiptPanel.getByText(receipt.transactionHash, { exact: true }).count()).toBe(1);
+    expect(await receiptPanel.getByText(receipt.blockNumber.toString(), { exact: true }).count()).toBe(1);
   }, 30_000);
 });
