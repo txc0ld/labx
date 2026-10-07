@@ -155,15 +155,6 @@ run("buyer UI repair invariants in a rendered browser", () => {
 
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.getByText("Saved transaction needs verification", { exact: true }).first().waitFor({ state: "visible", timeout: 10_000 });
-    expect(await fixture.page.getByText("Purchase confirmed", { exact: true }).count()).toBe(0);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
-    while (await fixture.page.getByText("Saved transaction needs verification", { exact: true }).count()) {
-      const recovery = fixture.page.locator(".transaction-outcome").filter({ hasText: "Saved transaction needs verification" }).first();
-      const before = await recovery.locator(".hash").innerText();
-      await recovery.getByRole("button", { name: "Check confirmation", exact: true }).click();
-      await expect.poll(async () => fixture.page.locator(".transaction-outcome").filter({ hasText: before }).innerText(), { timeout: 15_000 }).toMatch(/confirmed/i);
-    }
     await fixture.page.getByText("Purchase confirmed", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
     const again = fixture.page.getByRole("button", { name: "Buy again", exact: true });

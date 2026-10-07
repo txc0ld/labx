@@ -302,12 +302,16 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   const salesOpen = Number(snapshot.raffle.phase) === 1 && snapshot.block.timestamp < snapshot.raffle.salesEnd && !snapshot.paused;
   const quantityValid = Number.isSafeInteger(quantity) && quantity >= 1 && quantity <= 20;
   const { owner, outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
-  const purchaseOutcome = [...outcomes].reverse().find(outcome => outcome.kind === "terminal" && outcome.confirmation.kind === "confirmed"
+  const purchaseOutcome = [...outcomes].reverse().find(outcome => outcome.kind === "terminal" && outcome.confirmation.receipt.status === "success"
     && transactionMeaning(browser.service, outcome.submitted)?.purchase && transactionMeaning(browser.service, outcome.submitted)?.raffleId === snapshot.id);
-  const purchaseConfirmation = purchaseOutcome?.kind === "terminal" && purchaseOutcome.confirmation.kind === "confirmed" ? purchaseOutcome.confirmation : null;
+  const purchaseConfirmation = purchaseOutcome?.kind === "terminal" && purchaseOutcome.confirmation.receipt.status === "success" ? purchaseOutcome.confirmation.receipt : null;
   const canBuyAgain = purchaseConfirmation !== null && writesEnabled && account !== null && quote !== null
     && snapshot.block.number >= purchaseConfirmation.blockNumber && account.snapshot.block.number >= purchaseConfirmation.blockNumber
     && quote.block.number >= purchaseConfirmation.blockNumber && salesOpen;
+  const purchasesEnded = Number(snapshot.raffle.phase) >= 2 || snapshot.block.timestamp >= snapshot.raffle.salesEnd
+    || snapshot.packs.length > 0 && snapshot.packs.every(pack => pack.sold >= pack.maxSupply);
+  const canArchivePurchase = purchaseConfirmation !== null && purchasesEnded && writesEnabled && account !== null
+    && snapshot.block.number >= purchaseConfirmation.blockNumber && account.snapshot.block.number >= purchaseConfirmation.blockNumber;
   const [selectionNotice, setSelectionNotice] = useState("");
   const [receiptError, setReceiptError] = useState("");
 
@@ -390,7 +394,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   }
 
   function buyAgain() {
-    if (!canBuyAgain || !purchaseOutcome) return;
+    if ((!canBuyAgain && !canArchivePurchase) || !purchaseOutcome) return;
     try {
       owner.acknowledge(purchaseOutcome);
       setAgreements({ terms: false, rules: false, age: false });
@@ -402,7 +406,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
 
   return (
     <div className="stack buyer-flow">
-      {purchaseConfirmation ? <div className="transaction-state notice ok stack" role="status"><strong>Purchase confirmed</strong><span>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</span><p className="hash">{purchaseConfirmation.hash}</p>{salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain ? <p>Refresh the raffle, balance and quote before starting another purchase.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null}
+      {purchaseConfirmation ? <div className="transaction-state notice ok stack" role="status"><strong>Purchase confirmed</strong><span>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</span><p className="hash">{purchaseConfirmation.hash}</p>{purchasesEnded ? <button className="btn" type="button" disabled={!canArchivePurchase} onClick={buyAgain}>Acknowledge purchase receipt</button> : salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain ? <p>Refresh the raffle, balance and quote before starting another purchase.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null}
       {salesOpen && !purchaseConfirmation ? (
         <>
           {selectionNotice ? <p className="notice warning" role="status">{selectionNotice}</p> : null}

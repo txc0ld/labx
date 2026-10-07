@@ -86,11 +86,13 @@ export type PreparedAction = {
   readonly title: string; readonly amountUsdc: bigint; readonly recipient: Address;
   readonly block: BlockRef; readonly walletRevision: number;
 };
-export type SubmittedAction = { hash: Hex; account: Address; chainId: number; to: Address; data: Hex; value: bigint };
+export type SubmittedAction = { hash: Hex; account: Address; chainId: number; to: Address | null; data: Hex; value: bigint };
+export type CanonicalReceipt = SubmittedAction & { nonce: number; blockNumber: bigint; status: "success" | "reverted" };
+export type OutcomeJournal = { id: string; hash: Hex | null; nonce: number };
 export type Confirmation =
   | { kind: "pending"; hash: Hex }
-  | { kind: "reverted" | "replaced"; hash: Hex; reason: string }
-  | { kind: "confirmed"; hash: Hex; blockNumber: bigint; replacedHash: Hex | null };
+  | { kind: "reverted" | "replaced"; hash: Hex; reason: string; receipt: CanonicalReceipt }
+  | { kind: "confirmed"; hash: Hex; blockNumber: bigint; replacedHash: Hex | null; receipt: CanonicalReceipt };
 export type WalletProvider = {
   request(args: { method: string; params?: readonly unknown[] }): Promise<unknown>;
   on?(event: string, listener: (...args: unknown[]) => void): void;

@@ -1,4 +1,4 @@
-import { decodeFunctionData, isHex, type Address, type Hex } from "viem";
+import { bytesToHex, decodeFunctionData, isHex, type Address, type Hex } from "viem";
 import { raffleAbi } from "./abi";
 import type { RaffleService, WalletSessionPort } from "./ports";
 import type { Confirmation, PreparedAction, SubmittedAction } from "./types";
@@ -10,90 +10,159 @@ export type TransactionOutcome = { id: string; account: Address } & (
   | { kind: "submitting" }
   | { kind: "rejected"; message: string }
   | { kind: "recovery"; hash: Hex }
+  | { kind: "unverified"; hash: Hex; message: string }
   | { kind: "checking" | "pending"; submitted: SubmittedAction }
   | { kind: "terminal"; submitted: SubmittedAction; confirmation: TerminalConfirmation }
   | { kind: "error"; message: string; submitted: SubmittedAction | null }
 );
 export type OutcomeStorage = Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem">;
 const EMPTY: readonly TransactionOutcome[] = [];
-
-/** Labels are derived only from the service-validated transaction, never a button or saved hint. */
 export function transactionMeaning(service: Pick<RaffleService, "manifest">, submitted: SubmittedAction) {
-  if (submitted.chainId !== service.manifest.chainId || !sameAddress(submitted.to, service.manifest.address)) return null;
+  if (submitted.chainId !== service.manifest.chainId || !submitted.to || !sameAddress(submitted.to, service.manifest.address)) return null;
   try {
     const decoded = decodeFunctionData({ abi: raffleAbi, data: submitted.data });
     const id = decoded.args?.[0];
-    if (typeof id !== "bigint") return null;
-    return { raffleId: id, purchase: decoded.functionName === "buyPack" || decoded.functionName === "buyPackWithEth", action: decoded.functionName };
+    return typeof id === "bigint" ? { raffleId: id, purchase: decoded.functionName === "buyPack" || decoded.functionName === "buyPackWithEth", action: decoded.functionName } : null;
   } catch { return null; }
 }
-
-export function createTransactionOutcomes(service: Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm">, storage: () => OutcomeStorage = () => window.localStorage) {
+function outcomeHash(outcome: TransactionOutcome): Hex | null {
+  return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
+}
+type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending">;
+export function createTransactionOutcomes(service: OutcomeService, storage: () => OutcomeStorage = () => window.localStorage) {
   const prefix = `labx:outcome:v1:${service.manifest.chainId}:${service.manifest.address.toLowerCase()}:${service.manifest.runtimeCodeHash.toLowerCase()}:`;
   const listeners = new Set<() => void>();
   const records = new Map<string, readonly TransactionOutcome[]>();
-  const loaded = new Set<string>();
-  const checking = new Map<string, Promise<TransactionOutcome>>();
-  const submitting = new Set<string>();
-  const refreshed = new Set<string>();
+  const loaded = new Set<string>(), acknowledged = new Set<string>(), refreshed = new Set<string>(), submitting = new Set<string>();
+  const checking = new Map<string, Promise<TransactionOutcome>>(), inspections = new Map<string, Promise<TransactionOutcome>>();
+  const redirects = new Map<string, string>();
+  const recoveries = new Map<string, Promise<void>>();
   let sequence = 0;
   const accountKey = (account: Address) => account.toLowerCase();
-  const checkpointKey = (account: Address, hash: Hex) => `${prefix}${accountKey(account)}:${hash.toLowerCase()}`;
+  const checkpointKey = (account: Address, id: string) => `${prefix}${accountKey(account)}:${id.toLowerCase()}`;
   const getSnapshot = (account: Address) => records.get(accountKey(account)) ?? EMPTY;
-  function put(record: TransactionOutcome) {
-    const current = getSnapshot(record.account);
-    const index = current.findIndex(item => item.id === record.id);
-    records.set(accountKey(record.account), index < 0 ? [...current, record] : current.map(item => item.id === record.id ? record : item));
-    for (const listener of listeners) listener();
-    return record;
+  function identity(account: Address, id: string): string {
+    return redirects.get(checkpointKey(account, id)) ?? id.toLowerCase();
   }
-  function save(submitted: SubmittedAction) {
-    const target = storage();
-    const key = checkpointKey(submitted.account, submitted.hash);
-    target.setItem(key, submitted.hash.toLowerCase());
-    if (target.getItem(key) !== submitted.hash.toLowerCase()) throw new Error("Transaction recovery checkpoint could not be saved.");
+  function findHash(account: Address, hash: Hex) {
+    return getSnapshot(account).find(item => outcomeHash(item)?.toLowerCase() === hash.toLowerCase());
+  }
+  function operationId(account: Address, hash: Hex) {
+    const owned = findHash(account, hash);
+    if (owned) return owned.id;
+    let id = hash.toLowerCase();
+    while (getSnapshot(account).some(item => item.id === id) || acknowledged.has(checkpointKey(account, id))) id = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+    return id;
+  }
+  function notify() { for (const listener of listeners) listener(); }
+  function put(record: TransactionOutcome) {
+    const id = identity(record.account, record.id), current = getSnapshot(record.account);
+    const previous = current.find(item => item.id === id);
+    if (acknowledged.has(checkpointKey(record.account, id))) return record;
+    if (previous?.kind === "terminal") return previous;
+    const next = { ...record, id };
+    records.set(accountKey(record.account), previous ? current.map(item => item.id === id ? next : item) : [...current, next]);
+    notify();
+    return next;
+  }
+  function save(account: Address, id: string, hash: Hex) {
+    const stableId = identity(account, id);
+    if (acknowledged.has(checkpointKey(account, stableId))) return;
+    const terminal = getSnapshot(account).find(item => item.id === stableId && item.kind === "terminal");
+    if (terminal && outcomeHash(terminal)?.toLowerCase() !== hash.toLowerCase()) return;
+    const target = storage(), key = checkpointKey(account, id), value = hash.toLowerCase();
+    target.setItem(key, value);
+    if (target.getItem(key) !== value) throw new Error("Transaction recovery checkpoint could not be saved.");
+  }
+  // Only callers holding service-validated journal lineage may supply a prior hash.
+  function retain(account: Address, requestedId: string, canonicalHash: Hex, priorHash: Hex | null = null, verifiedNonce?: number) {
+    const candidate = priorHash ? findHash(account, priorHash) : undefined;
+    const previous = candidate?.kind === "terminal" && candidate.confirmation.receipt.nonce !== verifiedNonce ? undefined : candidate;
+    const id = identity(account, previous?.id ?? requestedId);
+    if (acknowledged.has(checkpointKey(account, id))) return id;
+    save(account, id, canonicalHash);
+    const related = getSnapshot(account).filter(item => item.id !== id && (item.id === identity(account, requestedId) || outcomeHash(item)?.toLowerCase() === canonicalHash.toLowerCase()));
+    for (const item of related) {
+      const hash = outcomeHash(item), target = storage(), key = checkpointKey(account, item.id);
+      if (hash && target.getItem(key)?.toLowerCase() === hash.toLowerCase()) {
+        target.removeItem(key);
+        if (target.getItem(key) !== null) throw new Error("The previous recovery checkpoint could not be updated.");
+      }
+      redirects.set(key, id);
+    }
+    redirects.set(checkpointKey(account, requestedId), id);
+    if (related.length) records.set(accountKey(account), getSnapshot(account).filter(item => !related.includes(item)));
+    return id;
   }
   function hydrate(account: Address) {
-    const identity = accountKey(account);
-    if (loaded.has(identity)) return;
+    const key = accountKey(account);
+    if (loaded.has(key)) return;
     try {
-      const target = storage();
-      const accountPrefix = `${prefix}${identity}:`;
-      const hints: Hex[] = [];
-      // Limit hostile or unexpectedly large browser storage before scanning or parsing it.
+      const target = storage(), accountPrefix = `${prefix}${key}:`;
+      const hints: { id: Hex; hash: Hex }[] = [];
       if (target.length > 10_000) throw new Error("Browser recovery storage is too large to read safely.");
       for (let index = 0; index < target.length; index++) {
         const key = target.key(index);
         if (!key?.startsWith(accountPrefix)) continue;
-        const hash = target.getItem(key)?.toLowerCase();
-        if (!hash || hash.length !== 66 || !isHex(hash, { strict: true }) || key !== checkpointKey(account, hash)) throw new Error("A transaction recovery checkpoint is invalid. Check wallet activity.");
-        hints.push(hash);
-        if (hints.length > 100) throw new Error("Too many transaction recovery checkpoints. Review wallet activity.");
+        const id = key.slice(accountPrefix.length), hash = target.getItem(key)?.toLowerCase();
+        if (id.length !== 66 || !isHex(id, { strict: true }) || id !== id.toLowerCase() || !hash || hash.length !== 66 || !isHex(hash, { strict: true })) throw new Error("A transaction recovery checkpoint is invalid. Check wallet activity.");
+        hints.push({ id, hash });
+        if (hints.length === 100) break;
       }
-      loaded.add(identity);
-      for (const hash of hints) if (!getSnapshot(account).some(item => item.id === hash)) put({ id: hash, account, kind: "recovery", hash });
+      loaded.add(accountKey(account));
+      for (const hint of hints) if (!getSnapshot(account).some(item => item.id === hint.id)) put({ ...hint, account, kind: "recovery" });
     } catch (error) {
       put({ id: "storage-error", account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "Transaction recovery storage is unavailable." });
     }
   }
-  async function confirm(submitted: SubmittedAction): Promise<TransactionOutcome> {
-    const key = checkpointKey(submitted.account, submitted.hash);
-    const existing = checking.get(key);
+  async function inspect(account: Address, hash: Hex, requestedId = operationId(account, hash)): Promise<TransactionOutcome> {
+    const key = checkpointKey(account, hash), existing = inspections.get(key);
     if (existing) return existing;
-    const terminal = getSnapshot(submitted.account).find(item => item.id === submitted.hash.toLowerCase() && item.kind === "terminal");
-    if (terminal) return terminal;
     const work = (async () => {
-      const base = { id: submitted.hash.toLowerCase(), account: submitted.account, submitted };
       try {
-        // Persist before confirm: the service may clear its nonce journal on a terminal receipt.
-        save(submitted);
-        put({ ...base, kind: "checking" });
-        const confirmation = await service.confirm({ transaction: submitted });
-        return confirmation.kind === "pending"
-          ? put({ ...base, kind: "pending" })
-          : put({ ...base, kind: "terminal", confirmation });
+        const confirmation = await service.inspectOutcome({ hash, account, timeoutMs: 1000 });
+        if (confirmation.kind === "pending") return put({ id: requestedId, account, kind: "unverified", hash, message: "The transaction is still pending. Check again after it confirms." });
+        const id = retain(account, requestedId, confirmation.receipt.hash);
+        return put({ id, account, kind: "terminal", submitted: confirmation.receipt, confirmation });
       } catch (error) {
-        return put({ ...base, kind: "error", message: error instanceof Error ? error.message : "Confirmation could not be checked. The recovery record is retained." });
+        return put({ id: requestedId, account, kind: "unverified", hash, message: error instanceof Error ? error.message : "The saved transaction could not be verified." });
+      }
+    })();
+    inspections.set(key, work);
+    try { return await work; }
+    finally { if (inspections.get(key) === work) inspections.delete(key); }
+  }
+  async function recover(account: Address) {
+    const key = accountKey(account), existing = recoveries.get(key);
+    if (existing) return existing;
+    hydrate(account);
+    const queue = getSnapshot(account).filter(item => item.kind === "recovery").slice(0, 100);
+    async function work() {
+      for (let item = queue.shift(); item; item = queue.shift()) if (item.kind === "recovery") await inspect(account, item.hash, item.id);
+    }
+    const job = Promise.all([work(), work()]).then(() => {});
+    recoveries.set(key, job);
+    try { await job; }
+    finally { if (recoveries.get(key) === job) recoveries.delete(key); }
+  }
+  async function confirm(submitted: SubmittedAction, requestedId = operationId(submitted.account, submitted.hash), reconcile = false): Promise<TransactionOutcome> {
+    const key = checkpointKey(submitted.account, submitted.hash), existing = checking.get(key);
+    if (existing) return existing;
+    const terminal = getSnapshot(submitted.account).find(item => item.id === identity(submitted.account, requestedId) && item.kind === "terminal");
+    if (terminal && !reconcile) return terminal;
+    const work = (async () => {
+      let id = identity(submitted.account, requestedId);
+      try {
+        save(submitted.account, id, submitted.hash);
+        put({ id, account: submitted.account, kind: "checking", submitted });
+        const confirmation = await service.confirm({ transaction: submitted, beforeJournalClear: ({ receipt, pending }) => {
+          id = retain(submitted.account, id, receipt.hash, pending?.hash ?? null, receipt.nonce);
+        } });
+        return confirmation.kind === "pending"
+          ? put({ id, account: submitted.account, kind: "pending", submitted })
+          : put({ id, account: submitted.account, kind: "terminal", submitted: confirmation.receipt, confirmation });
+      } catch (error) {
+        return put({ id, account: submitted.account, kind: "error", submitted, message: error instanceof Error ? error.message : "Confirmation could not be checked. The recovery record is retained." });
       }
     })();
     checking.set(key, work);
@@ -101,47 +170,46 @@ export function createTransactionOutcomes(service: Pick<RaffleService, "manifest
     finally { if (checking.get(key) === work) checking.delete(key); }
   }
   async function submit(prepared: PreparedAction, wallet: WalletSessionPort): Promise<TransactionOutcome> {
-    const identity = accountKey(prepared.account);
-    if (submitting.has(identity)) throw new Error("A wallet request is already in progress.");
-    submitting.add(identity);
+    const key = accountKey(prepared.account);
+    if (submitting.has(key)) throw new Error("A wallet request is already in progress.");
+    submitting.add(key);
     const id = `request-${++sequence}`;
     put({ id, account: prepared.account, kind: "submitting" });
     try {
       const submitted = await service.submit({ prepared, wallet });
-      // Replace only this request. Other account operations and recovery hints remain intact.
-      records.set(identity, getSnapshot(prepared.account).filter(item => item.id !== id));
+      records.set(key, getSnapshot(prepared.account).filter(item => item.id !== id));
       return await confirm(submitted);
     } catch (error) {
       return isWalletRequestRejected(error)
         ? put({ id, account: prepared.account, kind: "rejected", message: "The wallet request was rejected. No transaction was submitted." })
         : put({ id, account: prepared.account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "The wallet response could not be checked. Review wallet activity before retrying." });
-    } finally { submitting.delete(identity); }
+    } finally { submitting.delete(key); }
   }
   async function resume(hash: Hex, wallet: WalletSessionPort): Promise<TransactionOutcome> {
     const snapshot = wallet.getSnapshot();
     if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId) throw new Error("Connect the transaction's wallet on the verified network.");
-    const existing = getSnapshot(snapshot.account).find(item => item.id === hash.toLowerCase() && item.kind === "terminal");
-    if (existing) return existing;
-    const submitted = await service.resume({ hash, wallet });
-    return confirm(submitted);
+    const owned = findHash(snapshot.account, hash), pending = await service.pending({ wallet });
+    if (!pending && owned) return owned.kind === "terminal" ? owned : inspect(snapshot.account, hash, owned.id);
+    let id = owned?.id ?? operationId(snapshot.account, hash);
+    const submitted = await service.resume({ hash, wallet, beforeJournalUpdate: ({ transaction, pending, nonce }) => {
+      id = retain(snapshot.account, id, transaction.hash, pending?.hash ?? null, nonce);
+    } });
+    return confirm(submitted, id, true);
   }
   function acknowledge(record: TransactionOutcome) {
-    // Object identity prevents an old acknowledgment from removing a newer outcome.
     if (record.kind !== "terminal" || !getSnapshot(record.account).includes(record)) return;
-    const target = storage();
-    const key = checkpointKey(record.account, record.submitted.hash);
-    if (target.getItem(key) !== record.submitted.hash.toLowerCase()) throw new Error("The recovery checkpoint changed. Check its transaction again.");
+    const target = storage(), key = checkpointKey(record.account, record.id);
+    if (target.getItem(key)?.toLowerCase() !== record.submitted.hash.toLowerCase()) throw new Error("The recovery checkpoint changed. Check its transaction again.");
     target.removeItem(key);
     if (target.getItem(key) !== null) throw new Error("The recovery checkpoint could not be acknowledged.");
+    acknowledged.add(key);
     records.set(accountKey(record.account), getSnapshot(record.account).filter(item => item !== record));
-    for (const listener of listeners) listener();
+    notify();
+    loaded.delete(accountKey(record.account));
+    void recover(record.account);
   }
-  function claimRefresh(key: string) {
-    if (refreshed.has(key)) return false;
-    refreshed.add(key);
-    return true;
-  }
-  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, submit, confirm, resume, acknowledge };
+  function claimRefresh(key: string) { if (refreshed.has(key)) return false; refreshed.add(key); return true; }
+  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, submit, confirm, resume, acknowledge };
 }
 export type TransactionOutcomes = ReturnType<typeof createTransactionOutcomes>;
 const owners = new WeakMap<RaffleService, TransactionOutcomes>();

@@ -10,7 +10,7 @@ import { actionBuilder } from "./actions";
 import { MAX_MEMBERSHIP_TOTAL_USDC } from "./fees";
 import { hash, sameAddress } from "./validation";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
+import type { CanonicalReceipt, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
 function connected(wallet: WalletSessionPort, chainId: number) {
   const session = wallet.getSnapshot();
   if (session.kind !== "connected" || session.chainId !== chainId) throw new Error("Connect the approved test network before continuing.");
@@ -92,46 +92,73 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     } finally { submitting.delete(key); }
   }
 
-  async function confirm({ transaction, timeoutMs = 60_000 }: Parameters<RaffleService["confirm"]>[0]): ReturnType<RaffleService["confirm"]> {
+  async function canonicalReceipt(txHash: Hex, account: Address, timeoutMs: number, onReplaced?: () => void): Promise<CanonicalReceipt> {
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: Math.max(1000, Math.min(timeoutMs, 120_000)), onReplaced });
+    const actual = await client.getTransaction({ hash: receipt.transactionHash });
+    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+    if (block.hash !== receipt.blockHash) throw new Error("The transaction block changed. Refresh its confirmation.");
+    if (!sameAddress(actual.from, account)) throw new Error("Transaction sender does not match this wallet.");
+    return { hash: receipt.transactionHash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value,
+      nonce: actual.nonce, blockNumber: receipt.blockNumber, status: receipt.status };
+  }
+  function timedOut(error: unknown) {
+    return error instanceof Error && /Timeout|timed out/i.test(error.name + error.message);
+  }
+  async function inspectOutcome({ hash: txHash, account, timeoutMs = 1000 }: Parameters<RaffleService["inspectOutcome"]>[0]): ReturnType<RaffleService["inspectOutcome"]> {
+    await reader.checkedBlock(); hash(txHash);
+    const requested = await client.getTransaction({ hash: txHash });
+    if (!sameAddress(requested.from, account)) throw new Error("Transaction sender does not match this wallet.");
+    try {
+      const receipt = await canonicalReceipt(txHash, account, timeoutMs);
+      if (receipt.nonce !== requested.nonce) throw new Error("The canonical receipt does not match the requested transaction nonce.");
+      return receipt.status === "success"
+        ? { kind: "confirmed", hash: receipt.hash, blockNumber: receipt.blockNumber, replacedHash: receipt.hash.toLowerCase() === txHash.toLowerCase() ? null : txHash, receipt }
+        : { kind: "reverted", hash: receipt.hash, reason: "The transaction reverted. No successful action was recorded.", receipt };
+    } catch (error) {
+      if (timedOut(error)) return { kind: "pending", hash: txHash };
+      throw error;
+    }
+  }
+  async function confirm({ transaction, timeoutMs = 60_000, beforeJournalClear }: Parameters<RaffleService["confirm"]>[0]): ReturnType<RaffleService["confirm"]> {
     await reader.checkedBlock(); hash(transaction.hash);
     if (transaction.chainId !== manifest.chainId) throw new Error("Transaction network does not match this deployment.");
     let replacementSeen = false;
     try {
-      const receipt = await client.waitForTransactionReceipt({ hash: transaction.hash, confirmations: 2, timeout: Math.max(1000, Math.min(timeoutMs, 120_000)), onReplaced: () => { replacementSeen = true; } });
-      const actual = await client.getTransaction({ hash: receipt.transactionHash });
-      const block = await client.getBlock({ blockNumber: receipt.blockNumber });
-      if (block.hash !== receipt.blockHash) throw new Error("The transaction block changed. Refresh its confirmation.");
-      if (!sameAddress(actual.from, transaction.account)) throw new Error("Transaction sender does not match this wallet.");
-      let expectedIntent = transactionIntent(transaction);
+      const receipt = await canonicalReceipt(transaction.hash, transaction.account, timeoutMs, () => { replacementSeen = true; });
+      let expectedIntent = transaction.to ? transactionIntent({ ...transaction, to: transaction.to }) : null;
       await journal.exclusive(transaction.account, async () => {
         const current = journal.read(transaction.account);
-        if (!current) return;
-        if (actual.nonce !== current.nonce || receipt.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash !== transaction.hash && current.hash !== receipt.transactionHash) throw new Error("This transaction does not reconcile the unresolved wallet action.");
-        expectedIntent = current.intentHash;
-        journal.remove(transaction.account);
+        if (current) {
+          if (receipt.nonce !== current.nonce || receipt.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash !== transaction.hash && current.hash !== receipt.hash) throw new Error("This transaction does not reconcile the unresolved wallet action.");
+          expectedIntent = current.intentHash;
+        }
+        beforeJournalClear?.({ receipt, pending: current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null });
+        if (current) journal.remove(transaction.account);
       });
-      if (!actual.to || transactionIntent({ to: actual.to, data: actual.input, value: actual.value }) !== expectedIntent) return { kind: "replaced", hash: receipt.transactionHash, reason: "The wallet replaced this transaction with a different action." };
-      if (receipt.status !== "success") return { kind: "reverted", hash: receipt.transactionHash, reason: "The transaction reverted. No successful action was recorded." };
-      return { kind: "confirmed", hash: receipt.transactionHash, blockNumber: receipt.blockNumber, replacedHash: replacementSeen ? transaction.hash : null };
+      if (!receipt.to || transactionIntent({ ...receipt, to: receipt.to }) !== expectedIntent) return { kind: "replaced", hash: receipt.hash, reason: "The wallet replaced this transaction with a different action.", receipt };
+      if (receipt.status !== "success") return { kind: "reverted", hash: receipt.hash, reason: "The transaction reverted. No successful action was recorded.", receipt };
+      return { kind: "confirmed", hash: receipt.hash, blockNumber: receipt.blockNumber, replacedHash: replacementSeen ? transaction.hash : null, receipt };
     } catch (error) {
-      if (error instanceof Error && /Timeout|timed out/i.test(error.name + error.message)) return { kind: "pending", hash: transaction.hash };
+      if (timedOut(error)) return { kind: "pending", hash: transaction.hash };
       throw error;
     }
   }
-  async function resume({ hash: txHash, wallet }: Parameters<RaffleService["resume"]>[0]) {
+  async function resume({ hash: txHash, wallet, beforeJournalUpdate }: Parameters<RaffleService["resume"]>[0]) {
     await reader.checkedBlock(); hash(txHash); const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const tx = await client.getTransaction({ hash: txHash });
-    if (!tx.to || !sameAddress(tx.from, session.account)) throw new Error("This transaction is not from the connected wallet.");
+    if (!sameAddress(tx.from, session.account)) throw new Error("This transaction is not from the connected wallet.");
     const existing = journal.read(session.account);
     if (existing && (tx.nonce !== existing.nonce || tx.blockNumber !== null && tx.blockNumber < BigInt(existing.startedBlock))) throw new Error("This hash is unrelated to the unresolved wallet action.");
     const target = tx.to;
     if (existing) {
       // A replacement/cancellation may use different calldata. Only the exact unresolved nonce can reconcile it.
+    } else if (target === null) {
+      throw new Error("This is not a supported LABx workflow transaction.");
     } else if (sameAddress(target, manifest.address)) {
       const decoded = decodeFunctionData({ abi: raffleAbi, data: tx.input });
       const allowed = new Set(["createRaffle", "updateDraft", "approveRaffle", "revokeRaffleApproval", "escrow", "openWithPolicy", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "cancel", "abortDrawing", "reclaimPrize", "refund", "buyPack", "buyPackWithEth"]);
       if (!allowed.has(decoded.functionName) || decoded.functionName !== "buyPackWithEth" && tx.value !== 0n) throw new Error("This is not a supported LABx workflow transaction.");
-    } else if (sameAddress(tx.to, manifest.usdc)) {
+    } else if (sameAddress(target, manifest.usdc)) {
       const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.input });
       if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || decoded.args[1] <= 0n || decoded.args[1] > MAX_MEMBERSHIP_TOTAL_USDC || tx.value !== 0n) throw new Error("This is not a bounded LABx payment approval.");
     } else {
@@ -153,7 +180,12 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     await journal.exclusive(session.account, async () => {
       const current = journal.read(session.account);
       if (current?.id !== existing?.id) throw new Error("Pending wallet activity changed. Retry recovery.");
-      journal.write(session.account, current ? { ...current, hash: tx.hash } : { id: crypto.randomUUID(), intentHash: transactionIntent(result), nonce: tx.nonce, startedBlock: (tx.blockNumber ?? await client.getBlockNumber()).toString(), hash: tx.hash });
+      beforeJournalUpdate?.({ transaction: result, nonce: tx.nonce, pending: current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null });
+      if (current) journal.write(session.account, { ...current, hash: tx.hash });
+      else {
+        if (!result.to) throw new Error("This is not a supported LABx workflow transaction.");
+        journal.write(session.account, { id: crypto.randomUUID(), intentHash: transactionIntent({ ...result, to: result.to }), nonce: tx.nonce, startedBlock: (tx.blockNumber ?? await client.getBlockNumber()).toString(), hash: tx.hash });
+      }
     });
     return result;
   }
@@ -161,5 +193,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
+  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

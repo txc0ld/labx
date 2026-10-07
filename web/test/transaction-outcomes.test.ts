@@ -3,7 +3,7 @@ import { encodeFunctionData, erc20Abi, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { createTransactionOutcomes, transactionMeaning, type OutcomeStorage } from "../lib/chain/transaction-outcomes";
 import type { Confirmation, DeploymentManifest, PreparedAction, SubmittedAction, WalletSnapshot } from "../lib/chain/types";
-import type { WalletSessionPort } from "../lib/chain/ports";
+import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 
 const account = "0x1111111111111111111111111111111111111111";
 const other = "0x2222222222222222222222222222222222222222";
@@ -11,8 +11,9 @@ const contract = "0x3333333333333333333333333333333333333333";
 const hash: Hex = `0x${"ab".repeat(32)}`;
 const manifest: DeploymentManifest = { chainId: 31337, address: contract, usdc: other, runtimeCodeHash: hash, deploymentBlock: 1n, version: 3 };
 const submitted: SubmittedAction = { hash, account, chainId: 31337, to: contract, data: encodeFunctionData({ abi: raffleAbi, functionName: "refund", args: [1n] }), value: 0n };
-const prepared: PreparedAction = { ...submitted, action: { kind: "refund", id: 1n }, title: "Refund", amountUsdc: 1n, recipient: account, block: { number: 1n, hash, timestamp: 1n }, walletRevision: 1 };
-const confirmed: Confirmation = { kind: "confirmed", hash, blockNumber: 2n, replacedHash: null };
+const prepared: PreparedAction = { ...submitted, to: contract, action: { kind: "refund", id: 1n }, title: "Refund", amountUsdc: 1n, recipient: account, block: { number: 1n, hash, timestamp: 1n }, walletRevision: 1 };
+const receipt = { ...submitted, nonce: 1, blockNumber: 2n, status: "success" as const };
+const confirmed: Confirmation = { kind: "confirmed", hash, blockNumber: 2n, replacedHash: null, receipt };
 function deferred<T>() {
   let resolve: (value: T) => void = () => { throw new Error("Deferred promise was not initialized."); };
   const promise = new Promise<T>(done => { resolve = done; });
@@ -30,7 +31,13 @@ function fixture() {
     disconnect: () => { snapshot = { kind: "disconnected", revision: snapshot.revision + 1 }; }, assertCurrent: async () => {},
     requestTransaction: async () => hash, signMessage: async () => hash
   };
-  const service = { manifest, submit: vi.fn(async () => submitted), resume: vi.fn(async () => submitted), confirm: vi.fn(async (): Promise<Confirmation> => confirmed) };
+  const service = {
+    manifest, submit: vi.fn(async () => submitted),
+    pending: vi.fn(async (): ReturnType<RaffleService["pending"]> => null),
+    inspectOutcome: vi.fn(async (): Promise<Confirmation> => confirmed),
+    resume: vi.fn(async (input: Parameters<RaffleService["resume"]>[0]) => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: null }); return submitted; }),
+    confirm: vi.fn(async (input: Parameters<RaffleService["confirm"]>[0]): Promise<Confirmation> => { input.beforeJournalClear?.({ receipt, pending: null }); return confirmed; })
+  };
   const { storage, map } = memoryStorage();
   return { service, wallet, storage, map, switchWallet(next: WalletSnapshot) { snapshot = next; } };
 }
@@ -74,7 +81,7 @@ describe("operation ownership beyond transaction controls", () => {
 
   it.each(["pending", "reverted", "replaced"] as const)("retains the canonical %s outcome without claiming a purchase", async kind => {
     const f = fixture();
-    f.service.confirm.mockResolvedValue(kind === "pending" ? { kind, hash } : { kind, hash, reason: "Canonical result" });
+    f.service.confirm.mockResolvedValue(kind === "pending" ? { kind, hash } : { kind, hash, reason: "Canonical result", receipt });
     const owner = createTransactionOutcomes(f.service, () => f.storage);
     const result = await owner.submit(prepared, f.wallet);
     expect(result).toMatchObject(kind === "pending" ? { kind: "pending" } : { kind: "terminal", confirmation: { kind } });
@@ -100,8 +107,9 @@ describe("operation ownership beyond transaction controls", () => {
     expect(owner.getSnapshot(account)).toEqual([{ kind: "recovery", id: hash, account, hash }]);
     expect(f.service.confirm).not.toHaveBeenCalled();
     await owner.resume(hash, f.wallet);
-    expect(f.service.resume).toHaveBeenCalledTimes(1);
-    expect(f.service.confirm).toHaveBeenCalledTimes(1);
+    expect(f.service.resume).not.toHaveBeenCalled();
+    expect(f.service.confirm).not.toHaveBeenCalled();
+    expect(f.service.inspectOutcome).toHaveBeenCalledTimes(1);
     expect([...f.map.values()]).toEqual([hash]);
   });
 
@@ -153,6 +161,104 @@ describe("operation ownership beyond transaction controls", () => {
     const owner = createTransactionOutcomes(f.service, () => f.storage);
     expect(await owner.submit(prepared, f.wallet)).toMatchObject({ kind: "error" });
     expect(f.service.confirm).not.toHaveBeenCalled();
+  });
+
+  it("links distinct same-nonce hashes, keeps one canonical hint and automatically recovers cancellation after reload", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const replacementHash: Hex = `0x${"cd".repeat(32)}`;
+    const replacement: SubmittedAction = { ...submitted, hash: replacementHash, to: account, data: "0x" as const };
+    const cancelled = { ...replacement, nonce: 1, blockNumber: 3n, status: "success" as const };
+    f.service.confirm.mockResolvedValueOnce({ kind: "pending", hash });
+    await owner.confirm(submitted);
+    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.resume.mockImplementation(async input => {
+      input.beforeJournalUpdate?.({ transaction: replacement, nonce: 1, pending: { id: "nonce-1", hash, nonce: 1 } });
+      return replacement;
+    });
+    f.service.confirm.mockImplementation(async input => {
+      input.beforeJournalClear?.({ receipt: cancelled, pending: { id: "nonce-1", hash: replacementHash, nonce: 1 } });
+      f.service.pending.mockResolvedValue(null);
+      return { kind: "replaced", hash: replacementHash, reason: "Cancelled", receipt: cancelled };
+    });
+    const result = await owner.resume(replacementHash, f.wallet);
+    expect(result).toMatchObject({ kind: "terminal", id: hash, submitted: replacement, confirmation: { kind: "replaced" } });
+    expect(owner.getSnapshot(account)).toEqual([result]);
+    expect([...f.map.values()]).toEqual([replacementHash]);
+    f.service.inspectOutcome.mockResolvedValue({ kind: "confirmed", hash: replacementHash, blockNumber: 3n, replacedHash: null, receipt: cancelled });
+    const reloaded = createTransactionOutcomes(f.service, () => f.storage);
+    await Promise.all([reloaded.recover(account), reloaded.recover(account)]);
+    expect(reloaded.getSnapshot(account)).toMatchObject([{ id: hash, kind: "terminal", submitted: replacement }]);
+    expect(f.service.inspectOutcome).toHaveBeenCalledTimes(1);
+    expect(f.service.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["pending", "error"] as const)("does not resurrect an acknowledged operation when an old attempt returns %s", async kind => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage), late = deferred<Confirmation>();
+    const secondHash: Hex = `0x${"cd".repeat(32)}`;
+    const second = { ...submitted, hash: secondHash }, canonical = { ...receipt, hash: secondHash };
+    f.service.confirm.mockImplementationOnce(() => late.promise.then(value => { if (kind === "error") throw new Error("Old watcher failed"); return value; }));
+    const first = owner.confirm(submitted);
+    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: second, nonce: 1, pending: { id: "nonce-1", hash, nonce: 1 } }); return second; });
+    f.service.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: null }); return { kind: "confirmed", hash: secondHash, blockNumber: 2n, replacedHash: hash, receipt: canonical }; });
+    const terminal = await owner.resume(secondHash, f.wallet);
+    owner.acknowledge(terminal);
+    late.resolve({ kind: "pending", hash });
+    await first;
+    expect(owner.getSnapshot(account)).toEqual([]);
+    expect(f.map.size).toBe(0);
+  });
+
+  it("persists actual H3 and its semantics even when the journal was already cleared", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const thirdHash: Hex = `0x${"ef".repeat(32)}`;
+    const canonical = { ...receipt, hash: thirdHash, data: encodeFunctionData({ abi: raffleAbi, functionName: "buyPack", args: [3n, 0, 1, hash] }) };
+    f.service.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: null }); return { kind: "confirmed", hash: thirdHash, blockNumber: 2n, replacedHash: hash, receipt: canonical }; });
+    const result = await owner.confirm(submitted);
+    expect([...f.map.values()]).toEqual([thirdHash]);
+    expect(result.kind === "terminal" && transactionMeaning(f.service, result.submitted)).toMatchObject({ purchase: true, raffleId: 3n });
+  });
+
+  it("automatically inspects old receipts without reading or rewriting a newer journal", async () => {
+    const f = fixture();
+    await createTransactionOutcomes(f.service, () => f.storage).confirm(submitted);
+    f.service.pending.mockResolvedValue({ hash: null, nonce: 9 });
+    f.service.pending.mockClear(); f.service.resume.mockClear(); f.service.confirm.mockClear();
+    const owner = createTransactionOutcomes(f.service, () => f.storage);
+    await owner.recover(account);
+    expect(owner.getSnapshot(account)).toMatchObject([{ kind: "terminal" }]);
+    expect(f.service.pending).not.toHaveBeenCalled();
+    expect(f.service.resume).not.toHaveBeenCalled();
+    expect(f.service.confirm).not.toHaveBeenCalled();
+  });
+
+  it("does not use a cold alias key as proof that another nonce's transaction was reconciled", async () => {
+    const f = fixture();
+    await createTransactionOutcomes(f.service, () => f.storage).confirm(submitted);
+    const otherHash: Hex = `0x${"cd".repeat(32)}`;
+    for (const key of f.map.keys()) f.map.set(key, otherHash);
+    const historical = { ...receipt, hash: otherHash, nonce: 7 };
+    f.service.inspectOutcome.mockResolvedValue({ kind: "confirmed", hash: otherHash, blockNumber: 2n, replacedHash: null, receipt: historical });
+    const owner = createTransactionOutcomes(f.service, () => f.storage);
+    await owner.recover(account);
+    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: { id: "different-nonce", hash, nonce: 1 } }); return submitted; });
+    await owner.resume(hash, f.wallet);
+    expect(owner.getSnapshot(account)).toHaveLength(2);
+    expect(new Set([...f.map.values()])).toEqual(new Set([hash, otherHash]));
+  });
+
+  it("preserves a verified historical nonce when a different nonce names the same prior hint", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const first = await owner.confirm(submitted);
+    const nextHash: Hex = `0x${"cd".repeat(32)}`, next = { ...submitted, hash: nextHash }, canonical = { ...receipt, hash: nextHash, nonce: 9 };
+    f.service.pending.mockResolvedValue({ hash, nonce: 9 });
+    f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: next, nonce: 9, pending: { id: "different-nonce", hash, nonce: 9 } }); return next; });
+    f.service.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: { id: "different-nonce", hash: nextHash, nonce: 9 } }); return { kind: "confirmed", hash: nextHash, blockNumber: 2n, replacedHash: null, receipt: canonical }; });
+    await owner.resume(nextHash, f.wallet);
+    expect(owner.getSnapshot(account)).toContain(first);
+    expect(owner.getSnapshot(account)).toHaveLength(2);
+    expect(new Set(f.map.values())).toEqual(new Set([hash, nextHash]));
   });
 
   it("classifies actual targets and calldata instead of current control labels", () => {
