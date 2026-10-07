@@ -97,8 +97,10 @@ run("independent buyer state journeys", () => {
     expect(approvalText).toContain("88.5 USDC");
     await approvalReview.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
 
-    await expect.poll(() => zenith.isChecked(), { timeout: 15_000 }).toBe(true);
-    await expect.poll(() => quantity.inputValue(), { timeout: 15_000 }).toBe("2");
+    await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBe(88_500_000n);
+    await fixture.page.waitForTimeout(500);
+    expect(await zenith.isChecked()).toBe(true);
+    expect(await quantity.inputValue()).toBe("2");
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => {
