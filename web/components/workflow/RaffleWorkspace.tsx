@@ -1,5 +1,7 @@
 "use client";
 
+import { MembershipPackCard } from "@/components/ui/squishy-card-component";
+
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { formatEther, type Hex } from "viem";
@@ -300,7 +302,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
             <div className="chain-pack-grid" role="radiogroup" aria-label="Membership packs">
               {snapshot.packs.map((pack, index) => {
                 const remaining = Math.max(0, Number(pack.maxSupply) - Number(pack.sold));
-                return <label className="chain-pack" data-selected={index === packId} data-disabled={!pack.active || remaining === 0} key={`${index}-${pack.name}`}><input type="radio" name="pack" value={index} checked={index === packId} disabled={!pack.active || remaining === 0} onChange={() => setPackId(index)} /><strong>{pack.name}</strong><span>{formatUsdc(pack.priceUsdc)} USDC</span><small>{pack.bonusEntries} bonus entries · {remaining} left</small></label>;
+                return <MembershipPackCard key={`${index}-${pack.name}`} name={pack.name} price={formatUsdc(pack.priceUsdc)} bonusEntries={pack.bonusEntries} remaining={remaining} feeLabel={`${formatBps(snapshot.policy.buyerFeeBps)} buyer fee`} value={String(index)} selected={index === packId} disabled={!pack.active || remaining === 0} onSelect={() => setPackId(index)} />;
               })}
             </div>
           </section>

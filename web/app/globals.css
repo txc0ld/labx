@@ -1303,3 +1303,13 @@ html[data-motion="enabled"] [data-reveal]:focus-within { opacity:1; transform:no
 @media (pointer:coarse) {
   input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size:max(1rem,16px); }
 }
+
+/* The live selector keeps exact prices legible inside the sculpted pack treatment. */
+.chain-pack-grid .squishy-pack-card { min-height:16rem; padding:1rem; }
+.chain-pack-grid .squishy-pack-topline { align-items:flex-start; }
+.chain-pack-grid .squishy-pack-topline strong { font-size:1.3rem; overflow-wrap:anywhere; }
+.chain-pack-grid .squishy-pack-choice { min-width:0; font-size:.7rem; }
+.chain-pack-grid .squishy-pack-body { grid-template-columns:minmax(0,1fr) 48px; gap:.5rem; }
+.chain-pack-grid .squishy-pack-price { font-size:clamp(1.35rem,1.6vw,1.7rem); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.chain-pack-grid .squishy-pack-entries,.chain-pack-grid .squishy-pack-details { font-size:.8rem; }
+.chain-pack-grid .squishy-pack-background { width:48px; height:80px; }

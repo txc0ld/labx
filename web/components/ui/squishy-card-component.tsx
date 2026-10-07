@@ -47,20 +47,29 @@ const PACK_HEADING_COLORS: Record<PackName, string> = {
   Platinum: "#3C4B00"
 };
 
-export function SquishyPackCard({
-  pack,
-  feeUsdc,
-  selected,
-  disabled,
-  onSelect
-}: SquishyPackCardProps) {
+type MembershipPackCardProps = {
+  name: string;
+  price: string;
+  bonusEntries: number;
+  remaining: number;
+  feeLabel: string;
+  value: string;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+};
+
+const TIER_NAMES: readonly PackName[] = ["Entry", "Bronze", "Silver", "Gold", "Platinum"];
+
+export function MembershipPackCard({ name, price, bonusEntries, remaining, feeLabel, value, selected, disabled, onSelect }: MembershipPackCardProps) {
+  const tier = TIER_NAMES.find((candidate) => candidate.toLowerCase() === name.trim().toLowerCase()) ?? "Entry";
   const bubbleFillId = useId();
-  const entriesLabel = pack.bonusEntries === 1 ? "entry" : "entries";
+  const entriesLabel = bonusEntries === 1 ? "entry" : "entries";
 
   return (
     <label
       className="squishy-pack-card"
-      style={PACK_STYLES[pack.name]}
+      style={PACK_STYLES[tier]}
       data-selected={selected ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
     >
@@ -68,15 +77,15 @@ export function SquishyPackCard({
         className="sr squishy-pack-radio"
         type="radio"
         name="membership-pack"
-        value={pack.name}
+        value={value}
         checked={selected}
         disabled={disabled}
-        onChange={() => onSelect(pack.name)}
+        onChange={onSelect}
       />
 
       <span className="squishy-pack-content">
         <span className="squishy-pack-topline">
-          <strong style={{ color: PACK_HEADING_COLORS[pack.name] }}>{pack.name}</strong>
+          <strong style={{ color: PACK_HEADING_COLORS[tier] }}>{name}</strong>
           {(selected || disabled) && (
             <span className="squishy-pack-choice" aria-hidden="true">
               {disabled ? "Unavailable" : "Your pick"}
@@ -86,11 +95,11 @@ export function SquishyPackCard({
         <span className="squishy-pack-body">
           <span className="squishy-pack-info">
             <span className="squishy-pack-price">
-              {pack.priceUsdc}
+              {price}
               <small> USDC</small>
             </span>
             <span className="squishy-pack-entries">
-              {pack.bonusEntries} bonus {entriesLabel}
+              {bonusEntries} bonus {entriesLabel}
             </span>
           </span>
           <svg
@@ -125,12 +134,16 @@ export function SquishyPackCard({
           </svg>
         </span>
         <span className="squishy-pack-details">
-          <span>+{feeUsdc} USDC fee</span>
-          <span>{pack.remaining > 0 ? `${pack.remaining} remaining` : "Sold out"}</span>
+          <span>+{feeLabel}</span>
+          <span>{remaining > 0 ? `${remaining} remaining` : "Sold out"}</span>
         </span>
       </span>
     </label>
   );
+}
+
+export function SquishyPackCard({ pack, feeUsdc, selected, disabled, onSelect }: SquishyPackCardProps) {
+  return <MembershipPackCard name={pack.name} price={String(pack.priceUsdc)} bonusEntries={pack.bonusEntries} remaining={pack.remaining} feeLabel={`${feeUsdc} USDC fee`} value={pack.name} selected={selected} disabled={disabled} onSelect={() => onSelect(pack.name)} />;
 }
 
 export default SquishyPackCard;

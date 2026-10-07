@@ -98,7 +98,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     expect(transactionHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
 
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await expect.poll(async () => fixture.page.locator(".chain-pack").first().getAttribute("data-disabled"), { timeout: 10_000 }).toBe("true");
+    await expect.poll(async () => fixture.page.getByRole("radiogroup", { name: "Membership packs" }).locator("label").first().getAttribute("data-disabled"), { timeout: 10_000 }).toBe("true");
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
     const recovery = fixture.page.locator(".resume-transaction");
     await recovery.waitFor({ state: "visible", timeout: 10_000 });
