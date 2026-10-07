@@ -1057,12 +1057,11 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
 .partner-pass-face { position:relative; overflow:hidden; min-height:23rem; padding:clamp(1.4rem,3vw,2.1rem); background:radial-gradient(ellipse at 100% 0%,#bd8cff80,transparent 65%),linear-gradient(140deg,#fcfaff,#e9d8ff); }
 .partner-pass-brand { position:relative; z-index:2; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
 .partner-wordmark { display:inline-flex; align-items:center; font-weight:750; font-size:clamp(1.1rem,2.2vw,1.5rem); letter-spacing:-.055em; }
-.partner-pass--fantom-labs .partner-wordmark { color:#6600ff; }
+.partner-pass--fantom-labs { align-self:start; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.partner-pass--fantom-labs a { display:block; }
+.partner-pass--fantom-labs img { display:block; width:100%; height:auto; }
 .partner-pass-tag { padding:.35rem .6rem; border:1px solid #6600ff33; border-radius:100px; font-size:.66rem; white-space:nowrap; }
 .partner-pass-art { position:absolute; inset:0; pointer-events:none; }
-.fantom-orbit { position:absolute; width:15rem; aspect-ratio:1; inset-inline-end:-3rem; top:5rem; border:1px solid #6600ff40; border-radius:50%; background:radial-gradient(circle at 36% 28%,#f1e5ff 0%,#b080ff 22%,#6600ff 56%,#32008a 82%); box-shadow:inset -12px -16px 30px #25005f60,inset 4px 4px 12px #fff8,0 16px 40px #6600ff33; transform:rotate(-18deg); transition:transform 650ms var(--ease-out); }
-.fantom-orbit::after { content:""; position:absolute; inset:-1.2rem; border:1px solid #6600ff33; border-radius:50%; transform:scaleY(.45) rotate(-35deg); }
-.fantom-spark { position:absolute; top:5.5rem; inset-inline-end:1.5rem; color:#fff; font-family:Arial,sans-serif; font-size:7rem; line-height:1; text-shadow:0 4px 12px #26006055; transform:rotate(-12deg); transition:transform 650ms var(--ease-out); }
 .partner-pass-value { position:relative; z-index:1; display:flex; align-items:baseline; gap:.6rem; margin-top:3rem; width:fit-content; }
 .partner-pass-value strong { font-size:clamp(5rem,10vw,8.5rem); line-height:.85; letter-spacing:-.075em; font-weight:750; }
 .partner-pass-value strong>span { font-size:.62em; letter-spacing:-.08em; }
@@ -1096,8 +1095,6 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
 .partner-pass .discount-code .btn { background:var(--pass-accent); color:#fff; border-color:#ffffff50; }
 .partner-pass--seatmap .discount-code .btn { color:#131210; }
 @media (hover:hover) and (prefers-reduced-motion:no-preference) {
-  .partner-pass:hover .fantom-orbit,.partner-pass:focus-within .fantom-orbit { transform:translate(-.4rem,-.4rem) rotate(12deg); }
-  .partner-pass:hover .fantom-spark,.partner-pass:focus-within .fantom-spark { transform:rotate(48deg) scale(1.06); }
   .partner-pass:hover .seatmap-cabin,.partner-pass:focus-within .seatmap-cabin { transform:perspective(400px) rotateY(0) rotateZ(0) translateY(-.4rem); }
   .partner-pass-link:hover>span[aria-hidden] { transform:translate(2px,-2px); }
 }
@@ -1178,7 +1175,7 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:210
   .seller-raffle-list>li { grid-template-columns:1fr; }
   .form-pair,.pack-builder-row { grid-template-columns:1fr; }
 }
-@media (max-width:420px) { .partner-pass-face { min-height:21rem; } .fantom-orbit { width:11rem; inset-inline-end:-3.5rem; top:6rem; } .fantom-spark { font-size:5rem; inset-inline-end:.25rem; top:6.5rem; } .seatmap-cabin { width:6.5rem; inset-inline-end:.5rem; top:6.75rem; gap:.4rem; } .partner-pass-value { margin-top:3.5rem; } .partner-pass-value strong { font-size:5rem; } }
+@media (max-width:420px) { .partner-pass-face { min-height:21rem; } .seatmap-cabin { width:6.5rem; inset-inline-end:.5rem; top:6.75rem; gap:.4rem; } .partner-pass-value { margin-top:3.5rem; } .partner-pass-value strong { font-size:5rem; } }
 @media (prefers-reduced-motion:reduce) { .partner-pass *, .partner-pass *::after { transition:none!important; } .partner-pass-link:active { transform:none; } }
 
 /* Shared loading and missing states */
