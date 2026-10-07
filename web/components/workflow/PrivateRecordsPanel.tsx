@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import { loadPrivateRecordBatches } from "./record-batches";
-import type { BlockRef, HistoryItem } from "@/lib/chain/types";
+import type { BlockRef, HistoryItem, WalletSnapshot } from "@/lib/chain/types";
+import { sameAddress } from "@/lib/chain/validation";
 import { shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
@@ -24,6 +25,15 @@ type RecordsState =
   | { kind: "ready"; purchases: readonly HistoryItem[]; records: PrivateRecords }
   | { kind: "error"; message: string };
 
+type ConnectedWallet = Extract<WalletSnapshot, { kind: "connected" }>;
+
+function sameWalletSession(current: WalletSnapshot, expected: ConnectedWallet) {
+  return current.kind === "connected"
+    && current.revision === expected.revision
+    && current.chainId === expected.chainId
+    && sameAddress(current.account, expected.account);
+}
+
 export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceipt }: {
   browser: BrowserService;
   email: string;
@@ -36,8 +46,11 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   const [deliveryError, setDeliveryError] = useState("");
   const [continuation, setContinuation] = useState<{ cursor: bigint; block: BlockRef } | null>(null);
   const request = useRef(0);
-  const recordsInFlight = useRef(false);
-  const deliveryInFlight = useRef(new Set<string>());
+  const mounted = useRef(false);
+  const activeWallet = useRef(browser.wallet);
+  const recordsInFlight = useRef<{ token: symbol; wallet: ConnectedWallet } | null>(null);
+  const deliveryInFlight = useRef(new Map<string, { token: symbol; wallet: ConnectedWallet }>());
+  activeWallet.current = browser.wallet;
 
   async function loadHistory(more = false) {
     if (browser.kind !== "configured" || wallet.kind !== "connected") return;
@@ -61,9 +74,16 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   }
 
   useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
     setDelivery({});
     setContinuation(null);
     setDeliveryError("");
+    recordsInFlight.current = null;
+    deliveryInFlight.current.clear();
     if (browser.kind === "configured" && wallet.kind === "connected") void loadHistory();
     else setState({ kind: "loading-history" });
     return () => { request.current += 1; };
@@ -72,8 +92,12 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   }, [browser, wallet]);
 
   async function loadRecords(purchases: readonly HistoryItem[]) {
-    if (recordsInFlight.current) return;
-    recordsInFlight.current = true;
+    const expected = browser.wallet.getSnapshot();
+    if (expected.kind !== "connected") return;
+    const currentOperation = recordsInFlight.current;
+    if (currentOperation && sameWalletSession(currentOperation.wallet, expected)) return;
+    const token = Symbol("private records request");
+    recordsInFlight.current = { token, wallet: expected };
     const version = ++request.current;
     setState({ kind: "loading-records", purchases });
     try {
@@ -82,25 +106,35 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Private records could not be loaded." });
     } finally {
-      recordsInFlight.current = false;
+      if (recordsInFlight.current?.token === token) recordsInFlight.current = null;
     }
   }
 
   async function send(transactionHash: Hex, logIndex: number) {
+    const expected = browser.wallet.getSnapshot();
+    if (expected.kind !== "connected") return;
     const key = `${transactionHash}-${logIndex}`;
-    if (deliveryInFlight.current.has(key)) return;
-    deliveryInFlight.current.add(key);
+    const currentOperation = deliveryInFlight.current.get(key);
+    if (currentOperation && sameWalletSession(currentOperation.wallet, expected)) return;
+    const token = Symbol("receipt delivery request");
+    deliveryInFlight.current.set(key, { token, wallet: expected });
+    const isCurrent = () => mounted.current
+      && activeWallet.current === browser.wallet
+      && deliveryInFlight.current.get(key)?.token === token
+      && sameWalletSession(browser.wallet.getSnapshot(), expected);
     setDelivery((current) => ({ ...current, [key]: "sending" }));
     setDeliveryError("");
     try {
       const result = await deliverReceipt({ transactionHash, logIndex });
       if (!result.delivered) throw new Error(result.reason || "Receipt delivery was not acknowledged.");
-      setDelivery((current) => ({ ...current, [key]: "delivered" }));
+      if (isCurrent()) setDelivery((current) => ({ ...current, [key]: "delivered" }));
     } catch (error) {
-      setDelivery((current) => ({ ...current, [key]: "error" }));
-      setDeliveryError(error instanceof Error ? error.message : "Receipt delivery failed.");
+      if (isCurrent()) {
+        setDelivery((current) => ({ ...current, [key]: "error" }));
+        setDeliveryError(error instanceof Error ? error.message : "Receipt delivery failed.");
+      }
     } finally {
-      deliveryInFlight.current.delete(key);
+      if (deliveryInFlight.current.get(key)?.token === token) deliveryInFlight.current.delete(key);
     }
   }
 
@@ -114,7 +148,7 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
       {continuation && state.kind !== "loading-history" ? <div className="stack"><p className="notice warning" role="status">Partial history: later blocks have not been scanned. Continue to find newer purchases.</p><button className="btn btn-dark" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadHistory(true)}>Scan later purchases</button></div> : null}
       {state.kind === "ready" ? (
         <div className="workflow-grid">
-          <section className="pearl pad stack"><h2>Receipts</h2>{!email ? <p className="notice warning">Add an email preference before requesting delivery. <Link href="/profile#email-preferences">Email preferences</Link></p> : null}<ol className="private-record-list">{state.purchases.map((purchase) => {
+          <section className="pearl pad stack"><h2>Receipts</h2>{email ? <p className="notice"><strong>Saved receipt email:</strong> {email}<br /><span>This is a saved browser preference, not a verified wallet identity.</span></p> : <p className="notice warning">Add an email preference before requesting delivery. <Link href="/profile#email-preferences">Email preferences</Link></p>}<ol className="private-record-list">{state.purchases.map((purchase) => {
             const key = `${purchase.transactionHash}-${purchase.logIndex}`;
             const record = state.records.receipts.find((item) => item.transactionHash.toLowerCase() === purchase.transactionHash.toLowerCase() && item.logIndex === purchase.logIndex);
             const status = delivery[key] === "delivered" ? "delivered" : record?.status ?? "missing";
