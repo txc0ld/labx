@@ -6,9 +6,11 @@ Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166. The publ
 
 ## Current status
 
-The prepared v3 release includes the seller portal, raffle admission review and a minimum processing fee. Acceptance work is recorded in [the current task contract](docs/build/seller-portal-fees-20261007.md). The production approval registry remains empty; supplying an address does not enable transactions. A passing source test does not establish live functionality.
+The source registry now includes the verified v3 Sepolia contract `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327`, created at block 11865781. The Safe `0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1` accepted ownership and is the pinned treasury. Native-ETH VRF billing is configured; membership purchases use USDC, with the optional ETH purchase route disabled. See [the activation record](docs/build/v3-sepolia-registration-20261008.md) for exact manifest and verification evidence. Hosted selection and release are separate checks. Durable hosted storage is still a separate configuration blocker for seller commitments and buyer agreement recording; registration alone does not make those flows ready.
 
-The v2 Sepolia contract at `0xef27306567a5ADA354fe9403008D041d0b468213` was verified on 7 October 2026 at block 11861349 with the Safe as owner and treasury, native-ETH VRF configured, and no raffles. That was a point-in-time deployment check, not a completed live raffle test. Its fixed 5-USDC fee cannot be changed by updating this website. Version 3 requires a separately approved deployment and migration. The older contract at `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` is also excluded from current transactions.
+This is a Sepolia testing deployment. The Safe's threshold of one is testing-only. Human review remains required for each raffle. Deployment verification does not establish a completed live Chainlink raffle lifecycle; that test remains separate.
+
+The v2 contract `0xef27306567a5ADA354fe9403008D041d0b468213` and older contract `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` remain excluded from current transactions. Updating the website does not change their bytecode or migrate their entries, balances or claims.
 
 ## Layout
 

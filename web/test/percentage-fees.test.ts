@@ -4,7 +4,6 @@ import { keccak256, stringToHex, zeroAddress, zeroHash } from "viem";
 import { BUYER_FEE_BPS, MAX_MEMBERSHIP_TOTAL_USDC, SELLER_FEE_BPS, buyerFee, sellerAccounting } from "../lib/chain/fees";
 import { localDevelopmentManifest } from "../lib/chain/browser";
 import { serverWorkflow } from "../lib/chain/server";
-import { APPROVED_DEPLOYMENTS } from "../lib/chain/deployment";
 import type { RaffleSnapshot } from "../lib/chain/types";
 import { PUBLISHED_TERMS_CONTENT, PUBLISHED_TERMS_HASH, TERMS_VERSION, publishedTermsByHash, requirePublishedTerms } from "../lib/published-terms";
 
@@ -92,8 +91,7 @@ describe("local v3 deployment parsing", () => {
   afterEach(() => vi.unstubAllEnvs());
   const manifest = { chainId: 31337, version: 3, address: "0x1111111111111111111111111111111111111111", usdc: "0x2222222222222222222222222222222222222222",
     ...fixtureTrust, expectedPolicy: { ...fixtureTrust.expectedPolicy, subscriptionId: "1", minBuyerFeeUsdc: "2500000" }, runtimeCodeHash: zeroHash, deploymentBlock: "1" };
-  it("retains the empty approval registry and only enables local v3 fixtures", () => {
-    expect(APPROVED_DEPLOYMENTS).toEqual([]);
+  it("only enables local v3 fixtures in development", () => {
     vi.stubEnv("NODE_ENV", "development");
     expect(localDevelopmentManifest(JSON.stringify(manifest))?.version).toBe(3);
     vi.stubEnv("NODE_ENV", "production");

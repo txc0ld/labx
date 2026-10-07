@@ -1,6 +1,6 @@
 # LABx v3 release and migration plan
 
-This is a plan for a separately authorized Sepolia release. It does not authorize publishing, deploying, transferring assets or ownership, funding a subscription, or accepting agreements. The current local workflow checkpoint is [docs/build/seller-portal-fees-20261007.md](docs/build/seller-portal-fees-20261007.md).
+This is a plan for a separately authorized Sepolia release. It does not authorize publishing, deploying, transferring assets or ownership, funding a subscription, or accepting agreements. The current Sepolia deployment and source-registration checkpoint is [the v3 activation record](docs/build/v3-sepolia-registration-20261008.md). The user-signed deployment and Safe acceptance have been verified; hosted release and real VRF lifecycle testing remain separate gates.
 
 ## 1. Freeze the source candidate
 
@@ -42,7 +42,7 @@ Verify deployed runtime against the frozen compiler artifact and exact construct
 
 Exercise a separately authorized Sepolia lifecycle with test assets: create/edit draft, approve/escrow NFT, LABx admission review and Safe execution confirmation, checked opening, exact USDC approval, membership purchase, confirmed agreement/receipt, deadline close, batched snapshot, randomness, reveal/settlement, prize and separate proceeds/fee claims. Also verify stale/revoked admission, draft edits, timed cancellation, principal-only buyer refunds before and after treasury collection, seller NFT reclaim, paused recovery and late callbacks. NFT review must establish the canonical collection and assess proxy upgrades or transfer restrictions. Do not infer legitimacy from an image, name, code presence or ERC-721 interface. Do not describe mock Anvil fulfillment as live Chainlink verification.
 
-Only then add the reviewed manifest and configure the intended public address/RPC. An environment address by itself does not authorize v3 actions. The historical address remains excluded from v3 transactions.
+For the authorized Sepolia test deployment, verified deployment/configuration receipts and Safe acceptance permit source registration and reviewed public address/RPC selection before the separately authorized live lifecycle exercise. This does not claim live VRF fulfillment or mainnet readiness. An environment address by itself does not authorize v3 actions. Historical addresses remain excluded from v3 transactions.
 
 ## 6. Publish the website separately
 

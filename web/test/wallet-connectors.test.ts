@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BrowserWalletSession, type RemoteWallet } from "../lib/chain/wallet-connectors";
 import type { WalletProvider } from "../lib/chain/types";
-import { APPROVED_DEPLOYMENTS } from "../lib/chain/deployment";
 
 const account = "0x1111111111111111111111111111111111111111";
 const projectId = "a".repeat(32);
@@ -33,7 +32,7 @@ function providerFixture(chain = "0xaa36a7") {
 }
 
 describe("browser connector authority", () => {
-  it("keeps relay loading lazy, preserves injected requests and leaves deployment unavailable", async () => {
+  it("keeps relay loading lazy and preserves injected requests", async () => {
     const f = providerFixture(), load = vi.fn(async () => f.remote);
     const wallet = new BrowserWalletSession(f.provider, 11155111, projectId, load);
     await wallet.refresh();
@@ -43,7 +42,6 @@ describe("browser connector authority", () => {
     expect(f.calls).toContain("wallet_switchEthereumChain");
     expect(f.calls).toContain("eth_requestAccounts");
     expect(load).not.toHaveBeenCalled();
-    expect(APPROVED_DEPLOYMENTS).toEqual([]);
   });
   it.each([undefined, "bad-id"])("does not initialize without usable configuration %s", async value => {
     const load = vi.fn();

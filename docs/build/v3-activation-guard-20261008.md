@@ -1,5 +1,7 @@
 # V3 activation guard
 
+This is the historical guard implementation record. The later [verified Sepolia registration](v3-sepolia-registration-20261008.md) supersedes its empty-registry status.
+
 Base release: `0bb6f820f44cb04fe293558727a3ac74797bbf26`. The website previously verified runtime identity but did not bind later purchases to reviewed authority and the policy frozen at opening.
 
 Manifests now require `expectedOwner` and all eleven ABI-derived `expectedPolicy` members. Browser and server local-manifest parsers share strict validation. Runtime attestation remains independent of mutable trust settings.

@@ -2,6 +2,8 @@
 
 Use these documents for the current version 3 source:
 
+- [Verified v3 Sepolia registration](v3-sepolia-registration-20261008.md) records the deployed contract, Safe acceptance and exact source manifest.
+- [Action-specific activation guard](v3-activation-guard-20261008.md) records authority/policy enforcement and recovery boundaries; its empty-registry status describes its earlier freeze.
 - [Repository cleanup and portable verification](repository-cleanup-plan-20261007.md) defines the current cleanup and verification contract.
 - [Seller portal and percentage fees](seller-portal-fees-20261007.md) records the original portal scope; the following amendment supersedes its fee and refund policy.
 - [Raffle admission and minimum buyer fee](raffle-admission-minimum-fee-20261007.md) records the current admission and retained-fee behavior.
