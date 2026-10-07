@@ -19,8 +19,10 @@ contract AdmissionTest is PercentageFeeFixture {
             "Review",
             _configs()
         );
-        if (escrowed) nft.approve(address(raffle), token);
-        raffle.escrow(id);
+        if (escrowed) {
+            nft.approve(address(raffle), token);
+            raffle.escrow(id);
+        }
         vm.stopPrank();
     }
 
@@ -195,13 +197,19 @@ contract AdmissionTest is PercentageFeeFixture {
         uint256 id = _open(25e6);
         _buy(id, alice, 0, 1);
         uint256 selected = 1 + phase % 6;
-        if (selected >= 2 && selected <= 5) vm.warp(raffle.getRaffle(id).salesEnd);
-        raffle.close(id);
-        if (selected >= 3 && selected <= 5) raffle.snapshot(id, 100);
-        raffle.requestRandomness(id);
+        if (selected >= 2 && selected <= 5) {
+            vm.warp(raffle.getRaffle(id).salesEnd);
+            raffle.close(id);
+        }
+        if (selected >= 3 && selected <= 5) {
+            raffle.snapshot(id, 100);
+            raffle.requestRandomness(id);
+        }
         if (selected >= 4 && selected <= 5) vrf.fulfill(address(raffle), raffle.getRaffle(id).vrfRequestId, 0);
-        if (selected == 5) vm.warp(block.timestamp + raffle.REVEAL_GRACE());
-        raffle.settle(id);
+        if (selected == 5) {
+            vm.warp(uint256(raffle.getRaffle(id).drawnAt) + raffle.REVEAL_GRACE());
+            raffle.settle(id);
+        }
         if (selected == 6) {
             vm.warp(uint256(raffle.getRaffle(id).salesEnd) + raffle.DRAW_START_GRACE());
             raffle.cancel(id);
