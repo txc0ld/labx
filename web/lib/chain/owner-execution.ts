@@ -1,4 +1,4 @@
-import { decodeEventLog, encodeFunctionData, type Address, type Hex, type PublicClient } from "viem";
+import { TransactionNotFoundError, WaitForTransactionReceiptTimeoutError, decodeEventLog, encodeFunctionData, type Address, type Hex, type PublicClient } from "viem";
 import { raffleAbi } from "./abi";
 import type { createReader } from "./reader";
 import type { DeploymentManifest, OwnerExecutionConfirmation, OwnerExecutionIntent } from "./types";
@@ -19,7 +19,16 @@ export function ownerExecutionConfirmer(client: PublicClient, manifest: Deployme
     try {
       receipt = await client.waitForTransactionReceipt({ hash: executionHash, confirmations: 2, timeout: Math.max(1000, Math.min(timeoutMs, 120_000)) });
     } catch (error) {
-      if (error instanceof Error && /Timeout|timed out/i.test(error.name + error.message)) return { kind: "pending", hash: executionHash };
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        let transaction;
+        try { transaction = await client.getTransaction({ hash: executionHash }); }
+        catch (lookupError) {
+          if (lookupError instanceof TransactionNotFoundError) throw new Error("Ethereum transaction not found. Use the actual executed Ethereum transaction hash, or retry after broadcast.");
+          throw lookupError;
+        }
+        if (transaction.hash !== executionHash) throw new Error("Returned Ethereum transaction does not match the execution hash.");
+        return { kind: "pending", hash: executionHash };
+      }
       throw error;
     }
     if (receipt.status !== "success" || receipt.transactionHash !== executionHash || receipt.blockNumber < intent.reviewBlock.number) throw new Error("No successful execution matches this review.");

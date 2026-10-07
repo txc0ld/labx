@@ -47,6 +47,10 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const entry = reviews.get(prepared);
     if (!entry || entry.used) throw new Error("This review is invalid or already submitted. Review again.");
     const account = entry.session.account, key = account.toLowerCase();
+    await wallet.assertCurrent(entry.session);
+    const accountCode = await client.getCode({ address: account });
+    if (accountCode && accountCode !== "0x") throw new Error("Direct transactions from contract wallets are unsupported. Owner approval and revocation require the reviewed payload for external execution and its executed Ethereum transaction hash.");
+    if (entry.used) throw new Error("This review is invalid or already submitted. Review again.");
     if (submitting.has(key) || journal.read(account)) throw new Error(unresolved);
     submitting.add(key); entry.used = true;
     let intent: PendingIntent | null = null;
@@ -55,7 +59,6 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await wallet.assertCurrent(entry.session);
       const fresh = await build(entry.action, entry.session);
       if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
-      if ((entry.action.kind === "approveRaffle" || entry.action.kind === "revokeRaffleApproval") && await client.getCode({ address: account }) !== undefined) throw new Error("Contract owners must export the reviewed payload for external execution and reconcile its execution hash.");
       const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
       await wallet.assertCurrent(entry.session);
       const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce }, async () => {

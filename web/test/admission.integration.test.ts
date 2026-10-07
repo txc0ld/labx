@@ -2,6 +2,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, keccak256, zeroHash } from "viem";
 import { hash } from "../lib/chain/validation";
 import { raffleAbi } from "../lib/chain/abi";
+import { memoryPendingJournal } from "../lib/chain/pending-journal";
+import type { WorkflowAction } from "../lib/chain/types";
+import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { createRaffleService } from "../lib/chain/service";
 import { availableActions } from "../lib/chain/workflow";
 import { parseOwnerExecutionIntent, serializeOwnerExecutionIntent } from "../lib/chain/owner-execution";
@@ -17,7 +20,8 @@ run("admission review and external owner execution", () => {
     const id = await c.client.readContract({ address: c.raffle.address, abi: raffleAbi, functionName: "nextId" });
     await c.write(c.nft, "mint", [c.seller, id]);
     const now = (await c.client.getBlock()).timestamp, digest = keccak256("0x12");
-    await c.write(c.raffle, "createRaffle", [c.nft.address, id, now + 86400n, digest, digest, "Admission", [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 100 }]], c.seller);
+    const commitment = await c.client.readContract({ address: c.raffle.address, abi: raffleAbi, functionName: "hashCommitment", args: [digest, c.nft.address, id, digest, digest, digest] });
+    await c.write(c.raffle, "createRaffle", [c.nft.address, id, now + 86400n, digest, commitment, "Admission", [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 100 }]], c.seller);
     await c.write(c.nft, "approve", [c.raffle.address, id], c.seller);
     await c.write(c.raffle, "escrow", [id], c.seller);
     return id;
@@ -117,7 +121,7 @@ run("admission review and external owner execution", () => {
     const id = await draft(), other = await draft(); const { intent } = await exported(id);
     const otherReceipt = await c.admit(other); await c.mine();
     await expect(c.service.confirmOwnerExecution({ intent, hash: otherReceipt.transactionHash, timeoutMs: 1000 })).rejects.toThrow(/no matching/);
-    expect(await c.service.confirmOwnerExecution({ intent, hash: keccak256("0x9876"), timeoutMs: 1000 })).toMatchObject({ kind: "pending" });
+    await expect(c.service.confirmOwnerExecution({ intent, hash: keccak256("0x9876"), timeoutMs: 1000 })).rejects.toThrow(/actual executed Ethereum transaction hash, or retry after broadcast/);
     await c.admit(id);
     const code = await c.client.getCode({ address: c.nft.address });
     if (!code) throw new Error("Fixture NFT code missing.");
@@ -131,6 +135,30 @@ run("admission review and external owner execution", () => {
       expect(await c.service.confirmOwnerExecution({ intent: revoked.intent, hash: receipt.transactionHash, timeoutMs: 2000 })).toMatchObject({ kind: "executed", state: "revoked" });
     } finally { await c.rpc("anvil_setCode", [c.nft.address, code]); await c.mine(); }
   });
+  it("distinguishes a broadcast pending execution from unavailable or mismatched lookup results", async () => {
+    const id = await draft(); const { intent } = await exported(id);
+    await c.rpc("evm_setAutomine", [false]);
+    try {
+      const executionHash = hash(await c.rpc("eth_sendTransaction", [{ from: c.operator, to: intent.to, data: intent.data, gas: "0xf4240" }]));
+      const transaction = await c.client.getTransaction({ hash: executionHash });
+      expect(transaction.blockNumber).toBeNull();
+      expect(await c.service.confirmOwnerExecution({ intent, hash: executionHash, timeoutMs: 1000 })).toEqual({ kind: "pending", hash: executionHash });
+      const transportFailure = new Error("RPC request timed out");
+      const receiptFailure = vi.spyOn(c.client, "waitForTransactionReceipt").mockRejectedValue(transportFailure);
+      const untouchedLookup = vi.spyOn(c.client, "getTransaction");
+      try {
+        await expect(c.service.confirmOwnerExecution({ intent, hash: executionHash, timeoutMs: 1000 })).rejects.toBe(transportFailure);
+        expect(untouchedLookup).not.toHaveBeenCalled();
+      } finally { receiptFailure.mockRestore(); untouchedLookup.mockRestore(); }
+      const unavailable = new Error("Execution lookup provider unavailable");
+      const lookup = vi.spyOn(c.client, "getTransaction").mockRejectedValue(unavailable);
+      try { await expect(c.service.confirmOwnerExecution({ intent, hash: executionHash, timeoutMs: 1000 })).rejects.toBe(unavailable); }
+      finally { lookup.mockRestore(); }
+      const mismatched = vi.spyOn(c.client, "getTransaction").mockResolvedValue({ ...transaction, hash: zeroHash });
+      try { await expect(c.service.confirmOwnerExecution({ intent, hash: executionHash, timeoutMs: 1000 })).rejects.toThrow(/does not match the execution hash/); }
+      finally { mismatched.mockRestore(); }
+    } finally { await c.rpc("evm_setAutomine", [true]); await c.mine(); }
+  }, 15000);
   it("rejects a receipt reorg even after a matching approval event", async () => {
     const id = await draft(); const { intent } = await exported(id);
     const receipt = await c.write(c.raffle, "approveRaffle", [id, intent.action.expectedReviewHash]); await c.mine();
@@ -169,6 +197,26 @@ run("admission review and external owner execution", () => {
     await c.write(safe, "execute", [c.raffle.address, encodeFunctionData({ abi: raffleAbi, functionName: "acceptOwnership" })], c.stranger);
     const id = await draft(); const { intent, wallet } = await exported(id, safe.address);
     expect(intent.from).toBe(safe.address); expect(intent.value).toBe(0n);
+    const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);
+    async function refusesDirect(action: WorkflowAction) {
+      const prepared = await service.prepare({ action, wallet });
+      const nonce = vi.spyOn(c.client, "getTransactionCount"), request = vi.spyOn(wallet, "requestTransaction");
+      const read = vi.spyOn(journal, "read"), acquire = vi.spyOn(journal, "exclusive"), write = vi.spyOn(journal, "write"), remove = vi.spyOn(journal, "remove");
+      try {
+        await expect(service.submit({ prepared, wallet })).rejects.toThrow(/Direct transactions from contract wallets are unsupported/);
+        for (const operation of [nonce, request, read, acquire, write, remove]) expect(operation).not.toHaveBeenCalled();
+      } finally { for (const operation of [nonce, request, read, acquire, write, remove]) operation.mockRestore(); }
+      expect(journal.read(safe.address)).toBeNull();
+      return prepared;
+    }
+    const cancelled = await refusesDirect({ kind: "cancel", id });
+    const existingIntent = { id: "existing-intent", intentHash: zeroHash, nonce: 7, startedBlock: "1", hash: null };
+    journal.write(safe.address, existingIntent);
+    await expect(service.submit({ prepared: cancelled, wallet })).rejects.toThrow(/Direct transactions from contract wallets are unsupported/);
+    expect(journal.read(safe.address)).toEqual(existingIntent);
+    journal.remove(safe.address);
+    const refusedApproval = await refusesDirect(intent.action);
+    expect(await service.exportOwnerExecution({ prepared: refusedApproval, wallet })).toMatchObject({ data: intent.data });
     const repeat = await c.service.prepare({ action: intent.action, wallet });
     await expect(c.service.submit({ prepared: repeat, wallet })).rejects.toThrow(/external execution/);
     expect(await c.service.pending({ wallet })).toBeNull();
@@ -181,5 +229,14 @@ run("admission review and external owner execution", () => {
     await expect(c.service.confirmOwnerExecution({ intent: revoke.intent, hash: failed.transactionHash, timeoutMs: 2000 })).rejects.toThrow(/no matching/);
     const revoked = await c.write(safe, "execute", [revoke.intent.to, revoke.intent.data], c.stranger); await c.mine();
     expect(await c.service.confirmOwnerExecution({ intent: revoke.intent, hash: revoked.transactionHash, timeoutMs: 2000 })).toMatchObject({ kind: "executed", state: "revoked" });
+    const approval = await exported(id, safe.address);
+    await c.write(safe, "execute", [approval.intent.to, approval.intent.data], c.stranger);
+    await c.write(c.raffle, "open", [id], c.seller);
+    const digest = keccak256("0x12");
+    await refusesDirect({ kind: "reveal", id, publicHash: digest, privateHash: digest, salt: digest });
+    await c.write(c.usdc, "mint", [safe.address, 100_000_000n]);
+    const approve = await refusesDirect({ kind: "approveUsdc", id, packId: 0, quantity: 1 });
+    await c.write(safe, "execute", [approve.to, approve.data], c.stranger);
+    await refusesDirect({ kind: "buyMembership", id, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } });
   }, 30000);
 });
