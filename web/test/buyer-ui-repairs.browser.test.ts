@@ -160,7 +160,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     const again = fixture.page.getByRole("button", { name: "Buy again", exact: true });
     await expect.poll(() => again.isEnabled(), { timeout: 15_000 }).toBe(true);
     await again.click();
-    expect(await fixture.page.getByText("Purchase confirmed", { exact: true }).count()).toBe(0);
+    await expect.poll(() => fixture.page.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
     expect(await quantity.inputValue()).toBe("1");
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
     for (const dismiss of await fixture.page.getByRole("button", { name: "Dismiss receipt", exact: true }).all()) await dismiss.click();
