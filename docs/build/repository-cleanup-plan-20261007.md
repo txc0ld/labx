@@ -28,7 +28,7 @@ This document remains the bounded work contract. Test logs and the cleanup commi
 
 ## Verification commands
 
-The default web suite is `npm --prefix web test`. It skips every Anvil-backed integration unless its switch is set. Build contract fixtures with `forge build --root contracts`, then run `RUN_CHAIN_INTEGRATION=1 npm --prefix web test -- --maxWorkers=1` for the chain lane.
+The default web suite is `npm --prefix web test`. It skips every Anvil-backed integration unless its switch is set. Build contract fixtures with `forge build --root contracts`, then run `RUN_CHAIN_INTEGRATION=1 RUN_INDEPENDENT_WALLET_REVIEW_REPAIRS=1 RUN_INDEPENDENT_TRANSACTION_LINEAGE=1 npm --prefix web test -- --maxWorkers=1` for the chain lane.
 
 Run `web/node_modules/.bin/tsc --noEmit --project web/tsconfig.json` for type checking and `npm --prefix web run build` for the production build. Contract regression and fuzz coverage use `forge test --root contracts --fuzz-runs 1024`.
 
@@ -49,6 +49,7 @@ RUN_INDEPENDENT_OWNER_REVIEW_RACE_BROWSER=1 \
 RUN_INDEPENDENT_BUYER_STATE_BROWSER=1 \
 RUN_BROWSER_FIXTURE_LIFECYCLE=1 \
 RUN_INDEPENDENT_TRANSACTION_OUTCOMES_BROWSER=1 \
+RUN_INDEPENDENT_TRANSACTION_LINEAGE_BROWSER=1 \
 npm exec vitest -- run \
   test/independent-browser-journeys.test.ts \
   test/independent-browser-recovery.test.ts \
@@ -61,6 +62,7 @@ npm exec vitest -- run \
   test/independent-buyer-state.browser.test.ts \
   test/browser-chain-lifecycle.browser.test.ts \
   test/independent-transaction-outcomes.browser.test.ts \
+  test/independent-transaction-lineage.browser.test.ts \
   --maxWorkers=1
 ```
 

@@ -11,6 +11,7 @@ Use these documents for the current version 3 source:
 - [Wallet and checkout review repairs](review-repairs-20261007.md) defines the final recovery, signing and confirmation requirements.
 - [Transaction outcome recovery](transaction-outcomes-20261007.md) defines durable receipts, replacement handling and the boundary between receipt inspection and pending-nonce reconciliation.
 - [Aikido vendored CI finding](aikido-vendored-ci-20261007.md) records the unreachable upstream automation and its removal.
+- [Dependency and CI security](dependency-ci-security-20261007.md) records the patched WebSocket dependency and verified action pins.
 - [Release and migration plan](../../LAUNCH.md) lists the checks and approvals required before a release.
 
 The following reports are retained as historical evidence. Later reports above supersede their candidate or design status:

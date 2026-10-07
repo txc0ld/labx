@@ -65,6 +65,7 @@ jobs:
         env:
           RUN_CHAIN_INTEGRATION: "1"
           RUN_INDEPENDENT_WALLET_REVIEW_REPAIRS: "1"
+          RUN_INDEPENDENT_TRANSACTION_LINEAGE: "1"
 
   browser-acceptance:
     runs-on: ubuntu-latest
@@ -100,6 +101,7 @@ jobs:
             test/independent-buyer-state.browser.test.ts \
             test/browser-chain-lifecycle.browser.test.ts \
             test/independent-transaction-outcomes.browser.test.ts \
+            test/independent-transaction-lineage.browser.test.ts \
             --maxWorkers=1
         env:
           RUN_BROWSER_ACCEPTANCE: "1"
@@ -111,3 +113,4 @@ jobs:
           RUN_INDEPENDENT_BUYER_STATE_BROWSER: "1"
           RUN_BROWSER_FIXTURE_LIFECYCLE: "1"
           RUN_INDEPENDENT_TRANSACTION_OUTCOMES_BROWSER: "1"
+          RUN_INDEPENDENT_TRANSACTION_LINEAGE_BROWSER: "1"
