@@ -268,4 +268,60 @@ run("wallet-scoped private-record feedback", () => {
     await delivery.respond({ delivered: true });
     await fixture.page.getByText("Delivered", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }, 45_000);
+
+  it("does not let an old completion release the same receipt in a newer session or component lifetime", async () => {
+    await setFixtureSession({ chainId: 31337, account: chain.buyer });
+    await openRecords(chain.buyer);
+
+    const stale = await startDelivery();
+    await switchAccount(chain.stranger);
+    await reloadRecords(chain.stranger);
+    await switchAccount(chain.buyer);
+    await reloadRecords(chain.buyer);
+    const current = await startDelivery();
+    const requestCount = pendingReceipts.length;
+    await stale.respond({ status: 503, reason: "Old session failure." });
+    await expect.poll(async () => (await fixture.page.locator('[role="alert"]').allInnerTexts()).join(" ")).not.toMatch(/Old session failure/);
+    const sending = fixture.page.getByRole("button", { name: "Sending…", exact: true });
+    await expect.poll(async () => sending.isDisabled()).toBe(true);
+    await sending.click({ force: true });
+    await fixture.page.waitForTimeout(100);
+    expect(pendingReceipts).toHaveLength(requestCount);
+    await current.respond({ status: 503, reason: "Current session failure." });
+    await fixture.page.getByText("Current session failure.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+
+    const priorLifetime = await startDelivery();
+    await fixture.page.goto(`${fixture.baseUrl}/profile`, { waitUntil: "domcontentloaded" });
+    await openRecords(chain.buyer);
+    const currentLifetime = await startDelivery();
+    await priorLifetime.respond({ delivered: true });
+    await expect.poll(async () => fixture.page.getByText("Delivered", { exact: true }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Sending…", exact: true }).isDisabled()).toBe(true);
+    await currentLifetime.respond({ delivered: true });
+    await fixture.page.getByText("Delivered", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  }, 60_000);
+
+  it("does not let delayed records release or overwrite a new load after a chain round trip", async () => {
+    await setFixtureSession({ chainId: 31337, account: chain.buyer });
+    await openRecords(chain.buyer);
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const stale = await startRecordLoad();
+
+    await setFixtureSession({ chainId: 1, account: chain.buyer });
+    await fixture.page.getByText("Wrong network", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await setFixtureSession({ chainId: 31337, account: chain.buyer });
+    holdNextRecords = true;
+    const current = await startRecordLoad();
+
+    await stale.respond({ receiptStatus: "delivered", raffleId: "999" });
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Opening wallet…", exact: true }).isDisabled()).toBe(true);
+    await expect.poll(async () => fixture.page.getByText("Delivered", { exact: true }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
+
+    await current.respond({ receiptStatus: "missing", raffleId: "1" });
+    await fixture.page.getByRole("heading", { name: "Receipts", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);
+    await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
+  }, 60_000);
 });
