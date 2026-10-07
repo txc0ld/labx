@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeEventLog, erc20Abi, keccak256, toBytes, type Address, type Hex } from "viem";
+import { decodeEventLog, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import type { Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
 import { transactionIntent } from "../lib/chain/pending-journal";
@@ -92,16 +92,19 @@ run("independent transaction outcome ownership", () => {
     service = chain.service;
     seller = chain.wallet(chain.seller).session;
     await seller.connect();
-    for (const tokenId of [981n, 982n, 983n]) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
-    for (const account of [chain.buyer, chain.stranger, chain.treasury]) await chain.write(chain.usdc, "mint", [account, 1_000_000_000n]);
+    for (const tokenId of [981n, 982n, 983n, 984n]) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
+    for (const account of [chain.buyer, chain.stranger, chain.treasury, chain.operator]) await chain.write(chain.usdc, "mint", [account, 1_000_000_000n]);
     expect(await createOpenRaffle(981n, "Unrelated approval outcome", 10_000_000n)).toBe(1n);
     expect(await createOpenRaffle(982n, "Refresh during confirmation", 14_000_000n)).toBe(2n);
     expect(await createOpenRaffle(983n, "Late wallet completion", 18_000_000n)).toBe(3n);
+    expect(await createOpenRaffle(984n, "Replacement recovery", 22_000_000n)).toBe(4n);
     const stranger = chain.wallet(chain.stranger).session;
     const treasury = chain.wallet(chain.treasury).session;
-    await Promise.all([stranger.connect(), treasury.connect()]);
+    const operator = chain.wallet(chain.operator).session;
+    await Promise.all([stranger.connect(), treasury.connect(), operator.connect()]);
     await act({ kind: "approveUsdc", id: 2n, packId: 0, quantity: 1 }, stranger);
     await act({ kind: "approveUsdc", id: 3n, packId: 0, quantity: 1 }, treasury);
+    await act({ kind: "approveUsdc", id: 4n, packId: 0, quantity: 1 }, operator);
     fixture = await browserChain(chain, chain.buyer, false);
   }, 90_000);
 
@@ -241,4 +244,96 @@ run("independent transaction outcome ownership", () => {
     const originalWalletText = await fixture.page.locator("#content").innerText();
     expect(originalWalletText).toContain(hash);
   }, 75_000);
+
+  it("retires an errored original hash when its actual same-nonce cancellation is reconciled and survives reload", async () => {
+    await openPiece(4n, chain.operator);
+    const purchase = await reachPurchase();
+    await purchase.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible", timeout: 10_000 });
+
+    let automine = false;
+    await chain.rpc("evm_setAutomine", [false]);
+    const failedReceipts: string[] = [];
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const requests = Array.isArray(body) ? body : [body];
+      const receiptRequest = requests.some(value => typeof value === "object" && value !== null && "method" in value && value.method === "eth_getTransactionReceipt");
+      if (receiptRequest) {
+        failedReceipts.push(route.request().postData() ?? "");
+        await route.abort("failed");
+        return;
+      }
+      await route.continue();
+    });
+
+    try {
+      await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+      const original = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction needs attention" });
+      await original.waitFor({ state: "visible", timeout: 20_000 });
+      expect(failedReceipts.length).toBeGreaterThan(0);
+      const h1 = (await original.innerText()).match(/0x[0-9a-f]{64}/i)?.[0] as Hex | undefined;
+      expect(h1).toMatch(/^0x[0-9a-f]{64}$/i);
+      const pendingTransaction = await chain.client.getTransaction({ hash: h1! });
+      const maxFeePerGas = (pendingTransaction.maxFeePerGas ?? pendingTransaction.gasPrice ?? 1n) * 2n + 1n;
+      const maxPriorityFeePerGas = (pendingTransaction.maxPriorityFeePerGas ?? 1n) * 2n + 1n;
+      const replacement = await chain.rpc("eth_sendTransaction", [{
+        from: chain.operator,
+        to: chain.operator,
+        value: "0x0",
+        data: "0x",
+        nonce: toHex(pendingTransaction.nonce),
+        gas: toHex(21_000),
+        maxFeePerGas: toHex(maxFeePerGas),
+        maxPriorityFeePerGas: toHex(maxPriorityFeePerGas)
+      }]);
+      expect(replacement).toMatch(/^0x[0-9a-f]{64}$/i);
+      const h2 = replacement as Hex;
+      expect(h2).not.toBe(h1);
+      await chain.rpc("evm_setAutomine", [true]);
+      automine = true;
+      await chain.mine();
+      await fixture.page.unroute(`${chain.url}/`);
+
+      const recovery = fixture.page.locator(".resume-transaction form");
+      await recovery.waitFor({ state: "visible", timeout: 10_000 });
+      await recovery.getByLabel("Transaction hash").fill(h2);
+      await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
+      const replacementReceipt = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
+      await expect.poll(() => replacementReceipt.innerText(), { timeout: 15_000 }).toMatch(/transaction (?:confirmed|replaced)/i);
+      await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.operator)), { timeout: 10_000 }).toBeNull();
+
+      const staleOriginalBeforeReload = await original.count();
+      const agreements = fixture.page.locator(".agreements input[type=checkbox]");
+      await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
+      for (const checkbox of await agreements.all()) await checkbox.check();
+      const record = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
+      const nextPurchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
+      await fixture.page.waitForTimeout(1_000);
+      const recordAvailable = await record.isVisible().catch(() => false) && !await record.isDisabled().catch(() => true);
+      const purchaseAvailable = await nextPurchase.isVisible().catch(() => false) && !await nextPurchase.isDisabled().catch(() => true);
+      const blockedBeforeReload = !recordAvailable && !purchaseAvailable;
+
+      await fixture.page.reload({ waitUntil: "domcontentloaded" });
+      const savedReplacement = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
+      await savedReplacement.waitFor({ state: "visible", timeout: 10_000 });
+      const checkReplacement = savedReplacement.getByRole("button", { name: "Check confirmation", exact: true });
+      if (await checkReplacement.isVisible().catch(() => false)) await checkReplacement.click();
+      await fixture.page.waitForTimeout(1_000);
+      const postReloadText = await fixture.page.locator("#content").innerText();
+      const replacementRecovered = /transaction confirmed/i.test(await savedReplacement.innerText());
+      const postReloadAlerts = await fixture.page.locator("#content [role=alert]").allInnerTexts();
+      const unsupportedAfterReload = postReloadAlerts.length > 0 || /not a labx|not supported labx|could not be found|transaction.*not found/i.test(postReloadText);
+
+      expect({ staleOriginalBeforeReload, blockedBeforeReload, replacementRecovered, unsupportedAfterReload }).toEqual({
+        staleOriginalBeforeReload: 0,
+        blockedBeforeReload: false,
+        replacementRecovered: true,
+        unsupportedAfterReload: false
+      });
+    } finally {
+      if (!automine) await chain.rpc("evm_setAutomine", [true]);
+      await fixture.page.unroute(`${chain.url}/`).catch(() => {});
+    }
+  }, 90_000);
 });
