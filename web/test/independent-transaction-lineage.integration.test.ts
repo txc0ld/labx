@@ -211,7 +211,7 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
           }
           return chain.rpc(method, Array.isArray(params) ? params : []);
         }
-      })
+      }, { retryCount: 0 })
     });
     return createRaffleService(client, chain.manifest, journal);
   }
