@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import { decodeEventLog, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import type { Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
@@ -49,6 +50,10 @@ run("independent transaction outcome ownership", () => {
 
   function journalKey(account: Address) {
     return `labx:pending:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${account.toLowerCase()}`;
+  }
+
+  function outcomeCheckpointKey(account: Address, hash: Hex) {
+    return `labx:outcome:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${account.toLowerCase()}:${hash.toLowerCase()}`;
   }
 
   async function openPiece(id: bigint, account: Address) {
@@ -189,6 +194,28 @@ run("independent transaction outcome ownership", () => {
     const workspaceText = await fixture.page.locator("#content").innerText();
     expect(workspaceText).toContain(hash!);
     expect(workspaceText).toMatch(/purchase confirmed/i);
+
+    await fixture.page.setViewportSize({ width: 390, height: 844 });
+    await fixture.page.evaluate(async () => {
+      await document.fonts.ready;
+      await Promise.all(Array.from(document.images).map(image => image.complete ? Promise.resolve() : new Promise<void>(resolveImage => {
+        image.addEventListener("load", () => resolveImage(), { once: true });
+        image.addEventListener("error", () => resolveImage(), { once: true });
+      })));
+    });
+    expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await fixture.page.screenshot({
+      path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/transaction-outcomes/independent/purchase-outcome-mobile.png"),
+      fullPage: true,
+      animations: "disabled"
+    });
+
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const retained = fixture.page.locator("#content", { hasText: hash! });
+    await retained.waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => retained.innerText(), { timeout: 15_000 }).toMatch(/purchase confirmed/i);
+    await expect.poll(() => fixture.page.getByRole("button", { name: "Buy again", exact: true }).isEnabled(), { timeout: 15_000 }).toBe(true);
+    expect(await retained.getByText("Saved transaction needs verification", { exact: true }).count()).toBe(0);
   }, 75_000);
 
   it("surfaces a late purchase hash only after an A-B-A wallet prompt returns to its original wallet", async () => {
@@ -244,6 +271,43 @@ run("independent transaction outcome ownership", () => {
     const originalWalletText = await fixture.page.locator("#content").innerText();
     expect(originalWalletText).toContain(hash);
   }, 75_000);
+
+  it("inspects an old confirmed hint without changing a separate newer pending journal", async () => {
+    const buyer = chain.wallet(chain.buyer).session;
+    await buyer.connect();
+    const oldApproval = await act({ kind: "approveUsdc", id: 1n, packId: 0, quantity: 3 }, buyer);
+    const oldTransaction = await chain.client.getTransaction({ hash: oldApproval.hash });
+    await openPiece(1n, chain.buyer);
+    const pendingKey = journalKey(chain.buyer);
+    const checkpointKey = outcomeCheckpointKey(chain.buyer, oldApproval.hash);
+    const block = await chain.client.getBlockNumber({ cacheTime: 0 });
+    const newerJournal = JSON.stringify({
+      id: "independent-newer-pending",
+      intentHash: keccak256(toBytes("separate-newer-wallet-intent")),
+      nonce: oldTransaction.nonce + 1,
+      startedBlock: block.toString(),
+      hash: null
+    });
+    await fixture.page.evaluate(({ outcomeKey, outcomeHash, journalStorageKey, journal }) => {
+      localStorage.setItem(outcomeKey, outcomeHash.toLowerCase());
+      localStorage.setItem(journalStorageKey, journal);
+    }, { outcomeKey: checkpointKey, outcomeHash: oldApproval.hash, journalStorageKey: pendingKey, journal: newerJournal });
+
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const oldOutcome = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: oldApproval.hash });
+    await oldOutcome.waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.waitForTimeout(2_000);
+    const rawAfterInspection = await fixture.page.evaluate((key: string) => localStorage.getItem(key), pendingKey);
+    const outcomeText = await oldOutcome.innerText();
+    const pendingText = await fixture.page.locator(".resume-transaction").innerText();
+    await fixture.page.evaluate((key: string) => localStorage.removeItem(key), pendingKey);
+
+    expect({
+      journalUnchanged: rawAfterInspection === newerJournal,
+      oldReceiptVerified: /transaction confirmed/i.test(outcomeText),
+      newerPendingVisible: pendingText.includes(`nonce ${oldTransaction.nonce + 1}`)
+    }).toEqual({ journalUnchanged: true, oldReceiptVerified: true, newerPendingVisible: true });
+  }, 45_000);
 
   it("retires an errored original hash when its actual same-nonce cancellation is reconciled and survives reload", async () => {
     await openPiece(4n, chain.operator);
