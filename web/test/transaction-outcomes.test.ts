@@ -538,6 +538,32 @@ describe("operation ownership beyond transaction controls", () => {
     } finally { stop(); vi.unstubAllGlobals(); }
   });
 
+  it("does not authorize a same-intent historical receipt from another nonce or a forged pointer as its own submission", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    f.confirm.mockResolvedValueOnce({ kind: "pending", hash });
+    await owner.submit(prepared, f.wallet);
+    const historicalHash: Hex = `0x${"ef".repeat(32)}`;
+    f.service.inspectOutcome.mockResolvedValue({ ...confirmed, hash: historicalHash, receipt: { ...receipt, hash: historicalHash, nonce: 0 } });
+    const historical = await owner.resume(historicalHash, f.wallet);
+    expect(historical).toMatchObject({ kind: "terminal", confirmation: { kind: "confirmed" } });
+    expect(owner.belongsToSubmission(submitted, historical)).toBe(false);
+    const originalKey = [...f.map.keys()].find(key => key.endsWith(`:${hash}`));
+    if (!originalKey) throw new Error("Expected original checkpoint");
+    f.map.set(originalKey, historicalHash);
+    await owner.synchronize(account);
+    expect(owner.belongsToSubmission(submitted, historical)).toBe(false);
+    expect(owner.getSnapshot(account).filter(item => owner.belongsToSubmission(submitted, item))).toHaveLength(0);
+  });
+
+  it("authorizes only its current terminal record for a direct confirmed submission", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const terminal = await owner.submit(prepared, f.wallet);
+    expect(owner.belongsToSubmission(submitted, terminal)).toBe(true);
+    expect(owner.belongsToSubmission(submitted, { ...terminal })).toBe(false);
+    await owner.acknowledge(terminal, f.wallet);
+    expect(owner.belongsToSubmission(submitted, terminal)).toBe(false);
+  });
+
   it.each([false, true])("preserves observed original intent across another tab's canonical receipt (same intent: %s)", async repriced => {
     const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
     f.confirm.mockResolvedValueOnce({ kind: "pending", hash });
@@ -547,7 +573,9 @@ describe("operation ownership beyond transaction controls", () => {
     for (const key of f.map.keys()) f.map.set(key, replacementHash);
     f.service.inspectOutcome.mockResolvedValue({ ...confirmed, hash: replacementHash, receipt: canonical });
     await owner.synchronize(account);
-    expect(await owner.resume(hash, f.wallet)).toMatchObject({ kind: "terminal", confirmation: { kind: repriced ? "confirmed" : "replaced" }, submitted: { hash: replacementHash } });
+    const terminal = await owner.resume(hash, f.wallet);
+    expect(terminal).toMatchObject({ kind: "terminal", confirmation: { kind: repriced ? "confirmed" : "replaced" }, submitted: { hash: replacementHash } });
+    expect(owner.belongsToSubmission(submitted, terminal)).toBe(true);
     const separate = memoryStorage(), unowned = createTransactionOutcomes(f.service, () => separate.storage);
     expect(await unowned.resume(replacementHash, f.wallet)).toMatchObject({ kind: "terminal", confirmation: { kind: "confirmed" } });
   });

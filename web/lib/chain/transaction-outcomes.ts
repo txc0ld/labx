@@ -374,6 +374,17 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     assertScope(submitted);
     return watch(submitted, id);
   }
+  function belongsToSubmission(submitted: SubmittedAction, outcome: TransactionOutcome) {
+    if (outcome.kind !== "terminal" || !getSnapshot(outcome.account).includes(outcome)
+      || submitted.chainId !== service.manifest.chainId || outcome.submitted.chainId !== submitted.chainId
+      || !sameAddress(submitted.account, outcome.account) || !sameAddress(submitted.account, outcome.submitted.account)) return false;
+    const original = verified.get(checkpointKey(submitted.account, submitted.hash));
+    const canonical = verified.get(checkpointKey(outcome.account, outcome.submitted.hash));
+    return original !== undefined && canonical !== undefined && original.nonce === canonical.nonce
+      && canonical.nonce === outcome.confirmation.receipt.nonce
+      && identity(submitted.account, original.id) === identity(outcome.account, canonical.id)
+      && identity(outcome.account, canonical.id) === outcome.id;
+  }
   async function acknowledge(record: TransactionOutcome, wallet?: WalletSessionPort) {
     if (record.kind !== "terminal" || !getSnapshot(record.account).includes(record)) return;
     const snapshot = wallet?.getSnapshot();
@@ -399,7 +410,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     void recover(record.account);
   }
   function claimRefresh(key: string) { if (refreshed.has(key)) return false; refreshed.add(key); return true; }
-  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, synchronize, observe, submit, resume, acknowledge };
+  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, synchronize, observe, submit, resume, belongsToSubmission, acknowledge };
 }
 export type TransactionOutcomes = ReturnType<typeof createTransactionOutcomes>;
 const owners = new WeakMap<RaffleService, TransactionOutcomes>();

@@ -190,7 +190,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (outcome.kind === "terminal") {
       const confirmation = outcome.confirmation;
       const owned = ownSubmission.current?.scope === expected.generation ? ownSubmission.current.submitted : null;
-      if (!owned || !sameSubmittedIntent(owned, outcome.submitted)) {
+      if (!owned || !owner.belongsToSubmission(owned, outcome) || !sameSubmittedIntent(owned, outcome.submitted)) {
         setCurrent(expected, { kind: "receipt", confirmation });
       } else if (confirmation.kind === "confirmed") {
         setCurrent(expected, { kind: "confirmed", confirmation });
