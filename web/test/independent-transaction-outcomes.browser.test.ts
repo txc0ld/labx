@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { decodeEventLog, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import type { Route } from "playwright";
@@ -207,6 +208,41 @@ run("independent transaction outcome ownership", () => {
     await fixture.page.screenshot({
       path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/transaction-outcomes/independent/purchase-outcome-mobile.png"),
       fullPage: true,
+      animations: "disabled"
+    });
+    const lowerRecords = fixture.page.getByText(/Inspect bonus-entry records \(1 lots\)/);
+    await lowerRecords.scrollIntoViewIfNeeded();
+    await fixture.page.waitForTimeout(300);
+    const lowerLayout = await lowerRecords.evaluate(element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return { rect: { top: rect.top, bottom: rect.bottom, height: rect.height }, display: style.display, visibility: style.visibility, opacity: style.opacity, scrollY, viewportHeight: innerHeight };
+    });
+    expect(lowerLayout.rect.top).toBeGreaterThanOrEqual(0);
+    expect(lowerLayout.rect.bottom).toBeLessThanOrEqual(lowerLayout.viewportHeight);
+    expect(lowerLayout).toMatchObject({ visibility: "visible", opacity: "1" });
+    await fixture.page.screenshot({
+      path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/transaction-outcomes/independent/purchase-outcome-mobile-lower-viewport.png"),
+      fullPage: false,
+      animations: "disabled"
+    });
+    const footer = fixture.page.locator(".site-footer");
+    await footer.scrollIntoViewIfNeeded();
+    await fixture.page.waitForTimeout(300);
+    const footerLayout = await footer.evaluate(element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return { rect: { top: rect.top, bottom: rect.bottom, height: rect.height }, display: style.display, visibility: style.visibility, opacity: style.opacity, scrollY, viewportHeight: innerHeight };
+    });
+    expect(footerLayout.rect.top).toBeLessThan(footerLayout.viewportHeight);
+    expect(footerLayout).toMatchObject({ display: "grid", visibility: "visible", opacity: "1" });
+    writeFileSync(
+      resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/transaction-outcomes/independent/mobile-lower-layout.json"),
+      JSON.stringify({ lowerLayout, footerLayout }, null, 2)
+    );
+    await fixture.page.screenshot({
+      path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/transaction-outcomes/independent/purchase-outcome-mobile-footer-viewport.png"),
+      fullPage: false,
       animations: "disabled"
     });
 
