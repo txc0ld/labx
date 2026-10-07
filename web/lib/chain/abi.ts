@@ -1,4 +1,4 @@
-// Generated from the reviewed LabxRaffle v2 artifact.
+// Generated from the compiled LabxRaffle v3 artifact.
 export const raffleAbi = [
   {
     "type": "constructor",
@@ -79,6 +79,19 @@ export const raffleAbi = [
   },
   {
     "type": "function",
+    "name": "BUYER_FEE_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "COORDINATOR_DELAY",
     "inputs": [],
     "outputs": [
@@ -118,7 +131,7 @@ export const raffleAbi = [
   },
   {
     "type": "function",
-    "name": "LAB_FEE",
+    "name": "FEE_DENOMINATOR",
     "inputs": [],
     "outputs": [
       {
@@ -268,6 +281,19 @@ export const raffleAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "SELLER_FEE_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "stateMutability": "view"
@@ -875,6 +901,37 @@ export const raffleAbi = [
   },
   {
     "type": "function",
+    "name": "getRaffleAccounting",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "accounting",
+        "type": "tuple",
+        "internalType": "struct LabxRaffle.RaffleAccounting",
+        "components": [
+          {
+            "name": "grossPrincipal",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "buyerFees",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getRafflePolicy",
     "inputs": [
       {
@@ -928,6 +985,16 @@ export const raffleAbi = [
             "name": "nativePayment",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "buyerFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "sellerFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
           }
         ]
       }

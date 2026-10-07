@@ -1,4 +1,5 @@
 import { encodeFunctionData, erc20Abi, erc721Abi, type Hex, type PublicClient } from "viem";
+import { buyerFee } from "./fees";
 import { raffleAbi } from "./abi";
 import { createReader } from "./reader";
 import { availableActions } from "./workflow";
@@ -45,7 +46,8 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
         boundedNumber(action.packId, 0, snapshot.packs.length - 1); boundedNumber(action.quantity, 1, 20);
         const pack = snapshot.packs[action.packId];
         if (!pack.active || pack.maxSupply - pack.sold < action.quantity) throw new Error("The selected membership quantity is no longer available.");
-        amountUsdc = (pack.priceUsdc + snapshot.labFee) * BigInt(action.quantity);
+        const principal = pack.priceUsdc * BigInt(action.quantity);
+        amountUsdc = principal + buyerFee(principal, snapshot.policy.buyerFeeBps);
         if (action.kind === "approveUsdc") {
           to = manifest.usdc; title = "Approve exact membership total";
           data = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [manifest.address, amountUsdc] });

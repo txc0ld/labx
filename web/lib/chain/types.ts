@@ -2,6 +2,7 @@ import type { Address, Hex, ContractFunctionReturnType } from "viem";
 import type { raffleAbi } from "./abi";
 
 export type Raffle = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffle">;
+export type RaffleAccounting = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffleAccounting">;
 export type Pack = ContractFunctionReturnType<typeof raffleAbi, "view", "getPack">;
 export type RafflePolicy = ContractFunctionReturnType<typeof raffleAbi, "view", "getRafflePolicy">;
 export type Lot = ContractFunctionReturnType<typeof raffleAbi, "view", "lotAt">;
@@ -10,7 +11,7 @@ export type DeploymentManifest = {
   chainId: 11155111 | 31337;
   address: Address;
   runtimeCodeHash: Hex;
-  version: 2;
+  version: 3;
   deploymentBlock: bigint;
   usdc: Address;
 };
@@ -20,7 +21,7 @@ export type DeploymentStatus =
 export type RaffleSnapshot = {
   id: bigint; block: BlockRef; raffle: Raffle; packs: readonly Pack[]; policy: RafflePolicy;
   lotCount: bigint; paused: boolean; owner: Address; ethEnabled: boolean;
-  labFee: bigint; drawStartGrace: bigint; randomnessGrace: bigint; revealGrace: bigint;
+  accounting: RaffleAccounting; drawStartGrace: bigint; randomnessGrace: bigint; revealGrace: bigint;
 };
 export type Page<T, Cursor = bigint> = { items: readonly T[]; nextCursor: Cursor | null; block: BlockRef };
 export type AccountRaffleState = {

@@ -16,8 +16,8 @@ import type { DeploymentManifest } from "./types";
 export function localDevelopmentManifest(raw: string | undefined): DeploymentManifest | null {
   if (process.env.NODE_ENV !== "development" || !raw) return null;
   const data: unknown = JSON.parse(raw);
-  if (!data || typeof data !== "object" || !("chainId" in data) || data.chainId !== 31337 || !("address" in data) || !("runtimeCodeHash" in data) || !("usdc" in data) || !("deploymentBlock" in data) || typeof data.deploymentBlock !== "string" || !/^\d+$/.test(data.deploymentBlock)) throw new Error("Invalid local fixture manifest.");
-  return { chainId: 31337, address: address(data.address), runtimeCodeHash: hash(data.runtimeCodeHash), version: 2, deploymentBlock: BigInt(data.deploymentBlock), usdc: address(data.usdc) };
+  if (!data || typeof data !== "object" || !("chainId" in data) || data.chainId !== 31337 || !("version" in data) || data.version !== 3 || !("address" in data) || !("runtimeCodeHash" in data) || !("usdc" in data) || !("deploymentBlock" in data) || typeof data.deploymentBlock !== "string" || !/^\d+$/.test(data.deploymentBlock)) throw new Error("Invalid local fixture manifest.");
+  return { chainId: 31337, address: address(data.address), runtimeCodeHash: hash(data.runtimeCodeHash), version: 3, deploymentBlock: BigInt(data.deploymentBlock), usdc: address(data.usdc) };
 }
 let configured: BrowserService | undefined;
 export function configuredBrowserService(): BrowserService {

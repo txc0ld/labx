@@ -14,7 +14,7 @@ import {IVRFCoordinatorV2Plus, ISwapRouter02, IWETH9, AggregatorV3Interface} fro
 /// @notice Sepolia membership-pack draws for LABx. Bonus entries are not tickets.
 ///         Ethereum mainnet (chain id 1) cannot be deployed. Admin configuration needs independent review.
 /// @dev Prize NFTs are escrowed and pulled after settlement or cancellation. USDC principal
-///      and the lab fee are pulled separately, so a reverting receiver cannot freeze them.
+///      and protocol fees are pulled separately, so a reverting receiver cannot freeze them.
 ///      A server-side commitment is stored as a hash and never decoded on-chain.
 ///      Randomness is Chainlink VRF v2.5, requested only after an entry snapshot. The
 ///      full randomness configuration, terms and treasury are fixed when sales open.
@@ -22,7 +22,9 @@ import {IVRFCoordinatorV2Plus, ISwapRouter02, IWETH9, AggregatorV3Interface} fro
 contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     using SafeERC20 for IERC20;
 
-    uint256 public constant LAB_FEE = 5_000_000; // 5 USDC, 6 decimals. Charged on top of the pack price.
+    uint16 public constant BUYER_FEE_BPS = 200;
+    uint16 public constant SELLER_FEE_BPS = 200;
+    uint256 public constant FEE_DENOMINATOR = 10_000;
     uint256 public constant ENTRY_EXPIRY = 365 days;
     uint32 public constant MAX_QTY = 20;
     uint8 public constant MAX_PACKS = 8;
@@ -123,6 +125,11 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         string title;
     }
 
+    struct RaffleAccounting {
+        uint256 grossPrincipal;
+        uint256 buyerFees;
+    }
+
     struct RafflePolicy {
         address coordinator;
         address treasury;
@@ -132,6 +139,8 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         uint32 callbackGasLimit;
         uint16 requestConfirmations;
         bool nativePayment;
+        uint16 buyerFeeBps;
+        uint16 sellerFeeBps;
     }
 
     struct Init {
@@ -226,6 +235,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     mapping(uint256 => mapping(address => uint256)) public principalOf;
     mapping(uint256 => mapping(address => uint256)) public feeOf;
     mapping(uint256 => RafflePolicy) internal _policies;
+    mapping(uint256 => uint256) internal _buyerFees;
     mapping(address => mapping(uint256 => uint256)) public requestToRaffle;
     mapping(address => mapping(uint256 => bool)) public requestUsed;
 
@@ -253,6 +263,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     event RandomnessRequested(uint256 indexed id, uint256 indexed requestId);
     event WinnerDrawn(uint256 indexed id, address indexed winner, uint256 randomWord);
     event Revealed(uint256 indexed id, bytes32 publicHash, bytes32 privateHash);
+    /// @dev v3 principal is seller net; fee combines buyer fees and seller commission.
     event Settled(uint256 indexed id, address indexed winner, uint256 principal, uint256 fee);
     event Cancelled(uint256 indexed id);
     event Refunded(uint256 indexed id, address indexed buyer, uint256 amount);
@@ -511,7 +522,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
             subscriptionId: subscriptionId,
             callbackGasLimit: callbackGasLimit,
             requestConfirmations: requestConfirmations,
-            nativePayment: nativePayment
+            nativePayment: nativePayment,
+            buyerFeeBps: BUYER_FEE_BPS,
+            sellerFeeBps: SELLER_FEE_BPS
         });
     }
 
@@ -641,6 +654,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Drawn) revert BadPhase();
         if (!r.revealed && block.timestamp < uint256(r.drawnAt) + REVEAL_GRACE) revert RevealRequired();
+        uint256 sellerCommission = r.principalEscrow * _policies[id].sellerFeeBps / FEE_DENOMINATOR;
+        r.principalEscrow -= sellerCommission;
+        r.feeEscrow += sellerCommission;
         r.phase = Phase.Settled;
         emit Settled(id, r.winner, r.principalEscrow, r.feeEscrow);
     }
@@ -764,6 +780,16 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         v.title = r.title;
     }
 
+    /// @notice Lifetime sales, including refunded purchases. These counters are not liabilities.
+    function getRaffleAccounting(uint256 id) external view returns (RaffleAccounting memory accounting) {
+        uint8 count = _raffles[id].packCount;
+        for (uint8 packId; packId < count; ++packId) {
+            Pack storage pack = _packs[id][packId];
+            accounting.grossPrincipal += uint256(pack.priceUsdc) * pack.sold;
+        }
+        accounting.buyerFees = _buyerFees[id];
+    }
+
     function getPack(uint256 id, uint8 packId) external view returns (Pack memory) {
         return _packs[id][packId];
     }
@@ -777,7 +803,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     }
 
     function contractVersion() external pure returns (uint256) {
-        return 2;
+        return 3;
     }
 
     function getRafflePolicy(uint256 id) external view returns (RafflePolicy memory) {
@@ -828,7 +854,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         if (!p.active) revert BadPack();
         if (uint256(p.sold) + qty > p.maxSupply) revert SoldOut();
         principal = uint256(p.priceUsdc) * qty;
-        fee = LAB_FEE * qty;
+        fee = principal * _policies[id].buyerFeeBps / FEE_DENOMINATOR;
     }
 
     function _credit(uint256 id, uint8 packId, uint32 qty, uint256 principal, uint256 fee, bool paidWithEth) internal {
@@ -839,6 +865,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         r.feeEscrow += fee;
         principalOf[id][msg.sender] += principal;
         feeOf[id][msg.sender] += fee;
+        _buyerFees[id] += fee;
         uint32 entries = p.bonusEntries * qty;
         _lots[id].push(Lot({owner: msg.sender, amount: entries, expiresAt: uint64(block.timestamp + ENTRY_EXPIRY)}));
         emit PackPurchased(id, msg.sender, packId, qty, entries, principal, fee, paidWithEth);

@@ -14,7 +14,7 @@ export async function blockRef(client: PublicClient, requested?: BlockRef): Prom
 }
 export async function attestDeployment(client: PublicClient, manifest: DeploymentManifest, at?: BlockRef): Promise<DeploymentStatus> {
   address(manifest.address); address(manifest.usdc); hash(manifest.runtimeCodeHash);
-  if (![11155111, 31337].includes(manifest.chainId) || manifest.version !== 2 || manifest.deploymentBlock < 0n) return { kind: "mismatch", reason: "Deployment manifest is invalid." };
+  if (![11155111, 31337].includes(manifest.chainId) || manifest.version !== 3 || manifest.deploymentBlock < 0n) return { kind: "mismatch", reason: "Deployment manifest is invalid." };
   if (sameAddress(manifest.address, LEGACY_RAFFLE)) return { kind: "legacy", reason: "This historical contract does not implement the current buyer protections. Transactions are unavailable." };
   const block = await blockRef(client, at);
   if (await client.getChainId() !== manifest.chainId || block.number < manifest.deploymentBlock) return { kind: "mismatch", reason: "The RPC network does not match this deployment." };
@@ -24,6 +24,6 @@ export async function attestDeployment(client: PublicClient, manifest: Deploymen
     client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "contractVersion", blockNumber: block.number }),
     client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "usdc", blockNumber: block.number })
   ]);
-  if (version !== 2n || !sameAddress(usdc, manifest.usdc)) return { kind: "mismatch", reason: "Contract version or payment token does not match the reviewed deployment." };
+  if (version !== 3n || !sameAddress(usdc, manifest.usdc)) return { kind: "mismatch", reason: "Contract version or payment token does not match the reviewed deployment." };
   return { kind: "verified", manifest, block };
 }

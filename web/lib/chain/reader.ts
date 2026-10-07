@@ -1,5 +1,7 @@
 import { decodeEventLog, erc20Abi, erc721Abi, zeroAddress, type Address, type PublicClient } from "viem";
 import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
+import { buyerFee } from "./fees";
+import { requirePublishedTerms } from "../published-terms";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
 import type { AccountRaffleState, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, RaffleSnapshot } from "./types";
@@ -21,19 +23,19 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   async function readRaffle({ id, block }: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot> {
     positiveId(id); const at = await checkedBlock(block);
     const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number };
-    const [raffle, policy, lotCount, paused, owner, ethEnabled, labFee, drawStartGrace, randomnessGrace, revealGrace] = await Promise.all([
+    const [raffle, policy, lotCount, paused, owner, ethEnabled, accounting, drawStartGrace, randomnessGrace, revealGrace] = await Promise.all([
       client.readContract({ ...base, functionName: "getRaffle", args: [id] }),
       client.readContract({ ...base, functionName: "getRafflePolicy", args: [id] }),
       client.readContract({ ...base, functionName: "lotCount", args: [id] }),
       client.readContract({ ...base, functionName: "paused" }), client.readContract({ ...base, functionName: "owner" }),
-      client.readContract({ ...base, functionName: "ethPathEnabled" }), client.readContract({ ...base, functionName: "LAB_FEE" }),
+      client.readContract({ ...base, functionName: "ethPathEnabled" }), client.readContract({ ...base, functionName: "getRaffleAccounting", args: [id] }),
       client.readContract({ ...base, functionName: "DRAW_START_GRACE" }), client.readContract({ ...base, functionName: "VRF_ABORT_AFTER" }),
       client.readContract({ ...base, functionName: "REVEAL_GRACE" })
     ]);
     if (raffle.seller === zeroAddress) throw new Error("Raffle not found.");
     if (raffle.packCount < 1 || raffle.packCount > 8 || raffle.phase > 6) throw new Error("Raffle data is invalid.");
     const packs = await Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] })));
-    return { id, block: at, raffle, packs, policy, lotCount, paused, owner, ethEnabled, labFee, drawStartGrace, randomnessGrace, revealGrace };
+    return { id, block: at, raffle, packs, policy, lotCount, paused, owner, ethEnabled, accounting, drawStartGrace, randomnessGrace, revealGrace };
   }
   async function readArtwork({ id, block }: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata> {
     const snapshot = await readRaffle({ id, block });
@@ -104,20 +106,24 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   }
   async function openingPolicy({ block }: { block?: BlockRef } = {}) {
     const at = await checkedBlock(block); const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number };
-    const [coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, hash] = await Promise.all([
+    const [coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps, hash] = await Promise.all([
       client.readContract({ ...base, functionName: "vrfCoordinator" }), client.readContract({ ...base, functionName: "treasury" }),
       client.readContract({ ...base, functionName: "termsHash" }), client.readContract({ ...base, functionName: "keyHash" }),
       client.readContract({ ...base, functionName: "subscriptionId" }), client.readContract({ ...base, functionName: "callbackGasLimit" }),
       client.readContract({ ...base, functionName: "requestConfirmations" }), client.readContract({ ...base, functionName: "nativePayment" }),
+      client.readContract({ ...base, functionName: "BUYER_FEE_BPS" }),
+      client.readContract({ ...base, functionName: "SELLER_FEE_BPS" }),
       client.readContract({ ...base, functionName: "openingPolicyHash" })
     ]);
-    return { policy: { coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment }, hash, block: at };
+    return { policy: { coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps }, hash, block: at };
   }
   async function quoteMembership({ id, packId, quantity, slippageBps = 100 }: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote> {
     const snapshot = await readRaffle({ id }); boundedNumber(packId, 0, snapshot.packs.length - 1); boundedNumber(quantity, 1, 20); boundedNumber(slippageBps, 0, 1000);
+    if (snapshot.raffle.phase !== 1 || snapshot.paused || snapshot.block.timestamp >= snapshot.raffle.salesEnd) throw new Error("Membership sales are not open.");
+    requirePublishedTerms(snapshot.policy.termsHash);
     const pack = snapshot.packs[packId];
     if (!pack.active || pack.maxSupply - pack.sold < quantity) throw new Error("This membership quantity is unavailable.");
-    const principal = pack.priceUsdc * BigInt(quantity), fee = snapshot.labFee * BigInt(quantity), totalUsdc = principal + fee;
+    const principal = pack.priceUsdc * BigInt(quantity), fee = buyerFee(principal, snapshot.policy.buyerFeeBps), totalUsdc = principal + fee;
     const basic = { principal, fee, totalUsdc, bonusEntries: BigInt(pack.bonusEntries) * BigInt(quantity), block: snapshot.block };
     if (!snapshot.ethEnabled) return { ...basic, eth: { kind: "unavailable", reason: "ETH payment is disabled for this deployment." } };
     try {

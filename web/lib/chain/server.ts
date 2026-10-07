@@ -12,11 +12,11 @@ export async function serverWorkflow() {
   let origin = new URL(publicSiteUrl()).origin;
   if (process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST) {
     const parsed: unknown = JSON.parse(process.env.NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST);
-    if (!parsed || typeof parsed !== "object" || !("chainId" in parsed) || parsed.chainId !== 31337 || !("address" in parsed) || !("runtimeCodeHash" in parsed) || !("usdc" in parsed) || !("deploymentBlock" in parsed) || typeof parsed.deploymentBlock !== "string" || !/^\d+$/.test(parsed.deploymentBlock)) throw new Error("Local fixture configuration is invalid.");
+    if (!parsed || typeof parsed !== "object" || !("chainId" in parsed) || parsed.chainId !== 31337 || !("version" in parsed) || parsed.version !== 3 || !("address" in parsed) || !("runtimeCodeHash" in parsed) || !("usdc" in parsed) || !("deploymentBlock" in parsed) || typeof parsed.deploymentBlock !== "string" || !/^\d+$/.test(parsed.deploymentBlock)) throw new Error("Local fixture configuration is invalid.");
     const localRpc = new URL(process.env.NEXT_PUBLIC_LOCAL_RPC_URL || "http://127.0.0.1:8545");
     const localOrigin = new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3113");
     if (!["localhost", "127.0.0.1"].includes(localRpc.hostname) || !["localhost", "127.0.0.1"].includes(localOrigin.hostname)) throw new Error("Local fixtures require loopback endpoints.");
-    manifest = { chainId: 31337, address: address(parsed.address), runtimeCodeHash: hash(parsed.runtimeCodeHash), version: 2, usdc: address(parsed.usdc), deploymentBlock: BigInt(parsed.deploymentBlock) } satisfies DeploymentManifest;
+    manifest = { chainId: 31337, address: address(parsed.address), runtimeCodeHash: hash(parsed.runtimeCodeHash), version: 3, usdc: address(parsed.usdc), deploymentBlock: BigInt(parsed.deploymentBlock) } satisfies DeploymentManifest;
     rpc = localRpc.href; origin = localOrigin.origin;
   }
   if (!manifest) throw new Error("A reviewed raffle deployment is not configured.");
