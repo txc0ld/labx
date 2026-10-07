@@ -51,6 +51,47 @@ function fixture() {
 }
 
 describe("operation ownership beyond transaction controls", () => {
+  it("owns a fresh broadcast in memory before RPC observation and survives detached UI notification", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const observed = deferred<void>(), confirm = f.service.confirm;
+    f.service.confirm = async input => { await observed.promise; return confirm(input); };
+    const notification = vi.fn((transaction: SubmittedAction) => { expect(Object.isFrozen(transaction)).toBe(true); throw new Error("UI detached"); });
+    const watching = owner.submit(prepared, f.wallet, notification);
+    await vi.waitFor(() => expect(notification).toHaveBeenCalledWith(submitted));
+    expect(owner.getSnapshot(account)).toMatchObject([{ kind: "checking", submitted: { hash } }]);
+    expect(f.map.size).toBe(0);
+    observed.resolve();
+    expect(await watching).toMatchObject({ kind: "terminal" });
+    expect([...f.map.values()]).toEqual([hash]);
+  });
+
+  it.each([false, true])("settles a pointer mismatch scan and retries its fork only on a new synchronization (captured lineage: %s)", async captured => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const replacement: Hex = `0x${"cd".repeat(32)}`;
+    const token = Object.freeze({ hash });
+    f.service.captureOutcomeLineage.mockImplementation(input => captured && input.hash === hash ? token : null);
+    const key = `labx:outcome:v1:31337:${contract}:${hash}:${account}:${hash}`;
+    f.map.set(key, hash);
+    owner.hydrate(account);
+    expect(f.service.captureOutcomeLineage).toHaveBeenCalledWith({ account, hash });
+    expect(f.service.inspectOutcome).not.toHaveBeenCalled();
+    f.map.set(key, replacement);
+    f.service.inspectOutcome.mockImplementation(async input => input.hash === hash
+      ? { kind: "unknown", hash, reason: "Transaction unavailable" }
+      : { kind: "pending", hash: replacement, reason: "confirmations", transaction: { ...submitted, hash: replacement, nonce: 1 } });
+    await owner.recover(account);
+    expect(f.service.inspectOutcome).toHaveBeenCalledTimes(2);
+    expect(owner.getSnapshot(account).every(item => item.kind === "unverified")).toBe(true);
+    await owner.recover(account);
+    expect(f.service.inspectOutcome).toHaveBeenCalledTimes(2);
+    f.service.inspectOutcome.mockResolvedValue({ ...confirmed, hash: replacement, receipt: { ...receipt, hash: replacement } });
+    f.service.retainOutcome.mockImplementation(async input => { input.retain({ priorHash: captured && input.lineage === token ? hash : null }); });
+    await owner.synchronize(account);
+    expect(f.service.inspectOutcome).toHaveBeenCalledTimes(3);
+    expect(owner.getSnapshot(account).filter(item => item.kind === "terminal")).toHaveLength(1);
+    expect(owner.getSnapshot(account).filter(item => item.kind === "unverified")).toHaveLength(captured ? 0 : 1);
+  });
+
   it("continues submission and confirmation after every subscriber detaches, isolating A from B and restoring A", async () => {
     const f = fixture(), send = deferred<SubmittedAction>(), receipt = deferred<Confirmation>();
     f.service.submit.mockImplementation(() => send.promise);

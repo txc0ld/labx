@@ -1,5 +1,5 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
-import { type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
+import { BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
@@ -107,7 +107,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     return Object.freeze(result);
   }
   async function canonicalReceipt(txHash: Hex, account: Address, timeoutMs: number, onReplaced?: () => void): Promise<CanonicalReceipt> {
-    return validateReceipt(await client.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: Math.max(1000, Math.min(timeoutMs, 120_000)), onReplaced }), account);
+    return validateReceipt(await client.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: Math.max(1, Math.min(timeoutMs, 120_000)), onReplaced }), account);
   }
   function timedOut(error: unknown) {
     return error instanceof Error && /Timeout|timed out/i.test(error.name + error.message);
@@ -137,13 +137,37 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       return { kind: "unknown", hash: txHash, reason: error instanceof Error ? error.message : "The transaction could not be verified. Check again when the RPC is available." };
     }
   }
+  function retryableObservation(error: unknown) {
+    const transient = (cause: unknown) => cause instanceof TransactionNotFoundError || cause instanceof TimeoutError
+      || cause instanceof SocketClosedError || cause instanceof WebSocketRequestError || cause instanceof InternalRpcError || cause instanceof LimitExceededRpcError
+      || cause instanceof HttpRequestError && (cause.status === undefined || cause.status === 408 || cause.status === 429 || cause.status >= 500);
+    return transient(error) || error instanceof BaseError && transient(error.walk(transient));
+  }
+  async function observeBroadcast(txHash: Hex, deadline: number) {
+    while (Date.now() < deadline) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          client.getTransaction({ hash: txHash }),
+          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), Math.max(1, deadline - Date.now())); })
+        ]);
+      } catch (error) {
+        if (!retryableObservation(error)) throw error;
+      } finally { if (timer) clearTimeout(timer); }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining)));
+    }
+    return null;
+  }
   async function confirm({ transaction, timeoutMs = 60_000, beforeJournalWatch, beforeJournalClear }: Parameters<RaffleService["confirm"]>[0]): ReturnType<RaffleService["confirm"]> {
     await reader.checkedBlock(); hash(transaction.hash);
     if (transaction.chainId !== manifest.chainId) throw new Error("Transaction network does not match this deployment.");
+    const deadline = Date.now() + Math.max(0, Math.min(timeoutMs, 120_000));
     let replacementSeen = false;
     try {
       if (beforeJournalWatch) {
-        const actual = await client.getTransaction({ hash: transaction.hash });
+        const actual = await observeBroadcast(transaction.hash, deadline);
+        if (!actual) return { kind: "pending", hash: transaction.hash };
         if (actual.hash.toLowerCase() !== transaction.hash.toLowerCase() || !sameAddress(actual.from, transaction.account)) throw new Error("Transaction sender or hash does not match this wallet request.");
         await journal.exclusive(transaction.account, async () => {
           const current = journal.read(transaction.account);
@@ -152,7 +176,8 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
           beforeJournalWatch({ transaction: { hash: actual.hash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value, nonce: actual.nonce }, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
         });
       }
-      const receipt = await canonicalReceipt(transaction.hash, transaction.account, timeoutMs, () => { replacementSeen = true; });
+      if (Date.now() >= deadline) return { kind: "pending", hash: transaction.hash };
+      const receipt = await canonicalReceipt(transaction.hash, transaction.account, deadline - Date.now(), () => { replacementSeen = true; });
       let expectedIntent = transaction.to ? transactionIntent({ ...transaction, to: transaction.to }) : null;
       await journal.exclusive(transaction.account, async () => {
         const current = journal.read(transaction.account);

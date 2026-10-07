@@ -46,6 +46,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
   const recoveries = new Map<string, Promise<void>>();
   const verified = new Map<string, { id: string; nonce: number; observed: ObservedTransaction | null }>();
   const lineages = new Map<string, OutcomeLineage>();
+  const handledPointers = new Map<string, string>();
   const rescan = new Set<string>();
   const observed = new Map<Address, number>();
   let sequence = 0;
@@ -142,20 +143,28 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     if (related.length) records.set(accountKey(account), getSnapshot(account).filter(item => !related.includes(item)));
     return id;
   }
+  function captureLineage(account: Address, hash: Hex) {
+    const key = checkpointKey(account, hash);
+    if (!lineages.has(key)) {
+      const lineage = service.captureOutcomeLineage({ account, hash });
+      if (lineage) lineages.set(key, lineage);
+    }
+  }
   function observeHint(account: Address, hint: { id: string; hash: Hex }) {
     const acknowledgedHash = acknowledged.get(checkpointKey(account, hint.id));
     if (acknowledgedHash) {
       if (acknowledgedHash !== hint.hash) throw new Error("An acknowledged checkpoint changed to unknown activity. Check wallet activity before continuing.");
       return;
     }
+    captureLineage(account, hint.hash);
     const existing = getSnapshot(account).find(item => item.id === hint.id), previousHash = existing ? outcomeHash(existing) : null;
     if (previousHash && previousHash.toLowerCase() !== hint.hash) {
       const lineage = lineages.get(checkpointKey(account, previousHash));
       if (lineage) lineages.set(checkpointKey(account, hint.hash), lineage);
     }
     if (previousHash && previousHash.toLowerCase() !== hint.hash && (existing?.kind === "terminal" || !verified.has(checkpointKey(account, previousHash)))) {
-      const id = operationId(account, hint.hash);
-      if (!getSnapshot(account).some(item => item.id === id)) put({ id, hash: hint.hash, account, kind: "recovery" });
+      const fork = findHash(account, hint.hash);
+      if (!fork || fork.kind === "unverified") put({ id: fork?.id ?? operationId(account, hint.hash), hash: hint.hash, account, kind: "recovery" });
     } else if (!existing || existing.kind !== "terminal" && (previousHash?.toLowerCase() !== hint.hash || existing.kind === "unverified")) put({ ...hint, account, kind: "recovery" });
   }
   function hydrate(account: Address) {
@@ -191,10 +200,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     }
     const work = (async () => {
       try {
-        if (!lineages.has(key)) {
-          const lineage = service.captureOutcomeLineage({ account, hash });
-          if (lineage) lineages.set(key, lineage);
-        }
+        captureLineage(account, hash);
         const confirmation = await service.inspectOutcome({ hash, account, timeoutMs: manual ? 60_000 : 0 });
         if (confirmation.kind === "pending") remember(confirmation.transaction, requestedId);
         else if (confirmation.kind !== "unknown") remember(confirmation.receipt, requestedId);
@@ -202,10 +208,14 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
         if (newer) return newer;
         const pointer = storage().getItem(checkpointKey(account, requestedId));
         if (pointer && pointer.toLowerCase() !== hash.toLowerCase()) {
-          void synchronize(account);
-          const advanced = getSnapshot(account).find(item => item.id === identity(account, requestedId));
-          if (advanced) return advanced;
-          throw new Error("The recovery checkpoint changed. Check it again.");
+          const result: TransactionOutcome = { id: requestedId, account, kind: "unverified", hash, message: "The recovery checkpoint changed. Its current transaction needs verification." };
+          const retained = owned ? put(result) : result;
+          const pointerKey = checkpointKey(account, requestedId);
+          if (handledPointers.get(pointerKey) !== pointer.toLowerCase()) {
+            handledPointers.set(pointerKey, pointer.toLowerCase());
+            void synchronize(account);
+          }
+          return retained;
         }
         if (confirmation.kind === "pending" || confirmation.kind === "unknown") {
           const message = confirmation.kind === "unknown" ? confirmation.reason : confirmation.reason === "unmined" ? "The transaction was unmined at the last check." : "The receipt needs two canonical confirmations.";
@@ -281,7 +291,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       if (!observed.size) { window.removeEventListener("storage", storageChanged); window.removeEventListener("focus", focused); }
     };
   }
-  async function watch(submitted: SubmittedAction, requestedId = operationId(submitted.account, submitted.hash)): Promise<TransactionOutcome> {
+  async function watch(submitted: SubmittedAction, requestedId = operationId(submitted.account, submitted.hash), freshSubmission = false): Promise<TransactionOutcome> {
     const key = checkpointKey(submitted.account, submitted.hash), existing = checking.get(key);
     if (existing) return existing;
     const work = (async () => {
@@ -292,7 +302,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
         if (pointer && pointer.toLowerCase() !== submitted.hash.toLowerCase()) { loaded.delete(accountKey(submitted.account)); hydrate(submitted.account); void recover(submitted.account); }
         const advanced = current();
         if (advanced && (advanced.kind === "terminal" || outcomeHash(advanced)?.toLowerCase() !== submitted.hash.toLowerCase())) return advanced;
-        return registered ? put(result) : result;
+        return registered || freshSubmission ? put(result) : result;
       }
       try {
         const confirmation = await service.confirm({ transaction: submitted, beforeJournalWatch: ({ transaction, pending }) => {
@@ -314,7 +324,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     try { return await work; }
     finally { if (checking.get(key) === work) checking.delete(key); }
   }
-  async function submit(prepared: PreparedAction, wallet: WalletSessionPort): Promise<TransactionOutcome> {
+  async function submit(prepared: PreparedAction, wallet: WalletSessionPort, onSubmitted?: (submitted: SubmittedAction) => void): Promise<TransactionOutcome> {
     const key = accountKey(prepared.account);
     if (submitting.has(key)) throw new Error("A wallet request is already in progress.");
     submitting.add(key);
@@ -323,8 +333,10 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     try {
       const submitted = await service.submit({ prepared, wallet });
       records.set(key, getSnapshot(prepared.account).filter(item => item.id !== id));
-      notify();
-      return await watch(submitted);
+      const submittedId = operationId(submitted.account, submitted.hash);
+      put({ id: submittedId, account: submitted.account, kind: "checking", submitted });
+      try { onSubmitted?.(Object.freeze({ ...submitted })); } catch { /* A detached UI cannot interrupt the owned confirmation. */ }
+      return await watch(submitted, submittedId, true);
     } catch (error) {
       return isWalletRequestRejected(error)
         ? put({ id, account: prepared.account, kind: "rejected", message: "The wallet request was rejected. No transaction was submitted." })

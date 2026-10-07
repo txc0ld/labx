@@ -19,6 +19,7 @@ type TransactionState =
   | { kind: "error"; message: string }
   | { kind: "reverted"; confirmation: Extract<Confirmation, { kind: "reverted" | "replaced" }> }
   | { kind: "replaced"; confirmation: Extract<Confirmation, { kind: "reverted" | "replaced" }> }
+  | { kind: "receipt"; confirmation: Exclude<Confirmation, { kind: "pending" }> }
   | { kind: "confirmed"; confirmation: Extract<Confirmation, { kind: "confirmed" }> };
 
 export type AmountFormatter = (atomicUsdc: bigint) => string;
@@ -110,6 +111,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const state = scopedState.scope === scope ? scopedState.value : { kind: "idle" } satisfies TransactionState;
   const operation = useRef<Operation | null>(null);
   const operationSequence = useRef(0);
+  const ownSubmission = useRef<{ scope: number; submitted: SubmittedAction } | null>(null);
   const callbacks = useRef({ onConfirmed, onCancel });
   callbacks.current = { onConfirmed, onCancel };
 
@@ -187,7 +189,10 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (!isCurrent(expected)) return;
     if (outcome.kind === "terminal") {
       const confirmation = outcome.confirmation;
-      if (confirmation.kind === "confirmed") {
+      const owned = ownSubmission.current?.scope === expected.generation ? ownSubmission.current.submitted : null;
+      if (!owned || !sameSubmittedIntent(owned, outcome.submitted)) {
+        setCurrent(expected, { kind: "receipt", confirmation });
+      } else if (confirmation.kind === "confirmed") {
         setCurrent(expected, { kind: "confirmed", confirmation });
         await callbacks.current.onConfirmed?.(confirmation, outcome.submitted);
       } else setCurrent(expected, { kind: confirmation.kind, confirmation });
@@ -220,7 +225,9 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (!activeOperation) return;
     setCurrent(expected, { kind: "submitting", prepared });
     try {
-      await applyOutcome(await owner.submit(prepared, expected.wallet), expected);
+      await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
+        if (isCurrent(expected)) ownSubmission.current = { scope: expected.generation, submitted };
+      }), expected);
     } catch (error) {
       await showError(error, expected);
     } finally {
@@ -291,6 +298,9 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         <button className="btn" type="button" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={() => void checkConfirmation(state.submitted)}>Check confirmation</button>
       </div>
     );
+  }
+  if (state.kind === "receipt") {
+    return <div className="transaction-state notice stack" role="status"><strong>Recovered transaction receipt</strong><span>{state.confirmation.receipt.status === "success" ? "The recovered transaction succeeded" : "The recovered transaction reverted"} in block {state.confirmation.receipt.blockNumber.toString()}.</span><p>This receipt does not confirm the current {label.toLowerCase()} action.</p><p className="hash">{state.confirmation.hash}</p><button className="btn" type="button" disabled={disabled || activeOutcome} onClick={() => { ownSubmission.current = null; setCurrent(context.current, { kind: "idle" }); }}>Review this action</button></div>;
   }
   if (state.kind === "confirmed") {
     return <div className="transaction-state notice ok stack" role="status"><strong>Confirmed</strong><span>Confirmed in block {state.confirmation.blockNumber.toString()}.</span><p className="hash">{state.confirmation.hash}</p></div>;

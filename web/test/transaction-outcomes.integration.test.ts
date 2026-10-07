@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { encodeFunctionData, erc20Abi, keccak256, toBytes, type Hex } from "viem";
+import { HttpRequestError, TransactionNotFoundError, encodeFunctionData, erc20Abi, keccak256, toBytes, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { createRaffleService } from "../lib/chain/service";
@@ -23,6 +23,42 @@ run("canonical outcome recovery on isolated Anvil", () => {
   const send = async (to: string | null, data: Hex = "0x", extra: Record<string, string> = {}) => hash(await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, ...(to ? { to } : {}), data, value: "0x0", gas: "0x186a0", ...extra }]));
   async function depth() { await chain.mine(); await chain.mine(); }
   const approvalData = () => encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [chain.raffle.address, 100n] });
+
+  it("retries broadcast observation through RPC propagation and transport failures without early persistence", async () => {
+    const txHash = await send(chain.usdc.address, approvalData()); await depth();
+    const actual = await chain.client.getTransaction({ hash: txHash });
+    journal.write(chain.buyer, { id: "lagged", hash: txHash, nonce: actual.nonce, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) });
+    const observation = vi.spyOn(chain.client, "getTransaction")
+      .mockRejectedValueOnce(new TransactionNotFoundError({ hash: txHash }))
+      .mockRejectedValueOnce(new HttpRequestError({ url: "http://rpc.invalid", status: 429 }));
+    const beforeJournalWatch = vi.fn();
+    try {
+      expect(await service.confirm({ transaction: { hash: txHash, account: chain.buyer, chainId: 31337, to: chain.usdc.address, data: approvalData(), value: 0n }, timeoutMs: 2000, beforeJournalWatch })).toMatchObject({ kind: "confirmed" });
+      expect(beforeJournalWatch).toHaveBeenCalledOnce();
+      expect(observation.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(journal.read(chain.buyer)).toBeNull();
+    } finally { observation.mockRestore(); }
+  });
+
+  it("returns pending within the observation budget and never persists an unseen broadcast", async () => {
+    const txHash = await send(chain.usdc.address, approvalData()); await depth();
+    const actual = await chain.client.getTransaction({ hash: txHash });
+    const pending = { id: "unseen", hash: txHash, nonce: actual.nonce, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) };
+    journal.write(chain.buyer, pending);
+    const observation = vi.spyOn(chain.client, "getTransaction").mockRejectedValue(new TransactionNotFoundError({ hash: txHash }));
+    const beforeJournalWatch = vi.fn(), beforeJournalClear = vi.fn();
+    const started = Date.now();
+    try {
+      expect(await service.confirm({ transaction: { hash: txHash, account: chain.buyer, chainId: 31337, to: chain.usdc.address, data: approvalData(), value: 0n }, timeoutMs: 300, beforeJournalWatch, beforeJournalClear })).toMatchObject({ kind: "pending", hash: txHash });
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(beforeJournalWatch).not.toHaveBeenCalled();
+      expect(beforeJournalClear).not.toHaveBeenCalled();
+      expect(journal.read(chain.buyer)).toEqual(pending);
+      observation.mockResolvedValue({ ...actual, from: chain.seller });
+      await expect(service.confirm({ transaction: { hash: txHash, account: chain.buyer, chainId: 31337, to: chain.usdc.address, data: approvalData(), value: 0n }, timeoutMs: 2000, beforeJournalWatch })).rejects.toThrow(/sender or hash/);
+      expect(beforeJournalWatch).not.toHaveBeenCalled();
+    } finally { observation.mockRestore(); }
+  });
 
   it("inspects canonical cancellation and contract creation without touching a newer journal", async () => {
     const cancel = await send(chain.buyer), creation = await send(null, "0x60006000f3");
