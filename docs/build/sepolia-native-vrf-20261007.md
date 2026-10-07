@@ -34,7 +34,7 @@ Evidence directory: ignored `artifacts/sepolia-native-vrf-20261007/`. Independen
 
 ## Current checkpoint
 
-Implementation and builder checks PASS. Independent verification and fresh Astra High review are pending; the builder does not approve this candidate. The exact committed revision and source fingerprints are in `artifacts/sepolia-native-vrf-20261007/candidate.log`. Only the five contracted paths changed. Runtime source, ABI definitions, compiler settings, dependencies, locks and website are unchanged.
+Implementation, builder checks and independent behavioral verification PASS for source candidate `49db614a00c18c160afe74ccfdd32c7b5a1ca51f`. The final Astra High source verdict is recorded separately in `artifacts/sepolia-native-vrf-20261007/independent-review.md`, bound to the final checkpoint revision. The builder does not approve its own work. The tested source fingerprints are in `artifacts/sepolia-native-vrf-20261007/candidate.log`. Only the five contracted paths changed. Runtime source, ABI definitions, compiler settings, dependencies, locks and website are unchanged.
 
 The script enables native billing immediately after construction and before proposing Safe ownership. Its logs and operator documentation distinguish the subscription owner's consumer registration from the Safe's ownership acceptance. `WIRE_ETH_PATH=false` remains independent and keeps membership purchases in USDC.
 
@@ -56,4 +56,23 @@ All local evidence above is under `artifacts/sepolia-native-vrf-20261007/`, whic
 
 Root's read-only Sepolia evidence is in the sibling `labx-nav-fix/artifacts/sepolia-native-vrf-20261007/` worktree directory: `sepolia-readiness.json`, `operational-readiness.md`, and `balance-recheck-11860441.json`. At block 11860407 the intended Safe had no code and the subscription had zero LINK, 0.05 native ETH, zero requests and only the legacy consumer. The later observation at block 11860441 supersedes that balance with 0.10 native ETH; the Safe still has no code. Neither balance is proof of sufficient funding. Root's 0.434 ETH calculation is an illustrative planning allowance using a documented example overhead, not verified live Max Cost or an exact minimum.
 
-No keys or secret files were read, and no broadcasts, network writes, pushes or deployments occurred in this implementation lane. Tests overwrite script inputs with disposable fixtures, including the public test key `0xA11CE`; these values are not credentials. Live deployment and Chainlink fulfillment remain BLOCKED on Safe activation and verification, a qualified human release decision and wallet flow, consumer registration, and an approved funding budget checked against live Max Cost. Independent verifier and reviewer are the next owners of the frozen source candidate.
+No keys or secret files were read, and no broadcasts, network writes, pushes or deployments occurred in this implementation lane. Tests overwrite script inputs with disposable fixtures, including the public test key `0xA11CE`; these values are not credentials. Live deployment and Chainlink fulfillment remain BLOCKED on Safe activation and verification, a qualified human release decision and wallet flow, consumer registration, and an approved funding budget checked against live Max Cost.
+
+## Independent verification and release boundary
+
+The independent verifier used the separate `labx-native-vrf-independent` worktree. Its test-only commit `539d01fffc01b35681ca7a0424efa3eca60c3471` is directly based on tested source candidate `49db614a00c18c160afe74ccfdd32c7b5a1ca51f`; it does not change production code and has not been merged into the deployment branch. Evidence lives in that worktree's `artifacts/sepolia-native-vrf-20261007-independent/` directory.
+
+- PASS: two independent real-script tests, including omitted `WIRE_ETH_PATH` and a recorded request that retains the original billing/key/subscription/gas/confirmation/terms policy after Safe default changes. Evidence: `focused-independent-post-format.log` and its exit file, exit 0.
+- PASS: all seven candidate deployment tests rerun independently, exit 0. Evidence: `candidate-deployment-tests.log` and its exit file.
+- PASS: independent formatting, runtime size, unchanged runtime scope and whitespace checks, all exit 0. Runtime size is 21,027 bytes.
+- An initial independent fixture called the ETH-path setter from an unauthorized caller and received `NotOwner` instead of the intended disabled-path error. Only the fixture caller was corrected. The failed log remains preserved; this was not a candidate defect.
+- The independent verifier did not repeat the full fuzz suite. The 84-test, ten-by-1,024-fuzz result above belongs to the builder's full run; the separate independent checks must not be combined into an invented aggregate run.
+- Web tests, browser QA, public-chain deployment and live randomness fulfillment were NOT_RUN for this slice. The website, raffle runtime, ABI, compiler configuration and dependencies are unchanged. The first two checks are outside this deployment-script slice; the live checks remain blocked.
+
+The final checkpoint commit changes this document only. Existing test results remain evidence for unchanged source candidate `49db614`; a diff check and final independent review bind the closeout revision to that source rather than claiming another test run.
+
+Root's public reads are also copied into `artifacts/sepolia-native-vrf-20261007/live-readiness/`; `LATEST.md` identifies the confirmed 0.10 ETH subscription balance at block 11860441 and the still-undeployed Safe. The Subscription Manager's public details independently displayed the account and historical consumer; no wallet was connected in this check. No live Max Cost for a new consumer has been verified. The user, not the agent, performed the confirmed top-up.
+
+Deployment, setting native billing and proposing ownership are separate transactions. The runtime permits sellers to open raffles during setup, so treating a partially configured contract as inactive is an operational restriction, not an enforced contract state. Before release, inspect any openings and their pinned policies as well as current defaults; do not assume a later default correction repairs an already-open raffle.
+
+Next operational action: the user activates the intended Safe on Sepolia through their wallet. Read back and verify its implementation, owners, threshold, modules and guards, then prepare the exact deployment transaction sequence and funding budget for the qualified human release decision. This locally reviewed change does not activate the historical contract or publish a website deployment manifest.
