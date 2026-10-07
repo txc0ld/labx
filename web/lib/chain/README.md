@@ -23,6 +23,8 @@ npm --prefix web run build
 
 The integration suite starts disposable Anvil on an ephemeral loopback port and uses only its unlocked fixture accounts. It requires `anvil` and compiled Forge artifacts. Without `RUN_CHAIN_INTEGRATION=1`, those tests are explicitly skipped. Tests cover real service transactions through membership purchases, draw, settlement, claims, refunds, rejection, replacement and reload recovery. They do not establish live Sepolia readiness.
 
+The browser fixtures import the repository's pinned `playwright` package. Run `npx --prefix web playwright install chromium` once before browser acceptance. Playwright selects its installed Chromium by default; set `CHROMIUM_EXECUTABLE` only to use a specific executable. `RUN_BROWSER_ACCEPTANCE`, `RUN_SELLER_PORTAL_BROWSER` and `RUN_PRIVATE_RECORDS_BROWSER` enable the three Anvil-backed browser lanes.
+
 ## UI binding
 
 Call `prepare`, show the returned transaction review, then call `submit` only after the user's explicit confirmation. Wallet account/network changes invalidate the review. Repeated submissions are locked while confirmation is pending. An uncertain wallet response requires checking wallet activity and using `resume` with its actual hash. `confirm` distinguishes pending, reverted, replaced and confirmed transactions; refresh authoritative state after confirmation. Two confirmations used for UI progress are not finality; purchase receipts require a finalized block.

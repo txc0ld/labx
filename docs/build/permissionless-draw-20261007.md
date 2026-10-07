@@ -44,7 +44,7 @@ Owned React connection controls capture the initiating button. Only the latest p
 
 This repair intentionally couples to the pinned AppKit DOM. An SDK upgrade requires rerunning both the Chromium shadow fixture and actual desktop/mobile modal accessibility checks. Optional analytics remain disabled; upstream mandatory initialization/configuration traffic after an explicit click is not removed or represented as zero traffic. No additional passive initialization was added.
 
-The committed Chromium fixture is `web/test/walletconnect-accessibility.browser.cjs`. It uses the existing local Playwright/Chromium installation, overridable with `PLAYWRIGHT_PACKAGE` and `CHROMIUM_EXECUTABLE`. Run `node web/test/walletconnect-accessibility.browser.cjs` from the repository root. It performs no network pairing and verifies actual shadow roots, native control names, dynamic replacement/upgrades, QR keyboard activation, outside-scope preservation and cleanup. Actual SDK axe/focus QA belongs to the root reviewer and remains a separate gate.
+The committed Chromium fixture is `web/test/walletconnect-accessibility.browser.cjs`. It imports the repository's pinned Playwright package and uses that package's installed Chromium. `CHROMIUM_EXECUTABLE` can select an explicit executable. Run `npx --prefix web playwright install chromium` once, then `node web/test/walletconnect-accessibility.browser.cjs` from the repository root. The fixture performs no network pairing and verifies actual shadow roots, native control names, dynamic replacement and upgrades, QR keyboard activation, outside-scope preservation and cleanup. Actual SDK axe and focus QA belongs to the root reviewer and remains a separate gate.
 
 ## Implementation checkpoint
 

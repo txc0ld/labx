@@ -1,17 +1,14 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { OnChainStatus } from "../components/OnChainStatus";
 import { ResolvedTitle } from "../components/ResolvedTitle";
 import { ScrollStory } from "../components/ScrollStory";
 import { SquishyPackCard } from "../components/ui/squishy-card-component";
-import { raffleAddress, readRaffle } from "../lib/wallet";
-import { roundedOrtho } from "../lib/tubes";
 
 const webRoot = path.resolve(__dirname, "..");
-const repoRoot = path.resolve(webRoot, "..");
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -221,38 +218,12 @@ describe("chrome links", () => {
 });
 
 describe("on-chain soft disable", () => {
-  const previous = process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
-
-  afterEach(() => {
-    if (previous === undefined) delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
-    else process.env.NEXT_PUBLIC_RAFFLE_ADDRESS = previous;
-  });
-
-  it("returns null for an unset or invalid raffle address and does not invent one", () => {
-    delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
-    expect(raffleAddress()).toBeNull();
-    process.env.NEXT_PUBLIC_RAFFLE_ADDRESS = "";
-    expect(raffleAddress()).toBeNull();
-    process.env.NEXT_PUBLIC_RAFFLE_ADDRESS = "0xnotanaddress";
-    expect(raffleAddress()).toBeNull();
-
-    const envExample = readFileSync(path.join(repoRoot, ".env.example"), "utf8");
-    expect(envExample).toMatch(/NEXT_PUBLIC_RAFFLE_ADDRESS=\s*$/m);
-    expect(envExample).toMatch(/soft-disable|not wired|Leave empty|unset/i);
-    expect(envExample).not.toMatch(/NEXT_PUBLIC_RAFFLE_ADDRESS=0x[0-9a-fA-F]{40}/);
-  });
-
-  it("refuses on-chain reads and writes when the raffle address is missing", async () => {
-    delete process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
-    await expect(readRaffle(1n)).rejects.toThrow(/not wired|not set|not configured/i);
-  });
-
   it("keeps unavailable customer workflows read-only", () => {
     const surfaces = [
       read("app/seller/page.tsx"),
       read("app/profile/page.tsx"),
       read("app/rules/page.tsx"),
-      read("components/PieceDesk.tsx"),
+      read("components/workflow/LiveRaffle.tsx"),
       read("lib/bench.tsx")
     ].join("\n");
     expect(surfaces).toMatch(/OnChainStatus/);
@@ -274,56 +245,6 @@ describe("on-chain soft disable", () => {
       }
     }
   );
-});
-
-describe("hub laboratory tubing", () => {
-  it("fillets orthogonal elbows instead of drawing flat H/V", () => {
-    const d = roundedOrtho(
-      [
-        { x: 0, y: 0 },
-        { x: 80, y: 0 },
-        { x: 80, y: 60 }
-      ],
-      16
-    );
-    expect(d).toMatch(/Q /);
-    expect(d).not.toMatch(/ H | V /);
-  });
-
-  it("renders the desktop lab-tube stack and hides it over stacked mobile content", () => {
-    const tubes = read("components/BenchTubes.tsx");
-    const css = read("app/globals.css");
-    expect(tubes).toMatch(/function TubeFitting/);
-    expect(tubes).toMatch(/fitting-groove/);
-    expect(tubes).toMatch(/lab-tube-glow/);
-    expect(tubes).toMatch(/lab-tube-rim/);
-    expect(tubes).toMatch(/lab-tube-glass/);
-    expect(tubes).toMatch(/lab-tube-liquid/);
-    expect(tubes).toMatch(/lab-tube-specular/);
-    expect(tubes).toMatch(/lab-tube-reflect/);
-    expect(tubes).toMatch(/lab-tube-flow/);
-    expect(tubes).toMatch(/ResizeObserver/);
-    expect(tubes).toMatch(/aria-hidden/);
-    expect(tubes).toMatch(/roundedOrtho/);
-    expect(tubes.toLowerCase()).not.toMatch(/head|face|human|figure/);
-    expect(css).toMatch(/--tube-glow-w:\s*26px/);
-    expect(css).toMatch(/--tube-rim-w:\s*16px/);
-    expect(css).toMatch(/--tube-glass-w:\s*13px/);
-    expect(css).toMatch(/--tube-liquid-w:\s*9px/);
-    expect(css).toMatch(/--tube-bend-r:\s*24px/);
-    expect(css).toMatch(/--lab-tube-lime:\s*#b9ff87/i);
-    expect(css).toMatch(/--lab-tube-pink:\s*#ff79c0/i);
-    expect(css).toMatch(/--lab-tube-mint:\s*#8fffb6/i);
-    expect(css).toMatch(/--lab-tube-purple:\s*#b37df6/i);
-    expect(css).not.toMatch(/\.tube-shell/);
-    expect(css).not.toMatch(/\.tube-body/);
-    expect(css).not.toMatch(/\.tube-shine/);
-    expect(css).toMatch(/@media \(max-width: 900px\)[\s\S]*\.bench-tubes \{ display: none/);
-    expect(css).toMatch(/@media \(max-width: 900px\)[\s\S]*\.lab-tube-reflect[\s\S]*display:\s*none/);
-    expect(css).toMatch(/data-tube-state="disabled"[\s\S]*lab-tube-flow[\s\S]*animation:\s*none/);
-    expect(css).toMatch(/data-tube-state="disabled"[\s\S]*#9aa0a8/);
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.lab-tube-flow[\s\S]*animation:\s*none/);
-  });
 });
 
 describe("responsive chrome and legal surfaces", () => {
@@ -368,21 +289,6 @@ describe("responsive chrome and legal surfaces", () => {
     expect(layout).toMatch(/twitter/);
     expect(layout).toMatch(/themeColor:\s*"#f8f9fa"/);
     expect(layout).toMatch(/viewportFit:\s*"cover"/);
-  });
-
-  it("uniques Plumbing chrome gradient ids", () => {
-    const plumbing = read("components/Plumbing.tsx");
-    expect(plumbing).toMatch(/useId/);
-    expect(plumbing).not.toMatch(/id=["']chrome["']/);
-  });
-
-  it("puts the real collection ahead of promotional content", () => {
-    const hub = read("components/BenchHub.tsx");
-    expect(hub).toMatch(/<ResolvedTitle \/>/);
-    expect(hub).toMatch(/className="capsule-grid"/);
-    expect(hub).toMatch(/Listings unavailable/);
-    expect(hub).toMatch(/href="\/guide"/);
-    expect(hub).not.toMatch(/hero-art-stack|hero-art-card|Explore the bench/);
   });
 
   it("renders a complete accessible hero heading before visual motion runs", () => {

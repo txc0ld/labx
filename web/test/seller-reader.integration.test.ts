@@ -4,7 +4,9 @@ import { createRaffleService } from "../lib/chain/service";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
-describe("seller discovery and financial activity", () => {
+const run = process.env.RUN_CHAIN_INTEGRATION === "1" ? describe : describe.skip;
+
+run("seller discovery and financial activity", () => {
   let chain: LocalChain;
 
   beforeAll(async () => {

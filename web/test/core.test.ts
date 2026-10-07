@@ -5,32 +5,12 @@ import { generatePrivateKey } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { assertAgreements } from "../lib/agreements";
 import { COMMIT_VECTOR, hashCommitment } from "../lib/commitment";
-import { pickWinner, snapshotLots } from "../lib/draw";
 import { receiptBody } from "../lib/email";
 import { MemoryStore as Mem } from "../lib/store";
 import { checkIn, checkInMessage } from "../lib/points";
 import { createReserve, revealReserve, saltedPrivateHash, revealMessage } from "../lib/reserve";
 import { keccak256, toBytes } from "viem";
 
-
-describe("draw weights", () => {
-  const lots = [
-    { address: "alice", weight: 1, expiresAt: 10 },
-    { address: "bob", weight: 1, expiresAt: 10 },
-    { address: "cara", weight: 5, expiresAt: 10 },
-    { address: "old", weight: 9, expiresAt: 1 }
-  ];
-  const snap = snapshotLots(lots, 5);
-  it("drops expired lots", () => {
-    expect(snap.total).toBe(7);
-    expect(snap.cumulative).toEqual([1, 2, 7]);
-  });
-  it("matches the contract bands", () => {
-    expect(pickWinner(snap.cumulative, snap.holders, 0n)).toBe("alice");
-    expect(pickWinner(snap.cumulative, snap.holders, 1n)).toBe("bob");
-    expect(pickWinner(snap.cumulative, snap.holders, 6n)).toBe("cara");
-  });
-});
 
 describe("commitment", () => {
   it("matches the Forge vector", () => {
@@ -164,22 +144,14 @@ describe("surface copy and materials", () => {
     expect(names).not.toMatch(/head|face|human|workstation/);
   });
 
-  it("keeps reusable artwork capsules while publishing an honest empty collection", () => {
+  it("publishes an honest empty collection without invented artwork", () => {
     const page = readFileSync(path.join(root, "app/page.tsx"), "utf8");
-    const hub = readFileSync(path.join(root, "components/BenchHub.tsx"), "utf8");
-    const marks = readFileSync(path.join(root, "components/PieceMark.tsx"), "utf8");
+    const catalog = readFileSync(path.join(root, "components/workflow/RaffleCatalog.tsx"), "utf8");
     const css = readFileSync(path.join(root, "app/globals.css"), "utf8");
     expect(page).not.toMatch(/next\/image/);
-    expect(hub).not.toMatch(/\.jpg|\.png/);
-    expect(hub).toMatch(/shown\.map/);
-    expect(hub).toMatch(/className="raffle-capsule"/);
-    expect(hub).toMatch(/src=\{piece.image\}/);
-    expect(hub).toMatch(/No raffles listed/);
-    expect(hub).toMatch(/Listing tools are not connected yet/);
-    expect(hub.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
-    expect(marks.toLowerCase()).not.toMatch(/head|face|human|hand|figure/);
-    expect(css).toMatch(/nft-capsule/);
-    expect(css).toMatch(/lab-tube-liquid/);
+    expect(catalog).toMatch(/shown\.map/);
+    expect(catalog).toMatch(/No raffles listed/);
+    expect(catalog.toLowerCase()).not.toMatch(/\bdemo(?:nstration)?\b/);
     expect(css).toMatch(/\.capsule-art[^{]*\{[^}]*aspect-ratio:\s*1/);
     expect(css).toMatch(/\.btn[^{]*\{[^}]*text-decoration:\s*none/);
   });

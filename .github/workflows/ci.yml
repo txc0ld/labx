@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   contracts:
     runs-on: ubuntu-latest
@@ -12,9 +15,11 @@ jobs:
         working-directory: contracts
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.5
       # EIP-170: forge exits non-zero when any runtime exceeds 24,576 bytes.
       - run: forge build --sizes
       - run: forge test
@@ -26,6 +31,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,3 +41,24 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  chain-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+      - run: npm ci
+      - run: forge build --root ../contracts
+      - run: RUN_CHAIN_INTEGRATION=1 npm test -- --maxWorkers=1

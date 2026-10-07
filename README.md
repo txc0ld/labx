@@ -15,6 +15,7 @@ The v2 Sepolia contract at `0xef27306567a5ADA354fe9403008D041d0b468213` was veri
 - `contracts`: Solidity source, Foundry tests and isolated local/Sepolia deployment scripts.
 - `web`: Next.js pages, wallet/contract services and authenticated records.
 - `docs/build`: task contracts, candidate revisions and evidence pointers.
+- `docs/build/README.md`: current documentation index and superseded-report labels.
 - `SECURITY.md`: trust boundaries and known limits.
 - `LEGAL.md`: product notes for counsel, not legal clearance.
 - `LAUNCH.md`: separate deployment and migration plan.
@@ -31,11 +32,33 @@ forge test --fuzz-runs 1024
 cd web
 npm ci
 npm test
+npx tsc --noEmit
 npm run build
-npm run dev
+```
+
+The default web suite does not start Anvil. Build the contracts first, then run the opt-in chain suite:
+
+```bash
+forge build --root contracts
+RUN_CHAIN_INTEGRATION=1 npm --prefix web test -- --maxWorkers=1
+```
+
+Install the pinned Playwright Chromium once and run the portable browser acceptance check:
+
+```bash
+npx --prefix web playwright install chromium
+node web/test/walletconnect-accessibility.browser.cjs
+```
+
+`CHROMIUM_EXECUTABLE=/absolute/path/to/chromium` overrides Playwright's installed browser when an explicit executable is required. The Anvil-backed browser lanes use separate switches so each lane is visible in test output:
+
+```bash
+RUN_BROWSER_ACCEPTANCE=1 RUN_SELLER_PORTAL_BROWSER=1 RUN_PRIVATE_RECORDS_BROWSER=1 npm --prefix web test -- --maxWorkers=1
 ```
 
 Vercel's project root is `web`. A catalog without an approved deployment must show its unavailable state; do not add invented listings or wallet activity to fill it.
+
+See [the build documentation index](docs/build/README.md) for current reports and superseded historical candidates.
 
 ## Contract policy
 

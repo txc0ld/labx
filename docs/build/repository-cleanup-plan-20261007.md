@@ -24,7 +24,15 @@ Document the shortest commands for unit, chain, browser, typecheck, production b
 - Dependency and lockfile agree, relevant aggregate tests pass, and independent Astra review inspects the actual candidate.
 - No secrets, generated caches or transient browser artifacts enter the committed source. No on-chain, publication or infrastructure actions occur in this slice.
 
-The source mapping and implementation are pending. This document is a bounded work contract, not evidence that cleanup has happened.
+This document remains the bounded work contract. Test logs and the cleanup commit identify the implementation evidence for a candidate revision.
+
+## Verification commands
+
+The default web suite is `npm --prefix web test`. It skips every Anvil-backed integration unless its switch is set. Build contract fixtures with `forge build --root contracts`, then run `RUN_CHAIN_INTEGRATION=1 npm --prefix web test -- --maxWorkers=1` for the chain lane.
+
+Run `web/node_modules/.bin/tsc --noEmit --project web/tsconfig.json` for type checking and `npm --prefix web run build` for the production build. Contract regression and fuzz coverage use `forge test --root contracts --fuzz-runs 1024`.
+
+For portable browser acceptance, run `npx --prefix web playwright install chromium` once and then `node web/test/walletconnect-accessibility.browser.cjs`. The fixture uses Playwright's installed Chromium unless `CHROMIUM_EXECUTABLE` names an explicit executable. The Anvil-backed browser suites use `RUN_BROWSER_ACCEPTANCE`, `RUN_SELLER_PORTAL_BROWSER` and `RUN_PRIVATE_RECORDS_BROWSER`; enabling one does not implicitly enable the others.
 
 ## Tooling decision
 

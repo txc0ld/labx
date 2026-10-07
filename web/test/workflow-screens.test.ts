@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { copyPlaceholder } from "../components/DiscountCode";
 import { isCurrentPath, isExactCurrentPath, PRIMARY_LINKS } from "../lib/nav";
 import { PARTNER_OFFERS } from "../lib/offers";
-import { initialStudioState, studioPreparation } from "../lib/studio-preparation";
 
 const root = path.resolve(__dirname, "..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -48,30 +47,6 @@ describe("partner offers", () => {
     expect(writeText).toHaveBeenCalledWith("XXXX");
     await expect(copyPlaceholder(undefined)).resolves.toBe(false);
     await expect(copyPlaceholder({ writeText: async () => { throw new Error("denied"); } })).resolves.toBe(false);
-  });
-});
-
-describe("Studio preparation", () => {
-  it("preserves entered details through review and edit, then clears them on reset", () => {
-    let state = initialStudioState();
-    state = studioPreparation(state, { kind: "change-title", value: "User piece" });
-    state = studioPreparation(state, { kind: "change-artist", value: "User artist" });
-    state = studioPreparation(state, { kind: "change-token-reference", value: "0xabc / 7" });
-    state = studioPreparation(state, { kind: "change-proposed-close", value: "2027-02-03T14:00" });
-    state = studioPreparation(state, { kind: "review" });
-    expect(state).toEqual({ kind: "reviewing", draft: { title: "User piece", artist: "User artist", tokenReference: "0xabc / 7", proposedClose: "2027-02-03T14:00" } });
-    state = studioPreparation(state, { kind: "edit" });
-    expect(state.kind).toBe("editing");
-    expect(state.draft.title).toBe("User piece");
-    expect(studioPreparation(state, { kind: "reset" })).toEqual(initialStudioState());
-  });
-
-  it("keeps preparation session-only and excludes private commitment inputs", () => {
-    const studio = read("components/StudioPreparation.tsx");
-    expect(studio).toMatch(/current page session/);
-    expect(studio).not.toMatch(/fetch\(|localStorage|sessionStorage/);
-    expect(studio).not.toMatch(/type="file"/);
-    expect(studio).toMatch(/Do not enter a private commitment/);
   });
 });
 

@@ -54,8 +54,12 @@ Prior Slither results were triaged under documented trust assumptions; they are 
 
 ```sh
 forge test --root contracts
+forge build --root contracts
 RUN_CHAIN_INTEGRATION=1 npm --prefix web test
+web/node_modules/.bin/tsc --noEmit --project web/tsconfig.json
 npm --prefix web run build
+npx --prefix web playwright install chromium
+node web/test/walletconnect-accessibility.browser.cjs
 ```
 
 Contract regressions, fuzzing, isolated Anvil flows, browser journeys and independent source review have distinct scopes. Passing one does not prove the others or live readiness.

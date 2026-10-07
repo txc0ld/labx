@@ -28,6 +28,7 @@ run("independent pending journal boundaries on isolated Anvil", () => {
     const prepared = await service.prepare({ action, wallet });
     const transaction = await service.submit({ prepared, wallet });
     await chain.mine();
+    await chain.mine();
     expect(await service.confirm({ transaction, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
     return transaction;
   }
@@ -77,6 +78,7 @@ run("independent pending journal boundaries on isolated Anvil", () => {
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(String(rejected[0]?.reason)).toMatch(/unresolved transaction/);
+    await chain.mine();
     await chain.mine();
     expect(await first.confirm({ transaction: fulfilled[0]!.value, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
     expect(journal.read(chain.seller)).toBeNull();

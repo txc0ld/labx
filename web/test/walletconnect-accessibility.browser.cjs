@@ -2,12 +2,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
-const { chromium } = require(process.env.PLAYWRIGHT_PACKAGE || '/home/tx/.cache/ms-playwright-go/1.50.1/package');
+const { chromium } = require('playwright');
 const source = fs.readFileSync(path.join(__dirname, '../lib/chain/walletconnect-accessibility.ts'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || '/home/tx/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome', headless: true, args: ['--no-sandbox'] });
+  const browser = await chromium.launch({
+    ...(process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : {}),
+    headless: true,
+    args: ['--no-sandbox']
+  });
   try {
     const page = await browser.newPage();
     await page.setContent('<button id="outside">Outside</button>');

@@ -1,11 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createRequire } from "node:module";
 import { createServer } from "node:net";
+import { chromium } from "playwright";
 import type { Address } from "viem";
 import type { LocalChain } from "./local-chain";
-
-const playwrightPackage = "/home/tx/.cache/ms-playwright-go/1.50.1/package";
-const chromiumExecutable = "/home/tx/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome";
 
 async function freePort() {
   return new Promise<number>((resolve, reject) => {
@@ -57,9 +54,12 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
   server.stderr?.on("data", chunk => output.push(String(chunk)));
   await waitForServer(baseUrl, server, output);
 
-  const require = createRequire(import.meta.url);
-  const { chromium } = require(playwrightPackage) as { chromium: { launch(input: unknown): Promise<any> } };
-  const browser = await chromium.launch({ executablePath: chromiumExecutable, headless: true, args: ["--no-sandbox"] });
+  const executablePath = process.env.CHROMIUM_EXECUTABLE;
+  const browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    headless: true,
+    args: ["--no-sandbox"]
+  });
   const context = await browser.newContext();
   let selectedAccount: string = initialAccount;
   await context.exposeFunction("__labxRpc", async (input: { method: string; params?: readonly unknown[] }) => {
