@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { keccak256, toBytes } from "viem";
+import { raffleAbi } from "../lib/chain/abi";
+import type { WalletSessionPort } from "../lib/chain/ports";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
@@ -10,6 +12,7 @@ const run = process.env.RUN_SELLER_PORTAL_BROWSER === "1" ? describe : describe.
 run("rendered seller portal on isolated Anvil", () => {
   let chain: LocalChain;
   let fixture: Awaited<ReturnType<typeof browserChain>>;
+  let buyerWallet: WalletSessionPort;
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
 
@@ -41,6 +44,42 @@ run("rendered seller portal on isolated Anvil", () => {
     const refundable = await chain.service.readRaffle({ id: 2n });
     await chain.warp(refundable.raffle.salesEnd + refundable.drawStartGrace);
     await chain.write(chain.raffle, "cancel", [2n], chain.seller);
+
+    buyerWallet = chain.wallet(chain.buyer).session;
+    await buyerWallet.connect();
+    await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
+    async function purchasedClosedRaffle(id: bigint, salesEnd: bigint) {
+      const tokenId = 900n + id;
+      const commitment = keccak256(toBytes(`permissionless-draw-${id}`));
+      await chain.write(chain.nft, "mint", [chain.stranger, tokenId]);
+      await chain.write(chain.raffle, "createRaffle", [
+        chain.nft.address,
+        tokenId,
+        salesEnd,
+        commitment,
+        commitment,
+        `Permissionless draw ${id}`,
+        [{ name: "Membership", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }]
+      ], chain.stranger);
+      await chain.write(chain.nft, "approve", [chain.raffle.address, tokenId], chain.stranger);
+      await chain.write(chain.raffle, "escrow", [id], chain.stranger);
+      await chain.write(chain.raffle, "open", [id], chain.stranger);
+      await chain.write(chain.usdc, "approve", [chain.raffle.address, 1_020_000n], chain.buyer);
+      await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+      await chain.warp(salesEnd);
+      await chain.write(chain.raffle, "close", [id], chain.buyer);
+    }
+
+    let now = (await chain.client.getBlock()).timestamp;
+    await purchasedClosedRaffle(27n, now + 600n);
+    now = (await chain.client.getBlock()).timestamp;
+    await purchasedClosedRaffle(28n, now + 600n);
+    await chain.write(chain.raffle, "snapshot", [28n, 100n], chain.buyer);
+    const expiring = await chain.service.readRaffle({ id: 28n });
+    await chain.warp(expiring.raffle.salesEnd + expiring.drawStartGrace);
+    now = (await chain.client.getBlock()).timestamp;
+    await purchasedClosedRaffle(29n, now + 600n);
+    await chain.write(chain.raffle, "snapshot", [29n, 100n], chain.buyer);
     fixture = await browserChain(chain);
     fixture.page.on("pageerror", (error: Error) => pageErrors.push(error.message));
     fixture.page.on("console", (message: { type(): string; text(): string }) => {
@@ -116,5 +155,27 @@ run("rendered seller portal on isolated Anvil", () => {
     connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.page.getByRole("button", { name: "Claim refund", exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
+  }, 30_000);
+
+  it("keeps permissionless draw preparation blocked until snapshot completion and before the deadline", async () => {
+    await expect(chain.service.prepare({ action: { kind: "requestRandomness", id: 27n }, wallet: buyerWallet })).rejects.toThrow(/unavailable/);
+    await expect(chain.service.prepare({ action: { kind: "requestRandomness", id: 28n }, wallet: buyerWallet })).rejects.toThrow(/deadline/);
+  });
+
+  it("renders one permissionless draw review for an eligible non-seller and submits fixed arguments", async () => {
+    await fixture.switchAccount(chain.buyer);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/piece/29`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    const start = fixture.page.getByRole("button", { name: "Start draw", exact: true });
+    await start.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await start.count()).toBe(1);
+    await start.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible" });
+    expect(await review.innerText()).toContain(chain.raffle.address);
+    await review.getByRole("button", { name: "Confirm start draw", exact: true }).click();
+    await expect.poll(async () => (await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "getRaffle", args: [29n] })).phase, { timeout: 15_000 }).toBe(3);
   }, 30_000);
 });

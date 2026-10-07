@@ -264,7 +264,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
         payment: selectedPayment
       }
     : null;
-  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "abortDrawing", "settle", "cancel", "close", "snapshot", "claimFee"];
+  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "abortDrawing", "settle", "cancel", "close", "snapshot", "requestRandomness", "claimFee"];
   const nextRecovery = recoveryKinds.map(kind => availability.find(item => item.kind === kind)).find(item => item?.enabled);
   const recoveryAction: WorkflowAction | null = nextRecovery
     ? nextRecovery.kind === "snapshot"
