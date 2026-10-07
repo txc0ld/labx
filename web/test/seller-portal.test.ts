@@ -90,6 +90,15 @@ describe("seller portfolio state", () => {
     expect(mergeSellerActivityPage("error", [first], [retried], 11n)).toEqual([first, retried]);
   });
 
+  it("keeps earlier activity through repeated errors and an empty final page", () => {
+    const first = refundActivity(10n);
+    const afterFirstFailure = mergeSellerActivityPage("error", [first], [], 11n);
+    const afterRepeatedFailure = mergeSellerActivityPage("error", afterFirstFailure, [], 11n);
+
+    expect(afterFirstFailure).toEqual([first]);
+    expect(afterRepeatedFailure).toEqual([first]);
+  });
+
   it("scans every pinned page before returning complete totals", async () => {
     const first = snapshot({ id: 1n, grossPrincipal: 25_000_000n, principalEscrow: 25_000_000n });
     const later = snapshot({ id: 3n, phase: 5, grossPrincipal: 50_000_000n, buyerFees: 1_000_000n, principalEscrow: 49_000_000n, feeEscrow: 2_000_000n });

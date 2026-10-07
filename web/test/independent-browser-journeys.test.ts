@@ -58,7 +58,12 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}${path}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await fixture.page.locator("#content").waitFor({ state: "visible" });
-    await ensureConnected(account);
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await expect.poll(async () => fixture.page.evaluate(async () => {
+      const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
+      return provider.request({ method: "eth_accounts" });
+    }), { timeout: 5_000 }).toEqual([account]);
   }
 
   async function refreshState() {
@@ -68,7 +73,15 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
   async function transact(label: string) {
     const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
-    await trigger.waitFor({ state: "visible", timeout: 10_000 });
+    const secondary = fixture.page.locator("summary").filter({ hasText: "Other available seller actions" });
+    await expect.poll(async () =>
+      await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false),
+    { timeout: 10_000 }).toBe(true);
+    if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
+    await trigger.waitFor({ state: "visible", timeout: 10_000 }).catch(async (error: unknown) => {
+      const content = await fixture.page.locator("#content").innerText().catch(() => "Page content unavailable.");
+      throw new Error(`${error instanceof Error ? error.message : "Action did not appear."}\nRendered page:\n${content}`);
+    });
     await trigger.click();
     const review = fixture.page.locator(".transaction-review").first();
     await review.waitFor({ state: "visible", timeout: 10_000 });
@@ -89,6 +102,10 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
   async function createDraft(input: { tokenId: bigint; title: string; price: string; supply: string; deadline: number }) {
     await goto("/seller", chain.seller);
+    const draftSummary = fixture.page.locator("summary").filter({ hasText: "Prepare a draft" });
+    await draftSummary.waitFor({ state: "visible", timeout: 10_000 });
+    await draftSummary.click();
+    await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByLabel("Raffle title").fill(input.title);
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill(input.tokenId.toString());
@@ -105,8 +122,11 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const review = await transact("Create raffle draft");
     expect(review).toContain(chain.raffle.address);
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" }) - 1n;
-    await fixture.page.getByRole("link", { name: "Open workspace", exact: true }).last().click();
-    await fixture.page.waitForURL(`**/piece/${id.toString()}`);
+    const card = fixture.page.locator("li").filter({ has: fixture.page.getByRole("heading", { name: input.title, exact: true }) });
+    const manage = card.getByRole("link", { name: /Manage raffle/ });
+    await manage.waitFor({ state: "visible", timeout: 15_000 });
+    await manage.click();
+    await fixture.page.waitForURL(`**/seller/${id.toString()}`);
     await ensureConnected(chain.seller);
     return id;
   }
@@ -121,6 +141,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
   async function purchase(id: bigint, expectedTotal: string) {
     await switchAccount(chain.buyer);
+    await goto(`/piece/${id.toString()}`, chain.buyer);
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const approval = await transact("Approve exact USDC");
     expect(approval).toContain(expectedTotal);
@@ -147,7 +168,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
     await chain.warp(BigInt(firstDeadline));
     await switchAccount(chain.seller);
-    await refreshState();
+    await goto(`/seller/${id.toString()}`, chain.seller);
     await transact("Close sales");
     await transact("Freeze next entries");
     await transact("Start draw");
@@ -160,10 +181,13 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await transact("Settle raffle");
 
     await switchAccount(chain.buyer);
+    await goto(`/piece/${id.toString()}`, chain.buyer);
     await transact("Claim NFT");
     await switchAccount(chain.seller);
+    await goto(`/seller/${id.toString()}`, chain.seller);
     await transact("Claim proceeds");
     await switchAccount(chain.stranger);
+    await goto(`/piece/${id.toString()}`, chain.stranger);
     await transact("Send protocol fees");
 
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [301n] })).toBe(chain.buyer);
@@ -183,11 +207,13 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     try {
       await chain.warp(snapshot.raffle.salesEnd + snapshot.drawStartGrace);
       await switchAccount(chain.seller);
-      await refreshState();
+      await goto(`/seller/${id.toString()}`, chain.seller);
       await transact("Enable refunds");
       await switchAccount(chain.buyer);
+      await goto(`/piece/${id.toString()}`, chain.buyer);
       await transact("Claim refund");
       await switchAccount(chain.seller);
+      await goto(`/seller/${id.toString()}`, chain.seller);
       await transact("Reclaim NFT");
     } finally {
       await chain.write(chain.raffle, "setPaused", [false]);
