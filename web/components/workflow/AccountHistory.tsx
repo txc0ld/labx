@@ -17,7 +17,7 @@ const EVENT_COPY: Record<HistoryItem["event"], { title: string; detail: string }
   PrizeClaimed: { title: "Prize claimed", detail: "NFT transferred to the recorded winner" },
   ProceedsClaimed: { title: "Proceeds claimed", detail: "Membership proceeds transferred to the seller" },
   FeeClaimed: { title: "Lab fee transferred", detail: "Fee transferred to the pinned treasury" },
-  Refunded: { title: "Refund claimed", detail: "Membership price and lab fee returned" },
+  Refunded: { title: "Refund claimed", detail: "Membership principal and actual buyer fee returned" },
   PrizeReclaimed: { title: "Prize reclaimed", detail: "NFT returned after cancellation" }
 };
 

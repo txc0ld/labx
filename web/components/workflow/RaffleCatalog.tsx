@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowUpRight, Layers3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserService, RaffleService } from "@/lib/chain/ports";
+import { buyerFee } from "@/lib/chain/fees";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import { formatDate, formatUsdc, minimumActivePrice, catalogAvailability, shortAddress } from "./format";
 import { RaffleArtwork } from "./RaffleArtwork";
@@ -105,7 +106,7 @@ function RaffleCard({ service, snapshot }: { service?: RaffleService; snapshot: 
         {service ? <RaffleArtwork service={service} snapshot={snapshot} compact /> : <div className="chain-capsule-art"><span aria-hidden="true">{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span><p>NFT artwork unavailable</p><small>Token #{snapshot.raffle.tokenId.toString()}</small></div>}
         <div className="capsule-meta">
           <div className="capsule-title-row"><div><h3>{snapshot.raffle.title}</h3><p className="capsule-artist">NFT {shortAddress(snapshot.raffle.nft)}</p></div><span className={`capsule-status ${status.purchasable ? "is-open" : ""}`}>{status.label}</span></div>
-          <p className="capsule-price">{!status.purchasable || price === null ? "Membership sales unavailable" : `From ${formatUsdc(price + snapshot.labFee)} USDC · includes ${formatUsdc(snapshot.labFee)} lab fee`}</p>
+          <p className="capsule-price">{!status.purchasable || price === null ? "Membership sales unavailable" : `From ${formatUsdc(price + buyerFee(price, snapshot.policy.buyerFeeBps))} USDC · includes ${formatUsdc(buyerFee(price, snapshot.policy.buyerFeeBps))} buyer fee`}</p>
           <div className="capsule-foot"><span>{status.purchasable ? `${status.remaining.toLocaleString("en-US")} memberships left · ` : ""}Sales deadline {formatDate(snapshot.raffle.salesEnd)} UTC</span><span className="capsule-open" aria-hidden="true">View raffle ↗</span></div>
         </div>
       </Link>

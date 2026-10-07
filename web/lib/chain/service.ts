@@ -3,7 +3,9 @@ import { decodeFunctionData, erc20Abi, erc721Abi, type Address, type Hex, type P
 import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
+import { createSellerReader } from "./seller-reader";
 import { actionBuilder } from "./actions";
+import { MAX_MEMBERSHIP_TOTAL_USDC } from "./fees";
 import { hash, sameAddress } from "./validation";
 import type { RaffleService, WalletSessionPort } from "./ports";
 import type { DeploymentManifest, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
@@ -17,6 +19,7 @@ function sameTransaction(a: { to: Address; data: Hex; value: bigint }, b: { to: 
 }
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
+  const sellerReader = createSellerReader(client, manifest, reader);
   const reviews = new WeakMap<PreparedAction, { action: WorkflowAction; session: Extract<WalletSnapshot, { kind: "connected" }>; transaction: PreparedAction; used: boolean }>();
   const submitting = new Set<string>();
   const unresolved = "This wallet has an unresolved transaction. Reconcile its hash before another action.";
@@ -106,7 +109,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       if (!allowed.has(decoded.functionName) || decoded.functionName !== "buyPackWithEth" && tx.value !== 0n) throw new Error("This is not a supported LABx workflow transaction.");
     } else if (sameAddress(tx.to, manifest.usdc)) {
       const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.input });
-      if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || decoded.args[1] <= 0n || decoded.args[1] > 20_000_100_000_000n || tx.value !== 0n) throw new Error("This is not a bounded LABx payment approval.");
+      if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || decoded.args[1] <= 0n || decoded.args[1] > MAX_MEMBERSHIP_TOTAL_USDC || tx.value !== 0n) throw new Error("This is not a bounded LABx payment approval.");
     } else {
       const decoded = decodeFunctionData({ abi: erc721Abi, data: tx.input });
       if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || tx.value !== 0n) throw new Error("This is not a LABx NFT approval.");
@@ -133,5 +136,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, prepare, submit, confirm, resume };
+  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, prepare, submit, confirm, resume };
 }

@@ -43,6 +43,7 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
       NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST: JSON.stringify({
         version: chain.manifest.version,
         chainId: chain.manifest.chainId,
+        version: chain.manifest.version,
         address: chain.manifest.address,
         runtimeCodeHash: chain.manifest.runtimeCodeHash,
         usdc: chain.manifest.usdc,

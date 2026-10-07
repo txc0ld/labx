@@ -4,6 +4,7 @@ import type {
   AccountRaffleState, BlockRef, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
+import type { SellerRaffleActivity } from "./seller-types";
 
 import type { ConnectionOption, ConnectionStatus, WalletConnector } from "./wallet-connectors";
 
@@ -24,6 +25,8 @@ export interface RaffleService {
   readonly manifest: DeploymentManifest;
   attest(): Promise<DeploymentStatus>;
   listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
+  listSellerRaffles(input: { seller: Address; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
+  listRaffleActivity(input: { id: bigint; cursor?: bigint; block?: BlockRef }): Promise<Page<SellerRaffleActivity>>;
   readRaffle(input: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot>;
   readArtwork(input: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata>;
   readAccount(input: { id: bigint; account: Address; block?: BlockRef }): Promise<AccountRaffleState>;

@@ -31,7 +31,7 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
   if (r.phase === 5) {
     add("claimPrize", "Claim NFT", winner && r.escrowed, "Only the recorded winner can claim an unclaimed NFT.");
     add("claimProceeds", "Claim proceeds", seller && r.principalEscrow > 0n, "Only the seller can claim remaining membership proceeds.");
-    add("claimFee", "Send lab fee", r.feeEscrow > 0n, "The lab fee has already been claimed.");
+    add("claimFee", "Send protocol fees", r.feeEscrow > 0n, "The protocol fees have already been claimed.");
   }
   if (r.phase === 6) {
     add("refund", "Claim refund", !!account && account.principal + account.fee > 0n, "This wallet has no remaining refund.");

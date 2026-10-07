@@ -2,63 +2,132 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { sellerAccounting } from "@/lib/chain/fees";
 import type { BrowserService } from "@/lib/chain/ports";
-import { CATALOG_PAGE_LIMIT } from "@/lib/chain/types";
+import { scanSellerPortfolio, sellerPortfolioTotals } from "@/lib/chain/seller-portfolio";
 import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
+import styles from "./SellerPortal.module.css";
 import { ResumeTransaction } from "./ResumeTransaction";
-import { formatDate, phaseLabel } from "./format";
+import { formatDate, formatUsdc, phaseLabel } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type SellerState =
-  | { kind: "idle" | "loading" }
-  | { kind: "error"; message: string }
-  | { kind: "ready"; raffles: readonly RaffleSnapshot[]; nextCursor: bigint | null; loadingMore: boolean; block: BlockRef };
+  | { kind: "idle" }
+  | { kind: "scanning"; raffles: readonly RaffleSnapshot[]; block: BlockRef | null }
+  | { kind: "incomplete"; raffles: readonly RaffleSnapshot[]; block: BlockRef | null; message: string }
+  | { kind: "ready"; raffles: readonly RaffleSnapshot[]; block: BlockRef };
 
 export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser: BrowserService; draftForm?: React.ReactNode; revision?: number }) {
   const wallet = useWalletSnapshot(browser.wallet);
   const [state, setState] = useState<SellerState>({ kind: "idle" });
   const request = useRef(0);
 
-  async function load(cursor?: bigint) {
-    if (browser.kind !== "configured" || wallet.kind !== "connected") return;
+  async function load() {
+    if (browser.kind !== "configured" || wallet.kind !== "connected" || wallet.chainId !== browser.service.manifest.chainId) return;
     const version = ++request.current;
-    if (cursor === undefined) setState({ kind: "loading" });
-    else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true } : current);
-    try {
-      const page = await browser.service.listRaffles({ cursor, limit: CATALOG_PAGE_LIMIT, block: cursor !== undefined && state.kind === "ready" ? state.block : undefined });
-      const owned = page.items.filter((item) => item.raffle.seller.toLowerCase() === wallet.account.toLowerCase());
-      if (version === request.current) setState((current) => ({ kind: "ready", raffles: cursor !== undefined && current.kind === "ready" ? [...current.raffles, ...owned] : owned, nextCursor: page.nextCursor, loadingMore: false, block: page.block }));
-    } catch (error) {
-      if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Seller raffles could not be loaded." });
-    }
+    setState({ kind: "scanning", raffles: [], block: null });
+    const result = await scanSellerPortfolio({
+      service: browser.service,
+      seller: wallet.account,
+      isCurrent: () => version === request.current,
+      onProgress: (raffles, block) => {
+        if (version === request.current) setState({ kind: "scanning", raffles, block });
+      }
+    });
+    if (version !== request.current || result.kind === "stale") return;
+    setState(result.kind === "complete" ? { kind: "ready", raffles: result.raffles, block: result.block } : result);
   }
 
   useEffect(() => {
+    request.current += 1;
     setState({ kind: "idle" });
-    if (browser.kind === "configured" && wallet.kind === "connected") void load();
+    if (browser.kind === "configured" && wallet.kind === "connected" && wallet.chainId === browser.service.manifest.chainId) void load();
     return () => { request.current += 1; };
-    // Wallet revision and runtime changes invalidate the seller portfolio.
+    // The wallet revision invalidates delayed pages even when the account address is unchanged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browser, wallet, revision]);
+  }, [browser, wallet.kind, wallet.kind === "connected" ? wallet.account : "", wallet.kind === "connected" ? wallet.chainId : 0, wallet.revision, revision]);
 
-  if (browser.kind === "unavailable") return <p className="notice warning" role="status">{browser.reason}</p>;
+  if (browser.kind === "unavailable") return <div className={`${styles.gate} notice warning`} role="status"><strong>Studio unavailable</strong><span>{browser.reason}</span><small>No example revenue or raffle data is shown without a reviewed deployment.</small></div>;
+  if (wallet.kind === "connected" && wallet.chainId !== browser.service.manifest.chainId) {
+    return <div className={`${styles.gate} notice warning`} role="status"><strong>Wrong network</strong><span>Switch your wallet to chain {browser.service.manifest.chainId} to load this seller portfolio.</span><small>Raffle data and totals stay hidden until the wallet and reviewed deployment use the same network.</small></div>;
+  }
+
+  const totals = state.kind === "ready" ? sellerPortfolioTotals(state.raffles) : null;
+  const raffles = state.kind === "idle" ? [] : state.raffles;
+  const scanning = state.kind === "idle" || state.kind === "scanning";
+
   return (
     <WalletGate wallet={browser.wallet}>
-      <ResumeTransaction browser={browser} pendingOnly onConfirmed={() => load()} />
-      <section className="workflow-grid seller-workspace">
-        <article className="pearl pad stack">
-          <div><p className="kicker">Your raffles</p><h2>Continue on-chain work</h2></div>
-          {state.kind === "idle" || state.kind === "loading" ? <p className="notice" role="status">Loading seller raffles…</p> : null}
-          {state.kind === "error" ? <div className="notice error stack" role="alert"><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void load()}>Retry</button></div> : null}
-          {state.kind === "ready" && !state.raffles.length ? <p>No raffles owned by this wallet were found on the verified deployment.</p> : null}
-          {state.kind === "ready" && state.raffles.length ? <ol className="seller-raffle-list">{state.raffles.map((snapshot) => <li key={snapshot.id.toString()}><div><strong>{snapshot.raffle.title}</strong><span>{phaseLabel(Number(snapshot.raffle.phase))} · closes {formatDate(snapshot.raffle.salesEnd)} UTC</span></div><Link className="btn btn-dark" href={`/piece/${snapshot.id.toString()}`}>Open workspace</Link></li>)}</ol> : null}
-          {state.kind === "ready" && state.nextCursor !== null ? <button className="btn btn-dark" type="button" disabled={state.loadingMore} onClick={() => void load(state.nextCursor ?? undefined)}>{state.loadingMore ? "Scanning…" : "Scan more raffles"}</button> : null}
-        </article>
-        <article className="well pad stack">
-          <div><p className="kicker">New raffle</p><h2>Prepare and review</h2></div>
-          {draftForm ?? <><p>Creating a raffle is unavailable until the commitment recovery service is configured.</p><p className="notice warning" role="status">Do not place a private salt, seed or wallet secret into a public form.</p></>}
-        </article>
-      </section>
+      <div className={styles.portal}>
+        <ResumeTransaction browser={browser} pendingOnly onConfirmed={load} />
+        <section className={styles.overview} aria-labelledby="seller-overview-title">
+          <div className={styles.overviewHeading}>
+            <div><p className="kicker">Seller portfolio</p><h2 id="seller-overview-title">Revenue at a glance</h2></div>
+            <div className={styles.scanStatus} aria-live="polite"><span className={styles.statusDot} data-active={scanning} aria-hidden="true" />{scanning ? `Scanning all raffles${raffles.length ? ` · ${raffles.length} found` : ""}` : state.kind === "ready" ? `Complete at block ${state.block.number.toString()}` : "Scan incomplete"}</div>
+          </div>
+          {totals ? (
+            <dl className={styles.metrics}>
+              <Metric label="Earned net revenue" value={totals.earnedNetProceeds} note="Settled proceeds after seller commission" primary />
+              <Metric label="Already claimed" value={totals.paidProceeds} note="Settled proceeds paid to this seller" />
+              <Metric label="Ready to claim" value={totals.claimableProceeds} note="Settled seller proceeds still in escrow" />
+              <Metric label="Pending principal" value={totals.pendingPrincipal} note="Open or drawing; not earned revenue" />
+              <Metric label="Refund liability" value={totals.refundLiability} note="Claimable by cancelled-raffle buyers" />
+              <Metric label="Gross pack sales" value={totals.grossPrincipal} note="Includes sales later cancelled and refunded" />
+            </dl>
+          ) : (
+            <div className={styles.totalsPending} role={state.kind === "incomplete" ? "alert" : "status"}>
+              <strong>{state.kind === "incomplete" ? "Portfolio totals are incomplete" : "Calculating complete portfolio totals"}</strong>
+              <p>{state.kind === "incomplete" ? state.message : "Totals appear only after every catalog page is read at one verified block."}</p>
+              {state.kind === "incomplete" ? <button className="btn btn-dark" type="button" onClick={() => void load()}>Retry full scan</button> : null}
+            </div>
+          )}
+        </section>
+
+        <div className={styles.contentGrid}>
+          <section className={styles.raffles} aria-labelledby="seller-raffles-title">
+            <div className={styles.sectionHeading}><div><p className="kicker">Your raffles</p><h2 id="seller-raffles-title">Manage the lifecycle</h2></div>{state.kind === "ready" ? <span>{state.raffles.length} total</span> : null}</div>
+            {scanning && raffles.length === 0 ? <RaffleSkeleton /> : null}
+            {state.kind === "ready" && state.raffles.length === 0 ? (
+              <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles for this wallet yet</strong><p>Create a draft below. Nothing is published until you review and sign the on-chain transaction.</p></div></div>
+            ) : null}
+            {raffles.length > 0 ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ol> : null}
+            {state.kind === "incomplete" && raffles.length > 0 ? <p className={`${styles.inlineWarning} notice warning`}>Showing discovered raffles only. Revenue totals remain hidden until the full scan succeeds.</p> : null}
+          </section>
+
+          <aside className={styles.createPanel}>
+            <details>
+              <summary><span><small>New raffle</small><strong>Prepare a draft</strong></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
+              <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
+            </details>
+          </aside>
+        </div>
+      </div>
     </WalletGate>
   );
+}
+
+function Metric({ label, value, note, primary = false }: { label: string; value: bigint; note: string; primary?: boolean }) {
+  return <div className={styles.metric} data-primary={primary}><dt>{label}</dt><dd>{formatUsdc(value)} <small>USDC</small></dd><p>{note}</p></div>;
+}
+
+function SellerRaffleCard({ snapshot }: { snapshot: RaffleSnapshot }) {
+  const accounting = sellerAccounting(snapshot);
+  const phase = Number(snapshot.raffle.phase);
+  const outcome = phase === 5
+    ? { label: accounting.claimableProceeds > 0n ? "Ready to claim" : "Net earned", value: accounting.claimableProceeds > 0n ? accounting.claimableProceeds : accounting.netProceeds }
+    : phase === 6
+      ? { label: "Refund liability", value: accounting.refundLiability }
+      : { label: "Pending principal", value: accounting.pendingPrincipal };
+  return (
+    <li>
+      <div className={styles.cardTopline}><span>Raffle #{snapshot.id.toString()}</span><span className={styles.phase}>{phaseLabel(phase)}</span></div>
+      <div className={styles.cardTitle}><h3>{snapshot.raffle.title}</h3><p>Closes {formatDate(snapshot.raffle.salesEnd)} UTC</p></div>
+      <dl className={styles.cardFacts}><div><dt>Gross pack sales</dt><dd>{formatUsdc(accounting.grossPrincipal)} USDC</dd></div><div><dt>{outcome.label}</dt><dd>{formatUsdc(outcome.value)} USDC</dd></div></dl>
+      <Link className={`btn btn-dark ${styles.manageButton}`} href={`/seller/${snapshot.id.toString()}`}>Manage raffle <span aria-hidden="true">→</span></Link>
+    </li>
+  );
+}
+
+function RaffleSkeleton() {
+  return <div className={styles.skeleton} role="status"><span /><span /><span /><p>Reading verified seller raffles…</p></div>;
 }
