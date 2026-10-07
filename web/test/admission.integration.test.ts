@@ -78,8 +78,8 @@ run("admission review and external owner execution", () => {
     await c.client.waitForTransactionReceipt({ hash: submitted.hash }); await c.mine();
     expect(await c.service.confirm({ transaction: submitted, timeoutMs: 2000 })).toMatchObject({ kind: "confirmed" });
     const reloaded = createRaffleService(c.client, c.manifest);
-    const recovered = await reloaded.resume({ hash: submitted.hash, wallet });
-    expect(await reloaded.confirm({ transaction: recovered, timeoutMs: 2000 })).toMatchObject({ kind: "confirmed" });
+    expect(await reloaded.inspectOutcome({ hash: submitted.hash, account: c.operator })).toMatchObject({ kind: "confirmed" });
+    expect(await reloaded.pending({ wallet })).toBeNull();
   });
   it("rejects reverted outer transactions and mismatching approvers", async () => {
     const id = await draft(); const { intent } = await exported(id);

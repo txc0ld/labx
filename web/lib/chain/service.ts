@@ -1,13 +1,11 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
-import { decodeFunctionData, erc20Abi, erc721Abi, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
-import { raffleAbi } from "./abi";
+import { type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
 import { ownerExecutionConfirmer } from "./owner-execution";
 import { isWalletRequestRejected } from "./wallet-errors";
 import { actionBuilder } from "./actions";
-import { MAX_MEMBERSHIP_TOTAL_USDC } from "./fees";
 import { hash, sameAddress } from "./validation";
 import type { RaffleService, WalletSessionPort } from "./ports";
 import type { CanonicalReceipt, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
@@ -172,51 +170,28 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       throw error;
     }
   }
-  async function resume({ hash: txHash, wallet, beforeJournalUpdate }: Parameters<RaffleService["resume"]>[0]) {
-    await reader.checkedBlock(); hash(txHash); const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
+  async function resume({ hash: txHash, wallet, expectedJournal, beforeJournalUpdate }: Parameters<RaffleService["resume"]>[0]) {
+    hash(txHash);
+    const session = connected(wallet, manifest.chainId);
+    const existing = journal.read(session.account), expected = expectedJournal ?? existing;
+    const matches = (current: ReturnType<PendingJournal["read"]>) => current !== null && expected != null
+      && current.id === expected.id && current.hash === expected.hash && current.nonce === expected.nonce;
+    if (!matches(existing)) return null;
+    await wallet.assertCurrent(session);
+    await reader.checkedBlock();
     const tx = await client.getTransaction({ hash: txHash });
-    if (!sameAddress(tx.from, session.account)) throw new Error("This transaction is not from the connected wallet.");
-    const existing = journal.read(session.account);
-    if (existing && (tx.nonce !== existing.nonce || tx.blockNumber !== null && tx.blockNumber < BigInt(existing.startedBlock))) throw new Error("This hash is unrelated to the unresolved wallet action.");
-    const target = tx.to;
-    if (existing) {
-      // A replacement/cancellation may use different calldata. Only the exact unresolved nonce can reconcile it.
-    } else if (target === null) {
-      throw new Error("This is not a supported LABx workflow transaction.");
-    } else if (sameAddress(target, manifest.address)) {
-      const decoded = decodeFunctionData({ abi: raffleAbi, data: tx.input });
-      const allowed = new Set(["createRaffle", "updateDraft", "approveRaffle", "revokeRaffleApproval", "escrow", "openWithPolicy", "close", "snapshot", "requestRandomness", "reveal", "settle", "claimPrize", "claimProceeds", "claimFee", "cancel", "abortDrawing", "reclaimPrize", "refund", "buyPack", "buyPackWithEth"]);
-      if (!allowed.has(decoded.functionName) || decoded.functionName !== "buyPackWithEth" && tx.value !== 0n) throw new Error("This is not a supported LABx workflow transaction.");
-    } else if (sameAddress(target, manifest.usdc)) {
-      const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.input });
-      if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || decoded.args[1] <= 0n || decoded.args[1] > MAX_MEMBERSHIP_TOTAL_USDC || tx.value !== 0n) throw new Error("This is not a bounded LABx payment approval.");
-    } else {
-      const decoded = decodeFunctionData({ abi: erc721Abi, data: tx.input });
-      if (decoded.functionName !== "approve" || !sameAddress(decoded.args[0], manifest.address) || tx.value !== 0n) throw new Error("This is not a LABx NFT approval.");
-      // Recovery has no stored draft ID. Resolve the exact NFT/token/seller against paginated chain records.
-      let cursor: bigint | undefined = 1n, found = false;
-      const at = await reader.checkedBlock();
-      for (let pageCount = 0; pageCount < 20 && cursor !== undefined && !found; pageCount++) {
-        const page = await reader.listRaffles({ cursor, limit: 24, block: at, seller: session.account });
-        found = page.items.some(item => sameAddress(item.raffle.seller, session.account) && sameAddress(item.raffle.nft, target) && item.raffle.tokenId === decoded.args[1]);
-        cursor = page.nextCursor ?? undefined;
-      }
-      if (!found && cursor !== undefined) throw new Error("NFT approval recovery reached its bounded search limit of 480 raffle IDs. No matching seller record was found within that range. Open your raffle to check its current NFT approval.");
-      if (!found) throw new Error("No seller draft matches this NFT approval.");
-    }
+    if (tx.hash.toLowerCase() !== txHash.toLowerCase() || !sameAddress(tx.from, session.account)) throw new Error("This transaction is not from the connected wallet.");
     await wallet.assertCurrent(session);
     const result: SubmittedAction = { hash: tx.hash, account: session.account, chainId: manifest.chainId, to: tx.to, data: tx.input, value: tx.value };
-    await journal.exclusive(session.account, async () => {
+    return journal.exclusive(session.account, async () => {
+      await wallet.assertCurrent(session);
       const current = journal.read(session.account);
-      if (current?.id !== existing?.id) throw new Error("Pending wallet activity changed. Retry recovery.");
-      beforeJournalUpdate?.({ transaction: result, nonce: tx.nonce, pending: current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null });
-      if (current) journal.write(session.account, { ...current, hash: tx.hash });
-      else {
-        if (!result.to) throw new Error("This is not a supported LABx workflow transaction.");
-        journal.write(session.account, { id: crypto.randomUUID(), intentHash: transactionIntent({ ...result, to: result.to }), nonce: tx.nonce, startedBlock: (tx.blockNumber ?? await client.getBlockNumber()).toString(), hash: tx.hash });
-      }
+      if (!current || !matches(current)) return null;
+      if (tx.nonce !== current.nonce || tx.blockNumber !== null && tx.blockNumber < BigInt(current.startedBlock)) throw new Error("This hash is unrelated to the unresolved wallet action.");
+      beforeJournalUpdate?.({ transaction: result, nonce: tx.nonce, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
+      journal.write(session.account, { ...current, hash: tx.hash });
+      return result;
     });
-    return result;
   }
   async function acknowledgeOutcome({ receipt, acknowledge }: Parameters<RaffleService["acknowledgeOutcome"]>[0]) {
     const canonical = canonicalReceipts.get(receipt);
@@ -229,7 +204,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
   }
   async function pending({ wallet }: Parameters<RaffleService["pending"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
-    const current = journal.read(session.account); return current ? { hash: current.hash, nonce: current.nonce } : null;
+    const current = journal.read(session.account); return current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null;
   }
   return { manifest, pending, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

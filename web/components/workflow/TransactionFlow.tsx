@@ -5,7 +5,7 @@ import { formatEther, isHex, type Hex } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "@/lib/chain/types";
 import { useTransactionOutcomes } from "./useTransactionOutcomes";
-import type { TransactionOutcome } from "@/lib/chain/transaction-outcomes";
+import { sameSubmittedIntent, type TransactionOutcome } from "@/lib/chain/transaction-outcomes";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 
 type TransactionState =
@@ -201,7 +201,12 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }
 
   async function waitForConfirmation(submitted: SubmittedAction, expected: FlowContext) {
-    await applyOutcome(await owner.resume(submitted.hash, expected.wallet), expected);
+    const outcome = await owner.resume(submitted.hash, expected.wallet);
+    if (outcome.kind === "terminal" && !sameSubmittedIntent(submitted, outcome.submitted)) {
+      setCurrent(expected, { kind: "replaced", confirmation: { kind: "replaced", hash: outcome.submitted.hash, receipt: outcome.confirmation.receipt, reason: "The wallet replaced this transaction with a different action." } });
+      return;
+    }
+    await applyOutcome(outcome, expected);
   }
 
   async function submit(prepared: PreparedAction) {

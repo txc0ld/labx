@@ -39,6 +39,7 @@ run("pending purchase repair on isolated Anvil", () => {
       await expect(reloaded.confirm({ transaction: old, timeoutMs: 1000 })).rejects.toThrow(/does not reconcile/);
       expect(journal.read(c.buyer)).toEqual(before);
       const resumed = await reloaded.resume({ hash: transaction.hash, wallet: buyer }); await c.mine(); await c.mine();
+      if (!resumed) throw new Error("Expected existing pending transaction");
       expect((await reloaded.confirm({ transaction: resumed, timeoutMs: 3000 })).kind).toBe("confirmed");
       expect(await service.pending({ wallet: buyer })).toBeNull();
       expect((await service.readAccount({ id: 1n, account: c.buyer })).principal).toBe(25000000n);
@@ -56,6 +57,7 @@ run("pending purchase repair on isolated Anvil", () => {
     await expect(reloaded.submit({ prepared: duplicate, wallet: buyer })).rejects.toThrow(/unresolved/);
     if (!accepted) throw new Error("Fixture did not broadcast");
     const resumed = await reloaded.resume({ hash: accepted, wallet: buyer }); await c.mine();
+    if (!resumed) throw new Error("Expected existing pending transaction");
     expect((await reloaded.confirm({ transaction: resumed, timeoutMs: 3000 })).kind).toBe("confirmed"); expect(journal.read(c.buyer)).toBeNull();
   });
   it("does not create a ghost journal when inner pre-send wallet revalidation fails", async () => {

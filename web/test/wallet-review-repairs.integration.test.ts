@@ -86,7 +86,7 @@ run("wallet review repairs", () => {
   });
 
 
-  it("recovers an exact seller/NFT/token match on the final bounded page", async () => {
+  it("inspects historical NFT approval without a seller catalog scan or journal mutation", async () => {
     const receipt = await c.write(c.nft, "approve", [c.raffle.address, 1n], c.seller);
     const template = (await c.service.readRaffle({ id: 1n })).raffle;
     const read = c.client.readContract.bind(c.client);
@@ -98,13 +98,13 @@ run("wallet review repairs", () => {
     });
     const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);
     const wallet = c.wallet(c.seller).session; await wallet.connect();
-    expect((await service.resume({ hash: receipt.transactionHash, wallet })).hash).toBe(receipt.transactionHash);
-    expect(journal.read(c.seller)?.hash).toBe(receipt.transactionHash);
-    expect(spy.mock.calls.filter(([call]) => call.functionName === "getRaffle")).toHaveLength(480);
-    expect(spy.mock.calls.filter(([call]) => call.functionName === "getPack")).toHaveLength(1);
+    await c.mine();
+    expect(await service.inspectOutcome({ hash: receipt.transactionHash, account: c.seller })).toMatchObject({ kind: "confirmed", receipt: { hash: receipt.transactionHash } });
+    expect(journal.read(c.seller)).toBeNull();
+    expect(spy.mock.calls.some(([call]) => ["nextId", "getRaffle", "getPack"].includes(call.functionName))).toBe(false);
   });
 
-  it("bounds NFT recovery to 480 IDs, skips other sellers' row reads, and preserves journal recovery", async () => {
+  it("keeps historical NFT inspection separate from exact pending-journal recovery", async () => {
     await c.write(c.nft, "mint", [c.seller, 2n]);
     const receipt = await c.write(c.nft, "approve", [c.raffle.address, 2n], c.seller);
     const tx = await c.client.getTransaction({ hash: receipt.transactionHash });
@@ -118,13 +118,13 @@ run("wallet review repairs", () => {
     });
     const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);
     const wallet = c.wallet(c.seller).session; await wallet.connect();
-    await expect(service.resume({ hash: tx.hash, wallet })).rejects.toThrow(/bounded search.*480/i);
+    expect(await service.resume({ hash: tx.hash, wallet })).toBeNull();
     expect(journal.read(c.seller)).toBeNull();
-    expect(spy.mock.calls.filter(([call]) => call.functionName === "getRaffle")).toHaveLength(480);
+    expect(spy.mock.calls.filter(([call]) => call.functionName === "getRaffle")).toHaveLength(0);
     expect(spy.mock.calls.some(([call]) => ["getPack", "getRaffleAdmission", "getRafflePolicy"].includes(call.functionName))).toBe(false);
     spy.mockClear();
     journal.write(c.seller, { id: "existing", nonce: tx.nonce, startedBlock: receipt.blockNumber.toString(), hash: null, intentHash: transactionIntent({ to: c.nft.address, data: tx.input, value: tx.value }) });
-    expect((await service.resume({ hash: tx.hash, wallet })).hash).toBe(tx.hash);
+    expect(await service.resume({ hash: tx.hash, wallet })).toMatchObject({ hash: tx.hash });
     expect(spy.mock.calls.some(([call]) => call.functionName === "nextId" || call.functionName === "getRaffle")).toBe(false);
   });
 });

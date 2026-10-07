@@ -119,11 +119,11 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await expect.poll(() => quantity.inputValue(), { timeout: 15_000 }).toBe("3");
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
+    const recordAgreement = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
     await expect.poll(async () => {
       for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
-      return (await Promise.all((await agreements.all()).map(checkbox => checkbox.isChecked()))).filter(Boolean).length;
-    }, { timeout: 10_000 }).toBe(3);
-    const recordAgreement = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
+      return await recordAgreement.isVisible() && await recordAgreement.isEnabled();
+    }, { timeout: 10_000 }).toBe(true);
     await recordAgreement.waitFor({ state: "visible", timeout: 10_000 }).catch(async (error: unknown) => {
       throw new Error(`${error instanceof Error ? error.message : "Agreement action did not appear."}\nRendered page:\n${await fixture.page.locator("#content").innerText()}`);
     });

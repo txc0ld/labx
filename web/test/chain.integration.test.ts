@@ -114,8 +114,9 @@ run("isolated Anvil seller and membership journeys", () => {
     const tx = await chain.service.submit({ prepared: review, wallet: wallet.session });
     await expect(chain.service.submit({ prepared: review, wallet: wallet.session })).rejects.toThrow(/already submitted/);
     expect((await chain.service.confirm({ transaction: tx, timeoutMs: 1000 })).kind).toBe("pending");
-    const reloaded = createRaffleService(chain.client, chain.manifest); const resumed = await reloaded.resume({ hash: tx.hash, wallet: wallet.session }); await chain.mine();
-    expect((await reloaded.confirm({ transaction: resumed, timeoutMs: 3000 })).kind).toBe("confirmed");
+    const reloaded = createRaffleService(chain.client, chain.manifest); await chain.mine();
+    expect((await reloaded.inspectOutcome({ hash: tx.hash, account: chain.seller, timeoutMs: 3000 })).kind).toBe("confirmed");
+    expect(await reloaded.pending({ wallet: wallet.session })).toBeNull();
     await chain.service.confirm({ transaction: tx, timeoutMs: 3000 });
   }, 15_000);
   it("purchases with a bounded ETH quote, then refunds when randomness misses its seven-day deadline", async () => {
@@ -164,8 +165,8 @@ run("isolated Anvil seller and membership journeys", () => {
   it("reports a mined reverted transaction when recovering wallet activity", async () => {
     const hash = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.raffle.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "claimPrize", args: [999n] }), gas: "0x186a0" }]);
     if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("Missing reverted fixture transaction");
-    const recovered = await chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer }); await chain.mine(); await chain.mine();
-    expect((await chain.service.confirm({ transaction: recovered, timeoutMs: 3000 })).kind).toBe("reverted");
+    await chain.mine(); await chain.mine();
+    expect((await chain.service.inspectOutcome({ hash: hash as `0x${string}`, account: chain.buyer })).kind).toBe("reverted");
   });
 
   it("pins pagination to one block and rejects invalid cursors or replaced block hashes", async () => {
@@ -177,12 +178,13 @@ run("isolated Anvil seller and membership journeys", () => {
     await expect(chain.service.listLots({ id: 1n, cursor: 2n ** 80n })).rejects.toThrow(/cursor/);
     await expect(chain.service.listRaffles({ block: { ...first.block, hash: keccak256(toBytes("different block")) } })).rejects.toThrow(/Chain state changed/);
   });
-  it("rejects recovery of unrelated wallet transfers and retired free-entry calls", async () => {
+  it("never creates a pending journal for historical transfers or retired free-entry calls", async () => {
     const transfer = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.buyer, value: "0x0" }]);
     const voucher = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.raffle.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "claimAmoe", args: [1n, PUBLISHED_TERMS_HASH, 0n, "0x"] }), gas: "0x186a0" }]);
     for (const hash of [transfer, voucher]) {
       if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("Missing fixture transaction");
-      await expect(chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer })).rejects.toThrow();
+      expect(await chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer })).toBeNull();
+      expect(await chain.service.pending({ wallet: buyer })).toBeNull();
     }
   });
 

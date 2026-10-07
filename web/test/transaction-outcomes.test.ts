@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, erc20Abi, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { createTransactionOutcomes, transactionMeaning, type OutcomeStorage } from "../lib/chain/transaction-outcomes";
-import type { Confirmation, OutcomeInspection, DeploymentManifest, PreparedAction, SubmittedAction, WalletSnapshot } from "../lib/chain/types";
+import type { CanonicalReceipt, Confirmation, OutcomeInspection, DeploymentManifest, PreparedAction, SubmittedAction, WalletSnapshot } from "../lib/chain/types";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 
 const account = "0x1111111111111111111111111111111111111111";
@@ -37,7 +37,7 @@ function fixture() {
     manifest, submit: vi.fn(async () => submitted),
     pending: vi.fn(async (): ReturnType<RaffleService["pending"]> => null),
     inspectOutcome: vi.fn(async (_input: Parameters<RaffleService["inspectOutcome"]>[0]): Promise<OutcomeInspection> => confirmed),
-    resume: vi.fn(async (input: Parameters<RaffleService["resume"]>[0]) => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: null }); return submitted; }),
+    resume: vi.fn(async (input: Parameters<RaffleService["resume"]>[0]) => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: { id: "test-journal", hash, nonce: 1 } }); return submitted; }),
     confirm: async (input: Parameters<RaffleService["confirm"]>[0]): Promise<Confirmation> => {
       const pending = await service.pending();
       input.beforeJournalWatch?.({ transaction: { ...input.transaction, nonce: pending?.nonce ?? 1 }, pending: { id: "test-journal", hash: input.transaction.hash, nonce: pending?.nonce ?? 1 } });
@@ -78,7 +78,7 @@ describe("operation ownership beyond transaction controls", () => {
     const owner = createTransactionOutcomes(f.service, () => f.storage);
     const first = owner.submit(prepared, f.wallet);
     await vi.waitFor(() => expect(f.confirm).toHaveBeenCalledTimes(1));
-    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 1 });
     const second = owner.resume(hash, f.wallet);
     receipt.resolve(confirmed);
     expect(await first).toBe(await second);
@@ -178,7 +178,7 @@ describe("operation ownership beyond transaction controls", () => {
     const cancelled = { ...replacement, nonce: 1, blockNumber: 3n, status: "success" as const };
     f.confirm.mockResolvedValueOnce({ kind: "pending", hash });
     await owner.submit(prepared, f.wallet);
-    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 1 });
     f.service.resume.mockImplementation(async input => {
       input.beforeJournalUpdate?.({ transaction: replacement, nonce: 1, pending: { id: "nonce-1", hash, nonce: 1 } });
       return replacement;
@@ -207,7 +207,7 @@ describe("operation ownership beyond transaction controls", () => {
     f.confirm.mockImplementationOnce(() => late.promise.then(value => { if (kind === "error") throw new Error("Old watcher failed"); return value; }));
     const first = owner.submit(prepared, f.wallet);
     await vi.waitFor(() => expect(f.confirm).toHaveBeenCalledTimes(1));
-    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 1 });
     f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: second, nonce: 1, pending: { id: "nonce-1", hash, nonce: 1 } }); return second; });
     f.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: null }); return { kind: "confirmed", hash: secondHash, blockNumber: 2n, replacedHash: hash, receipt: canonical }; });
     const terminal = await owner.resume(secondHash, f.wallet);
@@ -231,7 +231,7 @@ describe("operation ownership beyond transaction controls", () => {
   it("automatically inspects old receipts without reading or rewriting a newer journal", async () => {
     const f = fixture();
     await createTransactionOutcomes(f.service, () => f.storage).submit(prepared, f.wallet);
-    f.service.pending.mockResolvedValue({ hash: null, nonce: 9 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash: null, nonce: 9 });
     f.service.pending.mockClear(); f.service.resume.mockClear(); f.confirm.mockClear();
     const owner = createTransactionOutcomes(f.service, () => f.storage);
     await owner.recover(account);
@@ -250,7 +250,7 @@ describe("operation ownership beyond transaction controls", () => {
     f.service.inspectOutcome.mockResolvedValue({ kind: "confirmed", hash: otherHash, blockNumber: 2n, replacedHash: null, receipt: historical });
     const owner = createTransactionOutcomes(f.service, () => f.storage);
     await owner.recover(account);
-    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 1 });
     f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: { id: "different-nonce", hash, nonce: 1 } }); return submitted; });
     await owner.resume(hash, f.wallet);
     expect(owner.getSnapshot(account)).toHaveLength(2);
@@ -261,7 +261,7 @@ describe("operation ownership beyond transaction controls", () => {
     const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
     const first = await owner.submit(prepared, f.wallet);
     const nextHash: Hex = `0x${"cd".repeat(32)}`, next = { ...submitted, hash: nextHash }, canonical = { ...receipt, hash: nextHash, nonce: 9 };
-    f.service.pending.mockResolvedValue({ hash, nonce: 9 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 9 });
     f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: next, nonce: 9, pending: { id: "different-nonce", hash, nonce: 9 } }); return next; });
     f.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: { id: "different-nonce", hash: nextHash, nonce: 9 } }); return { kind: "confirmed", hash: nextHash, blockNumber: 2n, replacedHash: null, receipt: canonical }; });
     await owner.resume(nextHash, f.wallet);
@@ -293,10 +293,10 @@ describe("operation ownership beyond transaction controls", () => {
 
   it("rejects mismatched resume metadata before the callback can retain a checkpoint", async () => {
     const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
-    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 1 });
     f.service.resume.mockImplementation(async input => {
       const transaction: SubmittedAction = { ...submitted, account: other };
-      input.beforeJournalUpdate?.({ transaction, nonce: 1, pending: null });
+      input.beforeJournalUpdate?.({ transaction, nonce: 1, pending: { id: "test-journal", hash, nonce: 1 } });
       return transaction;
     });
     await expect(owner.resume(hash, f.wallet)).rejects.toThrow(/original wallet/);
@@ -343,7 +343,7 @@ describe("operation ownership beyond transaction controls", () => {
     const original = tabA.submit(prepared, f.wallet);
     await vi.waitFor(() => expect(f.confirm).toHaveBeenCalledTimes(1));
     const replacementHash: Hex = `0x${"cd".repeat(32)}`, replacement = { ...submitted, hash: replacementHash }, canonical = { ...receipt, hash: replacementHash };
-    f.service.pending.mockResolvedValue({ hash, nonce: 1 });
+    f.service.pending.mockResolvedValue({ id: "test-journal", hash, nonce: 1 });
     f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: replacement, nonce: 1, pending: { id: "shared", hash, nonce: 1 } }); return replacement; });
     f.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: { id: "shared", hash: replacementHash, nonce: 1 } }); f.service.pending.mockResolvedValue(null); return { ...confirmed, hash: replacementHash, receipt: canonical }; });
     await tabB.resume(replacementHash, f.wallet);
@@ -424,6 +424,52 @@ describe("operation ownership beyond transaction controls", () => {
       await vi.waitFor(() => expect(owner.getSnapshot(account)).toMatchObject([{ kind: "terminal", submitted: { hash: replacementHash } }]));
       expect(owner.getSnapshot(account)).toHaveLength(1);
     } finally { stop(); vi.unstubAllGlobals(); }
+  });
+
+  it.each(["pending", "unknown", "error"] as const)("keeps queued H2 after remote acknowledgment despite a late H1 %s", async completion => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const key = `labx:outcome:v1:31337:${contract}:${hash}:${account}:${hash}`;
+    const replacementHash: Hex = `0x${"cd".repeat(32)}`;
+    const pending: OutcomeInspection = { kind: "pending", hash, reason: "unmined", transaction: { ...submitted, nonce: 1 } };
+    f.map.set(key, hash);
+    f.service.inspectOutcome.mockResolvedValue(pending);
+    const events = Object.assign(new EventTarget(), { localStorage: f.storage });
+    vi.stubGlobal("window", events);
+    const stop = owner.observe(account);
+    try {
+      await owner.recover(account);
+      const held = deferred<OutcomeInspection>();
+      f.service.inspectOutcome.mockImplementationOnce(() => held.promise.then(result => {
+        if (completion === "error") throw new Error("Delayed RPC failure");
+        return result;
+      }));
+      const rescanning = owner.synchronize(account);
+      await vi.waitFor(() => expect(f.service.inspectOutcome).toHaveBeenCalledTimes(2));
+      f.service.inspectOutcome.mockResolvedValue({ ...confirmed, hash: replacementHash, receipt: { ...receipt, hash: replacementHash } });
+      f.map.delete(key);
+      events.dispatchEvent(Object.assign(new Event("storage"), { key, newValue: replacementHash, storageArea: f.storage }));
+      events.dispatchEvent(Object.assign(new Event("storage"), { key, newValue: null, storageArea: f.storage }));
+      expect(owner.getSnapshot(account)).toMatchObject([{ kind: "recovery", hash: replacementHash }]);
+      held.resolve(completion === "unknown" ? { kind: "unknown", hash, reason: "Receipt unavailable" } : pending);
+      await rescanning;
+      expect(owner.getSnapshot(account)).toMatchObject([{ kind: "terminal", submitted: { hash: replacementHash } }]);
+      expect(owner.getSnapshot(account)).toHaveLength(1);
+      expect(f.service.inspectOutcome).toHaveBeenCalledWith(expect.objectContaining({ hash: replacementHash }));
+    } finally { stop(); vi.unstubAllGlobals(); }
+  });
+
+  it.each([false, true])("preserves observed original intent across another tab's canonical receipt (same intent: %s)", async repriced => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    f.confirm.mockResolvedValueOnce({ kind: "pending", hash });
+    await owner.submit(prepared, f.wallet);
+    const replacementHash: Hex = `0x${"cd".repeat(32)}`;
+    const canonical: CanonicalReceipt = { ...receipt, hash: replacementHash, ...(repriced ? {} : { to: account, data: "0x" as const }) };
+    for (const key of f.map.keys()) f.map.set(key, replacementHash);
+    f.service.inspectOutcome.mockResolvedValue({ ...confirmed, hash: replacementHash, receipt: canonical });
+    await owner.synchronize(account);
+    expect(await owner.resume(hash, f.wallet)).toMatchObject({ kind: "terminal", confirmation: { kind: repriced ? "confirmed" : "replaced" }, submitted: { hash: replacementHash } });
+    const separate = memoryStorage(), unowned = createTransactionOutcomes(f.service, () => separate.storage);
+    expect(await unowned.resume(replacementHash, f.wallet)).toMatchObject({ kind: "terminal", confirmation: { kind: "confirmed" } });
   });
 
 });

@@ -26,6 +26,11 @@ export function transactionMeaning(service: Pick<RaffleService, "manifest">, sub
     return typeof id === "bigint" ? { raffleId: id, purchase: decoded.functionName === "buyPack" || decoded.functionName === "buyPackWithEth", action: decoded.functionName } : null;
   } catch { return null; }
 }
+export function sameSubmittedIntent(left: SubmittedAction, right: SubmittedAction) {
+  return left.chainId === right.chainId && sameAddress(left.account, right.account)
+    && (left.to === null ? right.to === null : right.to !== null && sameAddress(left.to, right.to))
+    && left.data.toLowerCase() === right.data.toLowerCase() && left.value === right.value;
+}
 function outcomeHash(outcome: TransactionOutcome): Hex | null {
   return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
 }
@@ -39,7 +44,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
   const checking = new Map<string, Promise<TransactionOutcome>>(), inspections = new Map<string, Promise<TransactionOutcome>>();
   const redirects = new Map<string, string>();
   const recoveries = new Map<string, Promise<void>>();
-  const verified = new Map<string, { id: string; nonce: number }>();
+  const verified = new Map<string, { id: string; nonce: number; observed: ObservedTransaction | null }>();
   const rescan = new Set<string>();
   const observed = new Map<Address, number>();
   let sequence = 0;
@@ -59,7 +64,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     return direct ?? (known ? getSnapshot(account).find(item => item.id === identity(account, known.id)) : undefined);
   }
   function remember(transaction: ObservedTransaction, id: string) {
-    verified.set(checkpointKey(transaction.account, transaction.hash), { id, nonce: transaction.nonce });
+    verified.set(checkpointKey(transaction.account, transaction.hash), { id, nonce: transaction.nonce, observed: transaction });
   }
   function stored(account: Address) {
     const target = storage(), accountPrefix = `${prefix}${accountKey(account)}:`;
@@ -127,8 +132,8 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     }
     for (const item of related) redirects.set(checkpointKey(account, item.id), id);
     redirects.set(checkpointKey(account, requestedId), id);
-    verified.set(checkpointKey(account, canonicalHash), { id, nonce });
-    if (priorHash) verified.set(checkpointKey(account, priorHash), { id, nonce });
+    verified.set(checkpointKey(account, canonicalHash), { id, nonce, observed: verified.get(checkpointKey(account, canonicalHash))?.observed ?? null });
+    if (priorHash) verified.set(checkpointKey(account, priorHash), { id, nonce, observed: verified.get(checkpointKey(account, priorHash))?.observed ?? null });
     if (related.length) records.set(accountKey(account), getSnapshot(account).filter(item => !related.includes(item)));
     return id;
   }
@@ -159,15 +164,29 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       put({ id: "storage-error", account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "Transaction recovery storage is unavailable." });
     }
   }
+  function terminalOutcome(account: Address, id: string, confirmation: TerminalConfirmation) {
+    const original = [...verified.entries()].find(([key, entry]) => key.startsWith(`${prefix}${accountKey(account)}:`)
+      && identity(account, entry.id) === identity(account, id) && entry.nonce === confirmation.receipt.nonce && entry.observed !== null)?.[1].observed;
+    const canonical: TerminalConfirmation = original && !sameSubmittedIntent(original, confirmation.receipt)
+      ? { kind: "replaced", hash: confirmation.receipt.hash, receipt: confirmation.receipt, reason: "The wallet replaced the original transaction with a different action." }
+      : confirmation;
+    return put({ id, account, kind: "terminal", submitted: canonical.receipt, confirmation: canonical });
+  }
   async function inspect(account: Address, hash: Hex, requestedId = operationId(account, hash), manual = false): Promise<TransactionOutcome> {
     const key = checkpointKey(account, hash), existing = inspections.get(key);
     if (existing) return existing;
     const owned = getSnapshot(account).some(item => item.id === requestedId);
+    function advanced() {
+      const current = getSnapshot(account).find(item => item.id === identity(account, requestedId));
+      return current && outcomeHash(current)?.toLowerCase() !== hash.toLowerCase() ? current : undefined;
+    }
     const work = (async () => {
       try {
         const confirmation = await service.inspectOutcome({ hash, account, timeoutMs: manual ? 60_000 : 0 });
         if (confirmation.kind === "pending") remember(confirmation.transaction, requestedId);
         else if (confirmation.kind !== "unknown") remember(confirmation.receipt, requestedId);
+        const newer = advanced();
+        if (newer) return newer;
         const pointer = storage().getItem(checkpointKey(account, requestedId));
         if (pointer && pointer.toLowerCase() !== hash.toLowerCase()) {
           void synchronize(account);
@@ -181,8 +200,10 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
           return owned ? put(result) : result;
         }
         const id = retain(account, requestedId, confirmation.receipt.hash, confirmation.receipt.nonce);
-        return put({ id, account, kind: "terminal", submitted: confirmation.receipt, confirmation });
+        return terminalOutcome(account, id, confirmation);
       } catch (error) {
+        const newer = advanced();
+        if (newer) return newer;
         const result: TransactionOutcome = { id: requestedId, account, kind: "unverified", hash, message: error instanceof Error ? error.message : "The saved transaction could not be verified." };
         return owned ? put(result) : result;
       }
@@ -263,7 +284,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
         } });
         return confirmation.kind === "pending"
           ? finish({ id, account: submitted.account, kind: "pending", submitted })
-          : put({ id, account: submitted.account, kind: "terminal", submitted: confirmation.receipt, confirmation });
+          : terminalOutcome(submitted.account, id, confirmation);
       } catch (error) {
         return finish({ id, account: submitted.account, kind: "error", submitted, message: error instanceof Error ? error.message : "Confirmation could not be checked. The recovery record is retained." });
       }
@@ -302,12 +323,21 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     assertScope();
     if (!pending) return owned?.kind === "terminal" ? owned : inspect(snapshot.account, owned ? outcomeHash(owned) ?? hash : hash, owned?.id, true);
     let id = owned?.id ?? operationId(snapshot.account, hash);
-    const submitted = await service.resume({ hash, wallet, beforeJournalUpdate: ({ transaction, pending, nonce }) => {
+    const submitted = await service.resume({ hash, wallet, expectedJournal: pending, beforeJournalUpdate: ({ transaction, pending, nonce }) => {
       assertScope(transaction);
       id = retain(snapshot.account, id, transaction.hash, nonce, pending?.hash ?? null);
       remember({ ...transaction, nonce }, id);
       put({ id, account: snapshot.account, kind: "checking", submitted: transaction });
     } });
+    if (!submitted) {
+      assertScope();
+      await synchronize(snapshot.account);
+      assertScope();
+      const current = findKnown(snapshot.account, hash);
+      const result = current?.kind === "terminal" ? current : await inspect(snapshot.account, current ? outcomeHash(current) ?? hash : hash, current?.id, true);
+      assertScope();
+      return result;
+    }
     assertScope(submitted);
     return watch(submitted, id);
   }

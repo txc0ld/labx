@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, erc20Abi, keccak256, toBytes, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
@@ -33,12 +33,16 @@ run("canonical outcome recovery on isolated Anvil", () => {
     expect(await service.inspectOutcome({ hash: creation, account: chain.buyer })).toMatchObject({ kind: "confirmed", receipt: { hash: creation, to: null } });
     expect(journal.read(chain.buyer)).toEqual(newer);
     journal.remove(chain.buyer);
-    await expect(service.resume({ hash: creation, wallet })).rejects.toThrow(/supported LABx/);
+    expect(await service.resume({ hash: creation, wallet })).toBeNull();
+    expect(journal.read(chain.buyer)).toBeNull();
   });
 
   it("keeps the journal on pre-clear persistence failure and recovers both crash boundaries", async () => {
     const txHash = await send(chain.usdc.address, approvalData()); await depth();
+    const actual = await chain.client.getTransaction({ hash: txHash });
+    journal.write(chain.buyer, { id: "pre-clear", hash: txHash, nonce: actual.nonce, startedBlock: (actual.blockNumber ?? 0n).toString(), intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) });
     const submitted = await service.resume({ hash: txHash, wallet });
+    if (!submitted) throw new Error("Expected existing pending transaction");
     const before = journal.read(chain.buyer);
     const { map, storage } = memoryStorage();
     const key = `labx:outcome:v1:31337:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}:${txHash}`;
@@ -58,6 +62,27 @@ run("canonical outcome recovery on isolated Anvil", () => {
     await afterClear.recover(chain.buyer);
     expect(afterClear.getSnapshot(chain.buyer)).toMatchObject([{ kind: "terminal", submitted: { hash: txHash } }]);
     expect([...map.values()]).toEqual([txHash]);
+  });
+
+  it.each(["removed", "changed"] as const)("never recreates or updates a %s journal after a delayed recovery RPC", async kind => {
+    const txHash = await send(chain.usdc.address, approvalData()); await depth();
+    const actual = await chain.client.getTransaction({ hash: txHash });
+    const pending = { id: "delayed", hash: txHash, nonce: actual.nonce, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) };
+    journal.write(chain.buyer, pending);
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const transaction = vi.spyOn(chain.client, "getTransaction").mockImplementationOnce(async () => { await held; return actual; });
+    const beforeJournalUpdate = vi.fn();
+    try {
+      const resumed = service.resume({ hash: txHash, wallet, expectedJournal: await service.pending({ wallet }) ?? undefined, beforeJournalUpdate });
+      await vi.waitFor(() => expect(transaction).toHaveBeenCalledOnce());
+      const changed = { ...pending, hash: null };
+      if (kind === "removed") journal.remove(chain.buyer); else journal.write(chain.buyer, changed);
+      release();
+      expect(await resumed).toBeNull();
+      expect(beforeJournalUpdate).not.toHaveBeenCalled();
+      expect(journal.read(chain.buyer)).toEqual(kind === "removed" ? null : changed);
+    } finally { release(); transaction.mockRestore(); }
   });
 
   it("retains the prior journal hash when pre-update persistence fails", async () => {

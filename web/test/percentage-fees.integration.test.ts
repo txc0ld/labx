@@ -89,8 +89,11 @@ run("v3 fee accounting and version binding on isolated Anvil", () => {
     expect(prepared.amountUsdc).toBe(MAX_MEMBERSHIP_TOTAL_USDC);
     const reloaded = createRaffleService(c.client, c.manifest);
     const excessive = await c.write(c.usdc, "approve", [c.raffle.address, MAX_MEMBERSHIP_TOTAL_USDC + 1n], c.buyer);
-    await expect(reloaded.resume({ hash: excessive.transactionHash, wallet: buyer })).rejects.toThrow(/bounded/);
-    expect((await reloaded.resume({ hash: transaction.hash, wallet: buyer })).hash).toBe(transaction.hash);
+    await c.mine();
+    expect(await reloaded.resume({ hash: excessive.transactionHash, wallet: buyer })).toBeNull();
+    expect(await reloaded.inspectOutcome({ hash: excessive.transactionHash, account: c.buyer })).toMatchObject({ kind: "confirmed", receipt: { hash: excessive.transactionHash } });
+    expect(await reloaded.inspectOutcome({ hash: transaction.hash, account: c.buyer })).toMatchObject({ kind: "confirmed", receipt: { hash: transaction.hash } });
+    expect(await reloaded.pending({ wallet: buyer })).toBeNull();
   }, 30_000);
   it("rejects changed runtime, token, chain and on-chain version 2 even with its matching hash", async () => {
     expect((await attestDeployment(c.client, { ...c.manifest, runtimeCodeHash: keccak256("0xff") })).kind).toBe("mismatch");
