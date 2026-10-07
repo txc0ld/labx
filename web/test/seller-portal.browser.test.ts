@@ -44,12 +44,14 @@ run("rendered seller portal on isolated Anvil", () => {
     }
     await chain.write(chain.nft, "approve", [chain.raffle.address, 802n], chain.seller);
     await chain.write(chain.raffle, "escrow", [2n], chain.seller);
+    await chain.admit(2n);
     await chain.write(chain.raffle, "open", [2n], chain.seller);
     await chain.write(chain.usdc, "mint", [chain.seller, 100_000_000n]);
-    await chain.write(chain.usdc, "approve", [chain.raffle.address, 25_500_000n], chain.seller);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 27_500_000n], chain.seller);
     await chain.write(chain.raffle, "buyPack", [2n, 0, 1, PUBLISHED_TERMS_HASH], chain.seller);
     await chain.write(chain.nft, "approve", [chain.raffle.address, 826n], chain.seller);
     await chain.write(chain.raffle, "escrow", [26n], chain.seller);
+    await chain.admit(26n);
     await chain.write(chain.raffle, "open", [26n], chain.seller);
     const refundable = await chain.service.readRaffle({ id: 2n });
     await chain.warp(refundable.raffle.salesEnd + refundable.drawStartGrace);
@@ -74,8 +76,9 @@ run("rendered seller portal on isolated Anvil", () => {
       ], chain.stranger);
       await chain.write(chain.nft, "approve", [chain.raffle.address, tokenId], chain.stranger);
       await chain.write(chain.raffle, "escrow", [id], chain.stranger);
+      await chain.admit(id);
       await chain.write(chain.raffle, "open", [id], chain.stranger);
-      await chain.write(chain.usdc, "approve", [chain.raffle.address, 1_020_000n], chain.buyer);
+      await chain.write(chain.usdc, "approve", [chain.raffle.address, 3_500_000n], chain.buyer);
       await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
       await chain.warp(salesEnd);
       await chain.write(chain.raffle, "close", [id], chain.buyer);
@@ -119,8 +122,9 @@ run("rendered seller portal on isolated Anvil", () => {
     ], chain.seller);
     await chain.write(chain.nft, "approve", [chain.raffle.address, 930n], chain.seller);
     await chain.write(chain.raffle, "escrow", [30n], chain.seller);
+    await chain.admit(30n);
     await chain.write(chain.raffle, "open", [30n], chain.seller);
-    await chain.write(chain.usdc, "approve", [chain.raffle.address, 1_020_000n], chain.seller);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 3_500_000n], chain.seller);
     await chain.write(chain.raffle, "buyPack", [30n, 0, 1, PUBLISHED_TERMS_HASH], chain.seller);
     await chain.warp(now + 600n);
     await chain.write(chain.raffle, "close", [30n], chain.buyer);
@@ -274,7 +278,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByRole("button", { name: "Claim refund", exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [802n] })).toBe(chain.seller);
     await transact("Claim refund");
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(beforeRefund + 25_500_000n);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(beforeRefund + 25_000_000n);
     expect((await chain.service.readAccount({ id: 2n, account: chain.seller })).principal).toBe(0n);
   }, 30_000);
 

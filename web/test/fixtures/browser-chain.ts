@@ -64,7 +64,10 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
   let selectedAccount: string = initialAccount;
   await context.exposeFunction("__labxRpc", async (input: { method: string; params?: readonly unknown[] }) => {
     const result = await chain.rpc(input.method, input.params ?? []);
-    if (mineConfirmation && input.method === "eth_sendTransaction") await chain.mine();
+    if (mineConfirmation && input.method === "eth_sendTransaction") {
+      await chain.mine();
+      await chain.mine();
+    }
     return result;
   });
   await context.exposeFunction("__labxSelectedAccount", () => selectedAccount);

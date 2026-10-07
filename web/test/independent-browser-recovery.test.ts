@@ -49,6 +49,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
       const prepared = await service.prepare({ action, wallet });
       const transaction = await service.submit({ prepared, wallet });
       await chain.mine();
+      await chain.mine();
       expect(await service.confirm({ transaction, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
     };
     await act({ kind: "createDraft", draft }, seller);
@@ -56,6 +57,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     expect(id).toBe(1n);
     await act({ kind: "approvePrize", id }, seller);
     await act({ kind: "escrow", id }, seller);
+    await chain.admit(id);
     const policy = await service.openingPolicy();
     await act({ kind: "open", id, expectedPolicyHash: policy.hash }, seller);
     await act({ kind: "approveUsdc", id, packId: 0, quantity: 1 }, buyer);
@@ -106,11 +108,12 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     expect(await recovery.getByLabel("Transaction hash").inputValue()).toBe(transactionHash);
 
     await chain.mine();
+    await chain.mine();
     await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
     await expect.poll(async () => fixture.page.locator(".resume-transaction").count(), { timeout: 10_000 }).toBe(0);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(async () => fixture.page.locator(".resume-transaction").count(), { timeout: 10_000 }).toBe(0);
-    expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 20_000_000n, fee: 400_000n });
+    expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 20_000_000n, fee: 2_500_000n });
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
   }, 90_000);

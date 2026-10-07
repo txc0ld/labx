@@ -35,6 +35,7 @@ run("independent rendered catalog states on isolated Anvil", () => {
     const prepared = await chain.service.prepare({ action, wallet });
     const transaction = await chain.service.submit({ prepared, wallet });
     await chain.mine();
+    await chain.mine();
     expect(await chain.service.confirm({ transaction, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
   }
 
@@ -62,6 +63,7 @@ run("independent rendered catalog states on isolated Anvil", () => {
     await act({ kind: "createDraft", draft }, seller);
     await act({ kind: "approvePrize", id }, seller);
     await act({ kind: "escrow", id }, seller);
+    await chain.admit(id);
     const policy = await chain.service.openingPolicy();
     await act({ kind: "open", id, expectedPolicyHash: policy.hash }, seller);
     return id;
