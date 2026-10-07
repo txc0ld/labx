@@ -1,10 +1,10 @@
 # LABx security
 
-This describes the local version 2 source. It is not a claim about the historical Sepolia deployment, a formal audit or a zero-risk guarantee. See `LAUNCH.md` for release prerequisites and `docs/build/full-workflow-20261006.md` for candidate-specific evidence.
+This describes the prepared version 3 source. It is not a claim about the historical Sepolia deployment, a formal audit or a zero-risk guarantee. See `LAUNCH.md` for release prerequisites and `docs/build/seller-portal-fees-20261007.md` for candidate-specific evidence.
 
 ## Assets and authority
 
-The contract holds one escrowed ERC-721 prize per raffle and the USDC membership principal plus a 5 USDC lab fee per pack. Chainlink holds the VRF subscription balance. Server records include private commitments, signed agreements and receipt requests.
+The contract holds one escrowed ERC-721 prize per raffle and the USDC membership principal plus the actual 2% buyer fee charged per purchase. Settlement moves a separate 2% of gross principal into the fee escrow. Chainlink holds the VRF subscription balance. Server records include private commitments, signed agreements and receipt requests.
 
 | Role | Authority |
 | --- | --- |
@@ -22,7 +22,7 @@ A deployed Safe is intended for ownership and treasury. The deploy script checks
 - Snapshot batches contain at most 300 lots and omit expired entries. The website uses 100-lot batches. Anyone may request the single draw after a completed nonempty snapshot in Closed. The request must start strictly before `salesEnd + 7 days`. At or after that deadline, anyone can cancel an Open or Closed raffle, including one with an incomplete snapshot.
 - The pinned coordinator's result must arrive strictly before `vrfRequestedAt + 7 days`. Late results are ignored even if nobody has aborted yet. At or after the cutoff, anyone can abort and enable refunds. A retry cannot reroll or extend the deadline; the retained selector always reverts.
 - Coordinator/request identity is namespaced and used request IDs cannot be reused. A timely result selects from the frozen cumulative entry weights.
-- Anyone can settle after a valid reveal, or after the seven-day reveal grace without one. Prize, principal and fees are separate claims to the winner, seller and pinned treasury. Cancellation leaves buyers to claim their own principal and lab fee, and the seller to reclaim the NFT.
+- Anyone can settle after a valid reveal, or after the seven-day reveal grace without one. Prize, principal and fees are separate claims to the winner, seller and pinned treasury. Cancellation leaves buyers to claim their own principal and actual buyer fee, and the seller to reclaim the NFT.
 - Pausing cannot block closing, snapshotting, drawing, settlement, claims or timed recovery for existing raffles.
 
 The commitment binds chain, contract, nonce, token identity, public/private hashes and salt. Revealing proves these hashes; it does not enforce a numeric seller reserve. Private plaintext is never submitted on-chain.
@@ -44,7 +44,7 @@ Mainnet is rejected by the contract constructor. The deployment script accepts S
 - Receipts verify the finalized purchase log, buyer and amounts. The recipient and email payload are immutable after reservation. Idempotent mail retries are bounded; expired or uncertain jobs require reconciliation. This does not prove ownership of an email address.
 - Vercel requires both Upstash settings. Durable write failures fail closed. The local file store serializes one process and is not a multiprocess database. Receipt delivery additionally requires Resend configuration.
 - AMOE and CAPTCHA entry routes are disabled. The legacy contract entry selector reverts. Historical check-in points confer no entries or privilege; its server token is never public.
-- Metadata reads are bounded browser requests without credentials, referrers or redirects. The server does not fetch arbitrary metadata URLs. Unknown or failed metadata is not replaced with a fabricated listing.
+- Remote metadata JSON reads are bounded browser requests without credentials, referrers or redirects. Those bounds do not cover the RPC tokenURI response or native image transfer and decoded size. The server does not fetch arbitrary metadata URLs. Unknown or failed metadata is not replaced with a fabricated listing.
 
 Prior Slither results were triaged under documented trust assumptions; they are not a clean-scan claim or a comprehensive audit of the final application. See the exact revision's independent review and test artifacts.
 

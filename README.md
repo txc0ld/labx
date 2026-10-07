@@ -6,9 +6,9 @@ Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166. The publ
 
 ## Current status
 
-The v2 contract changes and complete website workflow are local implementation work. Their acceptance evidence and remaining checks are recorded in [the workflow checkpoint](docs/build/full-workflow-20261006.md). A passing source test does not establish that production or an existing deployed contract has the same behavior.
+The prepared v3 source uses percentage fees and includes the seller portal. Acceptance work is recorded in [the current task contract](docs/build/seller-portal-fees-20261007.md). The production approval registry remains empty; supplying an address does not enable transactions. A passing source test does not establish live functionality.
 
-The historical Sepolia address is not an approved v2 deployment. Its owner and pending ownership target had no deployed code at the last recorded read-only check. A correctly configured Safe remains an operational requirement, not a verified fact about that deployment. No production, ownership, funding or on-chain change is implied by this source tree.
+The v2 Sepolia contract at `0xef27306567a5ADA354fe9403008D041d0b468213` was verified on 7 October 2026 at block 11861349 with the Safe as owner and treasury, native-ETH VRF configured, and no raffles. That was a point-in-time deployment check, not a completed live raffle test. Its fixed 5-USDC fee cannot be changed by updating this website. Version 3 requires a separately approved deployment and migration. The older contract at `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` is also excluded from current transactions.
 
 ## Layout
 
@@ -39,7 +39,7 @@ Vercel's project root is `web`. A catalog without an approved deployment must sh
 
 ## Contract policy
 
-Sellers can edit a draft. Opening fixes the prize, pack economics, closing time, terms, treasury and randomness configuration for that raffle. Sales cannot close early. Each pack charges its price plus a 5 USDC lab fee; bonus entries expire after 365 days.
+Sellers can edit a draft. Opening fixes the prize, pack economics, closing time, terms, treasury and randomness configuration for that raffle. Sales cannot close early. Each purchase adds 2% of its membership principal, rounded down once in USDC atomic units for the transaction. Settlement deducts a separate 2% of total membership principal from seller proceeds. Cancellation refunds the actual principal and buyer fee paid, with no seller commission. Bonus entries expire after 365 days.
 
 Anyone can enable refunds if a draw has not started seven days after sales end, or if no randomness is accepted within seven days of the request. Results at or after the callback cutoff are ignored. There is no reroll. Anyone can settle a recorded winner after the seller reveals or the seven-day reveal grace expires. Prize, seller proceeds, treasury fees and buyer refunds have separate claim paths.
 
@@ -49,4 +49,4 @@ Pausing blocks new admissions and opening, while recovery and existing claims re
 
 Use `.env.example` for names, never for credentials. Durable server records require both Upstash settings on Vercel. Local file persistence is for a single development process.
 
-A public contract address alone must not enable financial actions. The v2 portal requires an approved deployment manifest and verifies chain, bytecode, contract version and payment token. Approval of a new manifest and any hosted release are separate from local source implementation. See [LAUNCH.md](LAUNCH.md).
+A public contract address alone must not enable financial actions. The v3 portal requires an approved deployment manifest and verifies chain, bytecode, contract version and payment token. Approval of a new manifest and any hosted release are separate from local source implementation. See [LAUNCH.md](LAUNCH.md).
