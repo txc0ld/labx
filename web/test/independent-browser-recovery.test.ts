@@ -101,7 +101,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await submitted.waitFor({ state: "visible", timeout: 10_000 });
     const submittedText = await submitted.innerText();
     const transactionHash = submittedText.match(/0x[0-9a-fA-F]{64}/)?.[0];
-    expect(transactionHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+    if (!transactionHash) throw new Error(`Submitted purchase did not render its transaction hash: ${submittedText}`);
 
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(async () => fixture.page.getByRole("radiogroup", { name: "Membership packs" }).locator("label").first().getAttribute("data-disabled"), { timeout: 10_000 }).toBe("true");
