@@ -1,3 +1,4 @@
+import { observeWalletConnectModal } from "./walletconnect-accessibility";
 import type { RemoteWallet } from "./wallet-connectors";
 import { bounded, WalletConnectBusyError } from "./wallet-connectors";
 
@@ -96,6 +97,8 @@ async function initializeProvider(projectId: string): Promise<RemoteWallet> {
         metadata: { name: "LABx", description: "LABx on Ethereum Sepolia", url: window.location.origin, icons: [`${window.location.origin}/favicon.svg`] }
       });
       let opened = false;
+      let activeModal = true;
+      let stopAccessibility: (() => void) | undefined;
       let rejectCancellation: (reason: Error) => void = () => {};
       const cancelled = new Promise<never>((_, reject) => { rejectCancellation = reject; });
       void cancelled.catch(() => {});
@@ -105,9 +108,19 @@ async function initializeProvider(projectId: string): Promise<RemoteWallet> {
         else if (opened && !provider.session) cancel();
       });
       const displayUri = (uri: string) => {
-        if (!retired && !signal.aborted) void modal.open({ view: "ConnectingWalletConnectBasic", uri }).catch(() => cancel());
+        if (!retired && !signal.aborted) void modal.open({ view: "ConnectingWalletConnectBasic", uri }).then(() => {
+          if (!activeModal || retired || signal.aborted || typeof document === "undefined") return;
+          const element = document.querySelector("w3m-modal");
+          if (element instanceof HTMLElement) {
+            stopAccessibility?.();
+            stopAccessibility = observeWalletConnectModal(element);
+          }
+        }).catch(() => cancel());
       };
       closeModal = () => {
+        activeModal = false;
+        stopAccessibility?.();
+        stopAccessibility = undefined;
         unsubscribe();
         provider.removeListener("display_uri", displayUri);
         signal.removeEventListener("abort", cancel);

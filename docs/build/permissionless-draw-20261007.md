@@ -33,3 +33,19 @@ Independent verification and a fresh Astra High review must inspect the frozen f
 Rollback is reverting this bounded source change before deployment. Existing deployed immutable contracts are not upgraded by these edits. The unsigned deployment packet for `f3b3355` is stale after this bytecode change and must never be represented as a packet for the new candidate. A later release requires regenerated artifacts and qualified human approval.
 
 Evidence belongs in ignored `artifacts/permissionless-draw-20261007/`. The public WalletConnect configuration may be copied to ignored `web/.env.local` with mode 0600 without printing it. No production secrets are needed.
+
+## WalletConnect accessibility repair preflight
+
+Root's browser QA on WalletConnect candidate `923c72c` verified desktop/mobile QR, cancellation, retry and a held-chunk cancellation race. It found unnamed AppKit header buttons, an unnamed mobile certified-wallet checkbox, and focus returning to BODY. Root approved this bounded repair in the combined tree. Original candidate and its server remain unchanged.
+
+AppKit 1.8.19 exposes no supported label options for these shadow-DOM controls. The compatibility helper is scoped to the active `w3m-modal` and its open shadow roots. It labels the actual native header buttons, native certified-wallet checkbox and existing dialog card. The known non-native QR icon receives button semantics and single keyboard activation. The helper preserves SDK click handlers, provider behavior, pairing data and existing native roles. It observes dynamic children and known custom-element upgrades; retirement disconnects observers and keyboard listeners. A late open completion cannot attach a retired helper.
+
+Owned React connection controls capture the initiating button. Only the latest pending status for that attempt may restore focus, after controls become enabled. If successful connection replaces that button, focus goes to the surviving control in the same group. Older attempts cannot steal focus from a newer attempt.
+
+This repair intentionally couples to the pinned AppKit DOM. An SDK upgrade requires rerunning both the Chromium shadow fixture and actual desktop/mobile modal accessibility checks. Optional analytics remain disabled; upstream mandatory initialization/configuration traffic after an explicit click is not removed or represented as zero traffic. No additional passive initialization was added.
+
+The committed Chromium fixture is `web/test/walletconnect-accessibility.browser.cjs`. It uses the existing local Playwright/Chromium installation, overridable with `PLAYWRIGHT_PACKAGE` and `CHROMIUM_EXECUTABLE`. Run `node web/test/walletconnect-accessibility.browser.cjs` from the repository root. It performs no network pairing and verifies actual shadow roots, native control names, dynamic replacement/upgrades, QR keyboard activation, outside-scope preservation and cleanup. Actual SDK axe/focus QA belongs to the root reviewer and remains a separate gate.
+
+## Implementation checkpoint
+
+Contract/policy candidate is `6ed7707a42ecbc0d81fc67515895957b20281627`. Aggregate contracts passed 92 tests with 1,024 fuzz runs; combined web/Anvil tests passed 207 with four browser-only tests skipped. Cold 300-lot snapshot measurements and final combined evidence are stored in `artifacts/permissionless-draw-20261007/`. Later accessibility edits leave the contract blobs unchanged. The old unsigned deployment packet remains stale.
