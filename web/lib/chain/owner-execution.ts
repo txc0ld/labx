@@ -42,6 +42,7 @@ export function ownerExecutionConfirmer(client: PublicClient, manifest: Deployme
     }
     if (!matched) throw new Error("Receipt contains no matching raffle approval event. A Safe proposal or failed inner call is not execution.");
     const review = await reader.readAdmission({ id: intent.action.id });
+    if (review.snapshot.block.number < receipt.blockNumber + 1n) throw new Error("Admission state does not include the required execution confirmation depth.");
     const record = review.snapshot.admission.record;
     const generationsMatch = review.ownerGeneration === intent.ownerGeneration && review.openingPolicyGeneration === intent.openingPolicyGeneration && sameAddress(review.snapshot.owner, intent.from);
     const state = intent.action.kind === "approveRaffle"
@@ -51,6 +52,7 @@ export function ownerExecutionConfirmer(client: PublicClient, manifest: Deployme
     // Recheck after all reads so a reorg during reconciliation cannot complete this action.
     if ((await client.getBlock({ blockNumber: receipt.blockNumber })).hash !== receipt.blockHash) throw new Error("Execution block changed. Refresh confirmation.");
     await reader.checkedBlock(review.snapshot.block);
+    await reader.checkedBlock(intent.reviewBlock);
     return { kind: "executed", hash: executionHash, blockNumber: receipt.blockNumber, state, review };
   };
 }
