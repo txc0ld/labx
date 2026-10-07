@@ -262,7 +262,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     );
     event Escrowed(uint256 indexed id, address indexed nft, uint256 tokenId);
     event RaffleApproved(uint256 indexed id, address indexed approver, bytes32 indexed reviewHash);
-    event RaffleApprovalRevoked(uint256 indexed id, address indexed approver, bytes32 indexed reviewHash, uint256 nextRevision);
+    event RaffleApprovalRevoked(
+        uint256 indexed id, address indexed approver, bytes32 indexed reviewHash, uint256 nextRevision
+    );
     event Opened(uint256 indexed id);
     event DraftUpdated(uint256 indexed id);
     event PolicyPinned(uint256 indexed id, address indexed coordinator, address treasury, bytes32 termsHash);
@@ -535,12 +537,30 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
             Pack storage p = _packs[id][i];
             packs[i] = keccak256(abi.encode(p.name, p.priceUsdc, p.bonusEntries, p.maxSupply, p.active));
         }
-        return keccak256(abi.encode(
-            keccak256("LABx.RaffleAdmission.v3"), block.chainid, address(this), id,
-            r.seller, r.nft, r.tokenId, r.nft.codehash, r.escrowed,
-            r.title, r.salesEnd, r.reserveNonce, r.reserveCommit, r.packCount, packs,
-            _admissions[id].reviewRevision, owner, ownerGeneration, openingPolicyGeneration, openingPolicyHash()
-        ));
+        return keccak256(
+            abi.encode(
+                keccak256("LABx.RaffleAdmission.v3"),
+                block.chainid,
+                address(this),
+                id,
+                r.seller,
+                r.nft,
+                r.tokenId,
+                r.nft.codehash,
+                r.escrowed,
+                r.title,
+                r.salesEnd,
+                r.reserveNonce,
+                r.reserveCommit,
+                r.packCount,
+                packs,
+                _admissions[id].reviewRevision,
+                owner,
+                ownerGeneration,
+                openingPolicyGeneration,
+                openingPolicyHash()
+            )
+        );
     }
 
     function approveRaffle(uint256 id, bytes32 expectedReviewHash) external onlyOwner nonReentrant {
@@ -607,8 +627,10 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         if (!r.escrowed) revert EscrowMissing();
         if (block.timestamp >= r.salesEnd) revert SalesClosed();
         RaffleAdmission storage admission = _admissions[id];
-        if (admission.approvedBy != owner || admission.approvedReviewHash == bytes32(0)
-            || admission.approvedReviewHash != draftReviewHash(id)) revert AdmissionRequired();
+        if (
+            admission.approvedBy != owner || admission.approvedReviewHash == bytes32(0)
+                || admission.approvedReviewHash != draftReviewHash(id)
+        ) revert AdmissionRequired();
         _checkCustody(r);
         admission.approvedAtOpening = true;
         _policies[id] = _openingPolicy();
@@ -630,7 +652,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         uint256 beforeBalance = usdc.balanceOf(address(this));
         usdc.safeTransferFrom(msg.sender, address(this), principal + fee);
         uint256 afterBalance = usdc.balanceOf(address(this));
-        if (afterBalance < beforeBalance || afterBalance - beforeBalance != principal + fee) revert UsdcReceiptMismatch();
+        if (afterBalance < beforeBalance || afterBalance - beforeBalance != principal + fee) {
+            revert UsdcReceiptMismatch();
+        }
         _credit(id, packId, qty, principal, fee, false);
     }
 
