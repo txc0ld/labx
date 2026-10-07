@@ -62,6 +62,7 @@ describe("seller discovery and financial activity", () => {
   it("includes purchases from every buyer and isolates the selected raffle", async () => {
     await act({ kind: "approvePrize", id: 2n });
     await act({ kind: "escrow", id: 2n });
+    await chain.admit(2n);
     await act({ kind: "open", id: 2n, expectedPolicyHash: (await chain.service.openingPolicy()).hash });
     await act({ kind: "approveUsdc", id: 2n, packId: 0, quantity: 1 }, chain.buyer);
     await act({

@@ -44,7 +44,7 @@ run("independent service verification on isolated Anvil", () => {
   async function act(action: WorkflowAction, wallet: WalletSessionPort) {
     const prepared = await service.prepare({ action, wallet });
     const transaction = await service.submit({ prepared, wallet });
-    await chain.mine();
+    await chain.client.waitForTransactionReceipt({ hash: transaction.hash }); await chain.mine();
     expect(await service.confirm({ transaction, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
     return { prepared, transaction };
   }
@@ -87,6 +87,7 @@ run("independent service verification on isolated Anvil", () => {
   async function open(id: bigint) {
     await act({ kind: "approvePrize", id }, seller);
     await act({ kind: "escrow", id }, seller);
+    await chain.admit(id);
     const policy = await service.openingPolicy();
     const opened = await act({ kind: "open", id, expectedPolicyHash: policy.hash }, seller);
     expect(decodeFunctionData({ abi: raffleAbi, data: opened.prepared.data }).functionName).toBe("openWithPolicy");
@@ -135,7 +136,7 @@ run("independent service verification on isolated Anvil", () => {
     await act({ kind: "updateDraft", id, draft: { ...draft, title: "Reviewed membership" } }, seller);
     await open(id);
     const { quote, bought } = await purchase(id, 2);
-    expect(quote).toMatchObject({ principal: 50_000_000n, fee: 1_000_000n, bonusEntries: 6n });
+    expect(quote).toMatchObject({ principal: 50_000_000n, fee: 2_500_000n, bonusEntries: 6n });
 
     const purchased = await service.readAccount({ id, account: chain.buyer });
     expect(purchased.principal).toBe(quote.principal);
@@ -213,7 +214,7 @@ run("independent service verification on isolated Anvil", () => {
       await chain.warp(draft.salesEnd + 7n * 86400n);
       await act({ kind: "cancel", id }, outsider);
       const refundReview = await service.prepare({ action: { kind: "refund", id }, wallet: buyer });
-      expect(refundReview).toMatchObject({ recipient: chain.buyer, amountUsdc: quote.totalUsdc });
+      expect(refundReview).toMatchObject({ recipient: chain.buyer, amountUsdc: quote.principal });
       await act({ kind: "refund", id }, buyer);
       const reclaimReview = await service.prepare({ action: { kind: "reclaimPrize", id }, wallet: seller });
       expect(reclaimReview.recipient).toBe(chain.seller);
@@ -228,7 +229,7 @@ run("independent service verification on isolated Anvil", () => {
         functionName: "balanceOf",
         args: [chain.buyer]
       })
-    ).toBe(buyerBefore);
+    ).toBe(buyerBefore - quote.fee);
     expect(await chain.client.getBalance({ address: chain.stranger })).toBeLessThanOrEqual(outsiderBefore);
     expect(
       await chain.client.readContract({
@@ -239,6 +240,9 @@ run("independent service verification on isolated Anvil", () => {
       })
     ).toBe(chain.seller);
     await expect(service.prepare({ action: { kind: "claimProceeds", id }, wallet: seller })).rejects.toThrow();
+    const retained = await service.prepare({ action: { kind: "claimFee", id }, wallet: outsider });
+    expect(retained.amountUsdc).toBe(quote.fee);
+    await act({ kind: "claimFee", id }, outsider);
     await expect(service.prepare({ action: { kind: "claimFee", id }, wallet: outsider })).rejects.toThrow();
   }, 30_000);
 
@@ -253,6 +257,7 @@ run("independent service verification on isolated Anvil", () => {
     const { id } = await createDraft(103n);
     await act({ kind: "approvePrize", id }, seller);
     await act({ kind: "escrow", id }, seller);
+    await chain.admit(id);
     const policy = await service.openingPolicy();
 
     const accountControl = chain.wallet(chain.seller);

@@ -99,6 +99,8 @@ function readerFixture(options: {
       case "usdc": return USDC;
       case "nextId": return options.nextId ?? 4n;
       case "getRaffle": return raffle(id ?? 0n, options.sellerFor?.(id ?? 0n) ?? SELLER);
+      case "getRaffleAdmission": return { reviewRevision: 1n, approvedReviewHash: zeroHash, approvedBy: OWNER, approvedAtOpening: true };
+      case "draftReviewHash": return zeroHash;
       case "getRafflePolicy": return {
         treasury: OWNER,
         termsHash: zeroHash,
@@ -140,14 +142,14 @@ function count(calls: readonly string[], name: string) {
 }
 
 describe("bounded raffle reads", () => {
-  it("cuts a three-raffle page from the observed 53-RPC baseline to 31 and never shares globals across calls", async () => {
+  it("cuts a three-raffle page from the observed 53-RPC baseline to 37 with admission records and draft hashes and never shares globals across calls", async () => {
     const fixture = readerFixture();
     const { listRaffles } = createReader(fixture.client, manifest);
 
     const first = await listRaffles({ limit: 3 });
     expect(first.items.map(item => item.id)).toEqual([1n, 2n, 3n]);
-    expect(fixture.rpcCount()).toBe(31);
-    expect(fixture.calls).toHaveLength(24);
+    expect(fixture.rpcCount()).toBe(37);
+    expect(fixture.calls).toHaveLength(30);
     for (const name of ["paused", "owner", "ethPathEnabled", "DRAW_START_GRACE", "VRF_ABORT_AFTER", "REVEAL_GRACE"]) {
       expect(count(fixture.calls, name), name).toBe(1);
     }
@@ -157,14 +159,14 @@ describe("bounded raffle reads", () => {
     expect(count(fixture.calls, "getPack")).toBe(3);
 
     await listRaffles({ limit: 3, block: first.block });
-    expect(fixture.rpcCount()).toBe(57);
+    expect(fixture.rpcCount()).toBe(69);
     for (const name of ["paused", "owner", "ethPathEnabled", "DRAW_START_GRACE", "VRF_ABORT_AFTER", "REVEAL_GRACE"]) {
       expect(count(fixture.calls, name), name).toBe(2);
     }
 
     fixture.advanceBlock();
     await listRaffles({ limit: 3 });
-    expect(fixture.rpcCount()).toBe(88);
+    expect(fixture.rpcCount()).toBe(106);
     for (const name of ["paused", "owner", "ethPathEnabled", "DRAW_START_GRACE", "VRF_ABORT_AFTER", "REVEAL_GRACE"]) {
       expect(count(fixture.calls, name), name).toBe(3);
     }

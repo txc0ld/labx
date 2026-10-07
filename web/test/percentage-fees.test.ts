@@ -27,13 +27,14 @@ describe("percentage fee arithmetic and seller accounting", () => {
   it.each([
     [1n, 1, 0n], [1n, 20, 0n], [49n, 1, 0n], [49n, 2, 1n], [49n, 20, 19n],
     [50n, 1, 1n], [50n, 20, 20n], [51n, 1, 1n], [51n, 20, 20n],
+    [124_999_999n, 1, 2_500_000n], [125_000_000n, 1, 2_500_000n], [125_000_049n, 1, 2_500_000n], [125_000_050n, 1, 2_500_001n], [200_000_000n, 1, 4_000_000n],
     [1_000_000_000_000n, 20, 400_000_000_000n]
-  ])("price %s and quantity %s round the transaction fee to %s", (price, quantity, fee) => {
-    expect(buyerFee(price * BigInt(quantity), BUYER_FEE_BPS, 2_500_000n)).toBe(fee);
+  ])("price %s and quantity %s apply the per-call fee to %s", (price, quantity, fee) => {
+    expect(buyerFee(price * BigInt(quantity), BUYER_FEE_BPS, 2_500_000n)).toBe(fee < 2_500_000n ? 2_500_000n : fee);
   });
   it("keeps split-purchase fees separate and the maximum approval exact", () => {
-    expect(buyerFee(49n, 200, 2_500_000n) * 2n).toBe(0n);
-    expect(buyerFee(98n, 200, 2_500_000n)).toBe(1n);
+    expect(buyerFee(49n, 200, 2_500_000n) * 2n).toBe(5_000_000n);
+    expect(buyerFee(98n, 200, 2_500_000n)).toBe(2_500_000n);
     expect(20_000_000_000_000n + buyerFee(20_000_000_000_000n, 200, 2_500_000n)).toBe(MAX_MEMBERSHIP_TOTAL_USDC);
     expect(SELLER_FEE_BPS).toBe(200);
     expect(() => buyerFee(-1n, 200, 2_500_000n)).toThrow();
@@ -56,11 +57,11 @@ describe("percentage fee arithmetic and seller accounting", () => {
   });
   it("distinguishes pending refunds, partial refunds and full refunds from revenue", () => {
     expect(sellerAccounting(snapshot(6, 247n, 2n))).toMatchObject({ netProceeds: 0n, sellerCommission: 0n,
-      refundLiability: 249n, refundedPrincipal: 0n, refundedBuyerFees: 0n, pendingPrincipal: 0n });
-    expect(sellerAccounting(snapshot(6, 196n, 1n))).toMatchObject({ refundLiability: 197n,
-      refundedPrincipal: 51n, refundedBuyerFees: 1n, netProceeds: 0n, sellerCommission: 0n });
+      refundLiability: 247n, refundedPrincipal: 0n, refundedBuyerFees: 0n, pendingPrincipal: 0n });
+    expect(sellerAccounting(snapshot(6, 196n, 1n))).toMatchObject({ refundLiability: 196n,
+      refundedPrincipal: 51n, refundedBuyerFees: 0n, protocolFeesPaid: 1n, netProceeds: 0n, sellerCommission: 0n });
     expect(sellerAccounting(snapshot(6, 0n, 0n))).toMatchObject({ refundLiability: 0n,
-      refundedPrincipal: 247n, refundedBuyerFees: 2n, netProceeds: 0n, sellerCommission: 0n });
+      refundedPrincipal: 247n, refundedBuyerFees: 0n, protocolFeesPaid: 2n, netProceeds: 0n, sellerCommission: 0n });
   });
 });
 
@@ -80,7 +81,7 @@ describe("current and historical fee terms", () => {
     expect(PUBLISHED_TERMS_HASH).not.toBe(oldHash);
     expect(publishedTermsByHash(PUBLISHED_TERMS_HASH).content).toBe(PUBLISHED_TERMS_CONTENT);
     expect(() => requirePublishedTerms(PUBLISHED_TERMS_HASH)).not.toThrow();
-    expect(PUBLISHED_TERMS_CONTENT).toContain("rounds down once per transaction");
+    expect(PUBLISHED_TERMS_CONTENT).toContain("round the 2% amount down");
     expect(PUBLISHED_TERMS_CONTENT).toContain("2% seller commission");
     expect(PUBLISHED_TERMS_CONTENT).toContain("No seller commission is charged on cancellation");
   });

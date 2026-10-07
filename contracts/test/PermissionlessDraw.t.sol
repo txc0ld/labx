@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {AdmissionFixture} from "./AdmissionFixture.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {MockERC20, MockERC721} from "./mocks/Mocks.sol";
 import {RecordingVRF} from "./BuyerProtection.t.sol";
 
-contract PermissionlessDrawTest is Test {
+contract PermissionlessDrawTest is AdmissionFixture {
     LabxRaffle internal labx;
     MockERC20 internal usdc;
     MockERC721 internal nft;
@@ -50,6 +50,7 @@ contract PermissionlessDrawTest is Test {
             address(nft), 1, uint64(block.timestamp + 2 days), bytes32(uint256(1)), bytes32(uint256(2)), "Piece", packs
         );
         labx.escrow(id);
+        _approveAdmission(labx, id);
         labx.open(id);
         vm.stopPrank();
         usdc.mint(buyer, uint256(lots) * 6e6);
@@ -163,8 +164,8 @@ contract PermissionlessDrawTest is Test {
         labx.cancel(id);
         vm.prank(buyer);
         labx.refund(id);
-        assertEq(usdc.balanceOf(buyer), 6e6);
-        assertEq(usdc.balanceOf(address(labx)), 0);
+        assertEq(usdc.balanceOf(buyer), 3_500_000);
+        assertEq(usdc.balanceOf(address(labx)), 2_500_000);
     }
 
     function test_permissionlessRequestDoesNotGrantOtherPrivileges() public {

@@ -38,7 +38,7 @@ contract MockERC20 is IERC20 {
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) external virtual returns (bool) {
         uint256 allowed = allowance[from][msg.sender];
         if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
         _transfer(from, to, amount);
@@ -270,5 +270,15 @@ contract MockVRF {
         uint256[] memory words = new uint256[](1);
         words[0] = word;
         LabxRaffle(payable(consumer)).rawFulfillRandomWords(requestId, words);
+    }
+}
+
+/// @dev Local fixture for outer executor / inner owner call boundaries, not a Safe implementation.
+contract OwnerExecutorFixture {
+    event ExecutionResult(bool success);
+
+    function execute(address target, bytes calldata data) external returns (bool success) {
+        (success,) = target.call(data);
+        emit ExecutionResult(success);
     }
 }

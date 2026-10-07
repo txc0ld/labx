@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {AdmissionFixture} from "./AdmissionFixture.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {MockERC20, MockERC721, MockVRF, SyncVRF} from "./mocks/Mocks.sol";
 import {VRFV2PlusClient} from "../src/vendor/VRFV2PlusClient.sol";
@@ -30,7 +30,7 @@ contract RecordingVRF is MockVRF {
     }
 }
 
-contract BuyerProtectionTest is Test {
+contract BuyerProtectionTest is AdmissionFixture {
     LabxRaffle internal labx;
     MockERC20 internal usdc;
     MockERC721 internal nft;
@@ -90,6 +90,7 @@ contract BuyerProtectionTest is Test {
     function _open(uint256 id) internal {
         vm.startPrank(seller);
         labx.escrow(id);
+        _approveAdmission(labx, id);
         labx.open(id);
         vm.stopPrank();
     }
@@ -157,8 +158,8 @@ contract BuyerProtectionTest is Test {
         labx.claimFee(oldId);
         vm.prank(alice);
         labx.claimFee(newId);
-        assertEq(usdc.balanceOf(treasury), 1e6);
-        assertEq(usdc.balanceOf(nextTreasury), 1e6);
+        assertEq(usdc.balanceOf(treasury), 3e6);
+        assertEq(usdc.balanceOf(nextTreasury), 3e6);
     }
 
     function test_syncCallbackUsesPinnedCoordinatorAfterDefaultChanges() public {
@@ -206,7 +207,7 @@ contract BuyerProtectionTest is Test {
         labx.refund(id);
         vm.prank(bob);
         labx.refund(nextId);
-        assertEq(usdc.balanceOf(address(labx)), 0);
+        assertEq(usdc.balanceOf(address(labx)), 5e6);
     }
 
     function test_pauseStopsAdmissionsButCannotStopDrawOrClaims() public {
@@ -216,6 +217,7 @@ contract BuyerProtectionTest is Test {
         uint256 draftId = _draft(2, uint64(vm.getBlockTimestamp() + 3 days));
         vm.prank(seller);
         labx.escrow(draftId);
+        _approveAdmission(labx, draftId);
         labx.setPaused(true);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.Paused.selector);
@@ -234,7 +236,7 @@ contract BuyerProtectionTest is Test {
         labx.claimFee(id);
         assertEq(nft.ownerOf(1), alice);
         assertEq(usdc.balanceOf(seller), 24_500_000);
-        assertEq(usdc.balanceOf(treasury), 1e6);
+        assertEq(usdc.balanceOf(treasury), 3e6);
     }
 
     function test_draftEditingClearsRemovedPacksAndLocksEscrowIdentity() public {
@@ -253,11 +255,13 @@ contract BuyerProtectionTest is Test {
         assertEq(labx.getPack(id, 1).maxSupply, 0);
         vm.prank(seller);
         labx.escrow(id);
+        _approveAdmission(labx, id);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.EscrowIdentityLocked.selector);
         labx.updateDraft(id, address(nft), 2, end, bytes32(uint256(4)), bytes32(uint256(5)), "Edited", _packs(1));
         vm.prank(seller);
         labx.updateDraft(id, address(nft), 1, end, bytes32(uint256(6)), bytes32(uint256(7)), "Ready", _packs(2));
+        _approveAdmission(labx, id);
         vm.prank(seller);
         labx.open(id);
         vm.prank(seller);
@@ -293,7 +297,7 @@ contract BuyerProtectionTest is Test {
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
-        assertEq(usdc.balanceOf(alice), 1_000e6);
+        assertEq(usdc.balanceOf(alice), 1_000e6 - _processingFee(uint256(quantity) * 25e6));
         assertEq(labx.lotCount(id), 1);
     }
 
@@ -301,6 +305,7 @@ contract BuyerProtectionTest is Test {
         uint256 id = _draft(1, uint64(vm.getBlockTimestamp() + 3 days));
         vm.prank(seller);
         labx.escrow(id);
+        _approveAdmission(labx, id);
         bytes32 reviewed = labx.openingPolicyHash();
         uint256 choice = field % 5;
         if (choice == 0) {
@@ -322,6 +327,7 @@ contract BuyerProtectionTest is Test {
         assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Draft));
         bytes32 current = labx.openingPolicyHash();
         assertNotEq(current, reviewed);
+        _approveAdmission(labx, id);
         vm.prank(seller);
         labx.openWithPolicy(id, current);
         assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Open));
@@ -350,6 +356,7 @@ contract BuyerProtectionTest is Test {
         uint256 draftId = _draft(2, uint64(vm.getBlockTimestamp() + 3 days));
         vm.prank(seller);
         labx.escrow(draftId);
+        _approveAdmission(labx, draftId);
         labx.cancel(draftId);
         vm.prank(seller);
         labx.reclaimPrize(draftId);

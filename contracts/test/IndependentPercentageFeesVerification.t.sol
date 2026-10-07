@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {AdmissionFixture} from "./AdmissionFixture.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {MockERC20, MockERC721, MockFeed, MockWETH, MockRouter, MockVRF} from "./mocks/Mocks.sol";
 
-contract IndependentPercentageFeesVerificationTest is Test {
+contract IndependentPercentageFeesVerificationTest is AdmissionFixture {
     LabxRaffle internal raffle;
     MockERC20 internal usdc;
     MockERC721 internal nft;
@@ -60,13 +60,14 @@ contract IndependentPercentageFeesVerificationTest is Test {
         );
         nft.approve(address(raffle), tokenId);
         raffle.escrow(id);
+        _approveAdmission(raffle, id);
         raffle.openWithPolicy(id, raffle.openingPolicyHash());
         vm.stopPrank();
     }
 
     function _buy(uint256 id, address buyer, uint8 packId, uint32 qty) internal returns (uint256 total) {
         uint256 principal = uint256(raffle.getPack(id, packId).priceUsdc) * qty;
-        total = principal + principal * raffle.BUYER_FEE_BPS() / raffle.FEE_DENOMINATOR();
+        total = principal + _processingFee(principal);
         usdc.mint(buyer, total);
         vm.startPrank(buyer);
         usdc.approve(address(raffle), total);
@@ -88,34 +89,34 @@ contract IndependentPercentageFeesVerificationTest is Test {
         _buy(id, alice, 0, 1);
         _buy(id, alice, 1, 1);
         assertEq(raffle.principalOf(id, alice), 149);
-        assertEq(raffle.feeOf(id, alice), 1);
+        assertEq(raffle.feeOf(id, alice), 7_500_000);
 
         vm.warp(uint256(raffle.getRaffle(id).salesEnd) + raffle.DRAW_START_GRACE());
         raffle.cancel(id);
         bytes memory failure = abi.encodeWithSignature("Error(string)", "refund recipient blocked");
-        vm.mockCallRevert(address(usdc), abi.encodeWithSelector(usdc.transfer.selector, alice, 150), failure);
+        vm.mockCallRevert(address(usdc), abi.encodeWithSelector(usdc.transfer.selector, alice, 149), failure);
         vm.prank(alice);
         vm.expectRevert(failure);
         raffle.refund(id);
 
         assertEq(raffle.principalOf(id, alice), 149);
-        assertEq(raffle.feeOf(id, alice), 1);
+        assertEq(raffle.feeOf(id, alice), 7_500_000);
         assertEq(raffle.getRaffle(id).principalEscrow, 149);
-        assertEq(raffle.getRaffle(id).feeEscrow, 1);
+        assertEq(raffle.getRaffle(id).feeEscrow, 7_500_000);
         LabxRaffle.RaffleAccounting memory afterFailure = raffle.getRaffleAccounting(id);
         assertEq(afterFailure.grossPrincipal, 149);
-        assertEq(afterFailure.buyerFees, 1);
+        assertEq(afterFailure.buyerFees, 7_500_000);
 
         vm.clearMockedCalls();
         vm.expectEmit(true, true, false, true);
-        emit LabxRaffle.Refunded(id, alice, 150);
+        emit LabxRaffle.Refunded(id, alice, 149);
         vm.prank(alice);
         raffle.refund(id);
-        assertEq(usdc.balanceOf(alice), 150);
+        assertEq(usdc.balanceOf(alice), 149);
         assertEq(raffle.getRaffle(id).principalEscrow, 0);
-        assertEq(raffle.getRaffle(id).feeEscrow, 0);
+        assertEq(raffle.getRaffle(id).feeEscrow, 7_500_000);
         assertEq(raffle.getRaffleAccounting(id).grossPrincipal, 149);
-        assertEq(raffle.getRaffleAccounting(id).buyerFees, 1);
+        assertEq(raffle.getRaffleAccounting(id).buyerFees, 7_500_000);
 
         vm.prank(alice);
         vm.expectRevert(LabxRaffle.BadPhase.selector);
@@ -124,15 +125,15 @@ contract IndependentPercentageFeesVerificationTest is Test {
 
     function test_permissionlessSettlementAndFeeClaimCannotRedirectPinnedTreasuryOrSellerFunds() public {
         uint256 id = _open();
-        _buy(id, alice, 0, 2); // principal 98, fee 1
-        _buy(id, bob, 1, 1); // principal 51, fee 1
+        _buy(id, alice, 0, 2); // principal 98, fee 2,500,000
+        _buy(id, bob, 1, 1); // principal 51, fee 2,500,000
         address replacementTreasury = makeAddr("replacement-treasury");
         raffle.setTreasury(replacementTreasury);
 
         _draw(id);
         vm.warp(uint256(raffle.getRaffle(id).drawnAt) + raffle.REVEAL_GRACE());
         vm.expectEmit(true, true, false, true);
-        emit LabxRaffle.Settled(id, alice, 147, 4);
+        emit LabxRaffle.Settled(id, alice, 147, 5_000_002);
         vm.prank(outsider);
         raffle.settle(id);
 
@@ -141,7 +142,7 @@ contract IndependentPercentageFeesVerificationTest is Test {
         raffle.claimProceeds(id);
         vm.prank(outsider);
         raffle.claimFee(id);
-        assertEq(usdc.balanceOf(treasury), 4);
+        assertEq(usdc.balanceOf(treasury), 5_000_002);
         assertEq(usdc.balanceOf(replacementTreasury), 0);
 
         vm.prank(seller);
@@ -150,14 +151,14 @@ contract IndependentPercentageFeesVerificationTest is Test {
         assertEq(usdc.balanceOf(outsider), 0);
         assertEq(usdc.balanceOf(address(raffle)), 0);
         assertEq(raffle.getRaffleAccounting(id).grossPrincipal, 149);
-        assertEq(raffle.getRaffleAccounting(id).buyerFees, 2);
+        assertEq(raffle.getRaffleAccounting(id).buyerFees, 5_000_000);
     }
 
     function test_failedRefundInOneRaffleDoesNotConsumeBackingForSettledRaffle() public {
         uint256 cancelled = _open();
         uint256 settled = _open();
-        _buy(cancelled, alice, 0, 2); // 99 total
-        _buy(settled, bob, 1, 1); // 52 total
+        _buy(cancelled, alice, 0, 2); // 2,500,098 total
+        _buy(settled, bob, 1, 1); // 2,500,051 total
         usdc.mint(address(raffle), 7);
 
         _draw(settled);
@@ -166,22 +167,24 @@ contract IndependentPercentageFeesVerificationTest is Test {
         raffle.settle(settled);
 
         bytes memory failure = abi.encodeWithSignature("Error(string)", "refund temporarily blocked");
-        vm.mockCallRevert(address(usdc), abi.encodeWithSelector(usdc.transfer.selector, alice, 99), failure);
+        vm.mockCallRevert(address(usdc), abi.encodeWithSelector(usdc.transfer.selector, alice, 98), failure);
         vm.prank(alice);
         vm.expectRevert(failure);
         raffle.refund(cancelled);
-        assertEq(usdc.balanceOf(address(raffle)), 158);
+        assertEq(usdc.balanceOf(address(raffle)), 5_000_156);
 
         raffle.claimFee(settled);
         vm.prank(seller);
         raffle.claimProceeds(settled);
-        assertEq(usdc.balanceOf(address(raffle)), 106); // cancelled obligation plus unsolicited 7
+        assertEq(usdc.balanceOf(address(raffle)), 2_500_105); // cancelled obligation plus unsolicited 7
 
         vm.clearMockedCalls();
         vm.prank(alice);
         raffle.refund(cancelled);
+        assertEq(usdc.balanceOf(address(raffle)), 2_500_007);
+        raffle.claimFee(cancelled);
         assertEq(usdc.balanceOf(address(raffle)), 7);
-        assertEq(usdc.balanceOf(treasury), 2); // buyer fee 1 plus seller commission 1
+        assertEq(usdc.balanceOf(treasury), 5_000_001); // Retained fees from both raffles plus settlement commission
         assertEq(usdc.balanceOf(seller), 50);
     }
 }

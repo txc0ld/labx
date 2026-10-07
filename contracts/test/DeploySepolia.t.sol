@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {AdmissionFixture} from "./AdmissionFixture.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {MockERC20, MockERC721, MockVRF} from "./mocks/Mocks.sol";
 import {VRFV2PlusClient} from "../src/vendor/VRFV2PlusClient.sol";
@@ -13,7 +13,7 @@ contract DeploySepoliaHarness is DeploySepolia {
     }
 }
 
-contract DeploySepoliaTest is Test {
+contract DeploySepoliaTest is AdmissionFixture {
     address internal constant USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     address internal constant COORDINATOR = 0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B;
     bytes32 internal constant KEY_HASH = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae;
@@ -144,7 +144,7 @@ contract DeploySepoliaTest is Test {
         assertEq(labx.getRaffle(nativeId).winner, address(0));
         vm.prank(makeAddr("buyer"));
         labx.refund(nativeId);
-        assertEq(MockERC20(USDC).balanceOf(makeAddr("buyer")), 34_500_000);
+        assertEq(MockERC20(USDC).balanceOf(makeAddr("buyer")), 30_000_000);
     }
 
     function _openAndBuy(LabxRaffle labx, uint64 end, uint256 tokenId) internal returns (uint256 id) {
@@ -160,6 +160,7 @@ contract DeploySepoliaTest is Test {
             address(nft), tokenId, end, bytes32(tokenId), keccak256("commit"), "Deployment test", packs
         );
         labx.escrow(id);
+        _approveAdmission(labx, id);
         labx.open(id);
         vm.stopPrank();
         MockERC20(USDC).mint(buyer, 30e6);

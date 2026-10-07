@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { createPublicClient, encodeDeployData, encodeFunctionData, getAddress, http, isHex, keccak256, type Abi, type Address, type Hex } from "viem";
+import { raffleAbi } from "../../lib/chain/abi";
 import { WalletSession } from "../../lib/chain/wallet-session";
 import { createRaffleService } from "../../lib/chain/service";
 import { PUBLISHED_TERMS_HASH } from "../../lib/published-terms";
@@ -55,6 +56,10 @@ export async function localChain() {
   async function write(contract: { address: Address; abi: Abi }, name: string, args: readonly unknown[] = [], from = operator) {
     return send(from, contract.address, encodeFunctionData({ abi: contract.abi, functionName: name, args }));
   }
+  async function admit(id: bigint) {
+    const digest = await client.readContract({ address: raffle.address, abi: raffleAbi, functionName: "draftReviewHash", args: [id] });
+    return write(raffle, "approveRaffle", [id, digest]);
+  }
   function wallet(account: Address) {
     const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     let current = account, chain = "0x7a69", refusal = false;
@@ -72,7 +77,7 @@ export async function localChain() {
     const session = new WalletSession(provider, 31337);
     return { session, reject(value: boolean) { refusal = value; }, changeAccount(value: Address) { current = value; for (const fn of listeners.get("accountsChanged") ?? []) fn([value]); }, changeChain(value: string) { chain = value; for (const fn of listeners.get("chainChanged") ?? []) fn(value); } };
   }
-  return { client, url, rpc, operator, seller, buyer, treasury, stranger, usdc, nft, vrf, weth, router, feed, raffle, manifest, write, wallet,
+  return { client, url, rpc, operator, seller, buyer, treasury, stranger, usdc, nft, vrf, weth, router, feed, raffle, manifest, write, admit, deploy, wallet,
     service: createRaffleService(client, manifest), async mine() { await rpc("evm_mine"); }, async warp(timestamp: bigint) { await rpc("evm_setNextBlockTimestamp", [Number(timestamp)]); await rpc("evm_mine"); },
     close() { node.kill(); } };
 }

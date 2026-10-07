@@ -17,11 +17,12 @@ run("pending purchase repair on isolated Anvil", () => {
     const h = keccak256(toBytes("fixture"));
     await execute({ kind: "createDraft", draft: { nft: c.nft.address, tokenId: 1n, title: "Pending protections", salesEnd: (await c.client.getBlock()).timestamp + 86400n, reserveCommit: h, reserveNonce: h, packs: [{ name: "Entry", priceUsdc: 25000000n, bonusEntries: 1, maxSupply: 100 }] } }, seller);
     await execute({ kind: "approvePrize", id: 1n }, seller); await execute({ kind: "escrow", id: 1n }, seller);
+    await c.admit(1n);
     await execute({ kind: "open", id: 1n, expectedPolicyHash: (await service.openingPolicy()).hash }, seller);
   }, 30000);
   afterAll(() => c?.close());
   async function execute(action: WorkflowAction, wallet = buyer) {
-    const prepared = await service.prepare({ action, wallet }); const transaction = await service.submit({ prepared, wallet }); await c.mine();
+    const prepared = await service.prepare({ action, wallet }); const transaction = await service.submit({ prepared, wallet }); await c.client.waitForTransactionReceipt({ hash: transaction.hash }); await c.mine();
     expect((await service.confirm({ transaction, timeoutMs: 3000 })).kind).toBe("confirmed"); return transaction;
   }
   const purchase: WorkflowAction = { kind: "buyMembership", id: 1n, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } };

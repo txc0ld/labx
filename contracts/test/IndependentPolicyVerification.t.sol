@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {AdmissionFixture} from "./AdmissionFixture.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {VRFV2PlusClient} from "../src/vendor/VRFV2PlusClient.sol";
 import {MockERC20, MockERC721, MockVRF, SyncVRF} from "./mocks/Mocks.sol";
@@ -29,7 +29,7 @@ contract IndependentMismatchedSyncVRF is MockVRF {
     }
 }
 
-contract IndependentPolicyVerificationTest is Test {
+contract IndependentPolicyVerificationTest is AdmissionFixture {
     bytes32 internal constant TERMS = keccak256("terms-v2");
     bytes32 internal constant KEY = keccak256("vrf-key");
 
@@ -62,6 +62,7 @@ contract IndependentPolicyVerificationTest is Test {
         uint256 id = _draft(raffle, 1, uint64(block.timestamp + 2 days));
         vm.prank(seller);
         raffle.escrow(id);
+        _approveAdmission(raffle, id);
         bytes32 reviewed = raffle.openingPolicyHash();
 
         vm.chainId(originalChain + 1);
@@ -199,8 +200,8 @@ contract IndependentPolicyVerificationTest is Test {
         raffle.refund(id);
         vm.prank(seller);
         raffle.reclaimPrize(id);
-        assertEq(usdc.balanceOf(alice), 1_000e6);
-        assertEq(usdc.balanceOf(address(raffle)), 0);
+        assertEq(usdc.balanceOf(alice), 997_500_000);
+        assertEq(usdc.balanceOf(address(raffle)), 2_500_000);
         assertEq(nft.ownerOf(14), seller);
     }
 
@@ -238,10 +239,10 @@ contract IndependentPolicyVerificationTest is Test {
         assertEq(nft.ownerOf(21), alice);
         assertEq(nft.ownerOf(22), seller);
         assertEq(usdc.balanceOf(seller), 24_500_000);
-        assertEq(usdc.balanceOf(treasury), 1e6);
-        assertEq(usdc.balanceOf(alice), 974_500_000);
-        assertEq(usdc.balanceOf(bob), 1_000e6);
-        assertEq(usdc.balanceOf(address(raffle)), 0);
+        assertEq(usdc.balanceOf(treasury), 3e6);
+        assertEq(usdc.balanceOf(alice), 972_500_000);
+        assertEq(usdc.balanceOf(bob), 997_500_000);
+        assertEq(usdc.balanceOf(address(raffle)), 2_500_000);
 
         vm.prank(outsider);
         vm.expectRevert(LabxRaffle.NotWinner.selector);
@@ -313,6 +314,7 @@ contract IndependentPolicyVerificationTest is Test {
     function _open(LabxRaffle target, uint256 id) internal {
         vm.startPrank(seller);
         target.escrow(id);
+        _approveAdmission(target, id);
         target.openWithPolicy(id, target.openingPolicyHash());
         vm.stopPrank();
     }
