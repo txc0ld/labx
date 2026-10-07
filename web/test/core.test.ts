@@ -60,9 +60,13 @@ describe("agreements", () => {
 });
 
 describe("receipt", () => {
-  it("states the lab fee and expiry", () => {
-    const body = receiptBody({ to: "a@labx.art", piece: "Junction Array", pack: "Entry", entries: 1, priceUsdc: 25, feeUsdc: 0.5 });
-    expect(body.text).toContain("0.5 USDC");
+  it("states the nonrefundable processing fee, principal refund and expiry", () => {
+    const body = receiptBody({ to: "a@labx.art", piece: "Junction Array", pack: "Entry", entries: 1, priceUsdc: 25, feeUsdc: 2.5 });
+    for (const content of [body.text, body.html]) {
+      expect(content).toContain("Nonrefundable processing fee");
+      expect(content).toContain("2.5 USDC");
+      expect(content).toContain("only the pack price is refundable");
+    }
     expect(body.text).toContain("12 months");
     expect(body.text.toLowerCase()).not.toMatch(/\btickets?\b/);
   });

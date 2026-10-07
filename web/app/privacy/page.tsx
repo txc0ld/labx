@@ -26,7 +26,7 @@ export default function PrivacyPage() {
         <article className="terminal pad stack legal-copy">
           <h2>This Sepolia bench</h2>
           <p>
-            Version 2 is intended for {OPERATOR.network} only. The website refuses a mainnet wallet and enables actions only for a reviewed deployment. Do not send real-value assets or treat Sepolia balances as cash.
+            Version 3 is intended for {OPERATOR.network} only. The website refuses a mainnet wallet and enables actions only for a reviewed deployment. Do not send real-value assets or treat Sepolia balances as cash.
           </p>
         </article>
       </div>

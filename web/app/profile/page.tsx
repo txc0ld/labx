@@ -105,7 +105,6 @@ export default function ProfilePage() {
           <div>
             points {!bench.wallet ? "connect wallet" : currentPoints.kind === "ready" ? currentPoints.balance : currentPoints.kind === "error" ? "unavailable" : "loading"}
           </div>
-          <div>chain sepolia</div>
         </div>
         <OnChainStatus surface="profile" />
         <p className="muted">Existing points records are separate from memberships and bonus entries. They do not grant an entry.</p>
@@ -119,7 +118,7 @@ export default function ProfilePage() {
           <label htmlFor="email">Email preference
             <input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
-          <p className="muted">This address is stored only in this browser. Purchase receipts are unavailable until verified purchase history is connected. See the <Link href="/privacy">privacy policy</Link>.</p>
+          <p className="muted">This address is stored only in this browser. With a reviewed deployment and your wallet connected, open <Link href="/profile/receipts">purchase receipts</Link> to request an email for a verified purchase. See the <Link href="/privacy">privacy policy</Link>.</p>
           <button className="btn btn-lime" type="submit">Save email in this browser</button>
           {note ? <p className="notice warning" role="status">{note}</p> : null}
         </form>
