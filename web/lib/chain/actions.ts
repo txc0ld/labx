@@ -77,7 +77,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
             if (hash(action.expectedPolicyHash) !== policy.hash) throw new Error("Opening policy changed. Review it again.");
             data = encodeFunctionData({ abi: raffleAbi, functionName: "openWithPolicy", args: [action.id, action.expectedPolicyHash] }); break;
           }
-          case "snapshot": if (action.maxSteps < 1n || action.maxSteps > 500n) throw new Error("Snapshot batches must contain 1–500 lots."); data = encodeFunctionData({ abi: raffleAbi, functionName: "snapshot", args: [action.id, action.maxSteps] }); break;
+          case "snapshot": if (action.maxSteps < 1n || action.maxSteps > 300n) throw new Error("Snapshot batches must contain 1–300 lots."); data = encodeFunctionData({ abi: raffleAbi, functionName: "snapshot", args: [action.id, action.maxSteps] }); break;
           case "reveal": data = encodeFunctionData({ abi: raffleAbi, functionName: "reveal", args: [action.id, hash(action.publicHash), hash(action.privateHash), hash(action.salt)] }); break;
           case "claimPrize": recipient = r.winner; data = encodeFunctionData({ abi: raffleAbi, functionName: "claimPrize", args: [action.id] }); break;
           case "claimProceeds": recipient = r.seller; amountUsdc = r.principalEscrow; data = encodeFunctionData({ abi: raffleAbi, functionName: "claimProceeds", args: [action.id] }); break;

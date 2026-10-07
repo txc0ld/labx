@@ -20,7 +20,7 @@ export default function FairnessPage() {
         </article>
         <article className="terminal pad">
           <h2>VRF</h2>
-          <p>Sales close, then the entry snapshot freezes. Only then does the contract ask Chainlink VRF v2.5. Later entries miss the snapshot.</p>
+          <p>After sales close and the complete entry snapshot freezes, anyone can start the single Chainlink VRF v2.5 request before the seven-day draw-start deadline. The raffle uses the settings fixed when memberships opened. No rerolls are allowed.</p>
         </article>
       </div>
       <div className="section table-wrap well pad">

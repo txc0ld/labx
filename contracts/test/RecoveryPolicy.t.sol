@@ -511,7 +511,7 @@ contract RecoveryPolicyTest is Test {
 
     function _readyAndRequest(uint256 id) internal {
         _close(id);
-        labx.snapshot(id, 500);
+        labx.snapshot(id, 300);
         vm.prank(seller);
         labx.requestRandomness(id);
     }

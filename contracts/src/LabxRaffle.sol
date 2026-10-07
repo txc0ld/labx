@@ -571,7 +571,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     }
 
     function snapshot(uint256 id, uint256 maxSteps) external nonReentrant {
-        if (maxSteps == 0 || maxSteps > 500) revert BadConfig();
+        if (maxSteps == 0 || maxSteps > 300) revert BadConfig();
         Raffle storage r = _raffles[id];
         if (r.phase != Phase.Closed || r.snapshotted) revert BadPhase();
         uint256 end = r.lotCursor + maxSteps;
@@ -591,9 +591,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         emit SnapshotProgress(id, end, cum);
     }
 
+    /// @notice Anyone may start the single draw after the snapshot and before its fixed deadline.
     function requestRandomness(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
-        if (msg.sender != r.seller && msg.sender != owner) revert NotSeller();
         if (r.phase != Phase.Closed || !r.snapshotted) revert BadPhase();
         if (r.snapshotTotal == 0) revert EmptyDraw();
         if (block.timestamp >= uint256(r.salesEnd) + DRAW_START_GRACE) revert Expired();

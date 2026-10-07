@@ -103,7 +103,7 @@ contract BuyerProtectionTest is Test {
         uint256 end = labx.getRaffle(id).salesEnd;
         if (vm.getBlockTimestamp() < end) vm.warp(end);
         labx.close(id);
-        labx.snapshot(id, 500);
+        labx.snapshot(id, 300);
         vm.prank(seller);
         labx.requestRandomness(id);
     }
@@ -193,7 +193,7 @@ contract BuyerProtectionTest is Test {
         first.reuse(1);
         vm.warp(labx.getRaffle(nextId).salesEnd);
         labx.close(nextId);
-        labx.snapshot(nextId, 500);
+        labx.snapshot(nextId, 300);
         vm.prank(seller);
         vm.expectRevert(LabxRaffle.RequestAlreadyUsed.selector);
         labx.requestRandomness(nextId);

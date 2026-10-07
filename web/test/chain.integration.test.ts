@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { decodeFunctionData, encodeFunctionData, erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { createRaffleService } from "../lib/chain/service";
+import { availableActions } from "../lib/chain/workflow";
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { MemoryStore } from "../lib/store";
@@ -61,7 +62,19 @@ run("isolated Anvil seller and membership journeys", () => {
     const lots = await chain.service.listLots({ id }); expect(lots.items).toHaveLength(1); expect(lots.items[0].amount).toBe(6);
     const history = await chain.service.history({ account: chain.buyer }); expect(history.items.find(row => row.transactionHash === bought.transaction.hash)?.bonusEntries).toBe(6);
     await expect(chain.service.prepare({ action: { kind: "cancel", id }, wallet: seller })).rejects.toThrow(/discretionary cancellation/);
-    await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger); await act({ kind: "snapshot", id, maxSteps: 100n }, stranger); await act({ kind: "requestRandomness", id });
+    await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: buyer })).rejects.toThrow(/unavailable/);
+    await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger);
+    await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: buyer })).rejects.toThrow(/unavailable/);
+    for (const maxSteps of [0n, 301n, 500n]) await expect(chain.service.prepare({ action: { kind: "snapshot", id, maxSteps }, wallet: stranger })).rejects.toThrow(/1–300/);
+    const maximum = await chain.service.prepare({ action: { kind: "snapshot", id, maxSteps: 300n }, wallet: stranger });
+    expect(decodeFunctionData({ abi: raffleAbi, data: maximum.data })).toMatchObject({ functionName: "snapshot", args: [id, 300n] });
+    await act({ kind: "snapshot", id, maxSteps: 100n }, stranger);
+    const ready = await chain.service.readAccount({ id, account: chain.buyer });
+    expect(availableActions(ready.snapshot, ready).find(action => action.kind === "requestRandomness")?.enabled).toBe(true);
+    const started = await act({ kind: "requestRandomness", id }, buyer);
+    expect(started.prepared.account).toBe(chain.buyer);
+    expect(decodeFunctionData({ abi: raffleAbi, data: started.prepared.data })).toMatchObject({ functionName: "requestRandomness", args: [id] });
+    await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: stranger })).rejects.toThrow(/unavailable/);
     const drawing = await chain.service.readRaffle({ id }); await chain.write(chain.vrf, "fulfill", [chain.raffle.address, drawing.raffle.vrfRequestId, 4n]);
     await expect(chain.service.prepare({ action: { kind: "settle", id }, wallet: stranger })).rejects.toThrow(/seven-day/);
     await act({ kind: "reveal", id, publicHash: reveal.publicHash, privateHash: reveal.privateHash, salt: reveal.salt });
@@ -116,7 +129,7 @@ run("isolated Anvil seller and membership journeys", () => {
     const purchased = await chain.service.submit({ prepared: review, wallet: buyer }); await chain.mine(); expect((await chain.service.confirm({ transaction: purchased })).kind).toBe("confirmed");
     expect((await chain.service.readAccount({ id, account: chain.buyer })).principal).toBe(25_000_000n);
     await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger); await act({ kind: "snapshot", id, maxSteps: 100n }, stranger);
-    await chain.write(chain.raffle, "setPaused", [true]); await act({ kind: "requestRandomness", id });
+    await chain.write(chain.raffle, "setPaused", [true]); await act({ kind: "requestRandomness", id }, stranger);
     const drawing = await chain.service.readRaffle({ id });
     await expect(chain.service.prepare({ action: { kind: "abortDrawing", id }, wallet: buyer })).rejects.toThrow(/deadline/);
     await chain.warp(drawing.raffle.vrfRequestedAt + 7n * 86400n); await act({ kind: "abortDrawing", id }, stranger); await act({ kind: "refund", id }, buyer); await act({ kind: "reclaimPrize", id });
@@ -170,5 +183,20 @@ run("isolated Anvil seller and membership journeys", () => {
       await expect(chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer })).rejects.toThrow();
     }
   });
+
+  it("rejects a buyer draw at the exact cutoff and preserves principal-plus-fee refunds", async () => {
+    const { id, input } = await draft(100n); await open(id); await purchase(id);
+    await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger);
+    await act({ kind: "snapshot", id, maxSteps: 100n }, stranger);
+    await chain.warp(input.salesEnd + 7n * 86400n);
+    await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: buyer })).rejects.toThrow(/deadline/);
+    const ready = await chain.service.readAccount({ id, account: chain.buyer });
+    expect(availableActions(ready.snapshot, ready).find(action => action.kind === "requestRandomness")?.enabled).toBe(false);
+    await act({ kind: "cancel", id }, buyer);
+    const before = await chain.service.readAccount({ id, account: chain.buyer });
+    await act({ kind: "refund", id }, buyer);
+    const after = await chain.service.readAccount({ id, account: chain.buyer });
+    expect(after.usdcBalance - before.usdcBalance).toBe(60_000_000n);
+  }, 30_000);
 
 });

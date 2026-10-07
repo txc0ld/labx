@@ -329,7 +329,7 @@ contract IndependentPolicyVerificationTest is Test {
         vm.prank(outsider);
         target.close(id);
         vm.prank(outsider);
-        target.snapshot(id, 500);
+        target.snapshot(id, 300);
     }
 
     function _readyAndRequest(LabxRaffle target, uint256 id) internal {

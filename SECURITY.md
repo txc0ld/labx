@@ -8,10 +8,10 @@ The contract holds one escrowed ERC-721 prize per raffle and the USDC membership
 
 | Role | Authority |
 | --- | --- |
-| Owner | Pause new sales; update defaults for future openings; propose a coordinator with a one-day delay; manage the immutable optional ETH path's enabled state; request draws and reveal alongside the seller. |
-| Seller | Create and edit a Draft, escrow, open, request randomness, reveal, claim proceeds and reclaim a cancelled prize. NFT identity cannot change while escrowed. |
+| Owner | Pause new sales; update defaults for future openings; propose a coordinator with a one-day delay; manage the immutable optional ETH path's enabled state; reveal alongside the seller. |
+| Seller | Create and edit a Draft, escrow, open, reveal, claim proceeds and reclaim a cancelled prize. NFT identity cannot change while escrowed. |
 | Buyer | Purchase memberships, claim their own refund after cancellation, and claim the NFT if they are the settled winner. |
-| Public caller | Close at the published deadline, build the snapshot in bounded batches, settle after reveal or seven days, invoke eligible timed recovery, and transfer the fee only to the pinned treasury. |
+| Public caller | Close at the published deadline, build the snapshot in bounded batches, start the single draw after its completed nonempty snapshot, settle after reveal or seven days, invoke eligible timed recovery, and transfer the fee only to the pinned treasury. |
 
 A deployed Safe is intended for ownership and treasury. The deploy script checks code presence, but code does not prove Safe implementation, owners, threshold or intended authority. Ownership acceptance and those properties require separate verification. The contract itself does not enforce that every future owner is a Safe.
 
@@ -19,7 +19,7 @@ A deployed Safe is intended for ownership and treasury. The deploy script checks
 
 - Opening fixes the NFT, pack economics, sales deadline, terms, treasury and VRF configuration for that raffle. The website uses `openWithPolicy` to reject an opening if the reviewed policy changed. Later admin default changes cannot rewrite an open raffle's policy.
 - Closing cannot happen early. Once entries exist, discretionary cancellation is unavailable. A completed empty snapshot and the fixed timeout paths remain recoverable.
-- Snapshot batches contain at most 500 lots and omit expired entries. The request must start strictly before `salesEnd + 7 days`. At or after that deadline, anyone can cancel an Open or Closed raffle, including one with an incomplete snapshot.
+- Snapshot batches contain at most 300 lots and omit expired entries. The website uses 100-lot batches. Anyone may request the single draw after a completed nonempty snapshot in Closed. The request must start strictly before `salesEnd + 7 days`. At or after that deadline, anyone can cancel an Open or Closed raffle, including one with an incomplete snapshot.
 - The pinned coordinator's result must arrive strictly before `vrfRequestedAt + 7 days`. Late results are ignored even if nobody has aborted yet. At or after the cutoff, anyone can abort and enable refunds. A retry cannot reroll or extend the deadline; the retained selector always reverts.
 - Coordinator/request identity is namespaced and used request IDs cannot be reused. A timely result selects from the frozen cumulative entry weights.
 - Anyone can settle after a valid reveal, or after the seven-day reveal grace without one. Prize, principal and fees are separate claims to the winner, seller and pinned treasury. Cancellation leaves buyers to claim their own principal and lab fee, and the seller to reclaim the NFT.
