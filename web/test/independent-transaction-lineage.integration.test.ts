@@ -1,13 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createPublicClient, custom, encodeFunctionData, erc20Abi, keccak256, toBytes, type Address, type Hex } from "viem";
+import { createPublicClient, custom, keccak256, toBytes, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
-import { memoryPendingJournal, transactionIntent } from "../lib/chain/pending-journal";
+import { memoryPendingJournal } from "../lib/chain/pending-journal";
 import { createRaffleService } from "../lib/chain/service";
 import { createTransactionOutcomes, transactionMeaning, type OutcomeStorage, type TransactionOutcome } from "../lib/chain/transaction-outcomes";
 import { hash } from "../lib/chain/validation";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
-import type { SubmittedAction } from "../lib/chain/types";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
 const run = process.env.RUN_INDEPENDENT_TRANSACTION_LINEAGE === "1" ? describe : describe.skip;
@@ -50,10 +49,6 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
   });
   afterAll(() => chain?.close());
 
-  function approvalData() {
-    return encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [chain.raffle.address, 100n] });
-  }
-
   async function send(from: Address, to: Address, data: Hex, nonce: number, gasPrice: Hex) {
     return hash(await chain.rpc("eth_sendTransaction", [{
       from,
@@ -66,10 +61,6 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     }]));
   }
 
-  function submitted(transactionHash: Hex, account: Address, to: Address, data: Hex): SubmittedAction {
-    return { hash: transactionHash, account, chainId: chain.manifest.chainId, to, data, value: 0n };
-  }
-
   async function replacementFixture(storage: OutcomeStorage, hydrateReplacementTab = false) {
     const journal = memoryPendingJournal();
     const service = createRaffleService(chain.client, chain.manifest, journal);
@@ -79,25 +70,38 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     const tabB = createTransactionOutcomes({ ...service, confirm: input => service.confirm({ ...input, timeoutMs: 1000 }) }, () => storage);
     if (hydrateReplacementTab) tabB.hydrate(chain.buyer);
 
-    await chain.rpc("evm_setAutomine", [false]);
-    const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
-    const data = approvalData();
-    const h1 = await send(chain.buyer, chain.usdc.address, data, nonce, "0x77359400");
-    journal.write(chain.buyer, {
-      id: "independent-lineage",
-      hash: h1,
-      nonce,
-      startedBlock: (await chain.client.getBlockNumber()).toString(),
-      intentHash: transactionIntent({ to: chain.usdc.address, data, value: 0n })
+    await chain.write(chain.nft, "mint", [chain.buyer, 8101n]);
+    const block = await chain.client.getBlock();
+    const digest = keccak256(toBytes("independent-lineage-draft"));
+    const prepared = await service.prepare({
+      action: {
+        kind: "createDraft",
+        draft: {
+          nft: chain.nft.address,
+          tokenId: 8101n,
+          salesEnd: block.timestamp + 3600n,
+          reserveNonce: digest,
+          reserveCommit: digest,
+          title: "Independent lineage draft",
+          packs: [{ name: "Entry", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }]
+        }
+      },
+      wallet
     });
-    const original = submitted(h1, chain.buyer, chain.usdc.address, data);
-    expect(await tabA.confirm(original)).toMatchObject({ kind: "pending", submitted: { hash: h1 } });
+
+    await chain.rpc("evm_setAutomine", [false]);
+    const pending = await tabA.submit(prepared, wallet);
+    expect(pending).toMatchObject({ kind: "pending" });
+    if (pending.kind !== "pending") throw new Error("Expected the draft watcher to time out with H1 pending.");
+    const h1 = pending.submitted.hash;
+    const nonce = journal.read(chain.buyer)?.nonce;
+    if (nonce === undefined) throw new Error("The draft submission did not create its pending journal.");
     expect(journal.read(chain.buyer)).toMatchObject({ hash: h1, nonce });
 
     const h2 = await send(chain.buyer, chain.buyer, "0x", nonce, "0xb2d05e00");
     await chain.mine();
     await chain.mine();
-    return { journal, service, wallet, tabA, tabB, original, h1, h2 };
+    return { journal, service, wallet, tabA, tabB, h1, h2 };
   }
 
   it("does not recreate stale H1 after its same-nonce H2 was reconciled in the persistent flow", async () => {
@@ -107,7 +111,8 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     expect(canonical).toMatchObject({ kind: "terminal", id: fixture.h1, submitted: { hash: fixture.h2 } });
     expect(fixture.journal.read(chain.buyer)).toBeNull();
 
-    await fixture.tabA.confirm(fixture.original);
+    const staleCheck = await fixture.tabA.resume(fixture.h1, fixture.wallet);
+    expect(staleCheck).toMatchObject({ kind: "terminal", submitted: { hash: fixture.h2 } });
 
     expect(map.size).toBe(1);
     expect([...map.values()].some(value => includesHash(value, fixture.h2))).toBe(true);
@@ -165,21 +170,29 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     await chain.write(chain.raffle, "openWithPolicy", [id, policy.hash], chain.seller);
     await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
-    const data = encodeFunctionData({ abi: raffleAbi, functionName: "buyPack", args: [id, 0, 1, PUBLISHED_TERMS_HASH] });
-    const transactionHash = hash(await chain.rpc("eth_sendTransaction", [{
-      from: chain.buyer,
-      to: chain.raffle.address,
-      data,
-      value: "0x0",
-      gas: "0x989680"
-    }]));
-    await chain.mine();
-    await chain.mine();
     const owner = createTransactionOutcomes(service, () => storage);
-    const receipt = await owner.confirm(submitted(transactionHash, chain.buyer, chain.raffle.address, data));
-    expect(receipt).toMatchObject({ kind: "terminal", submitted: { hash: transactionHash } });
-    expect(transactionMeaning(service, receipt.kind === "terminal" ? receipt.submitted : submitted(transactionHash, chain.buyer, chain.raffle.address, data))?.purchase).toBe(true);
-    return { data, id, journal, service, transactionHash, wallet };
+    const prepared = await service.prepare({
+      action: {
+        kind: "buyMembership",
+        id,
+        packId: 0,
+        quantity: 1,
+        acceptedTerms: PUBLISHED_TERMS_HASH,
+        agreements: { terms: true, rules: true, age: true },
+        payment: { kind: "usdc" }
+      },
+      wallet
+    });
+    const confirming = owner.submit(prepared, wallet);
+    await expect.poll(() => journal.read(chain.buyer)?.hash ?? null, { timeout: 5_000 }).toMatch(/^0x[0-9a-f]{64}$/);
+    await chain.mine();
+    await chain.mine();
+    const receipt = await confirming;
+    expect(receipt).toMatchObject({ kind: "terminal" });
+    if (receipt.kind !== "terminal") throw new Error("Expected a canonical purchase receipt.");
+    const transactionHash = receipt.submitted.hash;
+    expect(transactionMeaning(service, receipt.submitted)?.purchase).toBe(true);
+    return { id, journal, service, transactionHash, wallet };
   }
 
   function delayedService(journal: ReturnType<typeof memoryPendingJournal>, delayMs: number, failFirstReceipt = false) {
