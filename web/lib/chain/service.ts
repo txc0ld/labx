@@ -145,7 +145,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         found = page.items.some(item => sameAddress(item.raffle.seller, session.account) && sameAddress(item.raffle.nft, target) && item.raffle.tokenId === decoded.args[1]);
         cursor = page.nextCursor ?? undefined;
       }
-      if (!found && cursor !== undefined) throw new Error("NFT approval recovery reached its bounded search limit of 480 raffle IDs. No matching seller record was found within that range.");
+      if (!found && cursor !== undefined) throw new Error("NFT approval recovery reached its bounded search limit of 480 raffle IDs. No matching seller record was found within that range. Open your raffle to check its current NFT approval.");
       if (!found) throw new Error("No seller draft matches this NFT approval.");
     }
     await wallet.assertCurrent(session);
