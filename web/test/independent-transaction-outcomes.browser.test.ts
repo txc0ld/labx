@@ -345,6 +345,101 @@ run("independent transaction outcome ownership", () => {
     }).toEqual({ journalUnchanged: true, oldReceiptVerified: true, newerPendingVisible: true });
   }, 45_000);
 
+  it("does not persist or reconcile wallet B while wallet A pending lookup is delayed", async () => {
+    const walletB = chain.wallet(chain.treasury).session;
+    await walletB.connect();
+    const walletBApproval = await act({ kind: "approveUsdc", id: 3n, packId: 0, quantity: 2 }, walletB);
+    await openPiece(1n, chain.buyer);
+    const accountAKey = journalKey(chain.buyer);
+    const accountBKey = journalKey(chain.treasury);
+    const accountAPrefix = `labx:outcome:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}:`;
+    const accountAJournal = JSON.stringify({
+      id: "independent-delayed-a-pending",
+      intentHash: keccak256(toBytes("wallet-a-original-intent")),
+      nonce: 777,
+      startedBlock: (await chain.client.getBlockNumber({ cacheTime: 0 })).toString(),
+      hash: null
+    });
+    await fixture.page.evaluate(({ keyA, keyB, valueA }) => {
+      localStorage.setItem(keyA, valueA);
+      localStorage.removeItem(keyB);
+    }, { keyA: accountAKey, keyB: accountBKey, valueA: accountAJournal });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const recovery = fixture.page.locator(".resume-transaction form");
+    await recovery.waitFor({ state: "visible", timeout: 10_000 });
+    await recovery.getByLabel("Transaction hash").fill(walletBApproval.hash);
+    await fixture.page.evaluate(({ keyA, accountB }) => {
+      type Scope = Window & {
+        __labxSetAccount(next: string): Promise<void>;
+        __pendingRaceWrites: { key: string; value: string }[];
+        __restorePendingRace(): void;
+      };
+      const scope = window as unknown as Scope;
+      const originalGet = Storage.prototype.getItem;
+      const originalSet = Storage.prototype.setItem;
+      let armed = true;
+      scope.__pendingRaceWrites = [];
+      Storage.prototype.getItem = function (key: string) {
+        const value = originalGet.call(this, key);
+        if (armed && this === localStorage && key === keyA) {
+          armed = false;
+          queueMicrotask(() => void scope.__labxSetAccount(accountB));
+        }
+        return value;
+      };
+      Storage.prototype.setItem = function (key: string, value: string) {
+        scope.__pendingRaceWrites.push({ key, value });
+        return originalSet.call(this, key, value);
+      };
+      scope.__restorePendingRace = () => {
+        Storage.prototype.getItem = originalGet;
+        Storage.prototype.setItem = originalSet;
+      };
+    }, { keyA: accountAKey, accountB: chain.treasury });
+
+    await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
+    await expect.poll(() => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
+      .toContain(`${chain.treasury.slice(0, 6)}…${chain.treasury.slice(-4)}`);
+    await fixture.page.waitForTimeout(1_000);
+    const storageUnderB = await fixture.page.evaluate(({ keyA, keyB, prefixA, hashB }) => {
+      const scope = window as unknown as Window & { __pendingRaceWrites: { key: string; value: string }[]; __restorePendingRace(): void };
+      const accountACheckpoints = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+        .filter((key): key is string => typeof key === "string" && key.startsWith(prefixA))
+        .map(key => ({ key, value: localStorage.getItem(key) }));
+      const result = {
+        accountAJournal: localStorage.getItem(keyA),
+        accountBJournal: localStorage.getItem(keyB),
+        accountBJournalWrites: scope.__pendingRaceWrites.filter(write => write.key === keyB),
+        accountACheckpointsWithBHash: accountACheckpoints.filter(item => item.value?.toLowerCase() === hashB.toLowerCase())
+      };
+      scope.__restorePendingRace();
+      return result;
+    }, { keyA: accountAKey, keyB: accountBKey, prefixA: accountAPrefix, hashB: walletBApproval.hash });
+    const walletBOutcomes = (await fixture.page.locator(".transaction-outcome").allInnerTexts()).join(" ");
+
+    await fixture.switchAccount(chain.buyer);
+    await expect.poll(() => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
+      .toContain(`${chain.buyer.slice(0, 6)}…${chain.buyer.slice(-4)}`);
+    const walletAOutcomes = (await fixture.page.locator(".transaction-outcome").allInnerTexts()).join(" ");
+    await fixture.page.evaluate((key: string) => localStorage.removeItem(key), accountAKey);
+
+    expect({
+      accountAJournalUnchanged: storageUnderB.accountAJournal === accountAJournal,
+      accountBJournalUnchanged: storageUnderB.accountBJournal === null,
+      accountBJournalWrites: storageUnderB.accountBJournalWrites.length,
+      accountACheckpointsWithBHash: storageUnderB.accountACheckpointsWithBHash.length,
+      walletBShowsStaleAResult: walletBOutcomes.includes(walletBApproval.hash),
+      walletAShowsBResultAfterReturn: walletAOutcomes.includes(walletBApproval.hash)
+    }).toEqual({
+      accountAJournalUnchanged: true,
+      accountBJournalUnchanged: true,
+      accountBJournalWrites: 0,
+      accountACheckpointsWithBHash: 0,
+      walletBShowsStaleAResult: false,
+      walletAShowsBResultAfterReturn: false
+    });
+  }, 60_000);
+
   it("retires an errored original hash when its actual same-nonce cancellation is reconciled and survives reload", async () => {
     await openPiece(4n, chain.operator);
     const purchase = await reachPurchase();
@@ -406,13 +501,19 @@ run("independent transaction outcome ownership", () => {
       const staleOriginalBeforeReload = await original.count();
       const agreements = fixture.page.locator(".agreements input[type=checkbox]");
       await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
-      for (const checkbox of await agreements.all()) await checkbox.check();
       const record = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
       const nextPurchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
-      await fixture.page.waitForTimeout(1_000);
-      const recordAvailable = await record.isVisible().catch(() => false) && !await record.isDisabled().catch(() => true);
-      const purchaseAvailable = await nextPurchase.isVisible().catch(() => false) && !await nextPurchase.isDisabled().catch(() => true);
-      const blockedBeforeReload = !recordAvailable && !purchaseAvailable;
+      let purchaseAvailable = false;
+      let agreementRecorded = false;
+      const controlsDeadline = Date.now() + 10_000;
+      while (Date.now() < controlsDeadline && !purchaseAvailable) {
+        for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
+        const recordAvailable = await record.isVisible().catch(() => false) && !await record.isDisabled().catch(() => true);
+        if (recordAvailable && !agreementRecorded) { await record.click(); agreementRecorded = true; }
+        purchaseAvailable = await nextPurchase.isVisible().catch(() => false) && !await nextPurchase.isDisabled().catch(() => true);
+        if (!purchaseAvailable) await fixture.page.waitForTimeout(250);
+      }
+      const blockedBeforeReload = !purchaseAvailable;
 
       await fixture.page.reload({ waitUntil: "domcontentloaded" });
       const savedReplacement = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
