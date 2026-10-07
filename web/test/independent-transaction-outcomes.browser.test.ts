@@ -824,6 +824,7 @@ run("independent transaction outcome ownership", () => {
       await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
       const cancellationState = fixture.page.locator(".buyer-flow .transaction-state", { hasText: cancellationHash });
       await cancellationState.waitFor({ state: "visible", timeout: 15_000 });
+      await fixture.page.waitForLoadState("networkidle");
       expect({
         neutralReceipts: await cancellationState.getByText("Recovered transaction receipt", { exact: true }).count(),
         falseCurrentActionConfirmation: await cancellationState.getByText("Confirmed", { exact: true }).count(),

@@ -50,14 +50,14 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;
-    const confirmed = outcomes.filter(item => item.kind === "terminal" && item.confirmation.receipt.status === "success" && (confirmedThroughBlock === undefined || item.confirmation.receipt.blockNumber > confirmedThroughBlock));
+    const confirmed = outcomes.filter(item => item.kind === "terminal" && item.confirmation.receipt.status === "success" && transactionMeaning(browser.service, item.submitted) !== null && (confirmedThroughBlock === undefined || item.confirmation.receipt.blockNumber > confirmedThroughBlock));
     const unseen = confirmed.filter(item => owner.claimRefresh(`${scope}:${wallet.account.toLowerCase()}:${wallet.revision}:${item.id}`));
     if (!unseen.length) return;
     const version = generation.current;
     void Promise.resolve(callback.current()).catch(reason => {
       if (version === generation.current) setError(reason instanceof Error ? reason.message : "Confirmed transaction retained. Refresh the current state before another action.");
     });
-  }, [connected, outcomes, owner, scope, wallet, confirmedThroughBlock, deferRefresh]);
+  }, [browser.service, connected, outcomes, owner, scope, wallet, confirmedThroughBlock, deferRefresh]);
 
   async function check(transactionHash: Hex) {
     if (!connected || inFlight.current !== null) return;

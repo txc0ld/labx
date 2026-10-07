@@ -109,6 +109,10 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const scope = context.current.generation;
   const [scopedState, setScopedState] = useState<{ scope: number; value: TransactionState }>({ scope, value: { kind: "idle" } });
   const state = scopedState.scope === scope ? scopedState.value : { kind: "idle" } satisfies TransactionState;
+  const recoveryTerminal = state.kind === "recovery" && currentWallet.kind === "connected"
+    ? outcomes.find(item => item.kind === "terminal" && item.account.toLowerCase() === currentWallet.account.toLowerCase()
+      && item.confirmation.receipt.nonce === state.nonce)
+    : undefined;
   const operation = useRef<Operation | null>(null);
   const operationSequence = useRef(0);
   const ownSubmission = useRef<{ scope: number; submitted: SubmittedAction } | null>(null);
@@ -159,6 +163,23 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     // The numeric scope changes only when service, wallet, session, action or resume identity changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
+
+  useEffect(() => {
+    if (state.kind !== "recovery" || !recoveryTerminal) return;
+    const expected = context.current, recovery = state;
+    let active = true;
+    void expected.service.pending({ wallet: expected.wallet }).then(pending => {
+      if (!active || pending || !isCurrent(expected)) return;
+      setScopedState(current => {
+        if (!active || !isCurrent(expected) || current.scope !== expected.generation
+          || current.value !== recovery || operation.current?.scope === expected.generation) return current;
+        return { scope: expected.generation, value: { kind: "idle" } };
+      });
+    }).catch(() => { /* Keep recovery available when the current journal cannot be read. */ });
+    return () => { active = false; };
+    // Terminal outcomes prompt a fresh journal read, never action confirmation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, state, recoveryTerminal]);
 
   async function showError(error: unknown, expected: FlowContext) {
     try {
