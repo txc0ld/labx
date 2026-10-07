@@ -523,11 +523,11 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
 
   if (state.kind === "executed") {
     const copy = state.confirmation.state === "approved"
-      ? "Execution confirmed. The current draft remains approved and can be opened by its seller."
+      ? "Approval execution was confirmed at the block below. Check the current draft status above before opening."
       : state.confirmation.state === "revoked"
-        ? "Execution confirmed. The current draft approval is revoked."
-        : "Execution confirmed, but the reviewed owner, policy or draft state changed. This execution is stale and does not make the draft ready to open.";
-    return <section className={styles.flow} aria-live="polite"><p className="kicker">Canonical execution</p><h2>{state.confirmation.state === "stale" ? "Executed, now stale" : state.confirmation.state === "approved" ? "Approval recorded" : "Approval revoked"}</h2><p>{copy}</p><dl className={styles.facts}><div><dt>Execution hash</dt><dd className="hash">{state.confirmation.hash}</dd></div><div><dt>Execution block</dt><dd>{state.confirmation.blockNumber.toString()}</dd></div></dl><button className="btn btn-dark" type="button" onClick={() => { invalidateOperations(); setSelected(null); setState({ kind: "idle" }); }}>Review current state</button></section>;
+        ? "Revocation execution was confirmed at the block below. Check the current draft status above for later changes."
+        : "At confirmation, the reviewed owner, policy or draft state had changed. This execution was stale. Check the current draft status above.";
+    return <section className={styles.flow} aria-live="polite"><p className="kicker">Canonical execution</p><h2>{state.confirmation.state === "stale" ? "Stale at confirmation" : state.confirmation.state === "approved" ? "Approval recorded" : "Approval revoked"}</h2><p>{copy}</p><dl className={styles.facts}><div><dt>Execution hash</dt><dd className="hash">{state.confirmation.hash}</dd></div><div><dt>Execution block</dt><dd>{state.confirmation.blockNumber.toString()}</dd></div></dl><button className="btn btn-dark" type="button" onClick={() => { invalidateOperations(); setSelected(null); setState({ kind: "idle" }); }}>Review current state</button></section>;
   }
 
   if (state.kind === "error") return <section className={styles.flow}><h2>Owner action unavailable</h2><p className="notice error" role="alert">{state.message}</p><button className="btn btn-dark" type="button" onClick={() => { invalidateOperations(); setState({ kind: "idle" }); }}>Return to owner actions</button></section>;
