@@ -62,3 +62,49 @@ jobs:
       - run: npm ci
       - run: forge build --root ../contracts
       - run: RUN_CHAIN_INTEGRATION=1 npm test -- --maxWorkers=1
+
+  browser-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+      - run: npm ci
+      - run: ./node_modules/.bin/playwright install --with-deps chromium
+      - run: forge build --root ../contracts
+      - run: |
+          npm exec vitest -- run \
+            test/independent-browser-journeys.test.ts \
+            test/independent-browser-recovery.test.ts \
+            test/independent-browser-catalog.test.ts \
+            test/seller-portal.browser.test.ts \
+            test/private-record-feedback.browser.test.ts \
+            test/buyer-ui-repairs.browser.test.ts \
+            test/owner-review-race.browser.test.ts \
+            test/independent-owner-review-race.browser.test.ts \
+            test/independent-buyer-state.browser.test.ts \
+            test/browser-chain-lifecycle.browser.test.ts \
+            test/independent-transaction-outcomes.browser.test.ts \
+            --maxWorkers=1
+        env:
+          RUN_BROWSER_ACCEPTANCE: "1"
+          RUN_SELLER_PORTAL_BROWSER: "1"
+          RUN_PRIVATE_RECORDS_BROWSER: "1"
+          RUN_BUYER_UI_REPAIRS_BROWSER: "1"
+          RUN_OWNER_REVIEW_RACE_BROWSER: "1"
+          RUN_INDEPENDENT_OWNER_REVIEW_RACE_BROWSER: "1"
+          RUN_INDEPENDENT_BUYER_STATE_BROWSER: "1"
+          RUN_BROWSER_FIXTURE_LIFECYCLE: "1"
+          RUN_INDEPENDENT_TRANSACTION_OUTCOMES_BROWSER: "1"

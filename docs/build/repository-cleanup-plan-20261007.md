@@ -47,6 +47,8 @@ RUN_BUYER_UI_REPAIRS_BROWSER=1 \
 RUN_OWNER_REVIEW_RACE_BROWSER=1 \
 RUN_INDEPENDENT_OWNER_REVIEW_RACE_BROWSER=1 \
 RUN_INDEPENDENT_BUYER_STATE_BROWSER=1 \
+RUN_BROWSER_FIXTURE_LIFECYCLE=1 \
+RUN_INDEPENDENT_TRANSACTION_OUTCOMES_BROWSER=1 \
 npm exec vitest -- run \
   test/independent-browser-journeys.test.ts \
   test/independent-browser-recovery.test.ts \
@@ -57,10 +59,12 @@ npm exec vitest -- run \
   test/owner-review-race.browser.test.ts \
   test/independent-owner-review-race.browser.test.ts \
   test/independent-buyer-state.browser.test.ts \
+  test/browser-chain-lifecycle.browser.test.ts \
+  test/independent-transaction-outcomes.browser.test.ts \
   --maxWorkers=1
 ```
 
-The separate `RUN_BROWSER_FIXTURE_LIFECYCLE=1` test checks that teardown closes the server port and its owned process group. Linux teardown was exercised. Windows uses a `taskkill` fallback and has not been verified; complete descendant cleanup there remains a maintainer-owned follow-up. Startup-failure cleanup is source-reviewed but was not fault-injected.
+The `RUN_BROWSER_FIXTURE_LIFECYCLE=1` test checks that teardown closes the server port and its owned process group. Linux teardown was exercised. Windows uses a `taskkill` fallback and has not been verified; complete descendant cleanup there remains a maintainer-owned follow-up. Startup-failure cleanup is source-reviewed but was not fault-injected.
 
 ## Tooling decision
 
