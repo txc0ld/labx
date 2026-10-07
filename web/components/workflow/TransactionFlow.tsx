@@ -4,6 +4,8 @@ import { useCallback, useEffect, useId, useRef, useSyncExternalStore, useState }
 import { formatEther, isHex, type Hex } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "@/lib/chain/types";
+import { useTransactionOutcomes } from "./useTransactionOutcomes";
+import type { TransactionOutcome } from "@/lib/chain/transaction-outcomes";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 
 type TransactionState =
@@ -28,7 +30,7 @@ export type TransactionFlowProps = {
   label: string;
   formatUsdc: AmountFormatter;
   resumeHash?: Hex;
-  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>) => void | Promise<void>;
+  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction) => void | Promise<void>;
   onCancel?: () => void;
   disabled?: boolean;
   disabledReason?: string;
@@ -92,6 +94,8 @@ function actionReview(action: WorkflowAction) {
 }
 
 export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason }: TransactionFlowProps) {
+  const { owner, outcomes } = useTransactionOutcomes(service, wallet);
+  const activeOutcome = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "error" && item.submitted !== null);
   const reviewTitleId = useId();
   const subscribe = useCallback((listener: () => void) => wallet.subscribe(listener), [wallet]);
   const getWalletSnapshot = useCallback(() => walletSnapshot(wallet), [wallet]);
@@ -115,7 +119,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
 
   function isCurrent(expected: FlowContext) {
     const live = context.current;
-    return live.generation === expected.generation && live.service === expected.service && live.wallet === expected.wallet
+    return expected.wallet.getSnapshot().revision === expected.walletRevision && live.generation === expected.generation && live.service === expected.service && live.wallet === expected.wallet
       && live.actionKey === expected.actionKey && live.walletRevision === expected.walletRevision && live.resumeHash === expected.resumeHash;
   }
 
@@ -164,7 +168,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }
 
   async function prepare() {
-    if (disabled) return;
+    if (disabled || activeOutcome) return;
     const expected = context.current;
     const activeOperation = begin(expected);
     if (!activeOperation) return;
@@ -179,28 +183,29 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     }
   }
 
-  async function waitForConfirmation(submitted: SubmittedAction, expected: FlowContext) {
-    try {
-      const confirmation = await expected.service.confirm({ transaction: submitted });
-      if (!isCurrent(expected)) return;
-      if (confirmation.kind === "pending") {
-        setCurrent(expected, { kind: "pending", submitted });
-        return;
-      }
+  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext) {
+    if (!isCurrent(expected)) return;
+    if (outcome.kind === "terminal") {
+      const confirmation = outcome.confirmation;
       if (confirmation.kind === "confirmed") {
         setCurrent(expected, { kind: "confirmed", confirmation });
-        await callbacks.current.onConfirmed?.(confirmation);
-        return;
-      }
-      if (confirmation.kind === "reverted") setCurrent(expected, { kind: "reverted", confirmation });
-      else setCurrent(expected, { kind: "replaced", confirmation });
-    } catch (error) {
-      await showError(error, expected);
+        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted);
+      } else setCurrent(expected, { kind: confirmation.kind, confirmation });
+    } else if (outcome.kind === "pending" || outcome.kind === "checking") {
+      setCurrent(expected, { kind: "pending", submitted: outcome.submitted });
+    } else if (outcome.kind === "rejected") {
+      setCurrent(expected, { kind: "rejected", message: outcome.message });
+    } else if (outcome.kind === "error") {
+      await showError(new Error(outcome.message), expected);
     }
   }
 
+  async function waitForConfirmation(submitted: SubmittedAction, expected: FlowContext) {
+    await applyOutcome(await owner.confirm(submitted), expected);
+  }
+
   async function submit(prepared: PreparedAction) {
-    if (disabled) return;
+    if (disabled || activeOutcome) return;
     if (!sameWallet(prepared, currentWallet)) {
       setCurrent(context.current, { kind: "error", message: "Wallet or network changed. Review the action again before signing." });
       return;
@@ -210,10 +215,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (!activeOperation) return;
     setCurrent(expected, { kind: "submitting", prepared });
     try {
-      const submitted = await expected.service.submit({ prepared, wallet: expected.wallet });
-      if (!isCurrent(expected)) return;
-      setCurrent(expected, { kind: "pending", submitted });
-      await waitForConfirmation(submitted, expected);
+      await applyOutcome(await owner.submit(prepared, expected.wallet), expected);
     } catch (error) {
       await showError(error, expected);
     } finally {
@@ -236,10 +238,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     const activeOperation = begin(expected);
     if (!activeOperation) return;
     try {
-      const submitted = await expected.service.resume({ hash, wallet: expected.wallet });
-      if (!isCurrent(expected)) return;
-      setCurrent(expected, { kind: "pending", submitted });
-      await waitForConfirmation(submitted, expected);
+      await applyOutcome(await owner.resume(hash, expected.wallet), expected);
     } catch (error) {
       await showError(error, expected);
     } finally {
@@ -250,7 +249,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   if (state.kind === "recovery") return <section className="transaction-state notice warning stack" role="status"><strong>Reconcile pending wallet activity</strong><p>This wallet has an unresolved transaction at nonce {state.nonce}. Check the wallet’s activity and confirm its transaction or replacement hash before another action. Reloading does not remove this protection.</p><label>Transaction hash<input value={state.hash} spellCheck={false} onChange={event => setCurrent(context.current, { ...state, hash: event.target.value.trim() })} /></label><button className="btn" type="button" disabled={disabled || !isHex(state.hash, { strict: true }) || state.hash.length !== 66} onClick={() => { if (isHex(state.hash)) void resume(state.hash); }}>Reconcile transaction</button>{disabledReason && disabled ? <p className="notice warning">{disabledReason}</p> : null}<p className="muted">If the wallet has not broadcast it, use the wallet to replace or cancel that nonce. This page cannot safely clear an uncertain send.</p></section>;
 
   if (state.kind === "idle") {
-    return <button className="btn" type="button" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={() => void prepare()}>{label}</button>;
+    return <button className="btn" type="button" disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare()}>{label}</button>;
   }
   if (state.kind === "preparing") {
     return <button className="btn" type="button" disabled>Preparing review…</button>;
@@ -271,7 +270,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         {stale ? <p className="notice error" role="alert">Wallet or network changed. Prepare this action again.</p> : null}
         <details><summary>Transaction details</summary><p className="hash">Contract {state.prepared.to}</p></details>
         <div className="btn-row">
-          <button className="btn" type="button" disabled={disabled || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(state.prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : `Confirm ${label.toLowerCase()}`}</button>
+          <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(state.prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : `Confirm ${label.toLowerCase()}`}</button>
           <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Cancel</button>
         </div>
       </section>

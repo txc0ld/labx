@@ -7,13 +7,15 @@ import { useEffect, useRef, useState } from "react";
 import { formatEther, type Hex } from "viem";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { sellerAccounting } from "@/lib/chain/fees";
-import type { ActionAvailability, AccountRaffleState, Confirmation, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
+import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
 import { SELLER_ACTION_KINDS, sellerOwnsRaffle, sellerPortalActions, type SellerActionAvailability } from "@/lib/chain/seller-actions";
 import type { ReserveRecord } from "@/lib/reserve";
 import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
+import { transactionMeaning } from "@/lib/chain/transaction-outcomes";
+import { useTransactionOutcomes } from "./useTransactionOutcomes";
 import { ResumeTransaction } from "./ResumeTransaction";
 import { DrawProgress } from "./DrawProgress";
 import { RaffleArtwork } from "./RaffleArtwork";
@@ -219,7 +221,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
       <div className="detail-path"><Link href={mode === "seller" ? "/seller" : "/"} className="detail-back"><span aria-hidden="true">←</span> {mode === "seller" ? "Back to studio" : "Back to explore"}</Link><button className="text-link" type="button" disabled={refreshState.kind === "loading"} onClick={() => void refresh()}>{refreshState.kind === "loading" ? "Refreshing state…" : "Refresh state"}</button></div>
       {refreshState.kind === "loading" ? <p className="notice" role="status">Refreshing verified contract state. Transaction controls are paused.</p> : null}
       {refreshState.kind === "error" ? <p className="notice error" role="alert">Refresh failed: {refreshState.message} Transaction controls remain paused. <button className="text-link" type="button" onClick={() => void refresh()}>Retry refresh</button></p> : null}
-      <ResumeTransaction browser={browser} pendingOnly onConfirmed={refresh} />
+      <ResumeTransaction browser={browser} pendingOnly scope={`raffle-${snapshot.id}`} onConfirmed={refresh} />
       <section className="section piece-layout piece-console chain-piece">
         <div className="piece-visual chain-piece-visual">
           <div className="piece-visual-topline"><span>Verified on-chain raffle</span><span>#{snapshot.id.toString()}</span></div>
@@ -299,21 +301,23 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   const selected = snapshot.packs[packId];
   const salesOpen = Number(snapshot.raffle.phase) === 1 && snapshot.block.timestamp < snapshot.raffle.salesEnd && !snapshot.paused;
   const quantityValid = Number.isSafeInteger(quantity) && quantity >= 1 && quantity <= 20;
-  const [confirmedPurchaseState, setConfirmedPurchaseState] = useState<{
-    confirmation: Extract<Confirmation, { kind: "confirmed" }>;
-    service: RaffleService;
-    wallet: WalletSessionPort;
-    walletRevision: number;
-    raffleId: bigint;
-  } | null>(null);
-  const purchaseConfirmation = confirmedPurchaseState?.service === browser.service && confirmedPurchaseState.wallet === browser.wallet
-    && confirmedPurchaseState.walletRevision === buyerWallet.revision && confirmedPurchaseState.raffleId === snapshot.id
-    ? confirmedPurchaseState.confirmation : null;
+  const { owner, outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
+  const purchaseOutcome = [...outcomes].reverse().find(outcome => outcome.kind === "terminal" && outcome.confirmation.kind === "confirmed"
+    && transactionMeaning(browser.service, outcome.submitted)?.purchase && transactionMeaning(browser.service, outcome.submitted)?.raffleId === snapshot.id);
+  const purchaseConfirmation = purchaseOutcome?.kind === "terminal" && purchaseOutcome.confirmation.kind === "confirmed" ? purchaseOutcome.confirmation : null;
+  const canBuyAgain = purchaseConfirmation !== null && writesEnabled && account !== null && quote !== null
+    && snapshot.block.number >= purchaseConfirmation.blockNumber && account.snapshot.block.number >= purchaseConfirmation.blockNumber
+    && quote.block.number >= purchaseConfirmation.blockNumber && salesOpen;
+  const [selectionNotice, setSelectionNotice] = useState("");
+  const [receiptError, setReceiptError] = useState("");
 
   useEffect(() => {
     if (selected?.active && selected.sold < selected.maxSupply) return;
     const fallback = snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply);
-    if (fallback >= 0 && fallback !== packId) setPackId(fallback);
+    if (fallback >= 0 && fallback !== packId) {
+      setSelectionNotice(`The selected pack is no longer available. ${snapshot.packs[fallback].name} is now selected. Review its price and give consent again.`);
+      setPackId(fallback);
+    }
   }, [packId, selected, snapshot.packs]);
 
   useEffect(() => {
@@ -385,16 +389,23 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
     }
   }
 
-  async function confirmedPurchase(confirmation: Extract<Confirmation, { kind: "confirmed" }>) {
-    setConfirmedPurchaseState({ confirmation, service: browser.service, wallet: browser.wallet, walletRevision: buyerWallet.revision, raffleId: snapshot.id });
-    await onConfirmed();
+  function buyAgain() {
+    if (!canBuyAgain || !purchaseOutcome) return;
+    try {
+      owner.acknowledge(purchaseOutcome);
+      setAgreements({ terms: false, rules: false, age: false });
+      setAgreementState("idle");
+      agreementGeneration.current += 1;
+      setReceiptError("");
+    } catch (error) { setReceiptError(error instanceof Error ? error.message : "The receipt could not be acknowledged."); }
   }
 
   return (
     <div className="stack buyer-flow">
-      {purchaseConfirmation ? <div className="transaction-state notice ok stack" role="status"><strong>Purchase confirmed</strong><span>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</span><p className="hash">{purchaseConfirmation.hash}</p></div> : null}
+      {purchaseConfirmation ? <div className="transaction-state notice ok stack" role="status"><strong>Purchase confirmed</strong><span>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</span><p className="hash">{purchaseConfirmation.hash}</p>{salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain ? <p>Refresh the raffle, balance and quote before starting another purchase.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null}
       {salesOpen && !purchaseConfirmation ? (
         <>
+          {selectionNotice ? <p className="notice warning" role="status">{selectionNotice}</p> : null}
           <section className="pack-selector" aria-labelledby="pack-title">
             <div className="console-section-heading"><h2 id="pack-title">Choose membership</h2><span>Bonus entries included</span></div>
             <div className="chain-pack-grid" role="radiogroup" aria-label="Membership packs">
@@ -410,6 +421,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
           </section>
           {!quantityValid ? <p id="membership-qty-error" className="notice error" role="alert">Quantity must be a whole number from 1 to 20.</p> : null}
           {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
+          {payment === "eth" && quote?.eth.kind === "unavailable" ? <div className="notice warning stack" role="status"><p>ETH payment is no longer available for this quote. Choose USDC and review the total again.</p><button className="btn" type="button" onClick={() => { setPayment("usdc"); setAgreements({ terms: false, rules: false, age: false }); setAgreementState("idle"); agreementGeneration.current += 1; }}>Use USDC</button></div> : null}
           {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd>{formatDate(quote.eth.deadline)} UTC</dd></div></dl> : null}</> : <p className="muted">ETH payment unavailable{quote?.eth.kind === "unavailable" ? `: ${quote.eth.reason}` : "."}</p>}
           {!termsMatch ? <p className="notice error" role="alert">The raffle’s published terms do not match this website version. Purchasing is blocked.</p> : (
             <fieldset className="agreements stack"><legend>Confirm before purchase</legend><label><input type="checkbox" checked={agreements.terms} onChange={(event) => setAgreements((value) => ({ ...value, terms: event.target.checked }))} /> I agree to the <Link href="/legal">membership terms</Link>.</label><label><input type="checkbox" checked={agreements.rules} onChange={(event) => setAgreements((value) => ({ ...value, rules: event.target.checked }))} /> I agree to the <Link href="/rules">draw rules</Link>.</label><label><input type="checkbox" checked={agreements.age} onChange={(event) => setAgreements((value) => ({ ...value, age: event.target.checked }))} /> I confirm I am at least 18.</label></fieldset>
@@ -419,7 +431,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
               approval?.enabled && quote ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label="Approve exact USDC" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
             ) : !allAgreed ? <p className="notice warning" role="status">Review and accept all three confirmations to continue.</p>
               : agreementState !== "saved" ? <div className="stack"><button className="btn" type="button" disabled={!recordAgreement || agreementState === "saving" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recordReviewedAgreement()}>{agreementState === "saving" ? "Recording agreement…" : "Sign and record agreement"}</button>{!recordAgreement ? <p className="notice warning" role="status">Agreement storage is not configured. Purchasing is unavailable.</p> : null}{agreementState === "error" ? <p className="notice error" role="alert">{agreementError}</p> : null}</div>
-                : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={confirmedPurchase} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{purchase?.reason || "Purchase is not available."}</p>}
+                : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{purchase?.reason || "Purchase is not available."}</p>}
           </WalletGate>
         </>
       ) : !salesOpen ? <p className="notice" role="status">Membership sales are not open{snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.</p> : null}

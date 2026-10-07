@@ -62,6 +62,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await seller.connect();
     await chain.write(chain.nft, "mint", [chain.seller, 901n]);
     await chain.write(chain.nft, "mint", [chain.seller, 902n]);
+    await chain.write(chain.nft, "mint", [chain.seller, 903n]);
     await chain.write(chain.usdc, "mint", [chain.buyer, 2_000_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.stranger, 2_000_000_000n]);
     expect(await createOpenRaffle(901n, "Exact selection raffle", [
@@ -71,6 +72,10 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(await createOpenRaffle(902n, "Recovery account raffle", [
       { name: "Entry", priceUsdc: 15_000_000n, bonusEntries: 1, maxSupply: 20 }
     ])).toBe(2n);
+    expect(await createOpenRaffle(903n, "Refreshing selection raffle", [
+      { name: "Limited", priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 1 },
+      { name: "Available", priceUsdc: 20_000_000n, bonusEntries: 2, maxSupply: 20 }
+    ])).toBe(3n);
     fixture = await browserChain(chain, chain.buyer);
   }, 60_000);
 
@@ -140,7 +145,8 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(confirmationText).toMatch(/Confirmed in block \d+/);
     expect(confirmationText).toMatch(/0x[0-9a-f]{64}/i);
     await fixture.page.waitForTimeout(500);
-    expect(await confirmed.innerText()).toBe(confirmationText);
+    expect(await confirmed.locator(".hash").innerText()).toBe(confirmationText.match(/0x[0-9a-f]{64}/i)?.[0]);
+    expect(await confirmed.innerText()).toMatch(/Confirmed in block \d+/);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
 
     const account = await service.readAccount({ id: 1n, account: chain.buyer });
@@ -148,7 +154,45 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] })).toBe(0n);
 
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    await fixture.page.getByText("Saved transaction needs verification", { exact: true }).first().waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByText("Purchase confirmed", { exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    while (await fixture.page.getByText("Saved transaction needs verification", { exact: true }).count()) {
+      const recovery = fixture.page.locator(".transaction-outcome").filter({ hasText: "Saved transaction needs verification" }).first();
+      const before = await recovery.locator(".hash").innerText();
+      await recovery.getByRole("button", { name: "Check confirmation", exact: true }).click();
+      await expect.poll(async () => fixture.page.locator(".transaction-outcome").filter({ hasText: before }).innerText(), { timeout: 15_000 }).toMatch(/confirmed/i);
+    }
+    await fixture.page.getByText("Purchase confirmed", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+    const again = fixture.page.getByRole("button", { name: "Buy again", exact: true });
+    await expect.poll(() => again.isEnabled(), { timeout: 15_000 }).toBe(true);
+    await again.click();
+    expect(await fixture.page.getByText("Purchase confirmed", { exact: true }).count()).toBe(0);
+    expect(await quantity.inputValue()).toBe("1");
+    for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    for (const dismiss of await fixture.page.getByRole("button", { name: "Dismiss receipt", exact: true }).all()) await dismiss.click();
   }, 90_000);
+
+  it("explains a sold-out selection change and lets an unavailable ETH choice return to USDC", async () => {
+    await openPiece(3n, chain.buyer);
+    await fixture.page.getByRole("radio", { name: "ETH quote", exact: true }).check();
+    for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
+    const stranger = chain.wallet(chain.stranger).session;
+    await stranger.connect();
+    await act({ kind: "approveUsdc", id: 3n, packId: 0, quantity: 1 }, stranger);
+    await act({ kind: "buyMembership", id: 3n, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } }, stranger);
+    await chain.write(chain.feed, "setAnswer", [0n]);
+    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+    await fixture.page.getByText(/The selected pack is no longer available. Available is now selected/).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: "Use USDC", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("radio", { name: /Available/ }).isChecked()).toBe(true);
+    expect(await fixture.page.locator(".order-total").innerText()).toContain("22.5");
+    for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    await chain.write(chain.feed, "setAnswer", [2000_00000000n]);
+  }, 45_000);
 
   it("clears only stale recovery feedback after an account switch and leaves the original wallet journal intact", async () => {
     await openPiece(2n, chain.buyer);

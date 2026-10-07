@@ -3,79 +3,103 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
+import { transactionMeaning, type TransactionOutcome } from "@/lib/chain/transaction-outcomes";
 import { useWalletSnapshot } from "./WalletGate";
+import { useTransactionOutcomes } from "./useTransactionOutcomes";
 
-type ResumeState =
-  | { kind: "idle" }
-  | { kind: "checking"; hash: Hex }
-  | { kind: "pending"; hash: Hex }
-  | { kind: "confirmed"; hash: Hex; block: bigint }
-  | { kind: "error"; message: string };
+type Props = { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean; scope?: string };
+export function ResumeTransaction(props: Props) {
+  return props.browser.kind === "configured" ? <ConfiguredResume {...props} browser={props.browser} /> : null;
+}
 
-export function ResumeTransaction({ browser, onConfirmed, pendingOnly = false }: { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean }) {
-  const [hash, setHash] = useState("");
-  const [state, setState] = useState<ResumeState>({ kind: "idle" });
-  const inFlight = useRef(false);
-  const generation = useRef(0);
+function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "wallet" }: Props & { browser: Extract<BrowserService, { kind: "configured" }> }) {
   const wallet = useWalletSnapshot(browser.wallet);
+  const { owner, outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
+  const [hash, setHash] = useState("");
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
   const [pending, setPending] = useState<{ hash: Hex | null; nonce: number } | null>(null);
+  const generation = useRef(0);
+  const inFlight = useRef<number | null>(null);
+  const callback = useRef(onConfirmed);
+  callback.current = onConfirmed;
   const inputId = useId();
+  const connected = wallet.kind === "connected" && wallet.chainId === browser.service.manifest.chainId;
+
   useEffect(() => {
     const version = ++generation.current;
-    inFlight.current = false; setHash(""); setPending(null); setState({ kind: "idle" });
-    if (browser.kind === "configured" && wallet.kind === "connected" && wallet.chainId === browser.service.manifest.chainId) {
-      void browser.service.pending({ wallet: browser.wallet }).then(value => {
-        if (version === generation.current) { setPending(value); setHash(value?.hash ?? ""); }
-      }).catch(error => {
-        if (version === generation.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Pending wallet activity could not be read." });
-      });
-    }
-    return () => { generation.current += 1; };
-  }, [browser, wallet]);
+    inFlight.current = null;
+    setChecking(false); setError(""); setHash(""); setPending(null);
+    return () => { if (generation.current === version) generation.current++; };
+  }, [browser.service, browser.wallet, wallet]);
 
-  async function check(event: FormEvent) {
-    event.preventDefault();
-    if (inFlight.current) return;
-    if (browser.kind !== "configured") {
-      setState({ kind: "error", message: browser.reason });
-      return;
-    }
-    if (!isHex(hash, { strict: true }) || hash.length !== 66) {
-      setState({ kind: "error", message: "Enter a complete transaction hash." });
-      return;
-    }
+  useEffect(() => {
+    if (!connected) return;
+    let active = true;
     const version = generation.current;
-    const transactionHash: Hex = hash;
-    inFlight.current = true;
-    setState({ kind: "checking", hash: transactionHash });
-    try {
-      const submitted = await browser.service.resume({ hash: transactionHash, wallet: browser.wallet });
-      if (version !== generation.current) return;
-      const confirmation = await browser.service.confirm({ transaction: submitted });
-      if (version !== generation.current) return;
-      if (confirmation.kind !== "pending") setPending(null);
-      if (confirmation.kind === "pending") setState({ kind: "pending", hash: confirmation.hash });
-      else if (confirmation.kind === "confirmed") {
-        setState({ kind: "confirmed", hash: confirmation.hash, block: confirmation.blockNumber });
-        await onConfirmed?.();
-      } else setState({ kind: "error", message: confirmation.reason });
-    } catch (error) {
-      if (version === generation.current) setState({ kind: "error", message: error instanceof Error ? error.message : "The transaction could not be checked." });
+    void browser.service.pending({ wallet: browser.wallet }).then(value => {
+      if (active && version === generation.current) { setPending(value); if (value?.hash) setHash(value.hash); }
+    }).catch(reason => {
+      if (active && version === generation.current) setError(reason instanceof Error ? reason.message : "Pending wallet activity could not be read.");
+    });
+    return () => { active = false; };
+  }, [browser.service, browser.wallet, connected, wallet, outcomes]);
+
+  useEffect(() => {
+    if (!connected || wallet.kind !== "connected" || !callback.current) return;
+    const confirmed = outcomes.filter(item => item.kind === "terminal" && item.confirmation.kind === "confirmed");
+    const unseen = confirmed.filter(item => owner.claimRefresh(`${scope}:${wallet.account.toLowerCase()}:${wallet.revision}:${item.id}`));
+    if (!unseen.length) return;
+    const version = generation.current;
+    void Promise.resolve(callback.current()).catch(reason => {
+      if (version === generation.current) setError(reason instanceof Error ? reason.message : "Confirmed transaction retained. Refresh the current state before another action.");
+    });
+  }, [connected, outcomes, owner, scope, wallet]);
+
+  async function check(transactionHash: Hex) {
+    if (!connected || inFlight.current !== null) return;
+    const version = generation.current;
+    inFlight.current = version; setChecking(true); setError("");
+    try { await owner.resume(transactionHash, browser.wallet); }
+    catch (reason) {
+      if (version === generation.current) setError(reason instanceof Error ? reason.message : "The transaction could not be checked.");
     } finally {
-      if (version === generation.current) inFlight.current = false;
+      if (version === generation.current) { inFlight.current = null; setChecking(false); }
     }
   }
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!isHex(hash, { strict: true }) || hash.length !== 66) { setError("Enter a complete transaction hash."); return; }
+    void check(hash);
+  }
+  function dismiss(outcome: TransactionOutcome) {
+    try { owner.acknowledge(outcome); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "The receipt could not be acknowledged."); }
+  }
 
-  if (pendingOnly && (wallet.kind !== "connected" || browser.kind !== "configured" || wallet.chainId !== browser.service.manifest.chainId || !pending && state.kind === "idle")) return null;
+  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error) return null;
   return (
-    <form className="well pad stack resume-transaction" onSubmit={check}>
-      <div><h2>{pending ? "Pending wallet activity" : "Resume after reload"}</h2><p>Use a transaction hash from this connected wallet to check its on-chain result. A submitted hash is not treated as success.</p></div>
-      {pending ? <p className="notice warning" role="status">Reconcile this wallet’s unresolved transaction at nonce {pending.nonce} before submitting another action. {pending.hash ? "Its saved hash is filled in below." : "The wallet response was uncertain. Check wallet activity for the actual transaction or a same-nonce replacement/cancellation hash."}</p> : null}
-      <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={(event) => { setHash(event.target.value.trim()); setState({ kind: "idle" }); }} placeholder="0x…" /></label>
-      <button className="btn btn-dark" type="submit" disabled={state.kind === "checking" || wallet.kind !== "connected" || browser.kind !== "configured" || wallet.chainId !== browser.service.manifest.chainId}>{state.kind === "checking" ? "Checking confirmation…" : "Check transaction"}</button>
-      {state.kind === "pending" ? <p className="notice warning" role="status">Still pending. Check again later.</p> : null}
-      {state.kind === "confirmed" ? <p className="notice ok" role="status">Confirmed in block {state.block.toString()}.</p> : null}
-      {state.kind === "error" ? <p className="notice error" role="alert">{state.message}</p> : null}
-    </form>
+    <section className="stack resume-transaction" aria-label="Wallet transaction outcomes">
+      {outcomes.map(outcome => {
+        const submitted = "submitted" in outcome ? outcome.submitted : null;
+        const meaning = submitted ? transactionMeaning(browser.service, submitted) : null;
+        const transactionHash = submitted?.hash ?? (outcome.kind === "recovery" ? outcome.hash : null);
+        return <div key={outcome.id} className={`transaction-outcome notice stack ${outcome.kind === "terminal" && outcome.confirmation.kind === "confirmed" ? "ok" : "warning"}`} role="status">
+          <strong>{outcome.kind === "submitting" ? "Waiting for wallet" : outcome.kind === "terminal" ? outcome.confirmation.kind === "confirmed" ? meaning?.purchase ? `Purchase confirmed for raffle #${meaning.raffleId}` : "Transaction confirmed" : outcome.confirmation.kind === "reverted" ? "Transaction reverted" : "Transaction replaced" : outcome.kind === "rejected" ? "Wallet request rejected" : outcome.kind === "error" ? "Transaction needs attention" : outcome.kind === "recovery" ? "Saved transaction needs verification" : "Transaction submitted"}</strong>
+          {meaning && !meaning.purchase ? <span>Raffle #{meaning.raffleId.toString()} · {meaning.action}</span> : null}
+          {outcome.kind === "terminal" ? outcome.confirmation.kind === "confirmed" ? <span>Confirmed in block {outcome.confirmation.blockNumber.toString()}.</span> : <span>{outcome.confirmation.reason}</span> : (outcome.kind === "error" || outcome.kind === "rejected") ? <span>{outcome.message}</span> : outcome.kind === "submitting" ? <span>The original wallet request is in progress. Its result stays available here through refreshes.</span> : <span>A saved or submitted hash is not proof of success.</span>}
+          {transactionHash ? <p className="hash">{transactionHash}</p> : null}
+          {transactionHash && outcome.kind !== "terminal" ? <button className="btn" type="button" disabled={checking || outcome.kind === "checking"} onClick={() => void check(transactionHash)}>Check confirmation</button> : null}
+          {outcome.kind === "terminal" && !(meaning?.purchase && outcome.confirmation.kind === "confirmed") ? <button className="text-link" type="button" onClick={() => dismiss(outcome)}>Dismiss receipt</button> : null}
+        </div>;
+      })}
+      {pending || !pendingOnly ? <form className="well pad stack" onSubmit={submit}>
+        <div><h2>{pending ? "Pending wallet activity" : "Resume after reload"}</h2><p>Use a transaction hash from this connected wallet to check its on-chain result. A submitted hash is not treated as success.</p></div>
+        {pending ? <p className="notice warning" role="status">Reconcile this wallet’s unresolved transaction at nonce {pending.nonce} before submitting another action. {pending.hash ? "Its saved hash is filled in below." : "Check wallet activity for the actual transaction or a same-nonce replacement/cancellation hash."}</p> : null}
+        <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => setHash(event.target.value.trim())} placeholder="0x…" /></label>
+        <button className="btn btn-dark" type="submit" disabled={checking}>{checking ? "Checking confirmation…" : "Check transaction"}</button>
+      </form> : null}
+      {error ? <p className="notice error" role="alert">{error}</p> : null}
+    </section>
   );
 }
