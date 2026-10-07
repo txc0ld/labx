@@ -5,6 +5,7 @@ import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
 import { ownerExecutionConfirmer } from "./owner-execution";
+import { isWalletRequestRejected } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { MAX_MEMBERSHIP_TOTAL_USDC } from "./fees";
 import { hash, sameAddress } from "./validation";
@@ -55,6 +56,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     submitting.add(key); entry.used = true;
     let intent: PendingIntent | null = null;
     let walletRequested = false;
+    let broadcastHash: Hex | null = null;
     try {
       await wallet.assertCurrent(entry.session);
       const fresh = await build(entry.action, entry.session);
@@ -68,6 +70,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
           journal.write(account, intent);
         });
       }, () => { walletRequested = true; });
+      broadcastHash = txHash;
       if (!walletRequested) throw new Error("Wallet adapter did not establish transaction recovery protection.");
       await journal.exclusive(account, async () => {
         const current = journal.read(account);
@@ -76,10 +79,13 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       });
       return { hash: txHash, account, chainId: manifest.chainId, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value };
     } catch (error) {
-      const refused = typeof error === "object" && error !== null && "code" in error && error.code === 4001;
+      let refused = broadcastHash === null && isWalletRequestRejected(error);
       if (!walletRequested || refused) await journal.exclusive(account, async () => {
         const current = journal.read(account);
-        if (current?.id === intent?.id) journal.remove(account);
+        if (current && current.id === intent?.id) {
+          if (current.hash !== null || broadcastHash !== null) refused = false;
+          else journal.remove(account);
+        }
       });
       if (walletRequested && !refused) throw new Error("The wallet response is uncertain. Check its activity and reconcile the transaction hash before retrying.");
       throw error;
@@ -134,11 +140,12 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       // Recovery has no stored draft ID. Resolve the exact NFT/token/seller against paginated chain records.
       let cursor: bigint | undefined = 1n, found = false;
       const at = await reader.checkedBlock();
-      while (cursor !== undefined && !found) {
-        const page = await reader.listRaffles({ cursor, limit: 24, block: at });
+      for (let pageCount = 0; pageCount < 20 && cursor !== undefined && !found; pageCount++) {
+        const page = await reader.listRaffles({ cursor, limit: 24, block: at, seller: session.account });
         found = page.items.some(item => sameAddress(item.raffle.seller, session.account) && sameAddress(item.raffle.nft, target) && item.raffle.tokenId === decoded.args[1]);
         cursor = page.nextCursor ?? undefined;
       }
+      if (!found && cursor !== undefined) throw new Error("NFT approval recovery reached its bounded search limit of 480 raffle IDs. No matching seller record was found within that range.");
       if (!found) throw new Error("No seller draft matches this NFT approval.");
     }
     await wallet.assertCurrent(session);

@@ -25,13 +25,14 @@ async function request(path: string, input?: unknown) {
   return body;
 }
 async function contextFor(wallet: WalletSessionPort) {
+  const expected = wallet.getSnapshot();
+  if (expected.kind !== "connected") throw new Error("Connect the configured test network.");
   const browser = configuredBrowserService();
   if (browser.kind !== "configured") throw new Error(browser.reason);
   const raw = record((await request("/api/workflow/context")).context);
   const context: WorkflowContext = { origin: text(raw.origin), chainId: raw.chainId === 11155111 ? 11155111 : raw.chainId === 31337 ? 31337 : (() => { throw new Error("Invalid workflow network."); })(), contract: address(raw.contract), termsHash: hash(raw.termsHash), termsVersion: text(raw.termsVersion) };
   if (context.origin !== window.location.origin || context.chainId !== browser.service.manifest.chainId || !sameAddress(context.contract, browser.service.manifest.address) || context.termsHash !== PUBLISHED_TERMS_HASH || context.termsVersion !== TERMS_VERSION) throw new Error("The workflow origin, deployment or published terms do not match this website.");
-  const expected = wallet.getSnapshot();
-  if (expected.kind !== "connected" || expected.chainId !== context.chainId) throw new Error("Connect the configured test network.");
+  if (expected.chainId !== context.chainId) throw new Error("Connect the configured test network.");
   await wallet.assertCurrent(expected);
   return { context, expected, deadline: String(Math.floor(Date.now() / 1000) + 300) };
 }
