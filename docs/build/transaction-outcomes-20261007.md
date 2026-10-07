@@ -14,6 +14,8 @@ Read-only receipt inspection checks the deployment, sender, canonical receipt bl
 
 Guarded reconciliation resolves the wallet's pending nonce. It retains the existing wallet revision, sender, nonce, intent and canonical receipt checks. It can follow a same-nonce replacement, but cannot reconcile an unrelated action or another wallet's transaction. Recheck the initiating wallet after awaited work and validate every persistence callback's account and chain before writing.
 
+Reconciliation requires an existing journal. Capture its identity before awaiting transaction reads and recheck it under the account lock before any mutation. If another tab has changed or removed it, continue with read-only inspection. Historical inspection cannot recreate that journal.
+
 ## Persistence and replacement rules
 
 - Persist a replacement's recovery hash before updating the pending journal. Persist the actual canonical hash before removing that journal, even when the requested hash resolves to a different transaction.
@@ -21,6 +23,10 @@ Guarded reconciliation resolves the wallet's pending nonce. It retains the exist
 - Associate attempts only through validated transaction identity and checked journal lineage. Saved aliases and wallet-requested nonces alone do not establish that two transactions are related.
 - An older pending or failed attempt cannot replace a terminal result or recreate an acknowledged operation.
 - Acknowledgment uses service-validated receipt metadata and runs its exact checkpoint check under the account journal lock. It must retain a hash still needed by an unresolved same or older nonce and leave a newer unrelated journal unchanged.
+
+Cold recovery may capture an immutable, service-issued token for the exact pending journal before asynchronous reads. A canonical receipt must match the captured account, nonce and starting-block bound before the service links the old hash to its replacement. The token does not prove the old transaction was observed on-chain, establish its action's success, permit signing or acknowledge a purchase. A copied token has no authority. Unknown history without that proof remains protected.
+
+Keep local receipt state separate from durable checkpoints. Automatic inspection and late confirmation without a current journal may update an existing exact checkpoint but cannot recreate one that another tab removed. The local receipt and purchase freshness barrier remain until explicit local acknowledgment. A previously unowned historical transaction can be saved after an explicit manual check verifies its canonical receipt.
 
 ## Interface and bounded history
 
