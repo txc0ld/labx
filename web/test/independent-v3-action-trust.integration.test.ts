@@ -119,6 +119,24 @@ run("independent v3 action-aware trust boundaries", () => {
     }
   }, 30_000);
 
+  it("blocks opening with a currently mismatched policy even when the seller accepts its hash", async () => {
+    const chain = await localChain();
+    try {
+      const { service } = await reviewedService(chain);
+      await chain.write(chain.raffle, "setTreasury", [chain.stranger]);
+      const { id } = await createEscrowedDraft(chain, "Unsafe current opening policy");
+      const digest = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "draftReviewHash", args: [id] });
+      await chain.write(chain.raffle, "approveRaffle", [id, digest]);
+      const current = await chain.service.openingPolicy();
+      const seller = await connected(chain, chain.seller);
+
+      await expect(service.prepare({ action: { kind: "open", id, expectedPolicyHash: current.hash }, wallet: seller }))
+        .rejects.toThrow(/policy|reviewed deployment|treasury/i);
+    } finally {
+      chain.close();
+    }
+  }, 30_000);
+
   it("rejects a raffle opened under an unsafe policy even after global settings are restored", async () => {
     const chain = await localChain();
     try {
