@@ -1,6 +1,6 @@
 import type { AccountRaffleState, ActionAvailability, ActionKind, RaffleSnapshot } from "./types";
 import { sameAddress } from "./validation";
-export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffleState | null): readonly ActionAvailability[] {
+export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffleState | null, trustReason: string | null = null): readonly ActionAvailability[] {
   const r = snapshot.raffle, now = snapshot.block.timestamp;
   const seller = !!account && sameAddress(account.account, r.seller);
   const winner = !!account && sameAddress(account.account, r.winner);
@@ -40,5 +40,6 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     add("refund", "Claim refund", !!account && account.principal > 0n, "This wallet has no remaining refund.");
     add("reclaimPrize", "Reclaim NFT", seller && r.escrowed, "Only the seller can reclaim an unclaimed NFT.");
   }
-  return actions;
+  return actions.map(action => trustReason && ["approveRaffle", "open", "approveUsdc", "buyMembership"].includes(action.kind)
+    ? { ...action, enabled: false, reason: trustReason } : action);
 }

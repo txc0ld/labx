@@ -43,6 +43,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
       if (!sameAddress(snapshot.owner, session.account) || snapshot.raffle.phase !== 0) throw new Error("Only the current owner can review a draft.");
       if (hash(action.expectedReviewHash) !== snapshot.admission.reviewHash) throw new Error("Draft review changed. Review it again.");
       if (action.kind === "approveRaffle") {
+        await reader.assertActionTrust({ kind: "opening", id: action.id, block: at });
         if (action.attestations?.canonicalProvenance !== true || action.attestations?.transferRestrictions !== true || action.attestations?.drawFunding !== true) throw new Error("Review canonical provenance, transfer restrictions and draw funding first.");
         if (!snapshot.raffle.escrowed || review.custody.kind !== "held" || review.nftCodeHash === null || at.timestamp >= snapshot.raffle.salesEnd) throw new Error("Approval requires current NFT custody and a future closing time.");
         requirePublishedTerms(review.policy.termsHash);
@@ -55,6 +56,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
       if (action.kind === "approveUsdc" || action.kind === "buyMembership") {
         if (r.phase !== 1 || snapshot.paused || at.timestamp >= r.salesEnd) throw new Error("Membership sales are not open.");
         requirePublishedTerms(snapshot.policy.termsHash);
+        await reader.assertActionTrust({ kind: "membership", id: action.id, block: at });
         boundedNumber(action.packId, 0, snapshot.packs.length - 1); boundedNumber(action.quantity, 1, 20);
         const pack = snapshot.packs[action.packId];
         if (!pack.active || pack.maxSupply - pack.sold < action.quantity) throw new Error("The selected membership quantity is no longer available.");
@@ -84,6 +86,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
         if (action.kind === "open") {
           const opening = await reader.openingPolicy({ block: at });
           if (hash(action.expectedPolicyHash) !== opening.hash) throw new Error("Opening policy changed. Review it again.");
+          await reader.assertActionTrust({ kind: "opening", id: action.id, block: at });
         }
         const availability = availableActions(snapshot, state).find(item => item.kind === action.kind);
         if (!availability?.enabled) throw new Error(availability?.reason || "This action is unavailable for this wallet and raffle phase.");
@@ -109,6 +112,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
     }
     const simulated = await client.call({ account: session.account, to, data, value, blockNumber: at.number });
     if (action.kind === "approveUsdc" && simulated.data && BigInt(simulated.data) === 0n) throw new Error("USDC approval was refused.");
+    await reader.checkedBlock(at);
     return { action, account: session.account, chainId: manifest.chainId, to, data, value, title, amountUsdc, recipient, block: at, walletRevision: session.revision };
   };
 }

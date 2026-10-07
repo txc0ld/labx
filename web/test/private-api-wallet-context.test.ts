@@ -1,3 +1,4 @@
+import { fixtureTrust } from "./fixtures/deployment";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPublicClient, http } from "viem";
 import { configuredBrowserService } from "../lib/chain/browser";
@@ -11,7 +12,7 @@ import type { DeploymentManifest, WalletProvider } from "../lib/chain/types";
 vi.mock("../lib/chain/browser", () => ({ configuredBrowserService: vi.fn() }));
 const first: Address = "0x1111111111111111111111111111111111111111", second: Address = "0x2222222222222222222222222222222222222222";
 const digest = PUBLISHED_TERMS_HASH;
-const manifest: DeploymentManifest = { address: "0x3333333333333333333333333333333333333333", usdc: "0x4444444444444444444444444444444444444444", runtimeCodeHash: digest, chainId: 31337, version: 3, deploymentBlock: 1n };
+const manifest: DeploymentManifest = { ...fixtureTrust, address: "0x3333333333333333333333333333333333333333", usdc: "0x4444444444444444444444444444444444444444", runtimeCodeHash: digest, chainId: 31337, version: 3, deploymentBlock: 1n };
 const context = { origin: "https://labx.example", chainId: 31337, contract: manifest.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
 const actions = [
   { name: "commitment", invoke: (wallet: WalletSession) => createCommitment(wallet, { nft: manifest.address, tokenId: "1", publicSummary: "Summary", privateCommitment: "Private" }) },

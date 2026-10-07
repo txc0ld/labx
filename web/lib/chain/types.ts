@@ -35,7 +35,10 @@ export type DeploymentManifest = {
   version: 3;
   deploymentBlock: bigint;
   usdc: Address;
+  expectedOwner: Address;
+  expectedPolicy: RafflePolicy;
 };
+export type ActionTrustInput = { kind: "opening" | "membership"; id: bigint; block?: BlockRef };
 export type DeploymentStatus =
   | { kind: "verified"; manifest: DeploymentManifest; block: BlockRef }
   | { kind: "unavailable" | "legacy" | "mismatch"; reason: string };

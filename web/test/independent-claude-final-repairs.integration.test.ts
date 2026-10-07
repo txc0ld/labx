@@ -1,3 +1,4 @@
+import { fixtureTrust } from "./fixtures/deployment";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TransactionNotFoundError, encodeFunctionData, keccak256, toBytes, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
@@ -141,7 +142,7 @@ run("independent final transaction outcome repairs", () => {
       status: "success"
     };
     const service = {
-      manifest: { chainId: 31337 as const, address: contract, usdc: account, runtimeCodeHash: runtime, deploymentBlock: 1n, version: 3 as const },
+      manifest: { ...fixtureTrust, chainId: 31337 as const, address: contract, usdc: account, runtimeCodeHash: runtime, deploymentBlock: 1n, version: 3 as const },
       submit: vi.fn<(_: { prepared: PreparedAction; wallet: WalletSessionPort }) => Promise<SubmittedAction>>(),
       resume: vi.fn<(_: Parameters<RaffleService["resume"]>[0]) => Promise<SubmittedAction | null>>(),
       confirm: vi.fn<(_: Parameters<RaffleService["confirm"]>[0]) => ReturnType<RaffleService["confirm"]>>(),
@@ -208,7 +209,7 @@ run("independent final transaction outcome repairs", () => {
       status: "success"
     };
     const service = {
-      manifest: { chainId: 31337 as const, address: contract, usdc: account, runtimeCodeHash: runtime, deploymentBlock: 1n, version: 3 as const },
+      manifest: { ...fixtureTrust, chainId: 31337 as const, address: contract, usdc: account, runtimeCodeHash: runtime, deploymentBlock: 1n, version: 3 as const },
       submit: vi.fn<(_: { prepared: PreparedAction; wallet: WalletSessionPort }) => Promise<SubmittedAction>>(),
       resume: vi.fn<(_: Parameters<RaffleService["resume"]>[0]) => Promise<SubmittedAction | null>>(),
       confirm: vi.fn<(_: Parameters<RaffleService["confirm"]>[0]) => ReturnType<RaffleService["confirm"]>>(),

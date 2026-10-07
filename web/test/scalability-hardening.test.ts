@@ -1,3 +1,4 @@
+import { fixtureTrust } from "./fixtures/deployment";
 import {
   createPublicClient,
   custom,
@@ -31,7 +32,7 @@ const OTHER = "0x6666666666666666666666666666666666666666";
 const BUYER = "0x7777777777777777777777777777777777777777";
 const CODE = "0x600160005260206000f3";
 const BLOCK: BlockRef = { number: 100n, hash: keccak256(toBytes("block-100")), timestamp: 1_800_000_000n };
-const manifest: DeploymentManifest = {
+const manifest: DeploymentManifest = { ...fixtureTrust,
   chainId: 31337,
   address: LABX,
   runtimeCodeHash: keccak256(CODE),

@@ -1,8 +1,9 @@
+import { fixtureTrust } from "./fixtures/deployment";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { browserPendingJournal, transactionIntent } from "../lib/chain/pending-journal";
 import type { DeploymentManifest } from "../lib/chain/types";
 const address = "0x1111111111111111111111111111111111111111", other = "0x2222222222222222222222222222222222222222", hash = `0x${"ab".repeat(32)}` as const;
-const manifest: DeploymentManifest = { chainId: 31337, address, usdc: other, runtimeCodeHash: hash, deploymentBlock: 1n, version: 3 };
+const manifest: DeploymentManifest = { ...fixtureTrust, chainId: 31337, address, usdc: other, runtimeCodeHash: hash, deploymentBlock: 1n, version: 3 };
 afterEach(() => vi.unstubAllGlobals());
 describe("nonsecret browser pending journal", () => {
   it("survives adapter recreation and separates accounts/deployments without persisting calldata", async () => {

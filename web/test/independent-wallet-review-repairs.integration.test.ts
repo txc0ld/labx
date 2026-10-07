@@ -1,3 +1,4 @@
+import { fixtureTrust } from "./fixtures/deployment";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPublicClient, http, keccak256, type Address, type Hex } from "viem";
 import { configuredBrowserService } from "../lib/chain/browser";
@@ -14,7 +15,7 @@ vi.mock("../lib/chain/browser", () => ({ configuredBrowserService: vi.fn() }));
 const run = process.env.RUN_INDEPENDENT_WALLET_REVIEW_REPAIRS === "1" ? describe : describe.skip;
 const accountA: Address = "0x1111111111111111111111111111111111111111";
 const accountB: Address = "0x2222222222222222222222222222222222222222";
-const apiManifest: DeploymentManifest = {
+const apiManifest: DeploymentManifest = { ...fixtureTrust,
   address: "0x3333333333333333333333333333333333333333",
   usdc: "0x4444444444444444444444444444444444444444",
   runtimeCodeHash: PUBLISHED_TERMS_HASH,

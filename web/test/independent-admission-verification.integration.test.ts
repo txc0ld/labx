@@ -1,3 +1,4 @@
+import { createRaffleService } from "../lib/chain/service";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, keccak256, zeroHash } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
@@ -46,6 +47,7 @@ run("independent admission execution verification", () => {
       encodeFunctionData({ abi: raffleAbi, functionName: "acceptOwnership" })
     ], chain.stranger);
 
+    chain.service = createRaffleService(chain.client, { ...chain.manifest, expectedOwner: safe.address });
     const id = await draft();
     const wallet = chain.wallet(safe.address).session;
     await wallet.connect();
@@ -83,6 +85,7 @@ run("independent admission execution verification", () => {
 
   it("rejects a matching approval log when the receipt attributes it to another contract", async () => {
     const id = await draft();
+    chain.service = createRaffleService(chain.client, chain.manifest);
     const wallet = chain.wallet(chain.operator).session;
     await wallet.connect();
     const review = await chain.service.readAdmission({ id });

@@ -128,7 +128,9 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
         address: chain.manifest.address,
         runtimeCodeHash: chain.manifest.runtimeCodeHash,
         usdc: chain.manifest.usdc,
-        deploymentBlock: chain.manifest.deploymentBlock.toString()
+        deploymentBlock: chain.manifest.deploymentBlock.toString(),
+        expectedOwner: chain.manifest.expectedOwner,
+        expectedPolicy: { ...chain.manifest.expectedPolicy, subscriptionId: chain.manifest.expectedPolicy.subscriptionId.toString(), minBuyerFeeUsdc: chain.manifest.expectedPolicy.minBuyerFeeUsdc.toString() }
       }),
       NEXT_PUBLIC_LOCAL_RPC_URL: chain.url,
       NEXT_PUBLIC_SITE_URL: baseUrl

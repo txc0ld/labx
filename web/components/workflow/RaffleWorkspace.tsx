@@ -1,5 +1,6 @@
 "use client";
 
+import { useActionTrust } from "./useActionTrust";
 import { MembershipPackCard } from "@/components/ui/squishy-card-component";
 
 import Link from "next/link";
@@ -22,7 +23,7 @@ import { RaffleArtwork } from "./RaffleArtwork";
 import { SellerActivity } from "./SellerActivity";
 import styles from "./SellerPortal.module.css";
 
-export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null) => readonly ActionAvailability[];
+export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null, trustReason?: string | null) => readonly ActionAvailability[];
 export type RecoverCommitment = (commit: Hex) => Promise<ReserveRecord>;
 export type RecordAgreement = (raffleId: bigint) => Promise<void>;
 export type RaffleWorkspaceMode = "public" | "seller";
@@ -196,7 +197,8 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
 
   const currentAccount = account && account.snapshot.id === snapshot.id && account.snapshot.block.hash === snapshot.block.hash
     && walletSnapshot.kind === "connected" && account.account.toLowerCase() === walletSnapshot.account.toLowerCase() ? account : null;
-  const rawAvailability = availableActions(snapshot, currentAccount);
+  const trustReason = useActionTrust(browser.service, snapshot);
+  const rawAvailability = availableActions(snapshot, currentAccount, trustReason);
   const availability = mode === "seller" ? sellerPortalActions(rawAvailability) : rawAvailability;
   const phase = Number(snapshot.raffle.phase);
   const seller = walletSnapshot.kind === "connected" && sellerOwnsRaffle(walletSnapshot.account, snapshot);
@@ -221,6 +223,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
       <div className="detail-path"><Link href={mode === "seller" ? "/seller" : "/"} className="detail-back"><span aria-hidden="true">←</span> {mode === "seller" ? "Back to studio" : "Back to explore"}</Link><button className="text-link" type="button" disabled={refreshState.kind === "loading"} onClick={() => void refresh()}>{refreshState.kind === "loading" ? "Refreshing state…" : "Refresh state"}</button></div>
       {refreshState.kind === "loading" ? <p className="notice" role="status">Refreshing verified contract state. Transaction controls are paused.</p> : null}
       {refreshState.kind === "error" ? <p className="notice error" role="alert">Refresh failed: {refreshState.message} Transaction controls remain paused. <button className="text-link" type="button" onClick={() => void refresh()}>Retry refresh</button></p> : null}
+      {trustReason ? <p className="notice warning" role="status">{trustReason} Existing recovery and receipt controls remain available.</p> : null}
       <ResumeTransaction browser={browser} pendingOnly scope={`raffle-${snapshot.id}`} confirmedThroughBlock={snapshot.block.number} onConfirmed={refresh} />
       <section className="section piece-layout piece-console chain-piece">
         <div className="piece-visual chain-piece-visual">

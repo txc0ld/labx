@@ -1,7 +1,7 @@
 import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
-  AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, OutcomeLineage, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
+  ActionTrustInput, AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, OutcomeLineage, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
@@ -24,6 +24,7 @@ export interface WalletSessionPort {
 export interface RaffleService {
   readonly manifest: DeploymentManifest;
   attest(): Promise<DeploymentStatus>;
+  assertActionTrust(input: ActionTrustInput): Promise<void>;
   listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   listSellerRaffles(input: { seller: Address; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   listRaffleActivity(input: { id: bigint; cursor?: bigint; block?: BlockRef }): Promise<Page<SellerRaffleActivity>>;

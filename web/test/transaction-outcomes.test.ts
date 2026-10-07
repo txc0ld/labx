@@ -1,3 +1,4 @@
+import { fixtureTrust } from "./fixtures/deployment";
 import { describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, erc20Abi, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
@@ -9,7 +10,7 @@ const account = "0x1111111111111111111111111111111111111111";
 const other = "0x2222222222222222222222222222222222222222";
 const contract = "0x3333333333333333333333333333333333333333";
 const hash: Hex = `0x${"ab".repeat(32)}`;
-const manifest: DeploymentManifest = { chainId: 31337, address: contract, usdc: other, runtimeCodeHash: hash, deploymentBlock: 1n, version: 3 };
+const manifest: DeploymentManifest = { ...fixtureTrust, chainId: 31337, address: contract, usdc: other, runtimeCodeHash: hash, deploymentBlock: 1n, version: 3 };
 const submitted: SubmittedAction = { hash, account, chainId: 31337, to: contract, data: encodeFunctionData({ abi: raffleAbi, functionName: "refund", args: [1n] }), value: 0n };
 const prepared: PreparedAction = { ...submitted, to: contract, action: { kind: "refund", id: 1n }, title: "Refund", amountUsdc: 1n, recipient: account, block: { number: 1n, hash, timestamp: 1n }, walletRevision: 1 };
 const receipt = { ...submitted, nonce: 1, blockNumber: 2n, status: "success" as const };

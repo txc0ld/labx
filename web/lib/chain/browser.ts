@@ -9,15 +9,15 @@ const loadRemote: ConstructorParameters<typeof BrowserWalletSession>[3] = async 
   const { createWalletConnectProvider } = await import("./walletconnect-provider");
   return createWalletConnectProvider(projectId);
 };
-import { address, hash, sameAddress } from "./validation";
+import { sameAddress } from "./validation";
+import { parseLocalManifest } from "./manifest";
 import type { BrowserService } from "./ports";
 import type { DeploymentManifest } from "./types";
 
 export function localDevelopmentManifest(raw: string | undefined): DeploymentManifest | null {
   if (process.env.NODE_ENV !== "development" || !raw) return null;
-  const data: unknown = JSON.parse(raw);
-  if (!data || typeof data !== "object" || !("chainId" in data) || data.chainId !== 31337 || !("version" in data) || data.version !== 3 || !("address" in data) || !("runtimeCodeHash" in data) || !("usdc" in data) || !("deploymentBlock" in data) || typeof data.deploymentBlock !== "string" || !/^\d+$/.test(data.deploymentBlock)) throw new Error("Invalid local fixture manifest.");
-  return { chainId: 31337, address: address(data.address), runtimeCodeHash: hash(data.runtimeCodeHash), version: 3, deploymentBlock: BigInt(data.deploymentBlock), usdc: address(data.usdc) };
+  try { return parseLocalManifest(JSON.parse(raw)); }
+  catch { throw new Error("Invalid local fixture manifest."); }
 }
 let configured: BrowserService | undefined;
 export function configuredBrowserService(): BrowserService {

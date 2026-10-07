@@ -1,10 +1,11 @@
 import { decodeEventLog, erc20Abi, erc721Abi, keccak256, zeroAddress, zeroHash, type Address, type PublicClient } from "viem";
 import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
+import { requireExpectedPolicy } from "./action-trust";
 import { buyerFee } from "./fees";
 import { requirePublishedTerms } from "../published-terms";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
-import type { AccountRaffleState, AdmissionReview, AdmissionStatus, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
+import type { ActionTrustInput, AccountRaffleState, AdmissionReview, AdmissionStatus, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
 import { CATALOG_PAGE_LIMIT } from "./types";
 import { boundedNumber, positiveId, sameAddress } from "./validation";
 
@@ -180,19 +181,50 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
       ownerGeneration, openingPolicyGeneration, nftCodeHash: code && code !== "0x" ? keccak256(code) : null,
       custody: custodyOwner === null ? { kind: "unknown" } : { kind: sameAddress(custodyOwner, manifest.address) ? "held" : "not-held", owner: custodyOwner } };
   }
+  async function assertActionTrust(input: ActionTrustInput): Promise<void> {
+    positiveId(input.id);
+    const at = await checkedBlock(input.block), base = baseAt(at);
+    const [owner, pendingOwner] = await Promise.all([
+      client.readContract({ ...base, functionName: "owner" }),
+      client.readContract({ ...base, functionName: "pendingOwner" })
+    ]);
+    if (!sameAddress(owner, manifest.expectedOwner)) throw new Error("New approvals, openings or purchases are unavailable: the contract owner differs from the reviewed owner.");
+    if (!sameAddress(pendingOwner, zeroAddress)) throw new Error("New approvals, openings or purchases are unavailable: the reviewed deployment has a pending ownership transfer.");
+    if (input.kind === "opening") {
+      const [pendingCoordinator, opening] = await Promise.all([
+        client.readContract({ ...base, functionName: "pendingCoordinator" }),
+        openingPolicy({ block: at })
+      ]);
+      if (!sameAddress(pendingCoordinator, zeroAddress)) throw new Error("New approvals and openings are unavailable while a coordinator change is pending.");
+      requireExpectedPolicy(opening.policy, manifest.expectedPolicy);
+    } else {
+      const [policy, admission] = await Promise.all([
+        client.readContract({ ...base, functionName: "getRafflePolicy", args: [input.id] }),
+        client.readContract({ ...base, functionName: "getRaffleAdmission", args: [input.id] })
+      ]);
+      if (!admission.approvedAtOpening || !sameAddress(admission.approvedBy, manifest.expectedOwner)) throw new Error("Membership purchases are unavailable: this raffle was not opened with approval from the reviewed owner.");
+      requireExpectedPolicy(policy, manifest.expectedPolicy);
+    }
+    await checkedBlock(at);
+  }
   async function quoteMembership({ id, packId, quantity, slippageBps = 100 }: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote> {
     const snapshot = await readRaffle({ id }); boundedNumber(packId, 0, snapshot.packs.length - 1); boundedNumber(quantity, 1, 20); boundedNumber(slippageBps, 0, 1000);
     if (snapshot.raffle.phase !== 1 || snapshot.paused || snapshot.block.timestamp >= snapshot.raffle.salesEnd) throw new Error("Membership sales are not open.");
     requirePublishedTerms(snapshot.policy.termsHash);
+    await assertActionTrust({ kind: "membership", id, block: snapshot.block });
     const pack = snapshot.packs[packId];
     if (!pack.active || pack.maxSupply - pack.sold < quantity) throw new Error("This membership quantity is unavailable.");
     const principal = pack.priceUsdc * BigInt(quantity), fee = buyerFee(principal, snapshot.policy.buyerFeeBps, snapshot.policy.minBuyerFeeUsdc), totalUsdc = principal + fee;
     const basic = { principal, fee, totalUsdc, bonusEntries: BigInt(pack.bonusEntries) * BigInt(quantity), block: snapshot.block };
-    if (!snapshot.ethEnabled) return { ...basic, eth: { kind: "unavailable", reason: "ETH payment is disabled for this deployment." } };
-    try {
-      const requiredEth = await client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "quoteEthForUsdc", args: [totalUsdc], blockNumber: snapshot.block.number });
-      return { ...basic, eth: { kind: "available", requiredEth, maxEth: (requiredEth * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n, slippageBps, deadline: snapshot.block.timestamp + 300n } };
-    } catch { return { ...basic, eth: { kind: "unavailable", reason: "A valid ETH price quote is currently unavailable." } }; }
+    let eth: MembershipQuote["eth"] = { kind: "unavailable", reason: "ETH payment is disabled for this deployment." };
+    if (snapshot.ethEnabled) {
+      try {
+        const requiredEth = await client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "quoteEthForUsdc", args: [totalUsdc], blockNumber: snapshot.block.number });
+        eth = { kind: "available", requiredEth, maxEth: (requiredEth * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n, slippageBps, deadline: snapshot.block.timestamp + 300n };
+      } catch { eth = { kind: "unavailable", reason: "A valid ETH price quote is currently unavailable." }; }
+    }
+    await checkedBlock(snapshot.block);
+    return { ...basic, eth };
   }
-  return { checkedBlock, readOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
+  return { checkedBlock, assertActionTrust, readOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
 }

@@ -1,6 +1,6 @@
 # Workflow service configuration and evidence
 
-The browser uses `configuredBrowserService()`. A public raffle address alone does not authorize writes. `APPROVED_DEPLOYMENTS` in `deployment.ts` is intentionally empty until a separately approved deployment is reviewed. Its manifest binds chain ID, contract address, runtime hash, version 3, deployment block and USDC address. RPC reads and simulations use explicit block numbers; pagination retains the block hash. The historical Sepolia address remains unavailable for writes.
+The browser uses `configuredBrowserService()`. A public raffle address alone does not authorize writes. `APPROVED_DEPLOYMENTS` in `deployment.ts` is intentionally empty until a separately approved deployment is reviewed. Its manifest binds chain ID, contract address, runtime hash, version 3, deployment block, USDC address, expected owner and the complete expected raffle policy. RPC reads and simulations use explicit block numbers; pagination retains the block hash. The historical Sepolia address remains unavailable for writes.
 
 Manifest review must also verify the real coordinator and subscription, LINK/native billing and funding, owners/threshold/authority, treasury, USDC, router/oracle, published terms hash and monitoring/recovery procedures. Runtime attestation is not a Safe or trusted-dependency audit. Existing contracts do not inherit source changes.
 
@@ -10,7 +10,7 @@ Vercel requires `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` for dura
 
 ## Local fixture only
 
-A development server on `localhost`/`127.0.0.1` may use `NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST`, JSON with `chainId:31337`, `address`, `runtimeCodeHash`, `usdc` and decimal-string `deploymentBlock`. `NEXT_PUBLIC_LOCAL_RPC_URL` must be loopback. Both browser and server reject this override outside development. No fixture manifest is committed or approved for production.
+A development server on `localhost`/`127.0.0.1` may use `NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST`, JSON with `chainId:31337`, `version:3`, `address`, `runtimeCodeHash`, `usdc`, decimal-string `deploymentBlock`, `expectedOwner` and `expectedPolicy`. Both parsers require every policy member. `subscriptionId` and `minBuyerFeeUsdc` are decimal strings; `callbackGasLimit`, `requestConfirmations`, `buyerFeeBps` and `sellerFeeBps` are bounded integers; `nativePayment` is a boolean; the remaining members are `coordinator`, `treasury`, `termsHash` and `keyHash`. `NEXT_PUBLIC_LOCAL_RPC_URL` must be loopback. Both browser and server reject this override outside development. No fixture manifest is committed or approved for production.
 
 Run from the repository root:
 
@@ -32,6 +32,12 @@ Call `prepare`, show the returned transaction review, then call `submit` only af
 Authenticated `api.ts` helpers request a scoped wallet signature only when called. Commitment recovery reveals hashes/salt only to the seller. Agreements are assertions, not proof of age or legal clearance. Receipt and private-record APIs verify their wallet and deployment scope. Never put recovered commitment data or authorization signatures in localStorage, analytics or logs.
 
 Artwork reads use bounded on-chain tokenURI data and safe display URLs. Remote JSON is fetched only in the browser with omitted credentials/referrer, no redirects, an 8-second timeout and a 64-KiB limit; no arbitrary metadata URL is fetched by the server. Failed/unsupported metadata returns a null image. No listings, entries or artwork are fabricated.
+
+## Action-specific trust
+
+`assertActionTrust` checks the expected owner and an empty pending owner at a canonical block. Approval and opening additionally require no pending coordinator and exact equality of all current opening-policy fields. Quotes, USDC approvals and purchases require the raffle's frozen policy to match the manifest and admission at opening by the expected owner. Future global policy or coordinator changes do not block purchases in an already approved raffle with the expected frozen policy.
+
+The builder repeats these checks during the existing submission/export rebuild before a wallet transaction or Safe payload is returned. The UI checks trust separately and blocks only new approvals, openings and purchases. Runtime identity, catalog reads, revocation, private commitment recovery, draws, claims, refunds and historical receipt/journal reconciliation remain independent of mutable trust settings. These checks do not reserve future authority, subscription funding or NFT authenticity.
 
 ## Admission and processing fees
 

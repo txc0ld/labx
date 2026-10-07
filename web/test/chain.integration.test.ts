@@ -103,6 +103,7 @@ run("isolated Anvil seller and membership journeys", () => {
     const review = await chain.service.prepare({ action: { kind: "open", id, expectedPolicyHash: policy.hash }, wallet: seller });
     await chain.write(chain.raffle, "setTreasury", [chain.stranger]);
     await expect(chain.service.submit({ prepared: review, wallet: seller })).rejects.toThrow(/approve the current draft|Opening policy changed/);
+    await chain.write(chain.raffle, "setTreasury", [chain.treasury]);
     await openExistingEscrow(id);
   }, 30_000);
   async function openExistingEscrow(id: bigint) { await chain.admit(id); const policy = await chain.service.openingPolicy(); await act({ kind: "open", id, expectedPolicyHash: policy.hash }); }

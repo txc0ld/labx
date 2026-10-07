@@ -195,6 +195,8 @@ run("admission review and external owner execution", () => {
     const safe = await c.deploy("Mocks.sol", "OwnerExecutorFixture");
     await c.write(c.raffle, "transferOwnership", [safe.address]);
     await c.write(safe, "execute", [c.raffle.address, encodeFunctionData({ abi: raffleAbi, functionName: "acceptOwnership" })], c.stranger);
+    c.manifest.expectedOwner = safe.address;
+    c.service = createRaffleService(c.client, c.manifest);
     const id = await draft(); const { intent, wallet } = await exported(id, safe.address);
     expect(intent.from).toBe(safe.address); expect(intent.value).toBe(0n);
     const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);

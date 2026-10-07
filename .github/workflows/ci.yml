@@ -90,6 +90,7 @@ jobs:
       - run: forge build --root ../contracts
       - run: |
           npm exec vitest -- run \
+            test/activation-trust.browser.test.ts \
             test/independent-browser-journeys.test.ts \
             test/independent-browser-recovery.test.ts \
             test/independent-browser-catalog.test.ts \
