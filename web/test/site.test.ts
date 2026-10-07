@@ -191,6 +191,10 @@ describe("chrome links", () => {
         expect(pageExists("app/piece/[id]/page.tsx")).toBe(true);
         continue;
       }
+      if (pathname === "/seller/${snapshot.id.toString()}") {
+        expect(pageExists("app/seller/[id]/page.tsx")).toBe(true);
+        continue;
+      }
       if (pathname.startsWith("/fairness")) {
         expect(pageExists("app/fairness/page.tsx")).toBe(true);
         continue;
