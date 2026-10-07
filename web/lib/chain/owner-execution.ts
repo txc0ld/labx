@@ -1,8 +1,8 @@
-import { decodeEventLog, encodeFunctionData, type Hex, type PublicClient } from "viem";
+import { decodeEventLog, encodeFunctionData, type Address, type Hex, type PublicClient } from "viem";
 import { raffleAbi } from "./abi";
 import type { createReader } from "./reader";
 import type { DeploymentManifest, OwnerExecutionConfirmation, OwnerExecutionIntent } from "./types";
-import { hash, positiveId, sameAddress } from "./validation";
+import { address, hash, positiveId, sameAddress } from "./validation";
 
 // This confirms chain execution, never a Safe proposal or an EOA journal entry.
 export function ownerExecutionConfirmer(client: PublicClient, manifest: DeploymentManifest, reader: ReturnType<typeof createReader>) {
@@ -10,7 +10,7 @@ export function ownerExecutionConfirmer(client: PublicClient, manifest: Deployme
     intent: OwnerExecutionIntent; hash: Hex; timeoutMs?: number;
   }): Promise<OwnerExecutionConfirmation> {
     hash(executionHash); positiveId(intent.action.id); hash(intent.action.expectedReviewHash);
-    if (intent.chainId !== manifest.chainId || !sameAddress(intent.to, manifest.address) || intent.value !== 0n
+    if (intent.runtimeCodeHash !== manifest.runtimeCodeHash || intent.chainId !== manifest.chainId || !sameAddress(intent.to, manifest.address) || intent.value !== 0n
       || (intent.action.kind !== "approveRaffle" && intent.action.kind !== "revokeRaffleApproval")) throw new Error("Owner execution intent does not match this deployment.");
     const expectedData = encodeFunctionData({ abi: raffleAbi, functionName: intent.action.kind, args: [intent.action.id, intent.action.expectedReviewHash] });
     if (intent.data !== expectedData) throw new Error("Owner execution calldata does not match its review.");
@@ -53,4 +53,41 @@ export function ownerExecutionConfirmer(client: PublicClient, manifest: Deployme
     await reader.checkedBlock(review.snapshot.block);
     return { kind: "executed", hash: executionHash, blockNumber: receipt.blockNumber, state, review };
   };
+}
+
+export function serializeOwnerExecutionIntent(intent: OwnerExecutionIntent): string {
+  return JSON.stringify(intent, (_key, value: unknown) => typeof value === "bigint" ? value.toString() : value);
+}
+
+export function parseOwnerExecutionIntent(raw: string, manifest: DeploymentManifest, owner: Address): OwnerExecutionIntent {
+  if (typeof raw !== "string" || raw.length > 8192) throw new Error("Invalid stored owner review.");
+  const object = (value: unknown): Record<string, unknown> => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid stored owner review.");
+    return Object.fromEntries(Object.entries(value));
+  };
+  const integer = (value: unknown): bigint => {
+    if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,77})$/.test(value)) throw new Error("Invalid stored review integer.");
+    const parsed = BigInt(value);
+    if (parsed >= 2n ** 256n) throw new Error("Stored review integer is too large.");
+    return parsed;
+  };
+  const root = object(JSON.parse(raw)), action = object(root.action), block = object(root.reviewBlock);
+  const id = integer(action.id); positiveId(id);
+  const expectedReviewHash = hash(action.expectedReviewHash);
+  let parsedAction: OwnerExecutionIntent["action"];
+  if (action.kind === "approveRaffle") {
+    const attestations = object(action.attestations);
+    if (attestations.canonicalProvenance !== true || attestations.transferRestrictions !== true || attestations.drawFunding !== true) throw new Error("Stored review attestations are incomplete.");
+    parsedAction = { kind: action.kind, id, expectedReviewHash, attestations: { canonicalProvenance: true, transferRestrictions: true, drawFunding: true } };
+  } else if (action.kind === "revokeRaffleApproval") parsedAction = { kind: action.kind, id, expectedReviewHash };
+  else throw new Error("Unsupported stored owner action.");
+  const from = address(root.from), to = address(root.to), runtimeCodeHash = hash(root.runtimeCodeHash);
+  const data = encodeFunctionData({ abi: raffleAbi, functionName: parsedAction.kind, args: [id, expectedReviewHash] });
+  if (root.chainId !== manifest.chainId || !sameAddress(from, owner) || !sameAddress(to, manifest.address)
+    || runtimeCodeHash !== manifest.runtimeCodeHash || root.value !== "0" || root.data !== data) throw new Error("Stored owner review belongs to a different account or deployment.");
+  const number = integer(block.number);
+  if (number < manifest.deploymentBlock) throw new Error("Stored review predates the deployment.");
+  return { action: parsedAction, chainId: manifest.chainId, runtimeCodeHash, from, to, value: 0n, data,
+    reviewBlock: { number, hash: hash(block.hash), timestamp: integer(block.timestamp) },
+    ownerGeneration: integer(root.ownerGeneration), openingPolicyGeneration: integer(root.openingPolicyGeneration), reviewRevision: integer(root.reviewRevision) };
 }

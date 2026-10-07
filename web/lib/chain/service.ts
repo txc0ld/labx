@@ -39,7 +39,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const review = await reader.readAdmission({ id: entry.action.id, block: fresh.block });
     await wallet.assertCurrent(entry.session);
     entry.used = true;
-    return { action: structuredClone(entry.action), chainId: manifest.chainId, from: entry.session.account, to: manifest.address,
+    return { action: structuredClone(entry.action), runtimeCodeHash: manifest.runtimeCodeHash, chainId: manifest.chainId, from: entry.session.account, to: manifest.address,
       value: 0n, data: fresh.data, reviewBlock: fresh.block, ownerGeneration: review.ownerGeneration,
       openingPolicyGeneration: review.openingPolicyGeneration, reviewRevision: review.snapshot.admission.record.reviewRevision };
   }

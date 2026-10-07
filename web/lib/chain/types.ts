@@ -19,7 +19,7 @@ export type AdmissionReview = {
   custody: { kind: "held" | "not-held"; owner: Address } | { kind: "unknown" };
 };
 export type OwnerExecutionIntent = {
-  action: OwnerAction; chainId: number; from: Address; to: Address; value: 0n; data: Hex;
+  action: OwnerAction; runtimeCodeHash: Hex; chainId: number; from: Address; to: Address; value: 0n; data: Hex;
   reviewBlock: BlockRef; ownerGeneration: bigint; openingPolicyGeneration: bigint; reviewRevision: bigint;
 };
 export type OwnerExecutionConfirmation =
