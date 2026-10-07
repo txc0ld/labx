@@ -25,3 +25,7 @@ Document the shortest commands for unit, chain, browser, typecheck, production b
 - No secrets, generated caches or transient browser artifacts enter the committed source. No on-chain, publication or infrastructure actions occur in this slice.
 
 The source mapping and implementation are pending. This document is a bounded work contract, not evidence that cleanup has happened.
+
+## Tooling decision
+
+Root pinned `playwright` 1.63.0 as a development dependency after checking the npm registry and official [library documentation](https://playwright.dev/docs/api/class-playwright) and [browser installation documentation](https://playwright.dev/docs/browsers). This matches the installed Chromium revision1243 and Firefox1543; the former fixture used Playwright1.50.1 against a different browser revision. Installation changed only the two Playwright package entries and their lock records. Browser binaries remain outside version control. The implementation owner should import this package normally and honor `CHROMIUM_EXECUTABLE` only as an optional explicit override.
