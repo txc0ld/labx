@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { decodeEventLog, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
+import { decodeEventLog, encodeFunctionData, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import type { Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
 import { transactionIntent } from "../lib/chain/pending-journal";
@@ -17,6 +17,13 @@ run("independent transaction outcome ownership", () => {
   let service: RaffleService;
   let seller: WalletSessionPort;
   let fixture: Awaited<ReturnType<typeof browserChain>>;
+  const getRaffleSelector = encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [1n] }).slice(0, 10).toLowerCase();
+
+  function isRaffleSnapshotRead(request: unknown) {
+    if (typeof request !== "object" || request === null || !("method" in request) || request.method !== "eth_call" || !("params" in request) || !Array.isArray(request.params)) return false;
+    const call = request.params[0];
+    return typeof call === "object" && call !== null && "data" in call && typeof call.data === "string" && call.data.toLowerCase().startsWith(getRaffleSelector);
+  }
 
   async function act(action: WorkflowAction, wallet: WalletSessionPort) {
     const prepared = await service.prepare({ action, wallet });
@@ -145,13 +152,29 @@ run("independent transaction outcome ownership", () => {
     const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
     await recovery.waitFor({ state: "visible", timeout: 10_000 });
     expect(await recovery.getByLabel("Transaction hash").inputValue()).toBe(approval.hash);
-    await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
-    await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key), { timeout: 10_000 }).toBeNull();
+    const callbackReads: string[] = [];
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      for (const request of Array.isArray(body) ? body : [body]) {
+        if (isRaffleSnapshotRead(request)) callbackReads.push(JSON.stringify(request));
+      }
+      await route.continue();
+    });
+    try {
+      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key), { timeout: 10_000 }).toBeNull();
 
-    expect(await purchased(1n, chain.buyer)).toHaveLength(0);
-    const buyerText = await fixture.page.locator(".buyer-flow").innerText();
-    expect(buyerText).not.toMatch(/purchase confirmed/i);
-    await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await purchased(1n, chain.buyer)).toHaveLength(0);
+      const buyerText = await fixture.page.locator(".buyer-flow").innerText();
+      expect(buyerText).not.toMatch(/purchase confirmed/i);
+      await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).waitFor({ state: "visible", timeout: 10_000 });
+      expect({
+        falseCurrentActionConfirmation: await fixture.page.locator(".buyer-flow .transaction-state").getByText("Confirmed", { exact: true }).count(),
+        confirmationCallbackReads: callbackReads.length
+      }).toEqual({ falseCurrentActionConfirmation: 0, confirmationCallbackReads: 0 });
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+    }
   }, 60_000);
 
   it("keeps the purchase receipt visible when refresh replaces controls during confirmation", async () => {
@@ -603,6 +626,213 @@ run("independent transaction outcome ownership", () => {
     } finally {
       rpc.mockRestore();
       await remote.close();
+    }
+  }, 90_000);
+
+  it("does not treat an older same-intent nonce as the current flow's recovered success", async () => {
+    const buyer = chain.wallet(chain.buyer).session;
+    await buyer.connect();
+    const older = await act({ kind: "approveUsdc", id: 1n, packId: 0, quantity: 1 }, buyer);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+    await openPiece(1n, chain.buyer);
+    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    await approve.waitFor({ state: "visible", timeout: 10_000 });
+    await approve.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible", timeout: 10_000 });
+
+    let failFreshLookup = true;
+    const callbackReads: string[] = [];
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const payload: unknown = route.request().postDataJSON();
+      if (typeof payload === "object" && payload !== null && "method" in payload && payload.method === "eth_getTransactionByHash" && failFreshLookup) {
+        failFreshLookup = false;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ jsonrpc: "2.0", id: "id" in payload ? payload.id : null, error: { code: -32602, message: "The test RPC rejected this fresh lookup." } })
+        });
+        return;
+      }
+      for (const request of Array.isArray(payload) ? payload : [payload]) {
+        if (isRaffleSnapshotRead(request)) callbackReads.push(JSON.stringify(request));
+      }
+      await route.continue();
+    });
+    try {
+      await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+      await recovery.waitFor({ state: "visible", timeout: 15_000 });
+      const freshHash = await recovery.getByLabel("Transaction hash").inputValue();
+      expect(freshHash).toMatch(/^0x[0-9a-f]{64}$/i);
+      const fresh = await chain.client.getTransaction({ hash: freshHash as Hex });
+      const historical = await chain.client.getTransaction({ hash: older.hash });
+      expect(fresh.nonce).not.toBe(historical.nonce);
+
+      const key = journalKey(chain.buyer);
+      await fixture.page.evaluate((storageKey: string) => localStorage.removeItem(storageKey), key);
+      expect(await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key)).toBeNull();
+      callbackReads.length = 0;
+      await recovery.getByLabel("Transaction hash").fill(older.hash);
+      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      const historicalState = fixture.page.locator(".buyer-flow .transaction-state", { hasText: older.hash });
+      await historicalState.waitFor({ state: "visible", timeout: 15_000 });
+      expect({
+        neutralReceipts: await historicalState.getByText("Recovered transaction receipt", { exact: true }).count(),
+        falseCurrentActionConfirmation: await historicalState.getByText("Confirmed", { exact: true }).count(),
+        confirmationCallbackReads: callbackReads.length
+      }).toEqual({ neutralReceipts: 1, falseCurrentActionConfirmation: 0, confirmationCallbackReads: 0 });
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+  }, 90_000);
+
+  it("accepts the current flow's canonically verified same-nonce fee replacement", async () => {
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.treasury);
+    await openPiece(1n, chain.treasury);
+    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    await approve.waitFor({ state: "visible", timeout: 10_000 });
+    await approve.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible", timeout: 10_000 });
+
+    let automine = false;
+    let failFreshLookup = true;
+    const callbackReads: string[] = [];
+    await chain.rpc("evm_setAutomine", [false]);
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const payload: unknown = route.request().postDataJSON();
+      if (typeof payload === "object" && payload !== null && "method" in payload && payload.method === "eth_getTransactionByHash" && failFreshLookup) {
+        failFreshLookup = false;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ jsonrpc: "2.0", id: "id" in payload ? payload.id : null, error: { code: -32602, message: "The test RPC rejected this fresh lookup." } })
+        });
+        return;
+      }
+      for (const request of Array.isArray(payload) ? payload : [payload]) {
+        if (isRaffleSnapshotRead(request)) callbackReads.push(JSON.stringify(request));
+      }
+      await route.continue();
+    });
+    try {
+      await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+      await recovery.waitFor({ state: "visible", timeout: 15_000 });
+      const originalHash = await recovery.getByLabel("Transaction hash").inputValue() as Hex;
+      const original = await chain.client.getTransaction({ hash: originalHash });
+      if (!original.to) throw new Error("The owned approval did not have a transaction target.");
+      const maxFeePerGas = (original.maxFeePerGas ?? original.gasPrice ?? 1n) * 2n + 1n;
+      const maxPriorityFeePerGas = (original.maxPriorityFeePerGas ?? 1n) * 2n + 1n;
+      const replacement = await chain.rpc("eth_sendTransaction", [{
+        from: chain.treasury,
+        to: original.to,
+        value: toHex(original.value),
+        data: original.input,
+        nonce: toHex(original.nonce),
+        gas: toHex(original.gas),
+        maxFeePerGas: toHex(maxFeePerGas),
+        maxPriorityFeePerGas: toHex(maxPriorityFeePerGas)
+      }]);
+      expect(replacement).toMatch(/^0x[0-9a-f]{64}$/i);
+      const replacementHash = replacement as Hex;
+      expect(replacementHash).not.toBe(originalHash);
+      await chain.rpc("evm_setAutomine", [true]);
+      automine = true;
+      await chain.mine();
+      await chain.mine();
+      const canonical = await chain.client.getTransaction({ hash: replacementHash });
+      expect(canonical.nonce).toBe(original.nonce);
+      expect({ to: canonical.to, data: canonical.input, value: canonical.value }).toEqual({ to: original.to, data: original.input, value: original.value });
+
+      callbackReads.length = 0;
+      await recovery.getByLabel("Transaction hash").fill(replacementHash);
+      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      await expect.poll(() => callbackReads.length, { timeout: 15_000 }).toBeGreaterThan(0);
+      await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ state: "visible", timeout: 15_000 });
+      expect(await fixture.page.getByText("Recovered transaction receipt", { exact: true }).count()).toBe(0);
+      await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.treasury)), { timeout: 10_000 }).toBeNull();
+    } finally {
+      if (!automine) await chain.rpc("evm_setAutomine", [true]);
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+  }, 90_000);
+
+  it("renders a cold self-cancellation neutrally after the current flow's journal was cleared", async () => {
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.operator);
+    await openPiece(1n, chain.operator);
+    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    await approve.waitFor({ state: "visible", timeout: 10_000 });
+    await approve.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible", timeout: 10_000 });
+
+    let automine = false;
+    let failFreshLookup = true;
+    const callbackReads: string[] = [];
+    await chain.rpc("evm_setAutomine", [false]);
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const payload: unknown = route.request().postDataJSON();
+      if (typeof payload === "object" && payload !== null && "method" in payload && payload.method === "eth_getTransactionByHash" && failFreshLookup) {
+        failFreshLookup = false;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ jsonrpc: "2.0", id: "id" in payload ? payload.id : null, error: { code: -32602, message: "The test RPC rejected this fresh lookup." } })
+        });
+        return;
+      }
+      for (const request of Array.isArray(payload) ? payload : [payload]) {
+        if (isRaffleSnapshotRead(request)) callbackReads.push(JSON.stringify(request));
+      }
+      await route.continue();
+    });
+    try {
+      await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+      await recovery.waitFor({ state: "visible", timeout: 15_000 });
+      const originalHash = await recovery.getByLabel("Transaction hash").inputValue() as Hex;
+      const original = await chain.client.getTransaction({ hash: originalHash });
+      const maxFeePerGas = (original.maxFeePerGas ?? original.gasPrice ?? 1n) * 2n + 1n;
+      const maxPriorityFeePerGas = (original.maxPriorityFeePerGas ?? 1n) * 2n + 1n;
+      const cancellation = await chain.rpc("eth_sendTransaction", [{
+        from: chain.operator,
+        to: chain.operator,
+        value: "0x0",
+        data: "0x",
+        nonce: toHex(original.nonce),
+        gas: toHex(21_000),
+        maxFeePerGas: toHex(maxFeePerGas),
+        maxPriorityFeePerGas: toHex(maxPriorityFeePerGas)
+      }]);
+      expect(cancellation).toMatch(/^0x[0-9a-f]{64}$/i);
+      const cancellationHash = cancellation as Hex;
+      await chain.rpc("evm_setAutomine", [true]);
+      automine = true;
+      await chain.mine();
+      await chain.mine();
+      const canonical = await chain.client.getTransaction({ hash: cancellationHash });
+      expect(canonical.nonce).toBe(original.nonce);
+      expect({ from: canonical.from.toLowerCase(), to: canonical.to?.toLowerCase(), data: canonical.input })
+        .toEqual({ from: chain.operator.toLowerCase(), to: chain.operator.toLowerCase(), data: "0x" });
+
+      const key = journalKey(chain.operator);
+      await fixture.page.evaluate((storageKey: string) => localStorage.removeItem(storageKey), key);
+      callbackReads.length = 0;
+      await recovery.getByLabel("Transaction hash").fill(cancellationHash);
+      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      const cancellationState = fixture.page.locator(".buyer-flow .transaction-state", { hasText: cancellationHash });
+      await cancellationState.waitFor({ state: "visible", timeout: 15_000 });
+      expect({
+        neutralReceipts: await cancellationState.getByText("Recovered transaction receipt", { exact: true }).count(),
+        falseCurrentActionConfirmation: await cancellationState.getByText("Confirmed", { exact: true }).count(),
+        confirmationCallbackReads: callbackReads.length,
+        journal: await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key)
+      }).toEqual({ neutralReceipts: 1, falseCurrentActionConfirmation: 0, confirmationCallbackReads: 0, journal: null });
+    } finally {
+      if (!automine) await chain.rpc("evm_setAutomine", [true]);
+      await fixture.page.unroute(`${chain.url}/`);
     }
   }, 90_000);
 });
