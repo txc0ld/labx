@@ -7,9 +7,9 @@ const journeys = [
     action: "Compare memberships",
     href: "/membership",
     steps: [
-      { title: "Choose", copy: "Check the artwork, membership price, lab fee, supply, bonus entries and closing time." },
+      { title: "Choose", copy: "Check the artwork, membership price, processing fee, supply, bonus entries and closing time." },
       { title: "Confirm", copy: "Read the rules, approve the exact USDC amount and wait for the purchase receipt to confirm." },
-      { title: "Follow", copy: "Track the draw. A winner claims the piece; a cancelled raffle enables each buyer’s refund." }
+      { title: "Follow", copy: "Track the draw. A winner claims the piece; a cancelled raffle returns pack principal. Processing fees are retained." }
     ]
   },
   {
@@ -19,7 +19,7 @@ const journeys = [
     href: "/seller",
     steps: [
       { title: "Prepare", copy: "Validate the NFT, configure the memberships and review the commitment before creating a draft." },
-      { title: "Open", copy: "Approve and escrow the NFT, verify custody, then publish fixed pricing, supply and closing time." },
+      { title: "Open", copy: "Escrow the NFT and get LABx approval for the prize and draw funding. Then open your reviewed raffle." },
       { title: "Complete", copy: "Close on schedule, snapshot entries, request randomness, reveal the commitment and settle the result." }
     ]
   }

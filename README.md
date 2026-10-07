@@ -6,7 +6,7 @@ Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166. The publ
 
 ## Current status
 
-The prepared v3 source uses percentage fees and includes the seller portal. Acceptance work is recorded in [the current task contract](docs/build/seller-portal-fees-20261007.md). The production approval registry remains empty; supplying an address does not enable transactions. A passing source test does not establish live functionality.
+The prepared v3 release includes the seller portal, raffle admission review and a minimum processing fee. Acceptance work is recorded in [the current task contract](docs/build/seller-portal-fees-20261007.md). The production approval registry remains empty; supplying an address does not enable transactions. A passing source test does not establish live functionality.
 
 The v2 Sepolia contract at `0xef27306567a5ADA354fe9403008D041d0b468213` was verified on 7 October 2026 at block 11861349 with the Safe as owner and treasury, native-ETH VRF configured, and no raffles. That was a point-in-time deployment check, not a completed live raffle test. Its fixed 5-USDC fee cannot be changed by updating this website. Version 3 requires a separately approved deployment and migration. The older contract at `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` is also excluded from current transactions.
 
@@ -39,11 +39,11 @@ Vercel's project root is `web`. A catalog without an approved deployment must sh
 
 ## Contract policy
 
-Sellers can edit a draft. Opening fixes the prize, pack economics, closing time, terms, treasury and randomness configuration for that raffle. Sales cannot close early. Each purchase adds 2% of its membership principal, rounded down once in USDC atomic units for the transaction. Settlement deducts a separate 2% of total membership principal from seller proceeds. Cancellation refunds the actual principal and buyer fee paid, with no seller commission. Bonus entries expire after 365 days.
+Sellers can edit a draft. LABx must approve its exact NFT and use of draw funding before it can open. Draft edits, policy changes and ownership changes require a fresh approval. Opening fixes the prize, pack economics, closing time, terms, treasury and randomness configuration for that raffle. Sales cannot close early. Each purchase call adds the greater of 2.50 USDC or 2% of its membership principal. The percentage rounds down once in USDC atomic units after multiplying price by quantity. Separate calls each pay their own minimum. Settlement deducts a separate 2% of total membership principal from seller proceeds. Cancellation returns the pack principal only. The processing fee is retained and no seller commission applies. Treasury fees can be claimed only after settlement or cancellation. Bonus entries expire after 365 days.
 
 Anyone can enable refunds if a draw has not started seven days after sales end, or if no randomness is accepted within seven days of the request. Results at or after the callback cutoff are ignored. There is no reroll. Anyone can settle a recorded winner after the seller reveals or the seven-day reveal grace expires. Prize, seller proceeds, treasury fees and buyer refunds have separate claim paths.
 
-Pausing blocks new admissions and opening, while recovery and existing claims remain available. Operator discretion, external dependencies and chain conditions remain relevant; this is not a zero-risk or formal-audit claim.
+Pausing blocks new purchases and opening, while recovery and existing claims remain available. Operator discretion, external dependencies and chain conditions remain relevant; this is not a zero-risk or formal-audit claim.
 
 ## Configuration
 

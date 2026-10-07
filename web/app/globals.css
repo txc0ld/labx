@@ -928,6 +928,7 @@ fieldset.agreements label { padding:.55rem 0; border-bottom:1px solid var(--line
 .guide-facts dt { font-size:.7rem; color:var(--charcoal); }
 .guide-facts dd { margin:.25rem 0 0; font-size:1.8rem; font-weight:650; line-height:1.2; white-space:nowrap; }
 .guide-facts small { font-size:.75rem; font-weight:500; }
+.fee-minimum { display:block; margin-block-start:.35rem; font-size:.8rem; font-weight:500; line-height:1.4; white-space:normal; }
 .guide-details { border-top:1px solid var(--line); }
 .guide-details summary { display:flex; align-items:center; justify-content:space-between; gap:1rem; min-height:48px; padding-block:.6rem; cursor:pointer; list-style:none; font-size:.85rem; font-weight:600; }
 .guide-details summary::-webkit-details-marker { display:none; }

@@ -124,11 +124,11 @@ describe("required marketing routes", () => {
     expect(terms).toMatch(/buyer.*actual membership principal and buyer fees/i);
   });
 
-  it("describes the lab and the Sepolia bench on About", () => {
+  it("describes the operator, NFT review and Sepolia scope on About", () => {
     const text = read("app/about/page.tsx");
-    expect(text).toMatch(/matte ceramic|enamel|fluoro chrome|NFT CONTAINER|capsule/i);
+    expect(text).toMatch(/collection contract, exact token, escrow and transfer restrictions/i);
     expect(text).toMatch(/membership pack/i);
-    expect(text).toMatch(/Mainnet/);
+    expect(text).toMatch(/Ethereum mainnet is blocked/i);
     expect(text).not.toMatch(/TODO|FIXME|lorem ipsum|coming soon|TBD/i);
   });
 
@@ -440,10 +440,12 @@ describe("responsive chrome and legal surfaces", () => {
     expect(guide).toMatch(/enables each step only when an approved deployment/i);
     expect(guide).toMatch(/BUYER_FEE_BPS/);
     expect(guide).toMatch(/SELLER_FEE_BPS/);
-    expect(guide).toMatch(/Historical contracts keep their original fees/);
+    expect(guide).toMatch(/Historical contracts keep their original rules/);
+    expect(guide).toMatch(/processing fee is not refunded/i);
+    expect(guide).toMatch(/greater of 2.50 USDC/i);
     expect(guide).toMatch(/validates quantity and remaining supply/i);
     expect(guide).toMatch(/12-month bonus-entry expiry/);
-    expect(guide).toMatch(/verified contract workflow/i);
+    expect(guide).toMatch(/Raffle workflow/i);
     for (const href of ["/", "/fairness", "/rules", "/legal", "/profile", "/seller"]) {
       expect(guide).toContain(`href="${href}`);
     }

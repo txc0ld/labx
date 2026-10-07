@@ -18,18 +18,18 @@ export default function MembershipPage() {
         <p className="lede">Choose a pack. Get your membership and its bonus entries.</p>
       </header>
       <div className="membership-facts">
-        <div className="pearl pad"><span>Purchase fee</span><strong>+{BUYER_FEE_BPS / 100}%</strong></div>
-        <div className="pearl pad"><span>Quantity per transaction</span><strong>1–20 packs</strong></div>
+        <div className="pearl pad"><span>Processing fee per purchase</span><strong>{BUYER_FEE_BPS / 100}%<span className="fee-minimum">2.50 USDC minimum</span></strong></div>
+        <div className="pearl pad"><span>Quantity per purchase</span><strong>1–20 packs</strong></div>
         <div className="pearl pad"><span>Bonus-entry expiry</span><strong>12 months</strong></div>
       </div>
       <section className="well pad stack" aria-labelledby="tiers-title">
         <h2 id="tiers-title">Pack tiers</h2>
         <ol className="tier-list">{PACKS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}><span>{pack}</span><span className="tier-orbs" aria-hidden="true" /></li>)}</ol>
-        <p className="muted">These are LABx’s visual tiers. A verified raffle can publish up to eight custom membership names, prices, bonus entries and supply limits.</p>
+        <p className="muted">These are LABx’s visual tiers. A reviewed raffle can publish up to eight custom membership names, prices, bonus entries and supply limits.</p>
       </section>
       <article className="notice warning stack">
-        <strong>Check the verified raffle before purchasing.</strong>
-        <span>The percentage fee applies to the new contract version. Membership controls appear only for an open raffle on an approved deployment. This comparison does not reserve a pack or place an order.</span>
+        <strong>Review your total before purchasing.</strong>
+        <span>The new contract uses the greater of 2.50 USDC or 2% of your pack subtotal. Processing fees are not refunded if a raffle is cancelled. Pack prices and purchase controls appear on open raffles; this comparison does not place an order.</span>
       </article>
       <div className="btn-row">
         <Link className="btn" href="/">Explore pieces</Link>

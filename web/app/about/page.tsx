@@ -14,7 +14,7 @@ export default function AboutPage() {
     <section className="section stack page-frame">
       <h1 className="page-title">About LABx</h1>
       <p className="lede legal-copy">
-        LABx is a membership bench for one escrowed piece at a time. Bonus entries come with the pack. After sales close, an entry snapshot freezes, then Chainlink VRF v2.5 selects the wallet.
+        Buy a membership for a piece you love. Each pack includes bonus entries in its raffle. The NFT stays in escrow, and Chainlink VRF selects a wallet after sales close.
       </p>
       <LegalNav />
       <div className="piece-grid">
@@ -26,22 +26,23 @@ export default function AboutPage() {
         <article className="pearl pad stack">
           <h2>The bench</h2>
           <p>What is sold is a membership pack for a single piece. The ladder is Entry through Platinum. Each pack publishes its USDC price, bonus-entry count and remaining supply.</p>
-          <p>The new contract version adds a {BUYER_FEE_BPS / 100}% purchase fee and deducts a separate {SELLER_FEE_BPS / 100}% seller fee at settlement. Cancelled raffles return the membership price and purchase fee to buyers. Historical contracts keep their original fees.</p>
-          <p>Public pages do not publish a private commitment. They show the outer hash, the escrow lamp, and the draw phase.</p>
+          <p>The new contract adds a processing fee of 2.50 USDC or {BUYER_FEE_BPS / 100}% of the pack subtotal, whichever is higher. It deducts a separate {SELLER_FEE_BPS / 100}% from seller proceeds at settlement. Cancellation returns the pack price only; the processing fee is retained. Historical contracts keep their original rules.</p>
+          <p>Public pages do not publish a private commitment. They show the commitment hash, escrow status and draw phase.</p>
         </article>
         <article className="terminal pad stack">
           <h2>Network</h2>
-          <p>This deployment is {OPERATOR.network} only, chain id {OPERATOR.chainId}. Sepolia assets have no cash value. Mainnet is disabled in the contract constructor, the deploy script, and the wallet gate.</p>
+          <p>LABx is being tested on {OPERATOR.network}, chain ID {OPERATOR.chainId}. The website only enables approved test deployments. Ethereum mainnet is blocked by the contract constructor.</p>
         </article>
         <article className="well pad stack">
-          <h2>Materials</h2>
-          <p>Matte ceramic and enamel panels. Fluoro chrome laboratory tubes with fittings. Black SVG marks. Capsule NFT CONTAINER well.</p>
+          <h2>Know your piece</h2>
+          <p>LABx reviews the collection contract, exact token, escrow and transfer restrictions before sales open. Check the NFT details yourself too. A familiar name or image does not establish authenticity.</p>
         </article>
       </div>
       <article className="pearl pad stack legal-copy">
         <h2>How a piece moves</h2>
         <ol className="walkthrough-list">
           <li><strong>Prepare.</strong> The seller reviews the membership options, saves the commitment and escrows the NFT.</li>
+          <li><strong>Review.</strong> LABx checks the NFT and draw funding. Draft changes require another review.</li>
           <li><strong>Open.</strong> Buyers choose a membership. Its published bonus entries join that piece only.</li>
           <li><strong>Draw.</strong> Sales close, eligible entries freeze, and Chainlink VRF supplies randomness.</li>
           <li><strong>Finish.</strong> The winner, seller and treasury claim their respective assets. Cancellation enables buyer refunds and NFT recovery.</li>
