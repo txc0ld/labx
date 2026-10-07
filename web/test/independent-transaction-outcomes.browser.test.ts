@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { decodeEventLog, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
@@ -538,6 +538,71 @@ run("independent transaction outcome ownership", () => {
     } finally {
       if (!automine) await chain.rpc("evm_setAutomine", [true]);
       await fixture.page.unroute(`${chain.url}/`).catch(() => {});
+    }
+  }, 90_000);
+
+  it("keeps a local successful purchase receipt and fresh-consent barrier after another tab acknowledges it", async () => {
+    await fixture.page.setViewportSize({ width: 1440, height: 900 });
+    const buyer = chain.wallet(chain.buyer).session;
+    await buyer.connect();
+    await act({ kind: "approveUsdc", id: 1n, packId: 0, quantity: 1 }, buyer);
+    await openPiece(1n, chain.buyer);
+    const purchase = await reachPurchase();
+    await purchase.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible", timeout: 10_000 });
+    await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+    const submitted = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction submitted" });
+    await submitted.waitFor({ state: "visible", timeout: 10_000 });
+    const transactionHash = (await submitted.innerText()).match(/0x[0-9a-f]{64}/i)?.[0];
+    if (!transactionHash) throw new Error("The submitted purchase did not render its transaction hash.");
+    await chain.mine();
+    await chain.mine();
+    const localReceipt = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Purchase confirmed" });
+    await localReceipt.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await localReceipt.getByText(transactionHash, { exact: true }).innerText()).toBe(transactionHash);
+    await expect.poll(() => purchased(1n, chain.buyer), { timeout: 10_000 }).toHaveLength(1);
+
+    const remote = await fixture.context.newPage();
+    const sensitiveMethods: string[] = [];
+    const request = chain.rpc.bind(chain);
+    const rpc = vi.spyOn(chain, "rpc").mockImplementation(async (method, params) => {
+      if (method === "eth_sendTransaction" || method === "personal_sign" || method.startsWith("eth_sign")) sensitiveMethods.push(method);
+      return request(method, params);
+    });
+    try {
+      const response = await remote.goto(`${fixture.baseUrl}/piece/1`, { waitUntil: "domcontentloaded" });
+      expect(response?.status()).toBe(200);
+      const remoteAccounts = await remote.evaluate(() =>
+        (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum
+          .request({ method: "eth_accounts" }));
+      if (!Array.isArray(remoteAccounts) || !remoteAccounts.every(account => typeof account === "string")) {
+        throw new Error("The remote provider did not return a string account list.");
+      }
+      expect(remoteAccounts.map(account => account.toLowerCase())).toEqual([chain.buyer.toLowerCase()]);
+      const remoteReceipt = remote.locator(".buyer-flow .transaction-state", { hasText: "Purchase confirmed" });
+      await remoteReceipt.getByText(transactionHash, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+      await remote.getByRole("button", { name: "Refresh state", exact: true }).click();
+      const remoteAgain = remote.getByRole("button", { name: "Buy again", exact: true });
+      await expect.poll(() => remoteAgain.isEnabled(), { timeout: 15_000 }).toBe(true);
+      await remoteAgain.click();
+      await expect.poll(() => remote.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+
+      await localReceipt.getByText(transactionHash, { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      expect(sensitiveMethods).toEqual([]);
+      await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+      const localAgain = fixture.page.getByRole("button", { name: "Buy again", exact: true });
+      await expect.poll(() => localAgain.isEnabled(), { timeout: 15_000 }).toBe(true);
+      await localAgain.click();
+      await expect.poll(() => fixture.page.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+      await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).waitFor({ state: "visible", timeout: 10_000 });
+      expect(await fixture.page.getByRole("spinbutton", { name: "Quantity" }).inputValue()).toBe("1");
+      for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+      expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+      expect(sensitiveMethods).toEqual([]);
+    } finally {
+      rpc.mockRestore();
+      await remote.close();
     }
   }, 90_000);
 });

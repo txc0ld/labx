@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createPublicClient, custom, keccak256, toBytes, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
-import { memoryPendingJournal } from "../lib/chain/pending-journal";
+import { memoryPendingJournal, transactionIntent } from "../lib/chain/pending-journal";
 import { createRaffleService } from "../lib/chain/service";
 import { createTransactionOutcomes, transactionMeaning, type OutcomeStorage, type TransactionOutcome } from "../lib/chain/transaction-outcomes";
 import { hash } from "../lib/chain/validation";
@@ -339,6 +339,38 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
       if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
       else Reflect.deleteProperty(globalThis, "window");
     }
+  }, 15_000);
+
+  it("does not apply a captured buyer lineage token to another account's canonical same-nonce receipt", async () => {
+    const journal = memoryPendingJournal();
+    const service = createRaffleService(chain.client, chain.manifest, journal);
+    const buyerNonce = await chain.client.getTransactionCount({ address: chain.buyer });
+    const otherNonce = await chain.client.getTransactionCount({ address: chain.treasury });
+    expect(otherNonce).toBe(buyerNonce);
+    const buyerHash = await send(chain.buyer, chain.buyer, "0x", buyerNonce, "0x77359400");
+    const otherHash = await send(chain.treasury, chain.treasury, "0x", otherNonce, "0x77359400");
+    await chain.mine();
+    await chain.mine();
+    const buyerTransaction = await chain.client.getTransaction({ hash: buyerHash });
+    const syntheticPrior = keccak256(toBytes("independent-other-account-lineage"));
+    journal.write(chain.buyer, {
+      id: "independent-buyer-lineage",
+      intentHash: transactionIntent({ to: chain.buyer, data: "0x", value: 0n }),
+      nonce: buyerTransaction.nonce,
+      startedBlock: "1",
+      hash: syntheticPrior
+    });
+    const lineage = service.captureOutcomeLineage({ account: chain.buyer, hash: syntheticPrior });
+    if (!lineage) throw new Error("The buyer lineage token was not captured.");
+    journal.remove(chain.buyer);
+    const other = await service.inspectOutcome({ hash: otherHash, account: chain.treasury });
+    if (other.kind !== "confirmed") throw new Error("The other account's canonical receipt was not confirmed.");
+    expect(other.receipt.nonce).toBe(buyerTransaction.nonce);
+    const retained: Array<Hex | null> = [];
+    await service.retainOutcome({ receipt: other.receipt, lineage, retain: ({ priorHash }) => retained.push(priorHash) });
+    expect(retained).toEqual([null]);
+    expect(journal.read(chain.buyer)).toBeNull();
+    expect(journal.read(chain.treasury)).toBeNull();
   }, 15_000);
 
   async function confirmedPurchaseCheckpoint(storage: OutcomeStorage) {
