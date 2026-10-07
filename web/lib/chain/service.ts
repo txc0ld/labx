@@ -24,6 +24,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
   const sellerReader = createSellerReader(client, manifest, reader);
   const reviews = new WeakMap<PreparedAction, { action: WorkflowAction; session: Extract<WalletSnapshot, { kind: "connected" }>; transaction: PreparedAction; used: boolean }>();
   const submitting = new Set<string>();
+  const canonicalReceipts = new WeakMap<CanonicalReceipt, { account: Address; nonce: number }>();
   const unresolved = "This wallet has an unresolved transaction. Reconcile its hash before another action.";
   async function prepare({ action, wallet }: Parameters<RaffleService["prepare"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
@@ -98,8 +99,10 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const block = await client.getBlock({ blockNumber: receipt.blockNumber });
     if (block.hash !== receipt.blockHash) throw new Error("The transaction block changed. Refresh its confirmation.");
     if (!sameAddress(actual.from, account)) throw new Error("Transaction sender does not match this wallet.");
-    return { hash: receipt.transactionHash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value,
+    const result: CanonicalReceipt = { hash: receipt.transactionHash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value,
       nonce: actual.nonce, blockNumber: receipt.blockNumber, status: receipt.status };
+    canonicalReceipts.set(result, { account: actual.from, nonce: actual.nonce });
+    return Object.freeze(result);
   }
   function timedOut(error: unknown) {
     return error instanceof Error && /Timeout|timed out/i.test(error.name + error.message);
@@ -189,9 +192,18 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     });
     return result;
   }
+  async function acknowledgeOutcome({ receipt, acknowledge }: Parameters<RaffleService["acknowledgeOutcome"]>[0]) {
+    const canonical = canonicalReceipts.get(receipt);
+    if (!canonical) throw new Error("Verify the canonical receipt before acknowledging it.");
+    await journal.exclusive(canonical.account, async () => {
+      const current = journal.read(canonical.account);
+      if (current && current.nonce <= canonical.nonce) throw new Error("Reconcile pending wallet activity before acknowledging this receipt.");
+      acknowledge();
+    });
+  }
   async function pending({ wallet }: Parameters<RaffleService["pending"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
+  return { manifest, pending, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

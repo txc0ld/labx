@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { encodeFunctionData, erc20Abi, type Hex } from "viem";
+import { encodeFunctionData, erc20Abi, keccak256, toBytes, type Hex } from "viem";
+import { raffleAbi } from "../lib/chain/abi";
+import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { createRaffleService } from "../lib/chain/service";
 import { memoryPendingJournal, transactionIntent } from "../lib/chain/pending-journal";
 import { createTransactionOutcomes, type OutcomeStorage } from "../lib/chain/transaction-outcomes";
@@ -46,6 +48,9 @@ run("canonical outcome recovery on isolated Anvil", () => {
     await restored.recover(chain.buyer);
     expect(restored.getSnapshot(chain.buyer)).toMatchObject([{ kind: "terminal" }]);
     expect(journal.read(chain.buyer)).toEqual(before);
+    const terminal = restored.getSnapshot(chain.buyer)[0];
+    await expect(restored.acknowledge(terminal, wallet)).rejects.toThrow(/Reconcile pending/);
+    expect([...map.values()]).toEqual([txHash]);
     await restored.resume(txHash, wallet);
     expect(journal.read(chain.buyer)).toBeNull();
     // The same durable checkpoint also survives losing the owner after journal clearance.
@@ -87,4 +92,72 @@ run("canonical outcome recovery on isolated Anvil", () => {
       expect(reloaded.getSnapshot(chain.buyer)).toMatchObject([{ kind: "terminal", submitted: { hash: second, to: chain.buyer.toLowerCase() } }]);
     } finally { await chain.rpc("evm_setAutomine", [true]); }
   }, 15_000);
+  it("requires service-issued canonical metadata and checks fresh same/older/newer journal nonces atomically", async () => {
+    const txHash = await send(chain.buyer); await depth();
+    const result = await service.inspectOutcome({ hash: txHash, account: chain.buyer });
+    if (result.kind === "pending") throw new Error("Expected canonical receipt");
+    let acknowledgments = 0;
+    const acknowledge = () => { acknowledgments++; };
+    await expect(service.acknowledgeOutcome({ receipt: { ...result.receipt, nonce: 0 }, acknowledge })).rejects.toThrow(/Verify the canonical/);
+    for (const nonce of [result.receipt.nonce, Math.max(0, result.receipt.nonce - 1)]) {
+      const pending = { id: "unresolved", hash: null, nonce, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) };
+      journal.write(chain.buyer, pending);
+      await expect(service.acknowledgeOutcome({ receipt: result.receipt, acknowledge })).rejects.toThrow(/Reconcile pending/);
+      expect(journal.read(chain.buyer)).toEqual(pending);
+    }
+    const newer = { id: "newer", hash: null, nonce: result.receipt.nonce + 1, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) };
+    journal.write(chain.buyer, newer);
+    await service.acknowledgeOutcome({ receipt: result.receipt, acknowledge });
+    expect(journal.read(chain.buyer)).toEqual(newer);
+    expect(acknowledgments).toBe(1);
+  });
+
+  it.each(["cancellation", "purchase"] as const)("preserves a canonical replacement %s checkpoint after a pre-clear crash until guarded resume", async kind => {
+    const { storage, map } = memoryStorage();
+    let to = chain.buyer, data: Hex = "0x";
+    if (kind === "purchase") {
+      await chain.write(chain.nft, "mint", [chain.seller, 999n]);
+      const block = await chain.client.getBlock();
+      const reserve = keccak256(toBytes("replacement-purchase"));
+      await chain.write(chain.raffle, "createRaffle", [chain.nft.address, 999n, block.timestamp + 3600n, reserve, reserve, "Replacement purchase", [{ name: "Entry", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }]], chain.seller);
+      const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" }) - 1n;
+      await chain.write(chain.nft, "approve", [chain.raffle.address, 999n], chain.seller);
+      await chain.write(chain.raffle, "escrow", [id], chain.seller);
+      await chain.admit(id);
+      const policy = await service.openingPolicy();
+      await chain.write(chain.raffle, "openWithPolicy", [id, policy.hash], chain.seller);
+      await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
+      await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
+      to = chain.raffle.address;
+      data = encodeFunctionData({ abi: raffleAbi, functionName: "buyPack", args: [id, 0, 1, PUBLISHED_TERMS_HASH] });
+    }
+    await chain.rpc("evm_setAutomine", [false]);
+    try {
+      const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
+      const first = await send(chain.usdc.address, approvalData(), { nonce: `0x${nonce.toString(16)}`, gasPrice: "0x77359400" });
+      const pending = { id: "crash-replacement", hash: first, nonce, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) };
+      journal.write(chain.buyer, pending);
+      const key = `labx:outcome:v1:31337:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}:${first}`;
+      const watching = expect(service.confirm({ transaction: { hash: first, account: chain.buyer, chainId: 31337, to: chain.usdc.address, data: approvalData(), value: 0n }, timeoutMs: 3000, beforeJournalClear({ receipt }) { storage.setItem(key, receipt.hash); throw new Error("Crash before clear"); } })).rejects.toThrow(/Crash before clear/);
+      // Let the receipt watcher observe the pending original before Anvil replaces it.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const second = await send(to, data, { nonce: `0x${nonce.toString(16)}`, gasPrice: "0xb2d05e00", gas: "0x989680" });
+      await chain.mine();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await chain.mine();
+      await watching;
+      const restored = createTransactionOutcomes(service, () => storage);
+      await restored.recover(chain.buyer);
+      const terminal = restored.getSnapshot(chain.buyer)[0];
+      expect(terminal).toMatchObject({ kind: "terminal", submitted: { hash: second }, confirmation: { receipt: { status: "success" } } });
+      await expect(restored.acknowledge(terminal, wallet)).rejects.toThrow(/Reconcile pending/);
+      expect([...map.values()]).toEqual([second]);
+      expect(journal.read(chain.buyer)).toEqual(pending);
+      await restored.resume(second, wallet);
+      expect(journal.read(chain.buyer)).toBeNull();
+      await restored.acknowledge(terminal, wallet);
+      expect(map.size).toBe(0);
+    } finally { await chain.rpc("evm_setAutomine", [true]); }
+  }, 15_000);
+
 });

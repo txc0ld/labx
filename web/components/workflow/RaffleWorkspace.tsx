@@ -221,7 +221,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
       <div className="detail-path"><Link href={mode === "seller" ? "/seller" : "/"} className="detail-back"><span aria-hidden="true">←</span> {mode === "seller" ? "Back to studio" : "Back to explore"}</Link><button className="text-link" type="button" disabled={refreshState.kind === "loading"} onClick={() => void refresh()}>{refreshState.kind === "loading" ? "Refreshing state…" : "Refresh state"}</button></div>
       {refreshState.kind === "loading" ? <p className="notice" role="status">Refreshing verified contract state. Transaction controls are paused.</p> : null}
       {refreshState.kind === "error" ? <p className="notice error" role="alert">Refresh failed: {refreshState.message} Transaction controls remain paused. <button className="text-link" type="button" onClick={() => void refresh()}>Retry refresh</button></p> : null}
-      <ResumeTransaction browser={browser} pendingOnly scope={`raffle-${snapshot.id}`} onConfirmed={refresh} />
+      <ResumeTransaction browser={browser} pendingOnly scope={`raffle-${snapshot.id}`} confirmedThroughBlock={snapshot.block.number} onConfirmed={refresh} />
       <section className="section piece-layout piece-console chain-piece">
         <div className="piece-visual chain-piece-visual">
           <div className="piece-visual-topline"><span>Verified on-chain raffle</span><span>#{snapshot.id.toString()}</span></div>
@@ -393,15 +393,17 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
     }
   }
 
-  function buyAgain() {
+  async function buyAgain() {
     if ((!canBuyAgain && !canArchivePurchase) || !purchaseOutcome) return;
+    const expected = browser.wallet.getSnapshot(), version = agreementGeneration.current;
     try {
-      owner.acknowledge(purchaseOutcome);
+      await owner.acknowledge(purchaseOutcome, browser.wallet);
+      if (browser.wallet.getSnapshot().revision !== expected.revision || agreementGeneration.current !== version) return;
       setAgreements({ terms: false, rules: false, age: false });
       setAgreementState("idle");
       agreementGeneration.current += 1;
       setReceiptError("");
-    } catch (error) { setReceiptError(error instanceof Error ? error.message : "The receipt could not be acknowledged."); }
+    } catch (error) { if (browser.wallet.getSnapshot().revision === expected.revision && agreementGeneration.current === version) setReceiptError(error instanceof Error ? error.message : "The receipt could not be acknowledged."); }
   }
 
   return (

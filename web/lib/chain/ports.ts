@@ -43,6 +43,7 @@ export interface RaffleService {
   submit(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<SubmittedAction>;
   confirm(input: { transaction: SubmittedAction; timeoutMs?: number; beforeJournalClear?: (input: { receipt: CanonicalReceipt; pending: OutcomeJournal | null }) => void }): Promise<Confirmation>;
   inspectOutcome(input: { hash: Hex; account: Address; timeoutMs?: number }): Promise<Confirmation>;
+  acknowledgeOutcome(input: { receipt: CanonicalReceipt; acknowledge: () => void }): Promise<void>;
   pending(input: { wallet: WalletSessionPort }): Promise<{ hash: Hex | null; nonce: number } | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort; beforeJournalUpdate?: (input: { transaction: SubmittedAction; nonce: number; pending: OutcomeJournal | null }) => void }): Promise<SubmittedAction>;
 }

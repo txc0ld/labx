@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
@@ -7,12 +8,12 @@ import { transactionMeaning, type TransactionOutcome } from "@/lib/chain/transac
 import { useWalletSnapshot } from "./WalletGate";
 import { useTransactionOutcomes } from "./useTransactionOutcomes";
 
-type Props = { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean; scope?: string };
+type Props = { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean; scope?: string; confirmedThroughBlock?: bigint };
 export function ResumeTransaction(props: Props) {
   return props.browser.kind === "configured" ? <ConfiguredResume {...props} browser={props.browser} /> : null;
 }
 
-function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "wallet" }: Props & { browser: Extract<BrowserService, { kind: "configured" }> }) {
+function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "wallet", confirmedThroughBlock }: Props & { browser: Extract<BrowserService, { kind: "configured" }> }) {
   const wallet = useWalletSnapshot(browser.wallet);
   const { owner, outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
   const [hash, setHash] = useState("");
@@ -47,14 +48,14 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current) return;
-    const confirmed = outcomes.filter(item => item.kind === "terminal" && item.confirmation.receipt.status === "success");
+    const confirmed = outcomes.filter(item => item.kind === "terminal" && item.confirmation.receipt.status === "success" && (confirmedThroughBlock === undefined || item.confirmation.receipt.blockNumber > confirmedThroughBlock));
     const unseen = confirmed.filter(item => owner.claimRefresh(`${scope}:${wallet.account.toLowerCase()}:${wallet.revision}:${item.id}`));
     if (!unseen.length) return;
     const version = generation.current;
     void Promise.resolve(callback.current()).catch(reason => {
       if (version === generation.current) setError(reason instanceof Error ? reason.message : "Confirmed transaction retained. Refresh the current state before another action.");
     });
-  }, [connected, outcomes, owner, scope, wallet]);
+  }, [connected, outcomes, owner, scope, wallet, confirmedThroughBlock]);
 
   async function check(transactionHash: Hex) {
     if (!connected || inFlight.current !== null) return;
@@ -72,9 +73,10 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     if (!isHex(hash, { strict: true }) || hash.length !== 66) { setError("Enter a complete transaction hash."); return; }
     void check(hash);
   }
-  function dismiss(outcome: TransactionOutcome) {
-    try { owner.acknowledge(outcome); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "The receipt could not be acknowledged."); }
+  async function dismiss(outcome: TransactionOutcome) {
+    const version = generation.current;
+    try { await owner.acknowledge(outcome, browser.wallet); }
+    catch (reason) { if (version === generation.current) setError(reason instanceof Error ? reason.message : "The receipt could not be acknowledged."); }
   }
 
   if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error) return null;
@@ -85,12 +87,13 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
         const meaning = submitted ? transactionMeaning(browser.service, submitted) : null;
         const transactionHash = submitted?.hash ?? ("hash" in outcome ? outcome.hash : null);
         return <div key={outcome.id} className={`transaction-outcome notice stack ${outcome.kind === "terminal" && outcome.confirmation.receipt.status === "success" ? "ok" : "warning"}`} role="status">
-          <strong>{outcome.kind === "submitting" ? "Waiting for wallet" : outcome.kind === "terminal" ? meaning?.purchase && outcome.confirmation.receipt.status === "success" ? `Purchase confirmed for raffle #${meaning.raffleId}` : outcome.confirmation.kind === "confirmed" ? "Transaction confirmed" : outcome.confirmation.kind === "reverted" ? "Transaction reverted" : "Transaction replaced" : outcome.kind === "rejected" ? "Wallet request rejected" : outcome.kind === "error" || outcome.kind === "unverified" ? "Transaction needs attention" : outcome.kind === "recovery" ? "Saved transaction needs verification" : "Transaction submitted"}</strong>
+          <strong>{outcome.kind === "submitting" ? "Waiting for wallet" : outcome.kind === "terminal" ? meaning?.purchase && outcome.confirmation.receipt.status === "success" ? `Purchase confirmed for raffle #${meaning.raffleId}` : outcome.confirmation.kind === "confirmed" ? "Transaction confirmed" : outcome.confirmation.kind === "reverted" ? "Transaction reverted" : "Transaction replaced" : outcome.kind === "rejected" ? "Wallet request rejected" : outcome.kind === "error" || outcome.kind === "unverified" || outcome.kind === "overflow" ? "Transaction needs attention" : outcome.kind === "recovery" ? "Saved transaction needs verification" : "Transaction submitted"}</strong>
           {meaning && !meaning.purchase ? <span>Raffle #{meaning.raffleId.toString()} · {meaning.action}</span> : null}
-          {outcome.kind === "terminal" ? outcome.confirmation.kind === "confirmed" ? <span>Confirmed in block {outcome.confirmation.blockNumber.toString()}.</span> : <span>{outcome.confirmation.reason}</span> : (outcome.kind === "error" || outcome.kind === "rejected" || outcome.kind === "unverified") ? <span>{outcome.message}</span> : outcome.kind === "submitting" ? <span>The original wallet request is in progress. Its result stays available here through refreshes.</span> : <span>A saved or submitted hash is not proof of success.</span>}
+          {outcome.kind === "terminal" ? outcome.confirmation.kind === "confirmed" ? <span>Confirmed in block {outcome.confirmation.blockNumber.toString()}.</span> : <span>{outcome.confirmation.reason}</span> : (outcome.kind === "error" || outcome.kind === "rejected" || outcome.kind === "unverified" || outcome.kind === "overflow") ? <span>{outcome.message}</span> : outcome.kind === "submitting" ? <span>The original wallet request is in progress. Its result stays available here through refreshes.</span> : <span>A saved or submitted hash is not proof of success.</span>}
+          {outcome.kind === "terminal" && meaning?.purchase && outcome.confirmation.receipt.status === "success" ? <Link className="text-link" href={`/piece/${meaning.raffleId}`}>View purchase receipt</Link> : null}
           {transactionHash ? <p className="hash">{transactionHash}</p> : null}
           {transactionHash && outcome.kind !== "terminal" ? <button className="btn" type="button" disabled={checking || outcome.kind === "checking"} onClick={() => void check(transactionHash)}>Check confirmation</button> : null}
-          {outcome.kind === "terminal" && !(meaning?.purchase && outcome.confirmation.receipt.status === "success") ? <button className="text-link" type="button" onClick={() => dismiss(outcome)}>Dismiss receipt</button> : null}
+          {outcome.kind === "terminal" && !(meaning?.purchase && outcome.confirmation.receipt.status === "success") ? <button className="text-link" type="button" onClick={() => void dismiss(outcome)}>Dismiss receipt</button> : null}
         </div>;
       })}
       {pending || !pendingOnly ? <form className="well pad stack" onSubmit={submit}>

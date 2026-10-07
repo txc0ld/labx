@@ -95,7 +95,7 @@ function actionReview(action: WorkflowAction) {
 
 export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
-  const activeOutcome = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && item.submitted !== null);
+  const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
   const subscribe = useCallback((listener: () => void) => wallet.subscribe(listener), [wallet]);
   const getWalletSnapshot = useCallback(() => walletSnapshot(wallet), [wallet]);

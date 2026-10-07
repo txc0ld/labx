@@ -32,9 +32,10 @@ function fixture() {
     requestTransaction: async () => hash, signMessage: async () => hash
   };
   const service = {
+    acknowledgeOutcome: vi.fn(async (input: Parameters<RaffleService["acknowledgeOutcome"]>[0]) => { input.acknowledge(); }),
     manifest, submit: vi.fn(async () => submitted),
     pending: vi.fn(async (): ReturnType<RaffleService["pending"]> => null),
-    inspectOutcome: vi.fn(async (): Promise<Confirmation> => confirmed),
+    inspectOutcome: vi.fn(async (_input: Parameters<RaffleService["inspectOutcome"]>[0]): Promise<Confirmation> => confirmed),
     resume: vi.fn(async (input: Parameters<RaffleService["resume"]>[0]) => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: null }); return submitted; }),
     confirm: vi.fn(async (input: Parameters<RaffleService["confirm"]>[0]): Promise<Confirmation> => { input.beforeJournalClear?.({ receipt, pending: null }); return confirmed; })
   };
@@ -128,12 +129,12 @@ describe("operation ownership beyond transaction controls", () => {
     const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
     f.service.confirm.mockResolvedValueOnce({ kind: "pending", hash });
     const pending = await owner.confirm(submitted);
-    owner.acknowledge(pending);
+    await owner.acknowledge(pending);
     expect(f.map.size).toBe(1);
     const terminal = await owner.confirm(submitted);
-    owner.acknowledge({ ...terminal });
+    await owner.acknowledge({ ...terminal });
     expect(f.map.size).toBe(1);
-    owner.acknowledge(terminal);
+    await owner.acknowledge(terminal);
     expect(f.map.size).toBe(0);
     expect(owner.getSnapshot(account)).toEqual([]);
   });
@@ -202,7 +203,7 @@ describe("operation ownership beyond transaction controls", () => {
     f.service.resume.mockImplementation(async input => { input.beforeJournalUpdate?.({ transaction: second, nonce: 1, pending: { id: "nonce-1", hash, nonce: 1 } }); return second; });
     f.service.confirm.mockImplementation(async input => { input.beforeJournalClear?.({ receipt: canonical, pending: null }); return { kind: "confirmed", hash: secondHash, blockNumber: 2n, replacedHash: hash, receipt: canonical }; });
     const terminal = await owner.resume(secondHash, f.wallet);
-    owner.acknowledge(terminal);
+    await owner.acknowledge(terminal);
     late.resolve({ kind: "pending", hash });
     await first;
     expect(owner.getSnapshot(account)).toEqual([]);
@@ -269,4 +270,60 @@ describe("operation ownership beyond transaction controls", () => {
     expect(transactionMeaning({ manifest }, { ...buy, chainId: 1 })).toBeNull();
     expect(transactionMeaning({ manifest }, { ...submitted, to: other, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [contract, 100n] }) })).toBeNull();
   });
+  it.each([false, true])("does not resume after the pending read changes wallet session (return to A: %s)", async backToA => {
+    const f = fixture(), pending = deferred<Awaited<ReturnType<RaffleService["pending"]>>>();
+    f.service.pending.mockImplementation(() => pending.promise);
+    const owner = createTransactionOutcomes(f.service, () => f.storage);
+    const run = owner.resume(hash, f.wallet);
+    f.switchWallet({ kind: "connected", account: other, chainId: 31337, revision: 2 });
+    if (backToA) f.switchWallet({ kind: "connected", account, chainId: 31337, revision: 3 });
+    pending.resolve(null);
+    await expect(run).rejects.toThrow(/Wallet changed/);
+    expect(f.service.resume).not.toHaveBeenCalled();
+    expect(f.map.size).toBe(0);
+  });
+
+  it("rejects mismatched resume metadata before the callback can retain a checkpoint", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    f.service.resume.mockImplementation(async input => {
+      const transaction: SubmittedAction = { ...submitted, account: other };
+      input.beforeJournalUpdate?.({ transaction, nonce: 1, pending: null });
+      return transaction;
+    });
+    await expect(owner.resume(hash, f.wallet)).rejects.toThrow(/original wallet/);
+    expect(f.map.size).toBe(0);
+    expect(f.service.confirm).not.toHaveBeenCalled();
+  });
+
+  it("blocks overflow hints and makes progress to a hidden purchase through verified acknowledgment", async () => {
+    const f = fixture();
+    for (let index = 1; index <= 101; index++) {
+      const hint = `0x${index.toString(16).padStart(64, "0")}`;
+      f.map.set(`labx:outcome:v1:31337:${contract}:${hash}:${account}:${hint}`, hint);
+    }
+    f.service.inspectOutcome.mockImplementation(async ({ hash: hint }) => ({ ...confirmed, hash: hint, receipt: { ...receipt, hash: hint } }));
+    const owner = createTransactionOutcomes(f.service, () => f.storage);
+    await owner.recover(account);
+    expect(f.service.inspectOutcome).toHaveBeenCalledTimes(100);
+    expect(owner.getSnapshot(account).some(item => item.kind === "overflow")).toBe(true);
+    const first = owner.getSnapshot(account).find(item => item.kind === "terminal");
+    if (!first) throw new Error("No canonical receipt");
+    await owner.acknowledge(first);
+    await vi.waitFor(() => expect(f.service.inspectOutcome).toHaveBeenCalledTimes(101));
+    expect(owner.getSnapshot(account).some(item => item.kind === "overflow")).toBe(false);
+    expect(owner.getSnapshot(account).some(item => "submitted" in item && item.submitted?.hash === `0x${(101).toString(16).padStart(64, "0")}`)).toBe(true);
+  });
+
+  it("does not acknowledge or reset a checkpoint after an async wallet session change", async () => {
+    const f = fixture(), guard = deferred<void>(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const terminal = await owner.confirm(submitted);
+    f.service.acknowledgeOutcome.mockImplementation(async input => { await guard.promise; input.acknowledge(); });
+    const run = owner.acknowledge(terminal, f.wallet);
+    f.switchWallet({ kind: "connected", account, chainId: 31337, revision: 3 });
+    guard.resolve();
+    await expect(run).rejects.toThrow(/Wallet changed/);
+    expect(owner.getSnapshot(account)).toEqual([terminal]);
+    expect(f.map.size).toBe(1);
+  });
+
 });

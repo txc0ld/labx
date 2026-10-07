@@ -9,6 +9,7 @@ type TerminalConfirmation = Exclude<Confirmation, { kind: "pending" }>;
 export type TransactionOutcome = { id: string; account: Address } & (
   | { kind: "submitting" }
   | { kind: "rejected"; message: string }
+  | { kind: "overflow"; message: string }
   | { kind: "recovery"; hash: Hex }
   | { kind: "unverified"; hash: Hex; message: string }
   | { kind: "checking" | "pending"; submitted: SubmittedAction }
@@ -28,7 +29,7 @@ export function transactionMeaning(service: Pick<RaffleService, "manifest">, sub
 function outcomeHash(outcome: TransactionOutcome): Hex | null {
   return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
 }
-type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending">;
+type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending" | "acknowledgeOutcome">;
 export function createTransactionOutcomes(service: OutcomeService, storage: () => OutcomeStorage = () => window.localStorage) {
   const prefix = `labx:outcome:v1:${service.manifest.chainId}:${service.manifest.address.toLowerCase()}:${service.manifest.runtimeCodeHash.toLowerCase()}:`;
   const listeners = new Set<() => void>();
@@ -100,17 +101,23 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     try {
       const target = storage(), accountPrefix = `${prefix}${key}:`;
       const hints: { id: Hex; hash: Hex }[] = [];
+      let count = 0;
       if (target.length > 10_000) throw new Error("Browser recovery storage is too large to read safely.");
       for (let index = 0; index < target.length; index++) {
         const key = target.key(index);
         if (!key?.startsWith(accountPrefix)) continue;
         const id = key.slice(accountPrefix.length), hash = target.getItem(key)?.toLowerCase();
         if (id.length !== 66 || !isHex(id, { strict: true }) || id !== id.toLowerCase() || !hash || hash.length !== 66 || !isHex(hash, { strict: true })) throw new Error("A transaction recovery checkpoint is invalid. Check wallet activity.");
-        hints.push({ id, hash });
-        if (hints.length === 100) break;
+        count++;
+        if (hints.length < 100) hints.push({ id, hash });
       }
       loaded.add(accountKey(account));
       for (const hint of hints) if (!getSnapshot(account).some(item => item.id === hint.id)) put({ ...hint, account, kind: "recovery" });
+      if (count > 100) put({ id: "overflow", account, kind: "overflow", message: "More saved transactions need verification. Acknowledge verified receipts to load the next batch before submitting another action." });
+      else if (getSnapshot(account).some(item => item.kind === "overflow")) {
+        records.set(key, getSnapshot(account).filter(item => item.kind !== "overflow"));
+        notify();
+      }
     } catch (error) {
       put({ id: "storage-error", account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "Transaction recovery storage is unavailable." });
     }
@@ -189,23 +196,43 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     const snapshot = wallet.getSnapshot();
     if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId) throw new Error("Connect the transaction's wallet on the verified network.");
     const owned = findHash(snapshot.account, hash), pending = await service.pending({ wallet });
+    await wallet.assertCurrent(snapshot);
+    const assertScope = (transaction?: SubmittedAction) => {
+      const current = wallet.getSnapshot();
+      if (current.kind !== "connected" || current.revision !== snapshot.revision || current.chainId !== snapshot.chainId || !sameAddress(current.account, snapshot.account)) throw new Error("Wallet changed. Check the transaction from its original wallet session.");
+      if (transaction && (transaction.chainId !== snapshot.chainId || !sameAddress(transaction.account, snapshot.account))) throw new Error("Recovered transaction does not match the original wallet and network.");
+    };
+    assertScope();
     if (!pending && owned) return owned.kind === "terminal" ? owned : inspect(snapshot.account, hash, owned.id);
     let id = owned?.id ?? operationId(snapshot.account, hash);
     const submitted = await service.resume({ hash, wallet, beforeJournalUpdate: ({ transaction, pending, nonce }) => {
+      assertScope(transaction);
       id = retain(snapshot.account, id, transaction.hash, pending?.hash ?? null, nonce);
     } });
+    assertScope(submitted);
     return confirm(submitted, id, true);
   }
-  function acknowledge(record: TransactionOutcome) {
+  async function acknowledge(record: TransactionOutcome, wallet?: WalletSessionPort) {
     if (record.kind !== "terminal" || !getSnapshot(record.account).includes(record)) return;
-    const target = storage(), key = checkpointKey(record.account, record.id);
-    if (target.getItem(key)?.toLowerCase() !== record.submitted.hash.toLowerCase()) throw new Error("The recovery checkpoint changed. Check its transaction again.");
-    target.removeItem(key);
-    if (target.getItem(key) !== null) throw new Error("The recovery checkpoint could not be acknowledged.");
-    acknowledged.add(key);
-    records.set(accountKey(record.account), getSnapshot(record.account).filter(item => item !== record));
-    notify();
-    loaded.delete(accountKey(record.account));
+    const snapshot = wallet?.getSnapshot();
+    if (snapshot && (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId || !sameAddress(snapshot.account, record.account))) throw new Error("Connect the receipt’s original wallet before acknowledging it.");
+    await service.acknowledgeOutcome({ receipt: record.confirmation.receipt, acknowledge() {
+      if (!getSnapshot(record.account).includes(record)) throw new Error("The receipt changed. Check it again.");
+      if (wallet && snapshot) {
+        const current = wallet.getSnapshot();
+        if (current.kind !== "connected" || current.revision !== snapshot.revision || current.chainId !== service.manifest.chainId || !sameAddress(current.account, record.account)) throw new Error("Wallet changed. Check the receipt from its original wallet session.");
+      }
+      const target = storage(), key = checkpointKey(record.account, record.id);
+      if (target.getItem(key)?.toLowerCase() !== record.submitted.hash.toLowerCase()) throw new Error("The recovery checkpoint changed. Check its transaction again.");
+      target.removeItem(key);
+      if (target.getItem(key) !== null) throw new Error("The recovery checkpoint could not be acknowledged.");
+      acknowledged.add(key);
+      records.set(accountKey(record.account), getSnapshot(record.account).filter(item => item !== record));
+      notify();
+      loaded.delete(accountKey(record.account));
+    } });
+    const recovering = recoveries.get(accountKey(record.account));
+    if (recovering) await recovering;
     void recover(record.account);
   }
   function claimRefresh(key: string) { if (refreshed.has(key)) return false; refreshed.add(key); return true; }

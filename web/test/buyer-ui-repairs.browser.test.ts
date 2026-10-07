@@ -329,4 +329,37 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await expect.poll(() => approve.isDisabled(), { timeout: 15_000 }).toBe(false);
     expect(await quantity.inputValue()).toBe("2");
   }, 45_000);
+  it("keeps expanded seller actions open when an older saved receipt finishes verification", async () => {
+    const snapshot = await service.readRaffle({ id: 3n });
+    const historical = await chain.write(chain.usdc, "approve", [chain.raffle.address, 100n], chain.seller);
+    await chain.warp(snapshot.raffle.salesEnd + snapshot.drawStartGrace);
+    const hint = historical.transactionHash;
+    await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
+      key: `labx:outcome:v1:31337:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.seller.toLowerCase()}:${hint}`, value: hint
+    });
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      if (JSON.stringify(body).includes(hint)) await held;
+      await route.continue();
+    });
+    try {
+      await fixture.switchAccount(chain.seller);
+      await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
+      const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+      if (await connect.isVisible().catch(() => false)) await connect.click();
+      const details = fixture.page.locator("details").filter({ has: fixture.page.locator("summary").filter({ hasText: "Other available seller actions" }) });
+      await details.locator("summary").click();
+      expect(await details.getAttribute("open")).not.toBeNull();
+      release();
+      const outcome = fixture.page.locator(".transaction-outcome").filter({ hasText: hint });
+      await expect.poll(() => outcome.innerText(), { timeout: 10_000 }).toContain("Transaction confirmed");
+      await fixture.page.waitForTimeout(300);
+      expect(await details.getAttribute("open")).not.toBeNull();
+      expect(await fixture.page.getByRole("button", { name: "Enable refunds", exact: true }).isVisible()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Enable refunds", exact: true }).isEnabled()).toBe(true);
+    } finally { release(); await fixture.page.unroute(`${chain.url}/`); }
+  }, 30_000);
+
 });
