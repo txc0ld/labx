@@ -97,7 +97,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     const review = fixture.page.locator(".transaction-review");
     await review.waitFor({ state: "visible", timeout: 10_000 });
     await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
-    const submitted = fixture.page.locator(".transaction-state", { hasText: "Transaction submitted" });
+    const submitted = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction submitted" });
     await submitted.waitFor({ state: "visible", timeout: 10_000 });
     const submittedText = await submitted.innerText();
     const transactionHash = submittedText.match(/0x[0-9a-fA-F]{64}/)?.[0];
