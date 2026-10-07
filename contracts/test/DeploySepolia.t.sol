@@ -144,7 +144,7 @@ contract DeploySepoliaTest is Test {
         assertEq(labx.getRaffle(nativeId).winner, address(0));
         vm.prank(makeAddr("buyer"));
         labx.refund(nativeId);
-        assertEq(MockERC20(USDC).balanceOf(makeAddr("buyer")), 30e6);
+        assertEq(MockERC20(USDC).balanceOf(makeAddr("buyer")), 34_500_000);
     }
 
     function _openAndBuy(LabxRaffle labx, uint64 end, uint256 tokenId) internal returns (uint256 id) {

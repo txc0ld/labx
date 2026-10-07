@@ -237,9 +237,9 @@ contract IndependentPolicyVerificationTest is Test {
 
         assertEq(nft.ownerOf(21), alice);
         assertEq(nft.ownerOf(22), seller);
-        assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(treasury), 5e6);
-        assertEq(usdc.balanceOf(alice), 970e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
+        assertEq(usdc.balanceOf(treasury), 1e6);
+        assertEq(usdc.balanceOf(alice), 974_500_000);
         assertEq(usdc.balanceOf(bob), 1_000e6);
         assertEq(usdc.balanceOf(address(raffle)), 0);
 

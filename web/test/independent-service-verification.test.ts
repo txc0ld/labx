@@ -135,7 +135,7 @@ run("independent service verification on isolated Anvil", () => {
     await act({ kind: "updateDraft", id, draft: { ...draft, title: "Reviewed membership" } }, seller);
     await open(id);
     const { quote, bought } = await purchase(id, 2);
-    expect(quote).toMatchObject({ principal: 50_000_000n, fee: 10_000_000n, bonusEntries: 6n });
+    expect(quote).toMatchObject({ principal: 50_000_000n, fee: 1_000_000n, bonusEntries: 6n });
 
     const purchased = await service.readAccount({ id, account: chain.buyer });
     expect(purchased.principal).toBe(quote.principal);
@@ -164,10 +164,10 @@ run("independent service verification on isolated Anvil", () => {
     expect(prizeReview.recipient).toBe(chain.buyer);
     await act({ kind: "claimPrize", id }, buyer);
     const proceedsReview = await service.prepare({ action: { kind: "claimProceeds", id }, wallet: seller });
-    expect(proceedsReview).toMatchObject({ recipient: chain.seller, amountUsdc: quote.principal });
+    expect(proceedsReview).toMatchObject({ recipient: chain.seller, amountUsdc: quote.principal * 98n / 100n });
     await act({ kind: "claimProceeds", id }, seller);
     const feeReview = await service.prepare({ action: { kind: "claimFee", id }, wallet: outsider });
-    expect(feeReview).toMatchObject({ recipient: chain.treasury, amountUsdc: quote.fee });
+    expect(feeReview).toMatchObject({ recipient: chain.treasury, amountUsdc: quote.fee + quote.principal * 2n / 100n });
     await act({ kind: "claimFee", id }, outsider);
 
     expect(
@@ -185,7 +185,7 @@ run("independent service verification on isolated Anvil", () => {
         functionName: "balanceOf",
         args: [chain.seller]
       })
-    ).toBe(sellerBefore + quote.principal);
+    ).toBe(sellerBefore + quote.principal * 98n / 100n);
     expect(
       await chain.client.readContract({
         address: chain.usdc.address,
@@ -193,7 +193,7 @@ run("independent service verification on isolated Anvil", () => {
         functionName: "balanceOf",
         args: [chain.treasury]
       })
-    ).toBe(treasuryBefore + quote.fee);
+    ).toBe(treasuryBefore + quote.fee + quote.principal * 2n / 100n);
     expect((await service.readRaffle({ id })).raffle).toMatchObject({ principalEscrow: 0n, feeEscrow: 0n });
   }, 30_000);
 

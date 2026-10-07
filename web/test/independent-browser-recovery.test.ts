@@ -110,7 +110,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await expect.poll(async () => fixture.page.locator(".resume-transaction").count(), { timeout: 10_000 }).toBe(0);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(async () => fixture.page.locator(".resume-transaction").count(), { timeout: 10_000 }).toBe(0);
-    expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 20_000_000n, fee: 5_000_000n });
+    expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 20_000_000n, fee: 400_000n });
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
   }, 90_000);

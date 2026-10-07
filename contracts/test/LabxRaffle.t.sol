@@ -161,15 +161,15 @@ contract LabxRaffleTest is Test {
         _fund(alice, 1_000e6);
         _fund(bob, 1_000e6);
         _fund(cara, 1_000e6);
-        _buy(alice, id, 0, 1); // 25 + 5, 1 entry
+        _buy(alice, id, 0, 1); // 25 + 0.5, 1 entry
         _buy(bob, id, 0, 1); // 1 entry
-        _buy(cara, id, 1, 1); // 50 + 5, 5 entries
+        _buy(cara, id, 1, 1); // 50 + 1, 5 entries
 
         assertEq(labx.principalOf(id, alice), 25e6);
-        assertEq(labx.feeOf(id, alice), 5e6);
+        assertEq(labx.feeOf(id, alice), 500_000);
         LabxRaffle.RaffleView memory viewR = labx.getRaffle(id);
         assertEq(viewR.principalEscrow, 100e6);
-        assertEq(viewR.feeEscrow, 15e6);
+        assertEq(viewR.feeEscrow, 2e6);
         assertEq(nft.ownerOf(1), address(labx));
 
         vm.prank(seller);
@@ -196,8 +196,8 @@ contract LabxRaffleTest is Test {
         _pullSettled(id, cara);
 
         assertEq(nft.ownerOf(1), cara);
-        assertEq(usdc.balanceOf(seller), 100e6);
-        assertEq(usdc.balanceOf(treasury), 15e6);
+        assertEq(usdc.balanceOf(seller), 98e6);
+        assertEq(usdc.balanceOf(treasury), 4e6);
         assertEq(uint256(labx.getRaffle(id).phase), uint256(LabxRaffle.Phase.Settled));
     }
 
@@ -311,14 +311,14 @@ contract LabxRaffleTest is Test {
         (uint256 id,,,) = _create();
         _escrowOpen(id);
         vm.deal(alice, 1 ether);
-        uint256 total = 30e6; // 25 + 5
+        uint256 total = 25_500_000; // 25 + 0.5
         uint256 quoted = labx.quoteEthForUsdc(total);
-        assertEq(quoted, 0.015 ether);
+        assertEq(quoted, 0.01275 ether);
         vm.prank(alice);
         labx.buyPackWithEth{value: 0.02 ether}(id, 0, 1, bytes32(TERMS), 200, _deadline());
         assertEq(labx.principalOf(id, alice), 25e6);
-        assertEq(labx.feeOf(id, alice), 5e6);
-        assertEq(usdc.balanceOf(address(labx)), 30e6);
+        assertEq(labx.feeOf(id, alice), 500_000);
+        assertEq(usdc.balanceOf(address(labx)), 25_500_000);
         uint256 cap = (quoted * 10_200 + 9_999) / 10_000;
         assertEq(alice.balance, 1 ether - (cap / 2));
         assertEq(address(labx).balance, 0);
@@ -371,7 +371,7 @@ contract LabxRaffleTest is Test {
         vm.expectRevert(LabxRaffle.FreeEntryDisabled.selector);
         labx.claimAmoe(id, captcha, deadline, abi.encodePacked(r, sigS, v));
         assertEq(labx.lotCount(id), 0);
-        assertEq(labx.contractVersion(), 2);
+        assertEq(labx.contractVersion(), 3);
     }
 
     function testFuzz_freeEntrySelectorCannotCreateLots(address caller, bytes32 digest, bytes calldata signature)
@@ -404,7 +404,7 @@ contract LabxRaffleTest is Test {
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
-        assertEq(usdc.balanceOf(alice), before + 30e6);
+        assertEq(usdc.balanceOf(alice), before + 25_500_000);
         assertEq(labx.getRaffle(id).principalEscrow, 0);
         assertEq(labx.getRaffle(id).feeEscrow, 0);
         assertEq(nft.ownerOf(1), address(labx));
@@ -447,7 +447,7 @@ contract LabxRaffleTest is Test {
         assertEq(nft.ownerOf(1), address(labx));
         _pullSettled(id, alice);
         assertEq(nft.ownerOf(1), alice);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(treasury), 1e6);
     }
 
     function test_snapshotAndVrfOrdering() public {
@@ -587,7 +587,7 @@ contract LabxRaffleTest is Test {
         _escrowOpen(id);
         _fund(alice, 20_000e6);
         _buy(alice, id, 0, qty);
-        assertEq(labx.feeOf(id, alice), uint256(qty) * 5e6);
+        assertEq(labx.feeOf(id, alice), uint256(qty) * 500_000);
         assertEq(labx.principalOf(id, alice), uint256(qty) * 25e6);
         assertEq(labx.lotAt(id, 0).amount, qty);
         assertEq(labx.lotAt(id, 0).expiresAt, uint64(block.timestamp + 365 days));
@@ -612,8 +612,8 @@ contract LabxRaffleTest is Test {
         vm.prank(seller);
         labx.claimProceeds(id);
         labx.claimFee(id);
-        assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
+        assertEq(usdc.balanceOf(treasury), 1e6);
         vm.prank(address(recv));
         labx.claimPrize(id);
         assertEq(nft.ownerOf(1), address(recv));
@@ -651,8 +651,8 @@ contract LabxRaffleTest is Test {
         vm.prank(seller);
         labx.claimProceeds(id);
         labx.claimFee(id);
-        assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
+        assertEq(usdc.balanceOf(treasury), 1e6);
         vm.prank(alice);
         vm.expectRevert(bytes("sticky"));
         labx.claimPrize(id);
@@ -681,7 +681,7 @@ contract LabxRaffleTest is Test {
         labx.cancel(id);
         vm.prank(alice);
         labx.refund(id);
-        assertEq(usdc.balanceOf(alice), before + 30e6);
+        assertEq(usdc.balanceOf(alice), before + 25_500_000);
         vm.prank(seller);
         vm.expectRevert(bytes("sticky"));
         labx.reclaimPrize(id);
@@ -693,11 +693,11 @@ contract LabxRaffleTest is Test {
         _escrowOpen(id);
         router.setSpend(1, 1);
         vm.deal(alice, 1 ether);
-        uint256 quoted = labx.quoteEthForUsdc(30e6);
+        uint256 quoted = labx.quoteEthForUsdc(25_500_000);
         vm.prank(alice);
         labx.buyPackWithEth{value: 1 ether}(id, 0, 1, bytes32(TERMS), 0, _deadline());
         assertEq(alice.balance, 1 ether - quoted);
-        assertEq(usdc.balanceOf(address(labx)), 30e6);
+        assertEq(usdc.balanceOf(address(labx)), 25_500_000);
     }
 
     function test_ethRejectsMissingOrDistantDeadline() public {
@@ -818,7 +818,7 @@ contract LabxRaffleTest is Test {
         uint256 before = usdc.balanceOf(alice);
         vm.prank(alice);
         labx.refund(id);
-        assertEq(usdc.balanceOf(alice), before + 30e6);
+        assertEq(usdc.balanceOf(alice), before + 25_500_000);
         vm.prank(seller);
         labx.reclaimPrize(id);
         assertEq(nft.ownerOf(1), seller);
@@ -1041,8 +1041,8 @@ contract LabxRaffleTest is Test {
         labx.escrow(settled);
         labx.open(settled);
         vm.stopPrank();
-        uint256 paidA = uint256(qtyA) * 30e6;
-        uint256 paidB = uint256(qtyB) * 55e6;
+        uint256 paidA = uint256(qtyA) * 25_500_000;
+        uint256 paidB = uint256(qtyB) * 51e6;
         _fund(alice, paidA);
         _fund(bob, paidB);
         _buy(alice, cancelled, 0, qtyA);
@@ -1074,8 +1074,8 @@ contract LabxRaffleTest is Test {
             _assertEscrowBacking(cancelled, settled);
         }
         assertEq(usdc.balanceOf(alice), paidA);
-        assertEq(usdc.balanceOf(seller), uint256(qtyB) * 50e6);
-        assertEq(usdc.balanceOf(treasury), uint256(qtyB) * 5e6);
+        assertEq(usdc.balanceOf(seller), uint256(qtyB) * 49e6);
+        assertEq(usdc.balanceOf(treasury), uint256(qtyB) * 2e6);
         assertEq(usdc.balanceOf(address(labx)), 0);
         vm.prank(alice);
         vm.expectRevert(LabxRaffle.BadPhase.selector);
@@ -1328,8 +1328,8 @@ contract LabxRaffleTest is Test {
         assertEq(labx.getRaffle(id).winner, alice);
         _pullSettled(id, alice);
         assertEq(nft.ownerOf(1), alice);
-        assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
+        assertEq(usdc.balanceOf(treasury), 1e6);
         assertEq(usdc.balanceOf(cara), 0);
         assertEq(usdc.balanceOf(address(labx)), 0);
         vm.expectRevert(LabxRaffle.BadPhase.selector);

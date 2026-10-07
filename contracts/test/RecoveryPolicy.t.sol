@@ -110,8 +110,8 @@ contract RecoveryPolicyTest is Test {
 
         LabxRaffle.RaffleView memory settled = labx.getRaffle(id);
         assertEq(settled.winner, alice);
-        assertEq(settled.principalEscrow, 25e6);
-        assertEq(settled.feeEscrow, 5e6);
+        assertEq(settled.principalEscrow, 24_500_000);
+        assertEq(settled.feeEscrow, 1e6);
         assertEq(uint256(settled.phase), uint256(LabxRaffle.Phase.Settled));
 
         vm.prank(outsider);
@@ -131,9 +131,9 @@ contract RecoveryPolicyTest is Test {
         vm.prank(alice);
         labx.claimPrize(id);
 
-        assertEq(usdc.balanceOf(seller), 25e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
         assertEq(usdc.balanceOf(nextTreasury), 0);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(treasury), 1e6);
         assertEq(nft.ownerOf(1), alice);
         assertEq(usdc.balanceOf(address(labx)), 0);
     }
@@ -203,10 +203,10 @@ contract RecoveryPolicyTest is Test {
         assertEq(uint256(labx.getRaffle(emptyId).phase), uint256(LabxRaffle.Phase.Cancelled));
         assertEq(uint256(labx.getRaffle(expiredId).phase), uint256(LabxRaffle.Phase.Cancelled));
 
-        _assertRefundAdds(openId, alice, 30e6);
-        _assertRefundAdds(partialId, alice, 30e6);
-        _assertRefundAdds(partialId, bob, 30e6);
-        _assertRefundAdds(expiredId, alice, 30e6);
+        _assertRefundAdds(openId, alice, 25_500_000);
+        _assertRefundAdds(partialId, alice, 25_500_000);
+        _assertRefundAdds(partialId, bob, 25_500_000);
+        _assertRefundAdds(expiredId, alice, 25_500_000);
         vm.prank(outsider);
         vm.expectRevert(LabxRaffle.NotSeller.selector);
         labx.reclaimPrize(openId);
@@ -250,7 +250,7 @@ contract RecoveryPolicyTest is Test {
         vm.prank(outsider);
         labx.cancel(id);
         assertEq(usdc.balanceOf(outsider), outsiderBefore);
-        _assertRefundAdds(id, alice, 30e6);
+        _assertRefundAdds(id, alice, 25_500_000);
         assertEq(labx.getRaffle(id).principalEscrow, 0);
         assertEq(labx.getRaffle(id).feeEscrow, 0);
         vm.prank(alice);
@@ -352,7 +352,7 @@ contract RecoveryPolicyTest is Test {
         labx.cancel(cancelledId);
         _assertBacking(cancelledId, settledId);
 
-        _assertRefundAdds(cancelledId, bob, 30e6);
+        _assertRefundAdds(cancelledId, bob, 25_500_000);
         _assertBacking(cancelledId, settledId);
         vm.prank(seller);
         labx.claimProceeds(settledId);
@@ -360,7 +360,7 @@ contract RecoveryPolicyTest is Test {
         vm.prank(outsider);
         labx.claimFee(settledId);
         _assertBacking(cancelledId, settledId);
-        _assertRefundAdds(cancelledId, alice, 30e6);
+        _assertRefundAdds(cancelledId, alice, 25_500_000);
         _assertBacking(cancelledId, settledId);
 
         vm.prank(bob);
@@ -378,8 +378,8 @@ contract RecoveryPolicyTest is Test {
         assertEq(usdc.balanceOf(address(labx)), 0);
         assertEq(usdc.balanceOf(alice), 100e6);
         assertEq(usdc.balanceOf(bob), 100e6);
-        assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
+        assertEq(usdc.balanceOf(treasury), 1e6);
         assertEq(nft.ownerOf(2), cara);
     }
 
@@ -401,7 +401,7 @@ contract RecoveryPolicyTest is Test {
         vm.warp(uint256(labx.getRaffle(id).vrfRequestedAt) + POLICY_WINDOW);
         vm.prank(outsider);
         labx.abortDrawing(id);
-        _assertRefundAdds(id, alice, 30e6);
+        _assertRefundAdds(id, alice, 25_500_000);
 
         assertEq(labx.requestToRaffle(address(vrf), requestId), 0);
         assertTrue(labx.requestUsed(address(vrf), requestId));
@@ -441,11 +441,11 @@ contract RecoveryPolicyTest is Test {
         target.refund(id);
 
         assertEq(target.principalOf(id, alice), 25e6);
-        assertEq(target.feeOf(id, alice), 5e6);
+        assertEq(target.feeOf(id, alice), 500_000);
         assertEq(target.getRaffle(id).principalEscrow, 25e6);
-        assertEq(target.getRaffle(id).feeEscrow, 5e6);
-        assertEq(failing.balanceOf(address(target)), 30e6);
-        assertEq(failing.balanceOf(alice), 70e6);
+        assertEq(target.getRaffle(id).feeEscrow, 500_000);
+        assertEq(failing.balanceOf(address(target)), 25_500_000);
+        assertEq(failing.balanceOf(alice), 74_500_000);
 
         failing.setFailTransfers(false);
         vm.prank(alice);

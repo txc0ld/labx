@@ -48,7 +48,7 @@ run("isolated Anvil seller and membership journeys", () => {
   }
   async function purchase(id: bigint) {
     const approval = await act({ kind: "approveUsdc", id, packId: 0, quantity: 2 }, buyer);
-    expect(decodeFunctionData({ abi: erc20Abi, data: approval.prepared.data })).toMatchObject({ functionName: "approve", args: [chain.raffle.address, 60_000_000n] });
+    expect(decodeFunctionData({ abi: erc20Abi, data: approval.prepared.data })).toMatchObject({ functionName: "approve", args: [chain.raffle.address, 51_000_000n] });
     return act({ kind: "buyMembership", id, packId: 0, quantity: 2, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } }, buyer);
   }
   it("runs draft edit, exact approvals, purchase, draw, reveal, settlement and separate claims", async () => {
@@ -58,7 +58,7 @@ run("isolated Anvil seller and membership journeys", () => {
     await expect(chain.service.prepare({ action: { kind: "close", id }, wallet: seller })).rejects.toThrow(/published deadline/);
     const bought = await purchase(id);
     const account = await chain.service.readAccount({ id, account: chain.buyer });
-    expect(account.principal).toBe(50_000_000n); expect(account.fee).toBe(10_000_000n); expect(account.usdcAllowance).toBe(0n);
+    expect(account.principal).toBe(50_000_000n); expect(account.fee).toBe(1_000_000n); expect(account.usdcAllowance).toBe(0n);
     const lots = await chain.service.listLots({ id }); expect(lots.items).toHaveLength(1); expect(lots.items[0].amount).toBe(6);
     const history = await chain.service.history({ account: chain.buyer }); expect(history.items.find(row => row.transactionHash === bought.transaction.hash)?.bonusEntries).toBe(6);
     await expect(chain.service.prepare({ action: { kind: "cancel", id }, wallet: seller })).rejects.toThrow(/discretionary cancellation/);
@@ -80,8 +80,8 @@ run("isolated Anvil seller and membership journeys", () => {
     await act({ kind: "reveal", id, publicHash: reveal.publicHash, privateHash: reveal.privateHash, salt: reveal.salt });
     await act({ kind: "settle", id }, stranger); await act({ kind: "claimPrize", id }, buyer); await act({ kind: "claimProceeds", id }); await act({ kind: "claimFee", id }, stranger);
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [1n] })).toBe(chain.buyer);
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(50_000_000n);
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(10_000_000n);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(49_000_000n);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(2_000_000n);
     await expect(chain.service.prepare({ action: { kind: "claimPrize", id }, wallet: buyer })).rejects.toThrow(/unclaimed NFT/);
   }, 30_000);
   it("recovers a funded raffle without a draw through buyer refunds and seller NFT reclaim", async () => {
@@ -89,7 +89,7 @@ run("isolated Anvil seller and membership journeys", () => {
     await chain.warp(input.salesEnd + 7n * 86400n); await act({ kind: "cancel", id }, stranger);
     const before = await chain.service.readAccount({ id, account: chain.buyer });
     await act({ kind: "refund", id }, buyer); await act({ kind: "reclaimPrize", id });
-    const after = await chain.service.readAccount({ id, account: chain.buyer }); expect(after.usdcBalance - before.usdcBalance).toBe(60_000_000n); expect(after.principal + after.fee).toBe(0n);
+    const after = await chain.service.readAccount({ id, account: chain.buyer }); expect(after.usdcBalance - before.usdcBalance).toBe(51_000_000n); expect(after.principal + after.fee).toBe(0n);
     expect(after.nftOwner).toBe(chain.seller);
     await expect(chain.service.prepare({ action: { kind: "refund", id }, wallet: buyer })).rejects.toThrow(/no remaining refund/);
   }, 30_000);
@@ -125,7 +125,7 @@ run("isolated Anvil seller and membership journeys", () => {
     const quote = await chain.service.quoteMembership({ id, packId: 0, quantity: 1, slippageBps: 100 });
     if (quote.eth.kind !== "available") throw new Error(quote.eth.reason);
     const action: WorkflowAction = { kind: "buyMembership", id, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "eth", maxEth: quote.eth.maxEth, slippageBps: quote.eth.slippageBps, deadline: quote.eth.deadline } };
-    const review = await chain.service.prepare({ action, wallet: buyer }); expect(review.value).toBe(quote.eth.maxEth); expect(review.amountUsdc).toBe(30_000_000n);
+    const review = await chain.service.prepare({ action, wallet: buyer }); expect(review.value).toBe(quote.eth.maxEth); expect(review.amountUsdc).toBe(25_500_000n);
     const purchased = await chain.service.submit({ prepared: review, wallet: buyer }); await chain.mine(); expect((await chain.service.confirm({ transaction: purchased })).kind).toBe("confirmed");
     expect((await chain.service.readAccount({ id, account: chain.buyer })).principal).toBe(25_000_000n);
     await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger); await act({ kind: "snapshot", id, maxSteps: 100n }, stranger);
@@ -196,7 +196,7 @@ run("isolated Anvil seller and membership journeys", () => {
     const before = await chain.service.readAccount({ id, account: chain.buyer });
     await act({ kind: "refund", id }, buyer);
     const after = await chain.service.readAccount({ id, account: chain.buyer });
-    expect(after.usdcBalance - before.usdcBalance).toBe(60_000_000n);
+    expect(after.usdcBalance - before.usdcBalance).toBe(51_000_000n);
   }, 30_000);
 
 });

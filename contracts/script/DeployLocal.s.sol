@@ -14,7 +14,7 @@ contract DeployLocal is Script {
         uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer = vm.addr(pk);
         address safe = vm.envOr("SAFE_ADDRESS", deployer);
-        bytes32 terms = vm.envOr("TERMS_HASH", keccak256("labx-local-terms"));
+        bytes32 terms = vm.envBytes32("TERMS_HASH");
 
         vm.startBroadcast(pk);
         MockERC20 usdc = new MockERC20("USD Coin", "USDC", 6);

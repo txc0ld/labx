@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { erc20Abi, erc721Abi } from "viem";
+import { erc20Abi, parseUnits, erc721Abi } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
@@ -134,7 +134,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     expect(purchaseReview).toContain(expectedTotal);
     expect(purchaseReview).toContain(chain.raffle.address);
     const account = await chain.service.readAccount({ id, account: chain.buyer });
-    expect(account.principal + account.fee).toBe(BigInt(expectedTotal.replace(" USDC", "")) * 1_000_000n);
+    expect(account.principal + account.fee).toBe(parseUnits(expectedTotal.replace(" USDC", ""), 6));
   }
 
   it("renders seller creation through buyer prize, seller proceeds and pinned fee claims", async () => {
@@ -143,7 +143,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const id = await createDraft({ tokenId: 301n, title: "Rendered winner path", price: "25", supply: "2", deadline: firstDeadline });
     expect(id).toBe(1n);
     await escrowAndOpen();
-    await purchase(id, "30 USDC");
+    await purchase(id, "25.5 USDC");
 
     await chain.warp(BigInt(firstDeadline));
     await switchAccount(chain.seller);
@@ -164,11 +164,11 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await switchAccount(chain.seller);
     await transact("Claim proceeds");
     await switchAccount(chain.stranger);
-    await transact("Send lab fee");
+    await transact("Send protocol fees");
 
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [301n] })).toBe(chain.buyer);
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(sellerBefore + 25_000_000n);
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(treasuryBefore + 5_000_000n);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(sellerBefore + 24_500_000n);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(treasuryBefore + 1_000_000n);
   }, 120_000);
 
   it("renders timed cancellation through exact buyer refund and seller NFT reclaim", async () => {
@@ -177,7 +177,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     expect(id).toBe(2n);
     await escrowAndOpen();
     const buyerBefore = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.buyer] });
-    await purchase(id, "45 USDC");
+    await purchase(id, "40.8 USDC");
     const snapshot = await chain.service.readRaffle({ id });
     await chain.write(chain.raffle, "setPaused", [true]);
     try {

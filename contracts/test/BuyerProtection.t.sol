@@ -157,8 +157,8 @@ contract BuyerProtectionTest is Test {
         labx.claimFee(oldId);
         vm.prank(alice);
         labx.claimFee(newId);
-        assertEq(usdc.balanceOf(treasury), 5e6);
-        assertEq(usdc.balanceOf(nextTreasury), 5e6);
+        assertEq(usdc.balanceOf(treasury), 1e6);
+        assertEq(usdc.balanceOf(nextTreasury), 1e6);
     }
 
     function test_syncCallbackUsesPinnedCoordinatorAfterDefaultChanges() public {
@@ -233,8 +233,8 @@ contract BuyerProtectionTest is Test {
         labx.claimProceeds(id);
         labx.claimFee(id);
         assertEq(nft.ownerOf(1), alice);
-        assertEq(usdc.balanceOf(seller), 25e6);
-        assertEq(usdc.balanceOf(treasury), 5e6);
+        assertEq(usdc.balanceOf(seller), 24_500_000);
+        assertEq(usdc.balanceOf(treasury), 1e6);
     }
 
     function test_draftEditingClearsRemovedPacksAndLocksEscrowIdentity() public {
