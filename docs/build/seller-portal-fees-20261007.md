@@ -1,5 +1,7 @@
 # Seller portal and percentage fees
 
+This is the original seller-portal work contract. The later [admission and processing-fee amendment](raffle-admission-minimum-fee-20261007.md) supersedes its buyer-fee and refund requirements. Current purchases charge the greater of 2.50 USDC or 2% of pack principal. Successful purchases retain that processing fee; cancellation returns principal only. The historical requirements below are preserved as the original design input.
+
 ## Request and authority
 
 User requested a high-quality seller dashboard with access to the seller's own raffle management and revenue, and confirmed: 2% added to each membership purchase, 2% deducted from the seller's pack-sale principal at settlement, buyer purchase fees refunded on cancellation/refund. Preserve LABx branding and existing buyer protections. Build and prepare the portal for deployment. The newly deployed v2 Sepolia contract cannot be changed in place. No new on-chain transaction or mainnet activation is authorized by this task; prepare the reviewed migration separately. User signs any subsequent approved deployment.

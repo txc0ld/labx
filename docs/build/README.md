@@ -3,7 +3,7 @@
 Use these documents for the current version 3 source:
 
 - [Repository cleanup and portable verification](repository-cleanup-plan-20261007.md) defines the current cleanup and verification contract.
-- [Seller portal and percentage fees](seller-portal-fees-20261007.md) records the current web and fee candidate.
+- [Seller portal and percentage fees](seller-portal-fees-20261007.md) records the original portal scope; the following amendment supersedes its fee and refund policy.
 - [Raffle admission and minimum buyer fee](raffle-admission-minimum-fee-20261007.md) records the current admission and retained-fee behavior.
 - [Permissionless draw start and bounded snapshots](permissionless-draw-20261007.md) records the current draw and recovery behavior.
 - [Scalability hardening](scalability-hardening-20261007.md) records the current bounded-read behavior.

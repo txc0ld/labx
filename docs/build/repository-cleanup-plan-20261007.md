@@ -34,6 +34,34 @@ Run `web/node_modules/.bin/tsc --noEmit --project web/tsconfig.json` for type ch
 
 For portable browser acceptance, run `npx --prefix web playwright install chromium` once and then `node web/test/walletconnect-accessibility.browser.cjs`. The fixture uses Playwright's installed Chromium unless `CHROMIUM_EXECUTABLE` names an explicit executable. The Anvil-backed browser suites use `RUN_BROWSER_ACCEPTANCE`, `RUN_SELLER_PORTAL_BROWSER` and `RUN_PRIVATE_RECORDS_BROWSER`; enabling one does not implicitly enable the others.
 
+Run browser fixtures serially in their own checkout, or finish them before a production build in the same checkout. They start Next development at the current working directory and share its `.next` output. Do not run a production build and these fixtures concurrently in one checkout.
+
+The complete wallet-browser gate, after installing Chromium and building the contract fixtures, is:
+
+```sh
+cd web
+RUN_BROWSER_ACCEPTANCE=1 \
+RUN_SELLER_PORTAL_BROWSER=1 \
+RUN_PRIVATE_RECORDS_BROWSER=1 \
+RUN_BUYER_UI_REPAIRS_BROWSER=1 \
+RUN_OWNER_REVIEW_RACE_BROWSER=1 \
+RUN_INDEPENDENT_OWNER_REVIEW_RACE_BROWSER=1 \
+RUN_INDEPENDENT_BUYER_STATE_BROWSER=1 \
+npm exec vitest -- run \
+  test/independent-browser-journeys.test.ts \
+  test/independent-browser-recovery.test.ts \
+  test/independent-browser-catalog.test.ts \
+  test/seller-portal.browser.test.ts \
+  test/private-record-feedback.browser.test.ts \
+  test/buyer-ui-repairs.browser.test.ts \
+  test/owner-review-race.browser.test.ts \
+  test/independent-owner-review-race.browser.test.ts \
+  test/independent-buyer-state.browser.test.ts \
+  --maxWorkers=1
+```
+
+The separate `RUN_BROWSER_FIXTURE_LIFECYCLE=1` test checks that teardown closes the server port and its owned process group. Linux teardown was exercised. Windows uses a `taskkill` fallback and has not been verified; complete descendant cleanup there remains a maintainer-owned follow-up. Startup-failure cleanup is source-reviewed but was not fault-injected.
+
 ## Tooling decision
 
 Root pinned `playwright` 1.63.0 as a development dependency after checking the npm registry and official [library documentation](https://playwright.dev/docs/api/class-playwright) and [browser installation documentation](https://playwright.dev/docs/browsers). This matches the installed Chromium revision1243 and Firefox1543; the former fixture used Playwright1.50.1 against a different browser revision. Installation changed only the two Playwright package entries and their lock records. Browser binaries remain outside version control. The implementation owner should import this package normally and honor `CHROMIUM_EXECUTABLE` only as an optional explicit override.
