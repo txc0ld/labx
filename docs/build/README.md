@@ -9,6 +9,7 @@ Use these documents for the current version 3 source:
 - [Scalability hardening](scalability-hardening-20261007.md) records the current bounded-read behavior.
 - [Private-record feedback preflight](private-record-feedback-preflight-20261007.md) defines the current wallet-scoped feedback contract.
 - [Wallet and checkout review repairs](review-repairs-20261007.md) defines the final recovery, signing and confirmation requirements.
+- [Aikido vendored CI finding](aikido-vendored-ci-20261007.md) records the unreachable upstream automation and its removal.
 - [Release and migration plan](../../LAUNCH.md) lists the checks and approvals required before a release.
 
 The following reports are retained as historical evidence. Later reports above supersede their candidate or design status:
