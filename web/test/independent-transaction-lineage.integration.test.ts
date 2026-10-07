@@ -37,6 +37,16 @@ function includesHash(value: string, transactionHash: Hex) {
   return value.toLowerCase().includes(transactionHash.toLowerCase());
 }
 
+function outcomeHashForTest(outcome: TransactionOutcome) {
+  return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(next => { resolve = next; });
+  return { promise, resolve };
+}
+
 run("independent transaction replacement lineage on isolated Anvil", () => {
   let chain: LocalChain;
   let snapshot: unknown;
@@ -98,10 +108,11 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     if (nonce === undefined) throw new Error("The draft submission did not create its pending journal.");
     expect(journal.read(chain.buyer)).toMatchObject({ hash: h1, nonce });
 
+    const h1Transaction = await chain.client.getTransaction({ hash: h1 });
     const h2 = await send(chain.buyer, chain.buyer, "0x", nonce, "0xb2d05e00");
     await chain.mine();
     await chain.mine();
-    return { journal, service, wallet, tabA, tabB, h1, h2 };
+    return { journal, service, wallet, tabA, tabB, h1, h1Transaction, h2 };
   }
 
   it("does not recreate stale H1 after its same-nonce H2 was reconciled in the persistent flow", async () => {
@@ -143,6 +154,105 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     expect(reloaded.getSnapshot(chain.buyer)).toMatchObject([
       { kind: "terminal", submitted: { hash: fixture.h2 } }
     ]);
+  }, 15_000);
+
+  it("does not let a late guarded H1 resume recreate state after H2 was reconciled and acknowledged", async () => {
+    const { map, storage } = memoryStorage();
+    const fixture = await replacementFixture(storage);
+    const entered = deferred();
+    const release = deferred();
+    const delayedClient = {
+      ...chain.client,
+      async getTransaction(input: Parameters<typeof chain.client.getTransaction>[0]) {
+        entered.resolve();
+        await release.promise;
+        return input.hash?.toLowerCase() === fixture.h1.toLowerCase()
+          ? fixture.h1Transaction
+          : chain.client.getTransaction(input);
+      }
+    } as typeof chain.client;
+    const delayedService = createRaffleService(delayedClient, chain.manifest, fixture.journal);
+    const delayed = createTransactionOutcomes({
+      ...delayedService,
+      confirm: input => delayedService.confirm({ ...input, timeoutMs: 1_000 })
+    }, () => storage);
+
+    const stale = delayed.resume(fixture.h1, fixture.wallet);
+    try {
+      await Promise.race([
+        entered.promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("The stale H1 transaction read was not reached.")), 5_000))
+      ]);
+      const canonical = await fixture.tabB.resume(fixture.h2, fixture.wallet);
+      expect(canonical).toMatchObject({ kind: "terminal", submitted: { hash: fixture.h2 } });
+      await fixture.tabB.acknowledge(canonical, fixture.wallet);
+      expect(map.size).toBe(0);
+      expect(fixture.journal.read(chain.buyer)).toBeNull();
+    } finally {
+      release.resolve();
+      await stale.catch(() => undefined);
+    }
+
+    expect({ checkpoints: map.size, journal: fixture.journal.read(chain.buyer) }).toEqual({ checkpoints: 0, journal: null });
+    expect(delayed.getSnapshot(chain.buyer)).toEqual([]);
+    expect(fixture.tabB.getSnapshot(chain.buyer)).toEqual([]);
+  }, 15_000);
+
+  it("keeps an observed H2 candidate when a late cold H1 inspection finishes after its checkpoint was deleted", async () => {
+    const { map, storage } = memoryStorage();
+    const fixture = await replacementFixture(storage);
+    const entered = deferred();
+    const release = deferred();
+    let delayedH1 = true;
+    const cold = createTransactionOutcomes({
+      ...fixture.service,
+      async inspectOutcome(input: Parameters<RaffleService["inspectOutcome"]>[0]) {
+        if (delayedH1 && input.hash.toLowerCase() === fixture.h1.toLowerCase()) {
+          delayedH1 = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return fixture.service.inspectOutcome(input);
+      }
+    }, () => storage);
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const listeners = new Map<string, Set<(event: { key?: string | null; newValue?: string | null; storageArea?: OutcomeStorage }) => void>>();
+    const fakeWindow = {
+      localStorage: storage,
+      addEventListener(type: string, listener: (event: { key?: string | null; newValue?: string | null; storageArea?: OutcomeStorage }) => void) {
+        const current = listeners.get(type) ?? new Set();
+        current.add(listener); listeners.set(type, current);
+      },
+      removeEventListener(type: string, listener: (event: { key?: string | null; newValue?: string | null; storageArea?: OutcomeStorage }) => void) {
+        listeners.get(type)?.delete(listener);
+      }
+    };
+    Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+    const stop = cold.observe(chain.buyer);
+    try {
+      await entered.promise;
+      const canonical = await fixture.tabB.resume(fixture.h2, fixture.wallet);
+      expect(canonical).toMatchObject({ kind: "terminal", submitted: { hash: fixture.h2 } });
+      const entry = [...map.entries()].find(([, value]) => includesHash(value, fixture.h2));
+      if (!entry) throw new Error("H2 was not saved before the simulated storage event.");
+      for (const listener of listeners.get("storage") ?? []) listener({ key: entry[0], newValue: entry[1], storageArea: storage });
+      await fixture.tabB.acknowledge(canonical, fixture.wallet);
+      expect(map.size).toBe(0);
+
+      release.resolve();
+      await expect.poll(() => cold.getSnapshot(chain.buyer), { timeout: 10_000 }).toMatchObject([
+        { kind: "terminal", submitted: { hash: fixture.h2 } }
+      ]);
+      expect(cold.getSnapshot(chain.buyer).some(item => outcomeHashForTest(item)?.toLowerCase() === fixture.h1.toLowerCase())).toBe(false);
+      expect(cold.getSnapshot(chain.buyer).filter(blocking)).toEqual([]);
+      expect(map.size).toBe(0);
+      expect(fixture.journal.read(chain.buyer)).toBeNull();
+    } finally {
+      stop();
+      release.resolve();
+      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
   }, 15_000);
 
   async function confirmedPurchaseCheckpoint(storage: OutcomeStorage) {

@@ -109,8 +109,20 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     await canonicalB.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
 
     await staleCheck.click();
-    const staleResult = tabA.locator(".transaction-state", { hasText: h2 });
-    await staleResult.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    const staleResult = tabA.locator(".transaction-state", { hasText: "Transaction replaced" });
+    try {
+      await staleResult.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    } catch (error) {
+      const diagnostic = {
+        flow: await tabA.locator(".transaction-state").allInnerTexts(),
+        outcomes: await tabA.locator(".resume-transaction .transaction-outcome").allInnerTexts(),
+        alerts: await tabA.locator("[role=alert]").allInnerTexts()
+      };
+      throw new Error(`Stale seller check did not resolve to H2: ${JSON.stringify(diagnostic)}`, { cause: error });
+    }
+    const canonicalA = tabA.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
+    await expect.poll(() => canonicalA.innerText(), { timeout: 15_000 }).toMatch(/Transaction (?:replaced|confirmed)/);
+    expect(await canonicalA.innerText()).not.toMatch(/Purchase confirmed|create raffle draft/i);
     expect(await tabA.getByRole("button", { name: "Confirm create raffle draft", exact: true }).count()).toBe(0);
     await tabA.getByRole("button", { name: "Review again", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
 
@@ -126,7 +138,8 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
 
     await tabA.reload({ waitUntil: "domcontentloaded" });
     const reloaded = tabA.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
-    await reloaded.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await expect.poll(() => reloaded.innerText(), { timeout: 15_000 }).toMatch(/Transaction (?:replaced|confirmed)/);
+    expect(await reloaded.innerText()).not.toMatch(/Purchase confirmed|create raffle draft/i);
     expect(await tabA.getByText(/Saved transaction needs verification|Transaction needs attention/).count()).toBe(0);
     expect(await tabA.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const bounds = await reloaded.boundingBox();
