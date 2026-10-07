@@ -28,7 +28,7 @@ const description = "Membership packs, member perks and NFT raffles by LABx.";
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#E6D8FA",
+  themeColor: "#f8f9fa",
   viewportFit: "cover"
 };
 

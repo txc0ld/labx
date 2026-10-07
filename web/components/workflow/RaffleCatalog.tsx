@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowUpRight, Layers3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserService, RaffleService } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
@@ -67,16 +68,22 @@ export function RaffleCatalogView({ state, service, onRetry, onLoadMore }: {
   if (state.kind === "loading") return <div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading the collection</strong><p>Reading verified raffle records.</p></div></div>;
   if (state.kind !== "ready") {
     return (
-      <div className="well empty-bench stack">
-        <h2>{state.kind === "legacy" ? "Legacy deployment detected" : state.kind === "mismatch" ? "Deployment mismatch" : "Collection unavailable"}</h2>
-        <p className="notice warning" role={state.kind === "error" ? "alert" : "status"}>{state.message}</p>
-        <p>Please try again shortly.</p>
-        <button className="btn btn-dark" type="button" onClick={onRetry}>Retry connection</button>
+      <div className="catalog-state" role={state.kind === "error" ? "alert" : "status"}>
+        <span className="catalog-state-symbol" aria-hidden="true"><Layers3 /></span>
+        <div className="catalog-state-copy">
+          <h2>{state.kind === "legacy" ? "Legacy deployment detected" : state.kind === "mismatch" ? "Deployment mismatch" : "Collection unavailable"}</h2>
+          <p>{state.kind === "error" ? "We couldn’t load the raffle records. Try the connection again." : "Raffles appear here when a verified deployment is connected."}</p>
+          <details className="workflow-details"><summary>Connection details</summary><p>{state.message}</p></details>
+        </div>
+        <div className="catalog-state-actions">
+          {state.kind === "error" ? <button className="btn btn-dark" type="button" onClick={onRetry}>Retry connection</button> : <Link className="btn btn-dark" href="/guide">How LABx works <ArrowUpRight size={17} aria-hidden="true" /></Link>}
+          <Link className="text-link" href="/discounts">Explore member perks <ArrowUpRight size={16} aria-hidden="true" /></Link>
+        </div>
       </div>
     );
   }
   if (!state.items.length) {
-    return <div className="well empty-bench stack"><h2>No raffles listed</h2><p>The verified deployment has no raffle records yet.</p><Link className="btn btn-dark" href="/guide">How LABx works</Link></div>;
+    return <div className="catalog-state"><span className="catalog-state-symbol" aria-hidden="true"><Layers3 /></span><div className="catalog-state-copy"><h2>No raffles listed</h2><p>The verified deployment has no raffle records yet.</p></div><div className="catalog-state-actions"><Link className="btn btn-dark" href="/guide">How LABx works <ArrowUpRight size={17} aria-hidden="true" /></Link><Link className="text-link" href="/discounts">Explore member perks <ArrowUpRight size={16} aria-hidden="true" /></Link></div></div>;
   }
 
   const shown = state.items.filter((snapshot) => filter === "all" || (filter === "open" ? catalogAvailability(snapshot).purchasable : catalogAvailability(snapshot).ended));

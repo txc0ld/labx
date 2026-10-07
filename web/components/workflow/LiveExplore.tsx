@@ -16,7 +16,7 @@ export function LiveExplore() {
     <>
       <section className="collection-intro" aria-labelledby="hero-title" data-reveal>
         <div className="collection-title-block"><ResolvedTitle /></div>
-        <div className="collection-intro-actions"><p className="collection-status-label"><strong>Verified contract records</strong></p><Link href="/guide" className="guide-link">How it works <span aria-hidden="true">↗</span></Link></div>
+        <div className="collection-intro-actions"><p className="collection-status-label"><strong>{catalog.kind === "ready" ? "Verified contract records" : "Sepolia test network"}</strong></p><Link href="/guide" className="guide-link">How it works <span aria-hidden="true">↗</span></Link></div>
       </section>
       {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
       <section className="capsule-collection" id="bench">

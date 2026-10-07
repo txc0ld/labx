@@ -9,7 +9,7 @@ export const OPERATOR = {
 
 export const OPERATOR_LINE = `${OPERATOR.name} (ABN ${OPERATOR.abn}, ACN ${OPERATOR.acn})`;
 
-const DEFAULT_SITE_URL = "https://labx-two.vercel.app";
+const DEFAULT_SITE_URL = "https://labx.art";
 
 export function publicSiteUrl(): string {
   const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -21,6 +21,6 @@ export function publicSiteHost(): string {
   try {
     return new URL(publicSiteUrl()).host;
   } catch {
-    return "labx-two.vercel.app";
+    return "labx.art";
   }
 }

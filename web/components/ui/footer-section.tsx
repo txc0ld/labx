@@ -134,8 +134,8 @@ function AnimatedContainer({ className, delay = 0.1, children }: AnimatedContain
     return () => observer.disconnect();
   }, [reducedMotion]);
 
-  const shown = { filter: "blur(0px)", translateY: 0, opacity: 1 };
-  const hidden = { filter: "blur(4px)", translateY: -8, opacity: 0 };
+  const shown = { transform: "translateY(0px)", opacity: 1 };
+  const hidden = { transform: "translateY(8px)", opacity: 0 };
   const animateMotion = armed && reducedMotion === false;
 
   return (
@@ -143,7 +143,7 @@ function AnimatedContainer({ className, delay = 0.1, children }: AnimatedContain
       ref={containerRef}
       initial={false}
       animate={animateMotion && !visible ? hidden : shown}
-      transition={animateMotion ? { delay: visible ? delay : 0, duration: 0.6, ease: [0.16, 1, 0.3, 1] } : { delay: 0, duration: 0 }}
+      transition={animateMotion ? { delay: visible ? delay : 0, duration: 0.24, ease: [0.16, 1, 0.3, 1] } : { delay: 0, duration: 0 }}
       className={`footer-animated${className ? ` ${className}` : ""}`}
       onFocusCapture={() => {
         hasRevealed.current = true;

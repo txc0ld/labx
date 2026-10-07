@@ -1,7 +1,6 @@
 "use client";
 
-import { motion, type Variants } from "framer-motion";
-import React, { useId, useState, useSyncExternalStore, type CSSProperties } from "react";
+import React, { useId, type CSSProperties } from "react";
 import type { Pack, PackName } from "@/lib/seed";
 
 type SquishyPackCardProps = {
@@ -48,47 +47,6 @@ const PACK_HEADING_COLORS: Record<PackName, string> = {
   Platinum: "#3C4B00"
 };
 
-const cardVariants: Variants = {
-  rest: { scale: 1 },
-  hover: { scale: 1.025 }
-};
-
-const backgroundVariants: Variants = {
-  rest: { scale: 1 },
-  hover: { scale: 1.35 }
-};
-
-const circleVariants: Variants = {
-  rest: { scaleY: 1, y: 0 },
-  hover: { scaleY: 0.55, y: -16 }
-};
-
-const ellipseVariants: Variants = {
-  rest: { scaleY: 1, y: 0 },
-  hover: { scaleY: 2.05, y: -16 }
-};
-
-const springyTransition = {
-  duration: 0.8,
-  ease: "backInOut" as const
-};
-
-const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
-
-function subscribeToReducedMotion(onChange: () => void) {
-  const mediaQuery = window.matchMedia(reducedMotionQuery);
-  mediaQuery.addEventListener("change", onChange);
-  return () => mediaQuery.removeEventListener("change", onChange);
-}
-
-function reducedMotionSnapshot() {
-  return window.matchMedia(reducedMotionQuery).matches;
-}
-
-function serverReducedMotionSnapshot() {
-  return false;
-}
-
 export function SquishyPackCard({
   pack,
   feeUsdc,
@@ -97,30 +55,14 @@ export function SquishyPackCard({
   onSelect
 }: SquishyPackCardProps) {
   const bubbleFillId = useId();
-  const reduceMotion = useSyncExternalStore(
-    subscribeToReducedMotion,
-    reducedMotionSnapshot,
-    serverReducedMotionSnapshot
-  );
-  const [focused, setFocused] = useState(false);
-  const activeVariant = !reduceMotion && !disabled && focused ? "hover" : "rest";
-  const interactiveVariant = !reduceMotion && !disabled ? "hover" : undefined;
-  const transition = reduceMotion ? { duration: 0, delay: 0 } : springyTransition;
   const entriesLabel = pack.bonusEntries === 1 ? "entry" : "entries";
 
   return (
-    <motion.label
+    <label
       className="squishy-pack-card"
       style={PACK_STYLES[pack.name]}
       data-selected={selected ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
-      variants={cardVariants}
-      initial="rest"
-      animate={activeVariant}
-      whileHover={interactiveVariant}
-      transition={transition}
-      onFocusCapture={() => setFocused(true)}
-      onBlurCapture={() => setFocused(false)}
     >
       <input
         className="sr squishy-pack-radio"
@@ -151,14 +93,12 @@ export function SquishyPackCard({
               {pack.bonusEntries} bonus {entriesLabel}
             </span>
           </span>
-          <motion.svg
+          <svg
             className="squishy-pack-background"
             viewBox="0 0 160 200"
             preserveAspectRatio="xMidYMid meet"
             aria-hidden="true"
             focusable="false"
-            variants={backgroundVariants}
-            transition={transition}
           >
             <defs>
               <radialGradient id={bubbleFillId} cx="32%" cy="24%" r="78%">
@@ -169,31 +109,27 @@ export function SquishyPackCard({
                 <stop offset="100%" stopColor="#171717" />
               </radialGradient>
             </defs>
-            <motion.circle
+            <circle
               cx="80"
               cy="58"
               r="52"
               fill={`url(#${bubbleFillId})`}
-              variants={circleVariants}
-              transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
             />
-            <motion.ellipse
+            <ellipse
               cx="80"
               cy="152"
               rx="52"
               ry="23"
               fill={`url(#${bubbleFillId})`}
-              variants={ellipseVariants}
-              transition={reduceMotion ? transition : { ...springyTransition, delay: 0.12 }}
             />
-          </motion.svg>
+          </svg>
         </span>
         <span className="squishy-pack-details">
           <span>+{feeUsdc} USDC fee</span>
           <span>{pack.remaining > 0 ? `${pack.remaining} remaining` : "Sold out"}</span>
         </span>
       </span>
-    </motion.label>
+    </label>
   );
 }
 

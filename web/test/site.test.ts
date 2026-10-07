@@ -80,7 +80,7 @@ describe("required marketing routes", () => {
     expect(operator).toContain("56 702 056 166");
     expect(operator).toContain("702 056 166");
     expect(operator).toMatch(/publicSiteUrl|NEXT_PUBLIC_SITE_URL/);
-    expect(operator).toContain("labx-two.vercel.app");
+    expect(operator).toContain("labx.art");
     for (const file of ["app/about/page.tsx", "app/privacy/page.tsx", "app/legal/page.tsx"]) {
       const text = read(file);
       expect(text).toMatch(/import \{[^}]*OPERATOR_LINE[^}]*\} from "@\/lib\/operator"/);
@@ -356,7 +356,7 @@ describe("responsive chrome and legal surfaces", () => {
     expect(layout).toMatch(/siteName:\s*"LABx"/);
     expect(layout).toMatch(/hero-linked-panels\.jpg/);
     expect(layout).toMatch(/twitter/);
-    expect(layout).toMatch(/themeColor:\s*"#E6D8FA"/);
+    expect(layout).toMatch(/themeColor:\s*"#f8f9fa"/);
     expect(layout).toMatch(/viewportFit:\s*"cover"/);
   });
 

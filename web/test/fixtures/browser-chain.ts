@@ -41,6 +41,7 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
       ...process.env,
       LABX_STORE: "memory",
       NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST: JSON.stringify({
+        version: chain.manifest.version,
         chainId: chain.manifest.chainId,
         address: chain.manifest.address,
         runtimeCodeHash: chain.manifest.runtimeCodeHash,

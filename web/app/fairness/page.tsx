@@ -7,16 +7,16 @@ export default function FairnessPage() {
   return (
     <section className="section page-frame">
       <h1 className="page-title">The draw</h1>
-      <p className="lede">Escrow, a commitment hash, then VRF after the snapshot. Settlement flips phase; claims move the prize, proceeds, and fee.</p>
+      <p className="lede">The prize is locked. Entries are frozen. One verifiable draw decides the winner.</p>
       <LegalNav />
       <div className="piece-grid legal-surfaces">
         <article className="pearl pad">
           <h2>Escrow</h2>
-          <p>The piece moves into escrow before memberships open. After settlement, the drawn wallet claims the NFT. Membership proceeds and the lab fee remain separate claims for the seller and pinned treasury.</p>
+          <p>The NFT enters escrow before memberships open. After settlement, the winner claims the prize, the seller claims net proceeds, and the treasury claims the fees separately.</p>
         </article>
         <article className="pearl pad">
           <h2>Commit</h2>
-          <p>A private commitment is hashed with a salt on the server, then committed on-chain. Public pages show the outer hash. The salt stays off this bench until a signed reveal.</p>
+          <p>The seller records a private commitment before opening. Its public hash lets anyone check the later reveal. It does not enforce a minimum sale price.</p>
         </article>
         <article className="terminal pad">
           <h2>VRF</h2>

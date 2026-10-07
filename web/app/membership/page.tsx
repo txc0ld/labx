@@ -15,7 +15,7 @@ export default function MembershipPage() {
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
         <h1 className="page-title">Membership.</h1>
-        <p className="lede">Each pack is a membership for one piece. A live listing must publish its price, bonus entries and remaining supply.</p>
+        <p className="lede">Choose a pack. Get your membership and its bonus entries.</p>
       </header>
       <div className="membership-facts">
         <div className="pearl pad"><span>Purchase fee</span><strong>+{BUYER_FEE_BPS / 100}%</strong></div>
@@ -24,7 +24,7 @@ export default function MembershipPage() {
       </div>
       <section className="well pad stack" aria-labelledby="tiers-title">
         <h2 id="tiers-title">Pack tiers</h2>
-        <ol className="tier-list">{PACKS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}>{pack}</li>)}</ol>
+        <ol className="tier-list">{PACKS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}><span>{pack}</span><span className="tier-orbs" aria-hidden="true" /></li>)}</ol>
         <p className="muted">These are LABx’s visual tiers. A verified raffle can publish up to eight custom membership names, prices, bonus entries and supply limits.</p>
       </section>
       <article className="notice warning stack">
