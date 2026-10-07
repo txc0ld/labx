@@ -114,13 +114,13 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     }
   }
 
-  if (state.kind === "retained" && existing) return <div className="studio-review stack"><p className="notice">The existing commitment and recovery hash are retained. These edits do not require private storage access.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setState({ kind: "editing" })}>Edit draft</button></div>;
+  if (state.kind === "retained" && existing) return <div className="studio-review stack"><p className="notice">The existing commitment and recovery hash are retained. These edits do not require private storage access.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setState({ kind: "editing" })}>Edit draft</button></div>;
 
   if (state.kind === "review" || state.kind === "saving" || state.kind === "committed") {
     const { action } = state;
     return (
       <div className="studio-review stack">
-        <p className="notice warning" role="status">Review every public value before requesting a wallet signature. Opening later fixes the economics and deadline.</p>
+        <p className="notice warning" role="status">Review every public value before requesting a wallet signature. Opening later fixes the economics and deadline. Editing an existing draft always requires a fresh LABx approval.</p>
         <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{formatDate(action.salesEnd)} UTC</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
         {state.kind === "committed" ? (
           <>
@@ -135,7 +135,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   return (
     <form className="studio-form stack" onSubmit={review}>
-      <p className="notice warning">The private commitment is signed for durable storage. It is never included in the public draft transaction.</p>
+      <p className="notice warning">The private commitment is signed for durable storage. It is never included in the public draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
       <label htmlFor="draft-title">Raffle title<input id="draft-title" value={form.title} onChange={(event) => update("title", event.target.value)} required /></label>
       <div className="form-pair"><label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} value={form.nft} disabled={existing?.raffle.escrowed} onChange={(event) => update("nft", event.target.value.trim())} required /></label><label htmlFor="draft-token">Token ID<input id="draft-token" inputMode="numeric" value={form.tokenId} disabled={existing?.raffle.escrowed} onChange={(event) => update("tokenId", event.target.value.trim())} required /></label></div>
       <label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} required /></label>

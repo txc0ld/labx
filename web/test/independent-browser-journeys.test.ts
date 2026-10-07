@@ -131,9 +131,30 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     return id;
   }
 
-  async function escrowAndOpen() {
+  async function approveDraftAsOwner(id: bigint) {
+    await switchAccount(chain.operator);
+    await goto(`/review/${id.toString()}`, chain.operator);
+    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
+    await fixture.page.getByRole("button", { name: "Prepare exact approval", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const review = await chain.service.readAdmission({ id });
+    if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
+    const receipt = await chain.write(chain.raffle, "approveRaffle", [id, review.snapshot.admission.reviewHash]);
+    await chain.mine();
+    await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
+    await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  }
+
+  async function escrowAndOpen(id: bigint) {
     expect(await transact("Approve NFT")).toContain(chain.raffle.address);
     expect(await transact("Escrow NFT")).toContain(chain.raffle.address);
+    await approveDraftAsOwner(id);
+    await switchAccount(chain.seller);
+    await goto(`/seller/${id.toString()}`, chain.seller);
     await fixture.page.getByRole("button", { name: "Review opening policy", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Open memberships", exact: true }).waitFor({ state: "visible" });
     expect(await transact("Open memberships")).toContain(chain.raffle.address);
@@ -163,8 +184,8 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const treasuryBefore = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] });
     const id = await createDraft({ tokenId: 301n, title: "Rendered winner path", price: "25", supply: "2", deadline: firstDeadline });
     expect(id).toBe(1n);
-    await escrowAndOpen();
-    await purchase(id, "25.5 USDC");
+    await escrowAndOpen(id);
+    await purchase(id, "27.5 USDC");
 
     await chain.warp(BigInt(firstDeadline));
     await switchAccount(chain.seller);
@@ -192,16 +213,17 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [301n] })).toBe(chain.buyer);
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(sellerBefore + 24_500_000n);
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(treasuryBefore + 1_000_000n);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(treasuryBefore + 3_000_000n);
   }, 120_000);
 
   it("renders timed cancellation through exact buyer refund and seller NFT reclaim", async () => {
+    await fixture.page.setViewportSize({ width: 390, height: 844 });
     await switchAccount(chain.seller);
     const id = await createDraft({ tokenId: 302n, title: "Rendered refund path", price: "40", supply: "2", deadline: secondDeadline });
     expect(id).toBe(2n);
-    await escrowAndOpen();
+    await escrowAndOpen(id);
     const buyerBefore = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.buyer] });
-    await purchase(id, "40.8 USDC");
+    await purchase(id, "42.5 USDC");
     const snapshot = await chain.service.readRaffle({ id });
     await chain.write(chain.raffle, "setPaused", [true]);
     try {
@@ -218,8 +240,9 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     } finally {
       await chain.write(chain.raffle, "setPaused", [false]);
     }
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.buyer] })).toBe(buyerBefore);
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.buyer] })).toBe(buyerBefore - 2_500_000n);
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [302n] })).toBe(chain.seller);
+    expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
   }, 120_000);

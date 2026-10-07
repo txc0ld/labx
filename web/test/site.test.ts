@@ -50,7 +50,8 @@ const STATIC_ROUTES = new Set([
   "/profile",
   "/profile/history",
   "/profile/receipts",
-  "/seller"
+  "/seller",
+  "/review"
 ]);
 const ALIAS_ROUTES = new Set(["/terms"]);
 
@@ -120,8 +121,9 @@ describe("required marketing routes", () => {
     expect(read("app/rules/page.tsx")).toMatch(/DRAW_RULES/);
     expect(terms).toMatch(/winner claims the NFT/i);
     expect(terms).toMatch(/seller claims net membership proceeds/i);
-    expect(terms).toMatch(/treasury receives buyer fees and the seller commission/i);
-    expect(terms).toMatch(/buyer.*actual membership principal and buyer fees/i);
+    expect(terms).toMatch(/treasury receives.*processing fees.*seller commission/i);
+    expect(terms).toMatch(/refunds?.*principal only/i);
+    expect(terms).toMatch(/processing fee.*retained/i);
   });
 
   it("describes the operator, NFT review and Sepolia scope on About", () => {
@@ -193,6 +195,10 @@ describe("chrome links", () => {
       }
       if (pathname === "/seller/${snapshot.id.toString()}") {
         expect(pageExists("app/seller/[id]/page.tsx")).toBe(true);
+        continue;
+      }
+      if (pathname === "/review/${snapshot.id.toString()}") {
+        expect(pageExists("app/review/[id]/page.tsx")).toBe(true);
         continue;
       }
       if (pathname.startsWith("/fairness")) {

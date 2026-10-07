@@ -71,7 +71,8 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
               <Metric label="Already claimed" value={totals.paidProceeds} note="Settled proceeds paid to this seller" />
               <Metric label="Ready to claim" value={totals.claimableProceeds} note="Settled seller proceeds still in escrow" />
               <Metric label="Pending principal" value={totals.pendingPrincipal} note="Open or drawing; not earned revenue" />
-              <Metric label="Refund liability" value={totals.refundLiability} note="Claimable by cancelled-raffle buyers" />
+              <Metric label="Refund liability" value={totals.refundLiability} note="Outstanding principal only for cancelled raffles" />
+              <Metric label="Processing fees paid" value={totals.buyerFees} note="Historical buyer fees; never seller revenue or refund liability" />
               <Metric label="Gross pack sales" value={totals.grossPrincipal} note="Includes sales later cancelled and refunded" />
             </dl>
           ) : (
@@ -118,11 +119,15 @@ function SellerRaffleCard({ snapshot }: { snapshot: RaffleSnapshot }) {
     : phase === 6
       ? { label: "Refund liability", value: accounting.refundLiability }
       : { label: "Pending principal", value: accounting.pendingPrincipal };
+  const admission = snapshot.admission.status === "pending" ? "Pending review"
+    : snapshot.admission.status === "changed" ? "Changed since review"
+      : snapshot.admission.status === "approved" ? "Approved for current draft"
+        : snapshot.admission.status === "opened" ? "Approved at opening" : "No approval recorded at opening";
   return (
     <li>
       <div className={styles.cardTopline}><span>Raffle #{snapshot.id.toString()}</span><span className={styles.phase}>{phaseLabel(phase)}</span></div>
       <div className={styles.cardTitle}><h3>{snapshot.raffle.title}</h3><p>Closes {formatDate(snapshot.raffle.salesEnd)} UTC</p></div>
-      <dl className={styles.cardFacts}><div><dt>Gross pack sales</dt><dd>{formatUsdc(accounting.grossPrincipal)} USDC</dd></div><div><dt>{outcome.label}</dt><dd>{formatUsdc(outcome.value)} USDC</dd></div></dl>
+      <dl className={styles.cardFacts}><div><dt>LABx review</dt><dd>{admission}</dd></div><div><dt>Gross pack sales</dt><dd>{formatUsdc(accounting.grossPrincipal)} USDC</dd></div><div><dt>{outcome.label}</dt><dd>{formatUsdc(outcome.value)} USDC</dd></div></dl>
       <Link className={`btn btn-dark ${styles.manageButton}`} href={`/seller/${snapshot.id.toString()}`}>Manage raffle <span aria-hidden="true">→</span></Link>
     </li>
   );

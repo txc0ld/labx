@@ -100,13 +100,14 @@ export function RaffleCatalogView({ state, service, onRetry, onLoadMore }: {
 function RaffleCard({ service, snapshot }: { service?: RaffleService; snapshot: RaffleSnapshot }) {
   const price = minimumActivePrice(snapshot);
   const status = catalogAvailability(snapshot);
+  const fee = price === null ? null : buyerFee(price, snapshot.policy.buyerFeeBps, snapshot.policy.minBuyerFeeUsdc);
   return (
     <li>
       <Link className="raffle-capsule chain-capsule" href={`/piece/${snapshot.id.toString()}`} aria-label={`Open ${snapshot.raffle.title}`}>
         {service ? <RaffleArtwork service={service} snapshot={snapshot} compact /> : <div className="chain-capsule-art"><span aria-hidden="true">{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span><p>NFT artwork unavailable</p><small>Token #{snapshot.raffle.tokenId.toString()}</small></div>}
         <div className="capsule-meta">
           <div className="capsule-title-row"><div><h3>{snapshot.raffle.title}</h3><p className="capsule-artist">NFT {shortAddress(snapshot.raffle.nft)}</p></div><span className={`capsule-status ${status.purchasable ? "is-open" : ""}`}>{status.label}</span></div>
-          <p className="capsule-price">{!status.purchasable || price === null ? "Membership sales unavailable" : `From ${formatUsdc(price + buyerFee(price, snapshot.policy.buyerFeeBps))} USDC · includes ${formatUsdc(buyerFee(price, snapshot.policy.buyerFeeBps))} buyer fee`}</p>
+          <p className="capsule-price">{!status.purchasable || price === null || fee === null ? "Membership sales unavailable" : `From ${formatUsdc(price + fee)} USDC · includes ${formatUsdc(fee)} nonrefundable processing fee per purchase call`}</p>
           <div className="capsule-foot"><span>{status.purchasable ? `${status.remaining.toLocaleString("en-US")} memberships left · ` : ""}Sales deadline {formatDate(snapshot.raffle.salesEnd)} UTC</span><span className="capsule-open" aria-hidden="true">View raffle ↗</span></div>
         </div>
       </Link>

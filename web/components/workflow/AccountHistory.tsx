@@ -13,11 +13,11 @@ type HistoryState =
   | { kind: "ready"; items: readonly HistoryItem[]; nextCursor: bigint | null; loadingMore: boolean; block: BlockRef };
 
 const EVENT_COPY: Record<HistoryItem["event"], { title: string; detail: string }> = {
-  PackPurchased: { title: "Membership purchased", detail: "Confirmed membership and included bonus entries" },
+  PackPurchased: { title: "Membership purchased", detail: "Confirmed principal and a nonrefundable processing fee" },
   PrizeClaimed: { title: "Prize claimed", detail: "NFT transferred to the recorded winner" },
   ProceedsClaimed: { title: "Proceeds claimed", detail: "Membership proceeds transferred to the seller" },
-  FeeClaimed: { title: "Lab fee transferred", detail: "Fee transferred to the pinned treasury" },
-  Refunded: { title: "Refund claimed", detail: "Membership principal and actual buyer fee returned" },
+  FeeClaimed: { title: "Protocol fees transferred", detail: "Retained processing fees and any settled seller commission transferred to the pinned treasury" },
+  Refunded: { title: "Principal refund claimed", detail: "Outstanding membership principal returned; the successful purchase processing fee remained nonrefundable" },
   PrizeReclaimed: { title: "Prize reclaimed", detail: "NFT returned after cancellation" }
 };
 

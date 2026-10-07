@@ -68,7 +68,7 @@ function ActivityRow({ item }: { item: SellerRaffleActivity }) {
   switch (item.eventName) {
     case "PackPurchased":
       title = "Membership purchased";
-      description = `${shortAddress(item.args.buyer)} paid ${formatUsdc(item.args.principal)} USDC principal + ${formatUsdc(item.args.fee)} buyer fee · quantity ${item.args.qty}`;
+      description = `${shortAddress(item.args.buyer)} paid ${formatUsdc(item.args.principal)} USDC principal + ${formatUsdc(item.args.fee)} nonrefundable processing fee · quantity ${item.args.qty}`;
       break;
     case "ProceedsClaimed":
       title = "Seller proceeds claimed";
@@ -80,7 +80,7 @@ function ActivityRow({ item }: { item: SellerRaffleActivity }) {
       break;
     case "Refunded":
       title = "Buyer refund claimed";
-      description = `${formatUsdc(item.args.amount)} USDC combined refund sent to ${shortAddress(item.args.buyer)}`;
+      description = `${formatUsdc(item.args.amount)} USDC principal-only refund sent to ${shortAddress(item.args.buyer)}; the processing fee remains historical`;
       break;
     default: {
       const exhaustive: never = item;

@@ -31,6 +31,28 @@ function formatBps(bps: number) {
   return `${whole}${fraction ? `.${fraction.toString().padStart(2, "0").replace(/0+$/, "")}` : ""}%`;
 }
 
+function explorerAddress(chainId: number, value: string) {
+  return chainId === 11155111 ? `https://sepolia.etherscan.io/address/${value}` : null;
+}
+
+function explorerToken(chainId: number, value: string, tokenId: bigint) {
+  return chainId === 11155111 ? `https://sepolia.etherscan.io/token/${value}?a=${tokenId.toString()}` : null;
+}
+
+function admissionCopy(snapshot: RaffleSnapshot) {
+  switch (snapshot.admission.status) {
+    case "pending": return "Pending owner review";
+    case "changed": return "Changed since owner review";
+    case "approved": return "Approved for this exact draft";
+    case "opened": return "Approved at opening";
+    case "not-opened": return "No approval recorded at opening";
+    default: {
+      const exhaustive: never = snapshot.admission;
+      return exhaustive;
+    }
+  }
+}
+
 type WorkspaceState =
   | { kind: "loading" }
   | { kind: "unavailable" | "legacy" | "mismatch" | "missing" | "error"; message: string }
@@ -164,6 +186,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
             <div className="purchase-eyebrow"><p className="kicker">Seller {shortAddress(snapshot.raffle.seller)}</p><span className="piece-status">{phaseLabel(phase)}</span></div>
             <h1 className="page-title">{snapshot.raffle.title}</h1>
             <p className="piece-deadline">Sales deadline {formatDate(snapshot.raffle.salesEnd)} UTC · {snapshot.lotCount.toString()} recorded lots</p>
+            <p className="notice" role="status"><strong>LABx review:</strong> {admissionCopy(snapshot)}. This records review of the exact prize and draw-funding use; it is not proof of authenticity or future transferability.</p>
             <Link className="guide-link" href="/fairness">Draw protections <span aria-hidden="true">↗</span></Link>
           </header>
           {mode === "seller" ? <SellerFinancialSummary snapshot={snapshot} /> : null}
@@ -174,7 +197,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
             : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} />}
           {mode === "public" ? <RecoveryAlternatives browser={browser} snapshot={snapshot} availability={availability} onConfirmed={reload} /> : null}
           {mode === "seller" && seller && phase === 0 && saveCommitment ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
-          <details className="workflow-details"><summary>Contract details</summary><dl className="review-list"><div><dt>Raffle contract</dt><dd className="hash">{browser.service.manifest.address}</dd></div><div><dt>NFT contract</dt><dd className="hash">{snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{snapshot.raffle.tokenId.toString()}</dd></div><div><dt>Buyer fee</dt><dd>{formatBps(snapshot.policy.buyerFeeBps)}</dd></div><div><dt>Seller commission</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)}</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
+          <details className="workflow-details"><summary>Contract and review details</summary><dl className="review-list"><div><dt>Chain</dt><dd>{browser.service.manifest.chainId === 11155111 ? "Ethereum Sepolia" : "Isolated local chain"} ({browser.service.manifest.chainId})</dd></div><div><dt>Raffle contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ? <a href={explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ?? undefined} target="_blank" rel="noreferrer">{browser.service.manifest.address} ↗</a> : browser.service.manifest.address}</dd></div><div><dt>Collection contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ? <a href={explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ?? undefined} target="_blank" rel="noreferrer">{snapshot.raffle.nft} ↗</a> : snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ? <a href={explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ?? undefined} target="_blank" rel="noreferrer">#{snapshot.raffle.tokenId.toString()} on explorer ↗</a> : `#${snapshot.raffle.tokenId.toString()}`}</dd></div><div><dt>LABx review</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(snapshot.policy.minBuyerFeeUsdc)} USDC or {formatBps(snapshot.policy.buyerFeeBps)} per purchase call; nonrefundable after success</dd></div><div><dt>Seller commission</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
       </section>
       <DrawProgress service={browser.service} snapshot={snapshot} />
@@ -195,8 +218,10 @@ function SellerFinancialSummary({ snapshot }: { snapshot: RaffleSnapshot }) {
         <div><dt>Ready to claim</dt><dd>{formatUsdc(accounting.claimableProceeds)} USDC</dd></div>
         <div><dt>Pending principal</dt><dd>{formatUsdc(accounting.pendingPrincipal)} USDC</dd></div>
         <div><dt>Refund liability</dt><dd>{formatUsdc(accounting.refundLiability)} USDC</dd></div>
+        <div><dt>Processing fees paid</dt><dd>{formatUsdc(accounting.buyerFees)} USDC</dd></div>
+        <div><dt>Protocol fee escrow</dt><dd>{formatUsdc(snapshot.raffle.feeEscrow)} USDC</dd></div>
       </dl>
-      <p>Gross sales include cancelled sales. Pending principal is not earned revenue. Buyer fees belong to the protocol and are excluded from seller revenue.</p>
+      <p>Gross sales include cancelled sales. Pending principal is not earned revenue. Successful purchase processing fees are retained for the pinned treasury and excluded from seller revenue. Cancellation adds no seller commission.</p>
     </section>
   );
 }
@@ -302,13 +327,13 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
             <div className="chain-pack-grid" role="radiogroup" aria-label="Membership packs">
               {snapshot.packs.map((pack, index) => {
                 const remaining = Math.max(0, Number(pack.maxSupply) - Number(pack.sold));
-                return <MembershipPackCard key={`${index}-${pack.name}`} name={pack.name} price={formatUsdc(pack.priceUsdc)} bonusEntries={pack.bonusEntries} remaining={remaining} feeLabel={`${formatBps(snapshot.policy.buyerFeeBps)} buyer fee`} value={String(index)} selected={index === packId} disabled={!pack.active || remaining === 0} onSelect={() => setPackId(index)} />;
+                return <MembershipPackCard key={`${index}-${pack.name}`} name={pack.name} price={formatUsdc(pack.priceUsdc)} bonusEntries={pack.bonusEntries} remaining={remaining} feeLabel={`max ${formatUsdc(snapshot.policy.minBuyerFeeUsdc)} USDC / ${formatBps(snapshot.policy.buyerFeeBps)} processing fee`} value={String(index)} selected={index === packId} disabled={!pack.active || remaining === 0} onSelect={() => setPackId(index)} />;
               })}
             </div>
           </section>
           <section className="order-panel" aria-labelledby="order-title">
             <div className="quantity-control"><label htmlFor="membership-qty"><span id="order-title">Quantity</span><input id="membership-qty" inputMode="numeric" type="number" min={1} step={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></label><span>Validated against live supply</span></div>
-            <div className="order-total" aria-live="polite"><span>Total</span><strong>{quote ? formatUsdc(quote.totalUsdc) : "—"} <small>USDC</small></strong>{quote ? <p>{formatUsdc(quote.principal)} membership + {formatUsdc(quote.fee)} buyer fee ({formatBps(snapshot.policy.buyerFeeBps)}) · {quote.bonusEntries.toString()} bonus entries</p> : <p>{quoteState === "loading" ? "Refreshing quote…" : "Choose an available membership."}</p>}</div>
+            <div className="order-total" aria-live="polite"><span>Total</span><strong>{quote ? formatUsdc(quote.totalUsdc) : "—"} <small>USDC</small></strong>{quote ? <p>{formatUsdc(quote.principal)} membership principal + {formatUsdc(quote.fee)} nonrefundable processing fee · {quote.bonusEntries.toString()} bonus entries</p> : <p>{quoteState === "loading" ? "Refreshing quote…" : "Choose an available membership."}</p>}</div>
           </section>
           {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
           {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd>{formatDate(quote.eth.deadline)} UTC</dd></div></dl> : null}</> : <p className="muted">ETH payment unavailable{quote?.eth.kind === "unavailable" ? `: ${quote.eth.reason}` : "."}</p>}
@@ -324,7 +349,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
           </WalletGate>
         </>
       ) : <p className="notice" role="status">Membership sales are not open{snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.</p>}
-      {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable balance</span><strong>{formatUsdc(account.principal + account.fee)} USDC</strong><small>Membership principal and the actual buyer fee paid are claimable only when contract state allows a refund.</small></div> : null}
+      {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable principal</span><strong>{formatUsdc(account.principal)} USDC</strong><small>{formatUsdc(account.fee)} USDC processing fee paid to date remains historical and nonrefundable. Cancellation refunds principal only.</small></div> : null}
       {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || (nextRecovery.kind === "claimFee" ? "Anyone can send protocol fees to the pinned treasury; they are never paid to the caller." : "The contract currently permits this action.")}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} /></section> : null}
     </div>
   );
@@ -394,8 +419,8 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   }
 
   if (availability.kind === "open") {
-    if (!policy) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Review opening policy</h2><p>Opening fixes the treasury, terms, 2% buyer fee, 2% seller commission and randomness configuration for this raffle.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => void reviewOpeningPolicy()}>{preflight === "loading" ? "Loading policy…" : "Review opening policy"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
-    return <section className="workflow-next stack"><div><p className="kicker">Opening policy</p><h2>Open memberships</h2><p>Review the pinned recipients, fee rates and terms. They cannot be edited after this transaction.</p></div><dl className="review-list"><div><dt>Buyer fee</dt><dd>{formatBps(policy.policy.buyerFeeBps)} per purchase</dd></div><div><dt>Seller commission</dt><dd>{formatBps(policy.policy.sellerFeeBps)} at settlement</dd></div><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="Open memberships" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setPolicy(null)}>Refresh policy review</button></section>;
+    if (!policy) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Review opening policy</h2><p>Opening fixes the treasury, terms, minimum processing fee, percentage rates and randomness configuration for this raffle. The current draft also needs a matching LABx owner approval.</p></div><button className="btn" type="button" disabled={preflight === "loading"} onClick={() => void reviewOpeningPolicy()}>{preflight === "loading" ? "Loading policy…" : "Review opening policy"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    return <section className="workflow-next stack"><div><p className="kicker">Opening policy</p><h2>Open memberships</h2><p>Review the pinned recipients, fee rates and terms. They cannot be edited after this transaction.</p></div><dl className="review-list"><div><dt>LABx approval</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(policy.policy.minBuyerFeeUsdc)} USDC or {formatBps(policy.policy.buyerFeeBps)} per purchase call; retained after a successful purchase</dd></div><div><dt>Seller commission</dt><dd>{formatBps(policy.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="Open memberships" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setPolicy(null)}>Refresh policy review</button></section>;
   }
   if (availability.kind === "reveal") {
     if (!recoverCommitment) return <p className="notice warning" role="status">Commitment recovery is not configured. Reveal is unavailable.</p>;
