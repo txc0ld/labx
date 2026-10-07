@@ -158,6 +158,7 @@ run("independent pending journal boundaries on isolated Anvil", () => {
       await chain.mine();
       await chain.mine();
       const resumed = await service.resume({ hash: replacement as `0x${string}`, wallet: controlled });
+      if (!resumed) throw new Error("The same-nonce cancellation did not reconcile the live journal.");
       expect(await service.confirm({ transaction: resumed, timeoutMs: 3_000 })).toMatchObject({ kind: "replaced" });
       expect(await service.pending({ wallet: controlled })).toBeNull();
     } finally {

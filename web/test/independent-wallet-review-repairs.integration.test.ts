@@ -154,7 +154,7 @@ run("independent wallet review repairs", () => {
       }
     });
 
-    it("stops before a matching raffle beyond 480 IDs and bypasses discovery for a live journal", async () => {
+    it("inspects historical NFT approval without recovery writes and reconciles a live journal without catalog discovery", async () => {
       await chain.write(chain.nft, "mint", [chain.seller, 2n]);
       const receipt = await chain.write(chain.nft, "approve", [chain.raffle.address, 2n], chain.seller);
       const transaction = await chain.client.getTransaction({ hash: receipt.transactionHash });
@@ -174,9 +174,15 @@ run("independent wallet review repairs", () => {
       const wallet = chain.wallet(chain.seller).session;
       await wallet.connect();
 
-      await expect(service.resume({ hash: transaction.hash, wallet })).rejects.toThrow(/bounded search.*480/i);
+      await chain.mine();
+      const inspected = await service.inspectOutcome({ hash: transaction.hash, account: chain.seller, timeoutMs: 3_000 });
+      expect(inspected).toMatchObject({
+        kind: "confirmed",
+        receipt: { hash: transaction.hash }
+      });
+      expect(inspected.kind === "confirmed" && inspected.receipt.account.toLowerCase()).toBe(chain.seller.toLowerCase());
       expect(journal.read(chain.seller)).toBeNull();
-      expect(calls.mock.calls.filter(([call]) => call.functionName === "getRaffle")).toHaveLength(480);
+      expect(calls.mock.calls.filter(([call]) => call.functionName === "getRaffle")).toHaveLength(0);
       expect(calls.mock.calls.some(([call]) => ["getPack", "getRaffleAdmission", "getRafflePolicy"].includes(call.functionName))).toBe(false);
 
       calls.mockClear();
@@ -188,6 +194,7 @@ run("independent wallet review repairs", () => {
         hash: null
       });
       const resumed = await service.resume({ hash: transaction.hash, wallet });
+      if (!resumed) throw new Error("The live pending NFT approval did not reconcile.");
       expect(resumed.hash).toBe(transaction.hash);
       expect(journal.read(chain.seller)?.hash).toBe(transaction.hash);
       expect(calls.mock.calls.some(([call]) => call.functionName === "nextId" || call.functionName === "getRaffle")).toBe(false);

@@ -11,6 +11,7 @@ import {
   type Hex
 } from "viem";
 import { createRaffleService } from "../lib/chain/service";
+import { memoryPendingJournal } from "../lib/chain/pending-journal";
 import { raffleAbi } from "../lib/chain/abi";
 import { hash } from "../lib/chain/validation";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
@@ -298,6 +299,8 @@ run("independent service verification on isolated Anvil", () => {
 
   it("handles uncertain submission, pending status, reload resume and a mined revert", async () => {
     const { id } = await createDraft(104n);
+    const journal = memoryPendingJournal();
+    const uncertainService = createRaffleService(chain.client, chain.manifest, journal);
     const controlled = chain.wallet(chain.seller);
     await controlled.session.connect();
     const captured: Hex[] = [];
@@ -316,12 +319,13 @@ run("independent service verification on isolated Anvil", () => {
     };
     await chain.rpc("evm_setAutomine", [false]);
     try {
-      const prepared = await service.prepare({ action: { kind: "approvePrize", id }, wallet: uncertain });
-      await expect(service.submit({ prepared, wallet: uncertain })).rejects.toThrow(/uncertain/);
+      const prepared = await uncertainService.prepare({ action: { kind: "approvePrize", id }, wallet: uncertain });
+      await expect(uncertainService.submit({ prepared, wallet: uncertain })).rejects.toThrow(/uncertain/);
       const hash = captured[0];
       if (!hash) throw new Error("Uncertain wallet did not submit a fixture transaction.");
-      const reloaded = createRaffleService(chain.client, chain.manifest);
+      const reloaded = createRaffleService(chain.client, chain.manifest, journal);
       const resumed = await reloaded.resume({ hash, wallet: controlled.session });
+      if (!resumed) throw new Error("The persisted uncertain send was not available after reload.");
       expect(await reloaded.confirm({ transaction: resumed, timeoutMs: 1_000 })).toEqual({ kind: "pending", hash });
       await chain.mine();
       await chain.mine();
@@ -342,10 +346,11 @@ run("independent service verification on isolated Anvil", () => {
     if (typeof reverted !== "string" || !/^0x[0-9a-f]{64}$/i.test(reverted)) {
       throw new Error("Fixture reverted transaction was not submitted.");
     }
-    const recovered = await service.resume({ hash: hash(reverted), wallet: buyer });
     await chain.mine();
     await chain.mine();
-    expect(await service.confirm({ transaction: recovered, timeoutMs: 3_000 })).toMatchObject({ kind: "reverted" });
+    expect(await service.pending({ wallet: buyer })).toBeNull();
+    expect(await service.inspectOutcome({ hash: hash(reverted), account: chain.buyer, timeoutMs: 3_000 })).toMatchObject({ kind: "reverted" });
+    expect(await service.pending({ wallet: buyer })).toBeNull();
   }, 30_000);
 
   it("detects replacement with different intent and keeps pagination block-bound and bounded", async () => {
