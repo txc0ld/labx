@@ -8,6 +8,8 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
   const actions: ActionAvailability[] = [];
   const add = (kind: ActionKind, label: string, permitted: boolean, reason: string) => actions.push({ kind, label, enabled: !!account && permitted, reason: !account ? "Connect your wallet." : permitted ? "" : reason });
   if (r.phase === 0) {
+    add("approveRaffle", "Review prize and draw funding", operator && r.escrowed && now < r.salesEnd, "The current LABx owner can review an escrowed draft before its deadline.");
+    add("revokeRaffleApproval", "Revoke draft approval", operator && snapshot.admission.record.approvedReviewHash !== "0x" + "0".repeat(64), "Only the current LABx owner can revoke an existing draft approval.");
     add("updateDraft", "Edit draft", seller, "Only the seller can edit this draft.");
     if (!r.escrowed) {
       add("approvePrize", "Approve NFT", seller && !!account?.nftOwner && sameAddress(account.nftOwner, r.seller) && !account.nftApproved, "The seller must own this NFT; an existing approval needs no repeat.");

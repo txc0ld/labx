@@ -81,6 +81,10 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
           title = "Purchase membership";
         }
       } else {
+        if (action.kind === "open") {
+          const opening = await reader.openingPolicy({ block: at });
+          if (hash(action.expectedPolicyHash) !== opening.hash) throw new Error("Opening policy changed. Review it again.");
+        }
         const availability = availableActions(snapshot, state).find(item => item.kind === action.kind);
         if (!availability?.enabled) throw new Error(availability?.reason || "This action is unavailable for this wallet and raffle phase.");
         title = availability.label;

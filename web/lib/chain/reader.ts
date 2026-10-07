@@ -56,6 +56,12 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
       : { status: record.approvedReviewHash === zeroHash ? "pending" : record.approvedReviewHash === reviewHash && sameAddress(record.approvedBy, globals.owner) ? "approved" : "changed", reviewHash, record };
     return { id, block: at, raffle, packs, policy, lotCount, accounting, admission, ...globals };
   }
+  async function readOwner({ block }: { block?: BlockRef } = {}) {
+    const at = await checkedBlock(block);
+    const owner = await client.readContract({ ...baseAt(at), functionName: "owner" });
+    await checkedBlock(at);
+    return { owner, block: at };
+  }
   async function readRaffle({ id, block }: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot> {
     positiveId(id); const at = await checkedBlock(block);
     const [raffle, globals] = await Promise.all([readRaffleTuple(id, at), readPageGlobals(at)]);
@@ -188,5 +194,5 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
       return { ...basic, eth: { kind: "available", requiredEth, maxEth: (requiredEth * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n, slippageBps, deadline: snapshot.block.timestamp + 300n } };
     } catch { return { ...basic, eth: { kind: "unavailable", reason: "A valid ETH price quote is currently unavailable." } }; }
   }
-  return { checkedBlock, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
+  return { checkedBlock, readOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
 }
