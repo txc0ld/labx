@@ -126,7 +126,9 @@ run("isolated Anvil seller and membership journeys", () => {
     if (quote.eth.kind !== "available") throw new Error(quote.eth.reason);
     const action: WorkflowAction = { kind: "buyMembership", id, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "eth", maxEth: quote.eth.maxEth, slippageBps: quote.eth.slippageBps, deadline: quote.eth.deadline } };
     const review = await chain.service.prepare({ action, wallet: buyer }); expect(review.value).toBe(quote.eth.maxEth); expect(review.amountUsdc).toBe(27_500_000n);
-    const purchased = await chain.service.submit({ prepared: review, wallet: buyer }); await chain.mine(); expect((await chain.service.confirm({ transaction: purchased })).kind).toBe("confirmed");
+    const purchased = await chain.service.submit({ prepared: review, wallet: buyer });
+    await chain.mine(); await chain.mine();
+    expect((await chain.service.confirm({ transaction: purchased })).kind).toBe("confirmed");
     expect((await chain.service.readAccount({ id, account: chain.buyer })).principal).toBe(25_000_000n);
     await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger); await act({ kind: "snapshot", id, maxSteps: 100n }, stranger);
     await chain.write(chain.raffle, "setPaused", [true]); await act({ kind: "requestRandomness", id }, stranger);
@@ -162,7 +164,7 @@ run("isolated Anvil seller and membership journeys", () => {
   it("reports a mined reverted transaction when recovering wallet activity", async () => {
     const hash = await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.raffle.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "claimPrize", args: [999n] }), gas: "0x186a0" }]);
     if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("Missing reverted fixture transaction");
-    const recovered = await chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer }); await chain.mine();
+    const recovered = await chain.service.resume({ hash: hash as `0x${string}`, wallet: buyer }); await chain.mine(); await chain.mine();
     expect((await chain.service.confirm({ transaction: recovered, timeoutMs: 3000 })).kind).toBe("reverted");
   });
 

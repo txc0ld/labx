@@ -344,6 +344,7 @@ run("independent service verification on isolated Anvil", () => {
     }
     const recovered = await service.resume({ hash: hash(reverted), wallet: buyer });
     await chain.mine();
+    await chain.mine();
     expect(await service.confirm({ transaction: recovered, timeoutMs: 3_000 })).toMatchObject({ kind: "reverted" });
   }, 30_000);
 
