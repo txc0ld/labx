@@ -26,3 +26,9 @@ Native T3 browser completed an initial 320px scan of 16 routes with one h1 and n
 Local concurrency tests must use isolated dummy records and bounded requests. Inspect pagination, RPC fan-out, timeouts and atomic writes. Do not use local throughput to claim a production concurrent-user capacity; infrastructure/provider quotas need their own evidence. Defensive security tests target local fixtures only.
 
 Final gates: integrated contract/web regressions, typecheck/build, responsive browser and accessibility checks, independent behavioral verification, fresh Astra review and actual Claude second review on the final candidate. Fix validated defects before publication. Prepare a separate v3 migration packet; the existing deployed v2 cannot adopt this policy in place.
+
+## Mobile navigation follow-up
+
+Native Preview became available again on 7 October. At390 CSS pixels the menu had44-pixel tap targets but only10.88-pixel text in a216-pixel central grid. A reviewed CSS change uses13-pixel text and the available header width, with automatic column wrapping at narrow or enlarged-text widths. Active links remain transparent with an underline. The source change still requires the final integrated build and responsive sweep. Browser experiment screenshot: browser-screenshot-127-0-0-1-muxwcl0i-21259dd2.png under T3 browser-artifacts.
+
+Android device ap35 was listed but device_open failed to boot. iOS remains unavailable because this host lacks macOS/Xcode. These are not successful device tests.

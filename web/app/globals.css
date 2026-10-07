@@ -990,9 +990,10 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:150
   .wrap,.site-header,.site-footer { width:min(100% - 1.25rem,1440px); }
   .brand-logo { width:132px; }
   .site-header { position:relative; top:auto; gap:.2rem .75rem; }
-  .site-header .nav-cluster { grid-column:1/-1; width:100%; display:grid; }
-  .nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); }
-  .nav a { width:100%; padding-inline:.25rem; font-size:.72rem; }
+  .site-header .nav-cluster { grid-column:1/-1; width:100%; display:grid; justify-content:stretch; justify-items:center; }
+  .site-header .nav-cluster>nav { width:100%; max-width:22rem; }
+  .nav { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,6rem),1fr)); }
+  .nav a { width:100%; padding-inline:.25rem; font-size:.8125rem; }
   main.wrap { padding-block-start:2.5rem; }
   .collection-intro { grid-template-columns:1fr; gap:1rem; padding-block:0 1.25rem; }
   .collection-intro-actions { width:100%; justify-content:space-between; gap:.5rem; justify-self:start; }
@@ -1057,12 +1058,10 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:150
 .review-list dt { color:var(--charcoal); font-size:.75rem; }
 .review-list dd { margin:0; overflow-wrap:anywhere; font-weight:650; }
 @media (max-width:760px) {
-  .nav { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .workflow-grid,.offer-grid,.membership-facts { grid-template-columns:1fr; }
   .tier-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media (max-width:520px) {
-  .nav a { font-size:.68rem; }
   .discount-code-row,.review-list>div { grid-template-columns:1fr; }
 }
 
