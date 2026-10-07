@@ -115,8 +115,7 @@ run("independent buyer state journeys", () => {
     const purchaseReview = fixture.page.locator(".transaction-review");
     await purchaseReview.waitFor({ state: "visible", timeout: 10_000 });
     const purchaseText = await purchaseReview.innerText();
-    expect(purchaseText).toMatch(/Pack ID\s+2/i);
-    expect(purchaseText).toMatch(/Quantity\s+2/i);
+    expect(purchaseText).toContain("88.5 USDC");
     await purchaseReview.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
 
     const confirmed = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Confirmed" });
