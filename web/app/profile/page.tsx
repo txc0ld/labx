@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OnChainStatus } from "@/components/OnChainStatus";
 import { AccountNav } from "@/components/AccountNav";
 import { useBench } from "@/lib/bench";
+import { WalletConnectionControls } from "@/components/workflow/WalletConnectionControls";
 import { ResumeTransaction } from "@/components/workflow/ResumeTransaction";
 
 type PointsState =
@@ -108,8 +109,8 @@ export default function ProfilePage() {
         </div>
         <OnChainStatus surface="profile" />
         <p className="muted">Existing points records are separate from memberships and bonus entries. They do not grant an entry.</p>
+        <WalletConnectionControls wallet={bench.browser.wallet} />
         <div className="btn-row">
-          {bench.wallet ? <button className="btn btn-dark" type="button" onClick={() => bench.disconnect()}>Disconnect wallet</button> : <button className="btn" type="button" onClick={() => bench.connect()}>Connect Sepolia</button>}
           {currentPoints.kind === "error" ? <button className="btn btn-dark" type="button" onClick={() => setPointsRetry((value) => value + 1)}>Retry points</button> : null}
         </div>
         {currentPoints.kind === "error" ? <p className="notice error" role="alert">{currentPoints.message}</p> : null}

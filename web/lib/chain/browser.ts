@@ -3,6 +3,12 @@ import { createPublicClient, http } from "viem";
 import { APPROVED_DEPLOYMENTS, LEGACY_RAFFLE } from "./deployment";
 import { createRaffleService } from "./service";
 import { WalletSession } from "./wallet-session";
+import { BrowserWalletSession } from "./wallet-connectors";
+
+const loadRemote: ConstructorParameters<typeof BrowserWalletSession>[3] = async projectId => {
+  const { createWalletConnectProvider } = await import("./walletconnect-provider");
+  return createWalletConnectProvider(projectId);
+};
 import { address, hash, sameAddress } from "./validation";
 import type { BrowserService } from "./ports";
 import type { DeploymentManifest } from "./types";
@@ -30,10 +36,10 @@ export function configuredBrowserService(): BrowserService {
       }
     }
     manifest ??= APPROVED_DEPLOYMENTS.find(item => selected && item.chainId === 11155111 && sameAddress(item.address, selected));
-    const wallet = new WalletSession(window.ethereum, manifest?.chainId ?? 11155111);
+    const wallet = new BrowserWalletSession(window.ethereum, manifest?.chainId ?? 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadRemote);
     if (!manifest) {
       configured = { kind: "unavailable", wallet, reason: selected && sameAddress(selected, LEGACY_RAFFLE) ? "The configured contract is historical. It does not support the current buyer protections." : "A reviewed raffle deployment has not been configured yet." };
     } else configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: http(rpc, { timeout: 15_000, retryCount: 1 }) }), manifest) };
-  } catch { configured = { kind: "unavailable", reason: "Deployment configuration is invalid.", wallet: new WalletSession(window.ethereum) }; }
+  } catch { configured = { kind: "unavailable", reason: "Deployment configuration is invalid.", wallet: new BrowserWalletSession(window.ethereum, 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadRemote) }; }
   return configured;
 }

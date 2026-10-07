@@ -38,7 +38,6 @@ export type Bench = State & {
   loadMoreCatalog: () => Promise<void>;
   disconnect: () => void;
   ready: boolean;
-  connect: () => Promise<void>;
   saveEmail: (email: string) => string;
   clearBanner: () => void;
 };
@@ -160,16 +159,6 @@ export function BenchProvider({ children }: { children: ReactNode }) {
     disconnect: () => browser.wallet.disconnect(),
     ready,
     clearBanner: () => setState((current) => ({ ...current, banner: undefined })),
-    connect: async () => {
-      try {
-        const session = await browser.wallet.connect();
-        if (session.kind !== "connected") throw new Error("Wallet connection failed.");
-        setState((current) => ({ ...current, wallet: session.account, banner: { tone: "ok", text: "Test-network wallet connected." } }));
-      } catch (error) {
-        const text = error instanceof Error ? error.message : "Wallet connection failed.";
-        setState((current) => ({ ...current, banner: { tone: "error", text } }));
-      }
-    },
     saveEmail: (value) => {
       const email = validEmail(value);
       if (!email) return "Enter a valid email address.";

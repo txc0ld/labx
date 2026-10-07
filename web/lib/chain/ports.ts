@@ -5,10 +5,14 @@ import type {
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 
+import type { ConnectionOption, ConnectionStatus, WalletConnector } from "./wallet-connectors";
+
 export interface WalletSessionPort {
+  readonly connectionOptions?: readonly ConnectionOption[];
+  getConnectionStatus?(): ConnectionStatus;
   getSnapshot(): WalletSnapshot;
   subscribe(listener: () => void): () => void;
-  connect(): Promise<WalletSnapshot>;
+  connect(connector?: WalletConnector): Promise<WalletSnapshot>;
   refresh(): Promise<WalletSnapshot>;
   disconnect(): void;
   assertCurrent(expected: Extract<WalletSnapshot, { kind: "connected" }>): Promise<void>;
