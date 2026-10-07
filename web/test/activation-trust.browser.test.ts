@@ -168,23 +168,28 @@ run("activation drift beside browser recovery", () => {
     const newerHash = keccak256("0x9999");
     const newerJournal = JSON.stringify({ ...oldJournal, id: "newer-wallet-activity", nonce: cancelled.nonce + 1, hash: newerHash });
     await visit("/piece/2", c.buyer);
+    const outcomeKey = `labx:outcome:v1:${c.manifest.chainId}:${c.manifest.address.toLowerCase()}:${c.manifest.runtimeCodeHash.toLowerCase()}:${c.buyer.toLowerCase()}:${cancellationHash}`;
+    await fixture.page.evaluate(({ key, txHash }) => {
+      localStorage.setItem(key, txHash);
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: txHash, storageArea: localStorage }));
+    }, { key: outcomeKey, txHash: cancellationHash });
+    await fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: cancellationHash }).getByText("Transaction confirmed", { exact: true }).waitFor({ timeout: 15_000 });
+    await fixture.page.waitForLoadState("networkidle");
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key, value: JSON.stringify(oldJournal) });
-    await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ timeout: 15_000 });
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
-    await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
     const localRecovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
-    await localRecovery.waitFor({ timeout: 15_000 });
     await fixture.page.evaluate(({ key, newerJournal, newerHash }) => {
       const originalGet = Storage.prototype.getItem;
       let armed = true;
       Storage.prototype.getItem = function (requestedKey: string) {
         const value = originalGet.call(this, requestedKey);
         const recoveryInput = document.querySelector(".buyer-flow .transaction-state input");
-        const terminal = [...document.querySelectorAll(".resume-transaction .transaction-outcome strong")].some(node => node.textContent === "Transaction confirmed");
-        if (armed && this === localStorage && requestedKey === key && value === null && terminal && recoveryInput instanceof HTMLInputElement) {
+        if (armed && this === localStorage && requestedKey === key && recoveryInput instanceof HTMLInputElement) {
           armed = false;
           Storage.prototype.getItem = originalGet;
+          localStorage.removeItem(key);
+          const emptyJournal = originalGet.call(this, requestedKey);
           localStorage.setItem(key, newerJournal);
           queueMicrotask(() => {
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -193,13 +198,12 @@ run("activation drift beside browser recovery", () => {
             recoveryInput.dispatchEvent(new Event("input", { bubbles: true }));
             document.documentElement.dataset.recoveryRace = "delivered";
           });
+          return emptyJournal;
         }
         return value;
       };
     }, { key, newerJournal, newerHash });
-    const recovery = fixture.page.locator(".resume-transaction form");
-    await recovery.getByLabel("Transaction hash").fill(cancellationHash);
-    await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
     await expect.poll(() => fixture.page.getAttribute("html", "data-recovery-race"), { timeout: 15_000 }).toBe("delivered");
     await fixture.page.waitForLoadState("networkidle");
     expect(await localRecovery.getByLabel("Transaction hash").inputValue()).toBe(newerHash);
