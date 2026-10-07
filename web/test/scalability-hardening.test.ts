@@ -187,6 +187,34 @@ describe("bounded raffle reads", () => {
     expect(count(fixture.calls, "paused")).toBe(1);
   });
 
+  it("preserves an empty seller page cursor and fetches details only for a later-page match", async () => {
+    const fixture = readerFixture({ nextId: 27n, sellerFor: id => id === 25n ? SELLER : OTHER });
+    const sellerReader = createSellerReader(fixture.client, manifest, createReader(fixture.client, manifest));
+
+    const first = await sellerReader.listSellerRaffles({ seller: SELLER, limit: 24 });
+    expect(first).toMatchObject({ items: [], nextCursor: 25n });
+    expect(count(fixture.calls, "getRaffle")).toBe(24);
+    expect(count(fixture.calls, "getRafflePolicy")).toBe(0);
+    expect(count(fixture.calls, "getRaffleAccounting")).toBe(0);
+    expect(count(fixture.calls, "getPack")).toBe(0);
+    expect(count(fixture.calls, "paused")).toBe(0);
+
+    const second = await sellerReader.listSellerRaffles({
+      seller: SELLER,
+      cursor: first.nextCursor ?? undefined,
+      limit: 24,
+      block: first.block
+    });
+    expect(second.items.map(item => item.id)).toEqual([25n]);
+    expect(second.nextCursor).toBeNull();
+    expect(second.block).toEqual(first.block);
+    expect(count(fixture.calls, "getRaffle")).toBe(26);
+    expect(count(fixture.calls, "getRafflePolicy")).toBe(1);
+    expect(count(fixture.calls, "getRaffleAccounting")).toBe(1);
+    expect(count(fixture.calls, "getPack")).toBe(1);
+    expect(count(fixture.calls, "paused")).toBe(1);
+  });
+
   it("does no detail or global work for a no-match or empty seller page", async () => {
     const noMatch = readerFixture({ nextId: 3n, sellerFor: () => OTHER });
     const noMatchReader = createReader(noMatch.client, manifest);
@@ -238,6 +266,23 @@ describe("bounded raffle reads", () => {
 
     const replaced = readerFixture({ onTokenUri() { replaced.moveBlock(); } });
     await expect(createReader(replaced.client, manifest).readArtwork({ id: 1n })).rejects.toThrow(/Chain state changed/);
+  });
+
+  it("returns recorded fallback artwork only after revalidating the pinned block", async () => {
+    const fallback = readerFixture({ onTokenUri() { throw new Error("token URI unavailable"); } });
+    await expect(createReader(fallback.client, manifest).readArtwork({ id: 1n })).resolves.toEqual({
+      title: "Raffle 1",
+      description: "",
+      image: null
+    });
+
+    const replacedFallback = readerFixture({
+      onTokenUri() {
+        replacedFallback.moveBlock();
+        throw new Error("token URI unavailable");
+      }
+    });
+    await expect(createReader(replacedFallback.client, manifest).readArtwork({ id: 1n })).rejects.toThrow(/Chain state changed/);
   });
 });
 
