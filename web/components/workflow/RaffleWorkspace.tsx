@@ -167,11 +167,11 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           {mode === "seller" ? <SellerFinancialSummary snapshot={snapshot} /> : null}
           {accountState === "loading" ? <p className="notice" role="status">Loading your account state…</p> : null}
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
-          {seller
+          {mode === "seller"
             ? <SellerActions browser={browser} snapshot={snapshot} account={account} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={account} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} />}
-          {!seller ? <RecoveryAlternatives browser={browser} snapshot={snapshot} availability={availability} onConfirmed={reload} /> : null}
-          {seller && phase === 0 && saveCommitment ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
+          {mode === "public" ? <RecoveryAlternatives browser={browser} snapshot={snapshot} availability={availability} onConfirmed={reload} /> : null}
+          {mode === "seller" && seller && phase === 0 && saveCommitment ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
           <details className="workflow-details"><summary>Contract details</summary><dl className="review-list"><div><dt>Raffle contract</dt><dd className="hash">{browser.service.manifest.address}</dd></div><div><dt>NFT contract</dt><dd className="hash">{snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{snapshot.raffle.tokenId.toString()}</dd></div><div><dt>Buyer fee</dt><dd>{formatBps(snapshot.policy.buyerFeeBps)}</dd></div><div><dt>Seller commission</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)}</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
       </section>

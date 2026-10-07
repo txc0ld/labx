@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes } from "viem";
 import { createRaffleService } from "../lib/chain/service";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
@@ -93,5 +93,39 @@ describe("seller discovery and financial activity", () => {
 
     const unavailable = createRaffleService(chain.client, chain.manifest);
     await expect(unavailable.listSellerRaffles({ seller: chain.seller, limit: 0 })).rejects.toThrow(/range/);
+  });
+
+  it("rejects a replacement that occurs while a raffle snapshot is being read", async () => {
+    const service = createRaffleService(chain.client, chain.manifest);
+    await service.readRaffle({ id: 2n });
+    const getBlock = chain.client.getBlock.bind(chain.client);
+    let calls = 0;
+    const blockSpy = vi.spyOn(chain.client, "getBlock").mockImplementation(async (input) => {
+      const block = await getBlock(input);
+      calls += 1;
+      return calls === 2 ? { ...block, hash: keccak256(toBytes("snapshot replaced during reads")) } : block;
+    });
+    try {
+      await expect(service.readRaffle({ id: 2n })).rejects.toThrow(/Chain state changed/);
+    } finally {
+      blockSpy.mockRestore();
+    }
+  });
+
+  it("rejects a replacement that occurs after activity logs are returned", async () => {
+    const service = createRaffleService(chain.client, chain.manifest);
+    await service.readRaffle({ id: 2n });
+    const getBlock = chain.client.getBlock.bind(chain.client);
+    let calls = 0;
+    const blockSpy = vi.spyOn(chain.client, "getBlock").mockImplementation(async (input) => {
+      const block = await getBlock(input);
+      calls += 1;
+      return calls === 4 ? { ...block, hash: keccak256(toBytes("activity replaced after logs")) } : block;
+    });
+    try {
+      await expect(service.listRaffleActivity({ id: 2n })).rejects.toThrow(/Chain state changed/);
+    } finally {
+      blockSpy.mockRestore();
+    }
   });
 });

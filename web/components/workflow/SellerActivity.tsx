@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { RaffleService } from "@/lib/chain/ports";
-import type { SellerRaffleActivity } from "@/lib/chain/seller-types";
+import { mergeSellerActivityPage, type SellerRaffleActivity } from "@/lib/chain/seller-types";
 import type { BlockRef } from "@/lib/chain/types";
 import styles from "./SellerPortal.module.css";
 import { formatUsdc, shortAddress } from "./format";
@@ -25,7 +25,7 @@ export function SellerActivity({ service, id }: { service: RaffleService; id: bi
       if (version !== request.current) return;
       setState((latest) => ({
         kind: "ready",
-        items: cursor !== undefined && latest.kind === "ready" ? [...latest.items, ...page.items] : page.items,
+        items: mergeSellerActivityPage(latest.kind, latest.kind === "loading" ? [] : latest.items, page.items, cursor),
         block: page.block,
         nextCursor: page.nextCursor,
         loadingMore: false

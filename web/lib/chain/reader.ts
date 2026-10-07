@@ -35,6 +35,7 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     if (raffle.seller === zeroAddress) throw new Error("Raffle not found.");
     if (raffle.packCount < 1 || raffle.packCount > 8 || raffle.phase > 6) throw new Error("Raffle data is invalid.");
     const packs = await Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] })));
+    await checkedBlock(at);
     return { id, block: at, raffle, packs, policy, lotCount, paused, owner, ethEnabled, accounting, drawStartGrace, randomnessGrace, revealGrace };
   }
   async function readArtwork({ id, block }: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata> {

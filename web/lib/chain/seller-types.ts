@@ -14,3 +14,12 @@ type SellerRaffleActivityByName = {
 };
 
 export type SellerRaffleActivity = SellerRaffleActivityByName[SellerFinancialEventName];
+
+export function mergeSellerActivityPage(
+  previousKind: "loading" | "ready" | "error",
+  previous: readonly SellerRaffleActivity[],
+  next: readonly SellerRaffleActivity[],
+  cursor?: bigint
+): readonly SellerRaffleActivity[] {
+  return cursor !== undefined && previousKind !== "loading" ? [...previous, ...next] : next;
+}

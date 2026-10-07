@@ -84,6 +84,7 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
       }
     }
 
+    await reader.checkedBlock(at);
     return { items, nextCursor: toBlock < at.number ? toBlock + 1n : null, block: at };
   }
 

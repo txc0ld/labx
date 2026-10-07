@@ -2,10 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
 import { parseSellerRaffleId, sellerPortalActions, sellerOwnsRaffle } from "../lib/chain/seller-actions";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";
+import { mergeSellerActivityPage, type SellerRaffleActivity } from "../lib/chain/seller-types";
 import type { ActionAvailability, ActionKind, RaffleSnapshot } from "../lib/chain/types";
 
 const SELLER = "0x1111111111111111111111111111111111111111";
 const OTHER = "0x2222222222222222222222222222222222222222";
+
+function refundActivity(blockNumber: bigint): SellerRaffleActivity {
+  return {
+    eventName: "Refunded",
+    args: { id: 1n, buyer: SELLER, amount: blockNumber },
+    transactionHash: keccak256(toBytes(`refund-${blockNumber}`)),
+    logIndex: Number(blockNumber),
+    blockNumber
+  };
+}
 
 function snapshot(input: {
   id: bigint;
@@ -72,6 +83,13 @@ function snapshot(input: {
 }
 
 describe("seller portfolio state", () => {
+  it("keeps earlier activity after a later-page error is retried to completion", () => {
+    const first = refundActivity(10n);
+    const retried = refundActivity(20n);
+
+    expect(mergeSellerActivityPage("error", [first], [retried], 11n)).toEqual([first, retried]);
+  });
+
   it("scans every pinned page before returning complete totals", async () => {
     const first = snapshot({ id: 1n, grossPrincipal: 25_000_000n, principalEscrow: 25_000_000n });
     const later = snapshot({ id: 3n, phase: 5, grossPrincipal: 50_000_000n, buyerFees: 1_000_000n, principalEscrow: 49_000_000n, feeEscrow: 2_000_000n });
