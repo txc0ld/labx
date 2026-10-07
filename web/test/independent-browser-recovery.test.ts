@@ -85,7 +85,11 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await expect.poll(async () => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
       .toContain(`${chain.buyer.slice(0, 6)}…${chain.buyer.slice(-4)}`);
 
-    for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
+    const agreements = fixture.page.locator(".agreements input[type=checkbox]");
+    await expect.poll(async () => {
+      for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
+      return (await Promise.all((await agreements.all()).map(checkbox => checkbox.isChecked()))).filter(Boolean).length;
+    }, { timeout: 10_000 }).toBe(3);
     await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
     const purchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
     await purchase.waitFor({ state: "visible", timeout: 10_000 });

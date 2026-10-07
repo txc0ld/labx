@@ -103,7 +103,7 @@ function RaffleCard({ service, snapshot }: { service?: RaffleService; snapshot: 
   const fee = price === null ? null : buyerFee(price, snapshot.policy.buyerFeeBps, snapshot.policy.minBuyerFeeUsdc);
   return (
     <li>
-      <Link className="raffle-capsule chain-capsule" href={`/piece/${snapshot.id.toString()}`} aria-label={`Open ${snapshot.raffle.title}`}>
+      <Link className="raffle-capsule chain-capsule" href={`/piece/${snapshot.id.toString()}`}>
         {service ? <RaffleArtwork service={service} snapshot={snapshot} compact /> : <div className="chain-capsule-art"><span aria-hidden="true">{snapshot.raffle.title.slice(0, 2).toUpperCase()}</span><p>NFT artwork unavailable</p><small>Token #{snapshot.raffle.tokenId.toString()}</small></div>}
         <div className="capsule-meta">
           <div className="capsule-title-row"><div><h3>{snapshot.raffle.title}</h3><p className="capsule-artist">NFT {shortAddress(snapshot.raffle.nft)}</p></div><span className={`capsule-status ${status.purchasable ? "is-open" : ""}`}>{status.label}</span></div>

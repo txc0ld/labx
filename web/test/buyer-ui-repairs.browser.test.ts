@@ -1,0 +1,297 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { erc20Abi, keccak256, toBytes, type Address } from "viem";
+import { raffleAbi } from "../lib/chain/abi";
+import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
+import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
+import type { DraftInput, WorkflowAction } from "../lib/chain/types";
+import { browserChain } from "./fixtures/browser-chain";
+import { localChain, type LocalChain } from "./fixtures/local-chain";
+
+const run = process.env.RUN_BUYER_UI_REPAIRS_BROWSER === "1" ? describe : describe.skip;
+
+run("buyer UI repair invariants in a rendered browser", () => {
+  let chain: LocalChain;
+  let service: RaffleService;
+  let seller: WalletSessionPort;
+  let fixture: Awaited<ReturnType<typeof browserChain>>;
+
+  async function act(action: WorkflowAction, wallet: WalletSessionPort) {
+    const prepared = await service.prepare({ action, wallet });
+    const submitted = await service.submit({ prepared, wallet });
+    await chain.mine();
+    await chain.mine();
+    expect(await service.confirm({ transaction: submitted, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
+  }
+
+  async function createOpenRaffle(tokenId: bigint, title: string, packs: DraftInput["packs"]) {
+    const latest = await chain.client.getBlock();
+    const reserve = keccak256(toBytes(`buyer-ui-${tokenId.toString()}`));
+    const draft: DraftInput = {
+      nft: chain.nft.address,
+      tokenId,
+      salesEnd: latest.timestamp + 3_600n,
+      reserveNonce: reserve,
+      reserveCommit: reserve,
+      title,
+      packs
+    };
+    await act({ kind: "createDraft", draft }, seller);
+    const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" }) - 1n;
+    await act({ kind: "approvePrize", id }, seller);
+    await act({ kind: "escrow", id }, seller);
+    await chain.admit(id);
+    const policy = await service.openingPolicy();
+    await act({ kind: "open", id, expectedPolicyHash: policy.hash }, seller);
+    return id;
+  }
+
+  async function openPiece(id: bigint, account: Address) {
+    await fixture.switchAccount(account);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await expect.poll(async () => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
+      .toContain(`${account.slice(0, 6)}…${account.slice(-4)}`);
+  }
+
+  beforeAll(async () => {
+    chain = await localChain();
+    service = chain.service;
+    seller = chain.wallet(chain.seller).session;
+    await seller.connect();
+    await chain.write(chain.nft, "mint", [chain.seller, 901n]);
+    await chain.write(chain.nft, "mint", [chain.seller, 902n]);
+    await chain.write(chain.usdc, "mint", [chain.buyer, 2_000_000_000n]);
+    await chain.write(chain.usdc, "mint", [chain.stranger, 2_000_000_000n]);
+    expect(await createOpenRaffle(901n, "Exact selection raffle", [
+      { name: "Entry", priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 20 },
+      { name: "Gold", priceUsdc: 50_000_000n, bonusEntries: 7, maxSupply: 20 }
+    ])).toBe(1n);
+    expect(await createOpenRaffle(902n, "Recovery account raffle", [
+      { name: "Entry", priceUsdc: 15_000_000n, bonusEntries: 1, maxSupply: 20 }
+    ])).toBe(2n);
+    fixture = await browserChain(chain, chain.buyer);
+  }, 60_000);
+
+  afterAll(async () => {
+    await fixture?.close();
+    chain?.close();
+  });
+
+  it("keeps catalog status, fee-inclusive price and deadline in each raffle link name", async () => {
+    const response = await fixture.page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const card = fixture.page.getByRole("link", { name: /Exact selection raffle[\s\S]*Open[\s\S]*From 12\.5 USDC[\s\S]*Sales deadline/i });
+    await card.waitFor({ state: "visible", timeout: 10_000 });
+  }, 30_000);
+
+  it("keeps a non-default pack and quantity through approval, purchases that exact choice, and keeps confirmation visible", async () => {
+    await fixture.page.setViewportSize({ width: 390, height: 844 });
+    await openPiece(1n, chain.buyer);
+
+    const gold = fixture.page.getByRole("radio", { name: /Gold/ });
+    await fixture.page.locator("label.squishy-pack-card").filter({ hasText: "Gold" }).click();
+    const quantity = fixture.page.getByRole("spinbutton", { name: "Quantity", exact: true });
+    await expect(quantity.getAttribute("max")).resolves.toBe("20");
+    await quantity.fill("21");
+    await fixture.page.getByText(/quantity must be a whole number from 1 to 20/i).waitFor({ state: "visible" });
+    await quantity.fill("3");
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByText(/greater of 2\.50 USDC or 2% per purchase call/i).count()).toBeGreaterThan(0);
+
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    const approvalReview = fixture.page.locator(".transaction-review");
+    await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
+    const approvalText = await approvalReview.innerText();
+    expect(approvalText).toMatch(/Raffle\s+#?1/i);
+    expect(approvalText).toMatch(/Pack ID\s+1/i);
+    expect(approvalText).toMatch(/Quantity\s+3/i);
+    expect(approvalText).toContain("153 USDC");
+    await approvalReview.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+
+    await expect.poll(() => gold.isChecked(), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => quantity.inputValue(), { timeout: 15_000 }).toBe("3");
+    const agreements = fixture.page.locator(".agreements input[type=checkbox]");
+    await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(async () => {
+      for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
+      return (await Promise.all((await agreements.all()).map(checkbox => checkbox.isChecked()))).filter(Boolean).length;
+    }, { timeout: 10_000 }).toBe(3);
+    const recordAgreement = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
+    await recordAgreement.waitFor({ state: "visible", timeout: 10_000 }).catch(async (error: unknown) => {
+      throw new Error(`${error instanceof Error ? error.message : "Agreement action did not appear."}\nRendered page:\n${await fixture.page.locator("#content").innerText()}`);
+    });
+    await recordAgreement.click();
+    await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+
+    await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).click();
+    const purchaseReview = fixture.page.locator(".transaction-review");
+    await purchaseReview.waitFor({ state: "visible", timeout: 10_000 });
+    const purchaseText = await purchaseReview.innerText();
+    expect(purchaseText).toMatch(/Raffle\s+#?1/i);
+    expect(purchaseText).toMatch(/Pack ID\s+1/i);
+    expect(purchaseText).toMatch(/Quantity\s+3/i);
+    await purchaseReview.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+
+    const confirmed = fixture.page.locator(".transaction-state", { hasText: "Confirmed" });
+    await confirmed.waitFor({ state: "visible", timeout: 15_000 });
+    const confirmationText = await confirmed.innerText();
+    expect(confirmationText).toMatch(/Confirmed in block \d+/);
+    expect(confirmationText).toMatch(/0x[0-9a-f]{64}/i);
+    await fixture.page.waitForTimeout(500);
+    expect(await confirmed.innerText()).toBe(confirmationText);
+    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+
+    const account = await service.readAccount({ id: 1n, account: chain.buyer });
+    expect(account).toMatchObject({ principal: 150_000_000n, fee: 3_000_000n });
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] })).toBe(0n);
+
+    expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }, 90_000);
+
+  it("clears only stale recovery feedback after an account switch and leaves the original wallet journal intact", async () => {
+    await openPiece(2n, chain.buyer);
+    const journalKey = `labx:pending:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}`;
+    await fixture.page.evaluate(({ key, intentHash }: { key: string; intentHash: string }) => {
+      localStorage.setItem(key, JSON.stringify({ id: "buyer-ui-recovery", intentHash, nonce: 9, startedBlock: "1", hash: null }));
+    }, { key: journalKey, intentHash: keccak256(toBytes("unresolved-buyer-action")) });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    await fixture.page.locator(".buyer-flow").getByText("Reconcile pending wallet activity", { exact: true }).waitFor({ state: "visible", timeout: 10_000 }).catch(async (error: unknown) => {
+      throw new Error(`${error instanceof Error ? error.message : "Recovery action did not appear."}\nRendered page:\n${await fixture.page.locator("#content").innerText()}`);
+    });
+
+    await fixture.switchAccount(chain.stranger);
+    await expect.poll(async () => fixture.page.locator(".buyer-flow").getByText("Reconcile pending wallet activity", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), journalKey)).not.toBeNull();
+    await fixture.page.evaluate((key: string) => localStorage.removeItem(key), journalKey);
+  }, 45_000);
+
+  it("drops a delayed prepare from an old wallet session and allows the fresh wallet action", async () => {
+    await openPiece(2n, chain.buyer);
+    await fixture.page.evaluate(() => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Held = { input: { method: string; params?: readonly unknown[] }; resolve(value: unknown): void; reject(error: unknown): void };
+      type Scope = Window & {
+        ethereum: { request: Request };
+        __buyerHeldWalletCalls: number;
+        __releaseBuyerWalletCalls(): void;
+      };
+      const scope = window as unknown as Scope;
+      const original = scope.ethereum.request.bind(scope.ethereum);
+      const held: Held[] = [];
+      let holding = true;
+      scope.__buyerHeldWalletCalls = 0;
+      scope.ethereum.request = input => {
+        if (!holding || input.method !== "eth_accounts") return original(input);
+        scope.__buyerHeldWalletCalls += 1;
+        return new Promise((resolve, reject) => held.push({ input, resolve, reject }));
+      };
+      scope.__releaseBuyerWalletCalls = () => {
+        holding = false;
+        for (const call of held.splice(0)) void original(call.input).then(call.resolve, call.reject);
+      };
+    });
+
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __buyerHeldWalletCalls: number }).__buyerHeldWalletCalls), { timeout: 5_000 }).toBeGreaterThan(0);
+    await fixture.switchAccount(chain.stranger);
+    await fixture.page.evaluate(() => (window as unknown as Window & { __releaseBuyerWalletCalls(): void }).__releaseBuyerWalletCalls());
+
+    await expect.poll(async () => fixture.page.locator(".transaction-review").count(), { timeout: 10_000 }).toBe(0);
+    await expect.poll(async () => (await fixture.page.locator(".buyer-flow [role=alert]").allInnerTexts()).join(" "), { timeout: 10_000 }).not.toMatch(/wallet or network changed/i);
+    const fresh = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    await fresh.waitFor({ state: "visible", timeout: 10_000 });
+    await fresh.click();
+    const review = fixture.page.locator(".transaction-review");
+    await review.waitFor({ state: "visible", timeout: 10_000 });
+    expect(await review.innerText()).toContain(chain.stranger.slice(0, 6));
+  }, 45_000);
+
+  it("drops a delayed prepare after leaving its raffle route", async () => {
+    await openPiece(2n, chain.buyer);
+    await fixture.page.evaluate(() => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Held = { input: { method: string; params?: readonly unknown[] }; resolve(value: unknown): void; reject(error: unknown): void };
+      type Scope = Window & {
+        ethereum: { request: Request };
+        __buyerRouteHeldCalls: number;
+        __releaseBuyerRouteCalls(): void;
+      };
+      const scope = window as unknown as Scope;
+      const original = scope.ethereum.request.bind(scope.ethereum);
+      const held: Held[] = [];
+      let holding = true;
+      scope.__buyerRouteHeldCalls = 0;
+      scope.ethereum.request = input => {
+        if (!holding || input.method !== "eth_accounts") return original(input);
+        scope.__buyerRouteHeldCalls += 1;
+        return new Promise((resolve, reject) => held.push({ input, resolve, reject }));
+      };
+      scope.__releaseBuyerRouteCalls = () => {
+        holding = false;
+        for (const call of held.splice(0)) void original(call.input).then(call.resolve, call.reject);
+      };
+    });
+
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __buyerRouteHeldCalls: number }).__buyerRouteHeldCalls), { timeout: 5_000 }).toBeGreaterThan(0);
+    await fixture.page.getByRole("link", { name: "Back to explore", exact: true }).click();
+    await fixture.page.waitForURL(url => url.pathname === "/", { timeout: 10_000 });
+    await fixture.page.evaluate(() => (window as unknown as Window & { __releaseBuyerRouteCalls(): void }).__releaseBuyerRouteCalls());
+    await fixture.page.waitForTimeout(500);
+
+    expect(new URL(fixture.page.url()).pathname).toBe("/");
+    expect(await fixture.page.locator(".transaction-review, .transaction-state").count()).toBe(0);
+    await fixture.page.getByRole("link", { name: /Recovery account raffle/ }).click();
+    await fixture.page.waitForURL("**/piece/2");
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  }, 45_000);
+
+  it("shows a definite code 5000 wallet refusal as rejected and permits a fresh review", async () => {
+    await openPiece(2n, chain.buyer);
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.evaluate(() => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Scope = Window & { ethereum: { request: Request } };
+      const scope = window as unknown as Scope;
+      const original = scope.ethereum.request.bind(scope.ethereum);
+      let refuse = true;
+      scope.ethereum.request = input => {
+        if (refuse && input.method === "eth_accounts") {
+          refuse = false;
+          return Promise.reject({ code: 5000 });
+        }
+        return original(input);
+      };
+    });
+
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.getByText("Wallet request rejected", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByText("The wallet request was rejected. No transaction was submitted.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.locator(".transaction-review").waitFor({ state: "visible", timeout: 10_000 });
+  }, 45_000);
+
+  it("keeps the loaded route and choice visible but blocks writes after a failed authoritative refresh", async () => {
+    await openPiece(2n, chain.buyer);
+    const quantity = fixture.page.getByRole("spinbutton", { name: "Quantity", exact: true });
+    await quantity.fill("2");
+    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    await approve.waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.route(`${chain.url}/`, route => route.abort("failed"));
+    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+
+    await fixture.page.getByText(/Refresh failed:/).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByRole("heading", { name: "Recovery account raffle", exact: true }).isVisible()).toBe(true);
+    expect(await quantity.inputValue()).toBe("2");
+    expect(await approve.isDisabled()).toBe(true);
+
+    await fixture.page.unroute(`${chain.url}/`);
+    await fixture.page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+    await expect.poll(() => approve.isDisabled(), { timeout: 15_000 }).toBe(false);
+    expect(await quantity.inputValue()).toBe("2");
+  }, 45_000);
+});
