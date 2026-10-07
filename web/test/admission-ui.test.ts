@@ -123,5 +123,7 @@ describe("owner admission UI", () => {
     expect(review).toContain("serializeOwnerExecutionIntent(intent)");
     expect(review).toContain("parseOwnerExecutionIntent(raw, service.manifest, owner)");
     expect(review).toContain("A Safe proposal hash is not an execution transaction hash");
+    expect(review).toContain("has not reached two canonical confirmations");
+    expect(review).not.toContain("matching event has not been finalized");
   });
 });

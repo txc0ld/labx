@@ -6,7 +6,7 @@ import { isHex, zeroAddress, zeroHash, type Address, type Hex } from "viem";
 import { useBench } from "@/lib/bench";
 import { parseOwnerExecutionIntent, serializeOwnerExecutionIntent } from "@/lib/chain/owner-execution";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
-import type { AdmissionReview, BlockRef, OwnerAction, OwnerExecutionConfirmation, OwnerExecutionIntent, RaffleSnapshot } from "@/lib/chain/types";
+import type { AdmissionReview, BlockRef, OwnerAction, OwnerExecutionConfirmation, OwnerExecutionIntent, RaffleSnapshot, WalletSnapshot } from "@/lib/chain/types";
 import { sameAddress } from "@/lib/chain/validation";
 import { formatDate, formatUsdc, shortAddress } from "@/components/workflow/format";
 import { useWalletSnapshot, WalletGate } from "@/components/workflow/WalletGate";
@@ -29,8 +29,9 @@ type FlowState =
   | { kind: "idle" }
   | { kind: "preparing"; actionKind: OwnerAction["kind"] }
   | { kind: "exported"; intent: OwnerExecutionIntent; copied: boolean }
-  | { kind: "confirming"; intent: OwnerExecutionIntent; hash: Hex }
-  | { kind: "pending"; intent: OwnerExecutionIntent; hash: Hex }
+  | { kind: "recovery"; intent: OwnerExecutionIntent; message?: string }
+  | { kind: "confirming"; intent: OwnerExecutionIntent; hash: Hex; confirmationOnly: boolean }
+  | { kind: "pending"; intent: OwnerExecutionIntent; hash: Hex; confirmationOnly: boolean }
   | { kind: "executed"; confirmation: Extract<OwnerExecutionConfirmation, { kind: "executed" }> }
   | { kind: "error"; message: string };
 
@@ -183,9 +184,15 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
   const id = idFromRoute(rawId);
   const [state, setState] = useState<DetailState>(() => id === null ? { kind: "invalid", message: "This raffle ID is invalid." } : { kind: "loading" });
   const request = useRef(0);
+  const loadScope = useRef({ browser, id, mounted: false });
+  if (loadScope.current.browser !== browser || loadScope.current.id !== id) {
+    loadScope.current = { browser, id, mounted: false };
+    request.current += 1;
+  }
 
   async function load(showLoading = true) {
-    if (id === null) return;
+    const scope = loadScope.current;
+    if (!scope.mounted || scope.browser !== browser || scope.id !== id || id === null) return;
     if (browser.kind !== "configured") {
       setState({ kind: "error", message: browser.reason });
       return;
@@ -194,17 +201,24 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
     if (showLoading) setState({ kind: "loading" });
     try {
       const deployment = await browser.service.attest();
+      if (loadScope.current !== scope || !scope.mounted || version !== request.current) return;
       if (deployment.kind !== "verified") throw new Error(deployment.reason);
       const review = await browser.service.readAdmission({ id });
-      if (version === request.current) setState({ kind: "ready", review });
+      if (loadScope.current === scope && scope.mounted && version === request.current) setState({ kind: "ready", review });
     } catch (error) {
-      if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "The review record could not be loaded." });
+      if (loadScope.current === scope && scope.mounted && version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "The review record could not be loaded." });
     }
   }
 
   useEffect(() => {
-    if (id !== null) void load();
-    return () => { request.current += 1; };
+    const scope = loadScope.current;
+    scope.mounted = true;
+    if (id === null) setState({ kind: "invalid", message: "This raffle ID is invalid." });
+    else void load();
+    return () => {
+      scope.mounted = false;
+      request.current += 1;
+    };
     // Route and deployment changes invalidate every displayed review field.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browser, id]);
@@ -295,20 +309,85 @@ function intentStorageKey(service: RaffleService, owner: Address, id: bigint) {
   return `labx:owner-review:v1:${service.manifest.chainId}:${service.manifest.address.toLowerCase()}:${service.manifest.runtimeCodeHash}:${owner.toLowerCase()}:${id.toString()}`;
 }
 
+function isRevokeConfirmationRecovery(intent: OwnerExecutionIntent, review: AdmissionReview) {
+  const admission = review.snapshot.admission;
+  return intent.action.kind === "revokeRaffleApproval"
+    && intent.action.id === review.snapshot.id
+    && sameAddress(intent.from, review.snapshot.owner)
+    && intent.ownerGeneration === review.ownerGeneration
+    && intent.openingPolicyGeneration === review.openingPolicyGeneration
+    && admission.status === "pending"
+    && admission.record.approvedReviewHash === zeroHash
+    && admission.record.reviewRevision === intent.reviewRevision + 1n;
+}
+
 function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: RaffleService; wallet: WalletSessionPort; review: AdmissionReview; onRecorded: () => Promise<void> }) {
   const currentWallet = useWalletSnapshot(wallet);
+  const identity = useRef({ service, wallet, epoch: 0 });
+  if (identity.current.service !== service || identity.current.wallet !== wallet) {
+    identity.current = { service, wallet, epoch: identity.current.epoch + 1 };
+  }
+  const walletKey = currentWallet.kind === "connected"
+    ? `${currentWallet.revision}:${currentWallet.chainId}:${currentWallet.account.toLowerCase()}`
+    : `${currentWallet.revision}:disconnected`;
+  const flowKey = [identity.current.epoch, walletKey, service.manifest.chainId, service.manifest.address.toLowerCase(), service.manifest.runtimeCodeHash, review.snapshot.id.toString(), review.snapshot.owner.toLowerCase()].join(":");
+  return <OwnerExecutionFlowScope key={flowKey} service={service} wallet={wallet} currentWallet={currentWallet} review={review} onRecorded={onRecorded} />;
+}
+
+function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRecorded }: {
+  service: RaffleService;
+  wallet: WalletSessionPort;
+  currentWallet: WalletSnapshot;
+  review: AdmissionReview;
+  onRecorded: () => Promise<void>;
+}) {
   const admission = review.snapshot.admission;
   const [selected, setSelected] = useState<OwnerAction["kind"] | null>(null);
   const [attestations, setAttestations] = useState<Attestations>(EMPTY_ATTESTATIONS);
   const [hashInput, setHashInput] = useState("");
   const [state, setState] = useState<FlowState>({ kind: "idle" });
-  const inFlight = useRef(false);
   const reviewHash = admission.reviewHash;
   const owner = review.snapshot.owner;
   const storageKey = intentStorageKey(service, owner, review.snapshot.id);
+  const lifetime = useRef({ mounted: false, generation: 0, nextOperation: 0, exclusiveOperation: null as number | null, reviewHash });
+  const previousReviewHash = useRef(reviewHash);
+  if (lifetime.current.reviewHash !== reviewHash) {
+    lifetime.current.reviewHash = reviewHash;
+    lifetime.current.nextOperation += 1;
+    lifetime.current.exclusiveOperation = null;
+  }
   const allAttested = attestations.canonicalProvenance && attestations.transferRestrictions && attestations.drawFunding;
   const canApprove = reviewHash !== null && review.snapshot.raffle.escrowed && review.custody.kind === "held" && review.nftCodeHash !== null && review.snapshot.block.timestamp < review.snapshot.raffle.salesEnd;
   const canRevoke = reviewHash !== null && admission.record.approvedReviewHash !== zeroHash;
+
+  type Operation = { id: number; generation: number; reviewHash: Hex | null; exclusive: boolean };
+  function beginOperation(exclusive: boolean): Operation | null {
+    const current = lifetime.current;
+    if (!current.mounted || current.exclusiveOperation !== null || previousReviewHash.current !== current.reviewHash) return null;
+    const operation = { id: ++current.nextOperation, generation: current.generation, reviewHash: current.reviewHash, exclusive };
+    if (exclusive) current.exclusiveOperation = operation.id;
+    return operation;
+  }
+  function isCurrent(operation: Operation) {
+    const current = lifetime.current;
+    return current.mounted && current.generation === operation.generation && current.nextOperation === operation.id && current.reviewHash === operation.reviewHash;
+  }
+  function finishOperation(operation: Operation) {
+    if (isCurrent(operation) && operation.exclusive) lifetime.current.exclusiveOperation = null;
+  }
+  function invalidateOperations() {
+    lifetime.current.nextOperation += 1;
+    lifetime.current.exclusiveOperation = null;
+  }
+
+  useEffect(() => {
+    lifetime.current.mounted = true;
+    return () => {
+      lifetime.current.mounted = false;
+      lifetime.current.generation += 1;
+      invalidateOperations();
+    };
+  }, []);
 
   useEffect(() => {
     setSelected(null);
@@ -320,8 +399,13 @@ function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: 
     if (!raw) return;
     try {
       const intent = parseOwnerExecutionIntent(raw, service.manifest, owner);
-      if (intent.action.id !== review.snapshot.id || reviewHash === null || intent.action.expectedReviewHash !== reviewHash) {
+      if (intent.action.id !== review.snapshot.id || reviewHash === null) {
         window.localStorage.removeItem(storageKey);
+        return;
+      }
+      if (intent.action.expectedReviewHash !== reviewHash) {
+        if (isRevokeConfirmationRecovery(intent, review)) setState({ kind: "recovery", intent });
+        else window.localStorage.removeItem(storageKey);
         return;
       }
       setSelected(intent.action.kind);
@@ -336,64 +420,105 @@ function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: 
   }, [currentWallet.revision, owner, review.snapshot.id, service, storageKey]);
 
   useEffect(() => {
-    if ((state.kind === "exported" || state.kind === "confirming" || state.kind === "pending")
-      && state.intent.action.expectedReviewHash !== reviewHash) {
-      window.localStorage.removeItem(storageKey);
+    if (previousReviewHash.current === reviewHash) return;
+    previousReviewHash.current = reviewHash;
+    if (state.kind === "executed") return;
+    const intent = state.kind === "exported" || state.kind === "recovery" || state.kind === "confirming" || state.kind === "pending" ? state.intent : null;
+    if (intent !== null && isRevokeConfirmationRecovery(intent, review)) {
+      invalidateOperations();
       setSelected(null);
+      setAttestations(EMPTY_ATTESTATIONS);
       setHashInput("");
-      setState({ kind: "idle" });
+      setState({ kind: "recovery", intent });
+      return;
     }
+    if (intent !== null && intent.action.expectedReviewHash !== reviewHash) {
+      window.localStorage.removeItem(storageKey);
+    }
+    invalidateOperations();
+    setSelected(null);
+    setAttestations(EMPTY_ATTESTATIONS);
+    setHashInput("");
+    setState({ kind: "idle" });
     // State is inspected only when the authoritative digest changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewHash, storageKey]);
 
   async function prepare() {
-    if (inFlight.current || selected === null || reviewHash === null) return;
+    if (selected === null || reviewHash === null) return;
     const action: OwnerAction = selected === "approveRaffle"
       ? { kind: "approveRaffle", id: review.snapshot.id, expectedReviewHash: reviewHash, attestations: { canonicalProvenance: true, transferRestrictions: true, drawFunding: true } }
       : { kind: "revokeRaffleApproval", id: review.snapshot.id, expectedReviewHash: reviewHash };
     if (action.kind === "approveRaffle" && !allAttested) return;
-    inFlight.current = true;
+    const operation = beginOperation(true);
+    if (operation === null) return;
     setState({ kind: "preparing", actionKind: selected });
     try {
       const prepared = await service.prepare({ action, wallet });
+      if (!isCurrent(operation)) return;
       const intent = await service.exportOwnerExecution({ prepared, wallet });
+      if (!isCurrent(operation)) return;
       window.localStorage.setItem(storageKey, serializeOwnerExecutionIntent(intent));
       setState({ kind: "exported", intent, copied: false });
     } catch (error) {
-      setState({ kind: "error", message: error instanceof Error ? error.message : "The owner execution payload could not be prepared." });
+      if (isCurrent(operation)) setState({ kind: "error", message: error instanceof Error ? error.message : "The owner execution payload could not be prepared." });
     } finally {
-      inFlight.current = false;
+      finishOperation(operation);
     }
   }
 
   async function copyPayload(intent: OwnerExecutionIntent) {
+    const operation = beginOperation(false);
+    if (operation === null) return;
     try {
       await navigator.clipboard.writeText(formatOwnerPayload(intent));
-      setState({ kind: "exported", intent, copied: true });
+      if (isCurrent(operation)) setState({ kind: "exported", intent, copied: true });
     } catch {
-      setState({ kind: "error", message: "Clipboard access was unavailable. Copy the visible payload fields manually." });
+      if (isCurrent(operation)) setState({ kind: "error", message: "Clipboard access was unavailable. Copy the visible payload fields manually." });
     }
   }
 
-  async function confirm(intent: OwnerExecutionIntent) {
-    if (inFlight.current || !isHex(hashInput, { strict: true }) || hashInput.length !== 66) return;
-    inFlight.current = true;
+  async function confirm(intent: OwnerExecutionIntent, confirmationOnly = false) {
+    if (!isHex(hashInput, { strict: true }) || hashInput.length !== 66) return;
+    const operation = beginOperation(true);
+    if (operation === null) return;
     const executionHash: Hex = hashInput;
-    setState({ kind: "confirming", intent, hash: executionHash });
+    setState({ kind: "confirming", intent, hash: executionHash, confirmationOnly });
     try {
       const confirmation = await service.confirmOwnerExecution({ intent, hash: executionHash });
-      if (confirmation.kind === "pending") setState({ kind: "pending", intent, hash: confirmation.hash });
+      if (!isCurrent(operation)) return;
+      if (confirmation.kind === "pending") setState({ kind: "pending", intent, hash: confirmation.hash, confirmationOnly });
       else {
         window.localStorage.removeItem(storageKey);
         setState({ kind: "executed", confirmation });
+        if (!isCurrent(operation)) return;
         await onRecorded();
       }
     } catch (error) {
-      setState({ kind: "error", message: error instanceof Error ? error.message : "The execution could not be reconciled." });
+      if (isCurrent(operation)) {
+        const message = error instanceof Error ? error.message : "The execution could not be reconciled.";
+        setState(confirmationOnly ? { kind: "recovery", intent, message } : { kind: "error", message });
+      }
     } finally {
-      inFlight.current = false;
+      finishOperation(operation);
     }
+  }
+
+  function discardExport() {
+    invalidateOperations();
+    window.localStorage.removeItem(storageKey);
+    setSelected(null);
+    setState({ kind: "idle" });
+    setHashInput("");
+  }
+
+  if (previousReviewHash.current !== reviewHash && state.kind !== "executed") {
+    return <section className={styles.flow} role="status"><h2>Refreshing the owner review</h2><p>The draft digest changed. Reloading current owner actions.</p></section>;
+  }
+
+  if (state.kind === "recovery" || state.kind === "confirming" && state.confirmationOnly || state.kind === "pending" && state.confirmationOnly) {
+    const intent = state.intent;
+    return <section className={styles.flow} aria-labelledby="owner-recovery-title"><div><p className="kicker">Executed revocation recovery</p><h2 id="owner-recovery-title">Confirm the recorded revocation</h2></div><p>The review revision advanced exactly once and the approval is now revoked. This stored call is historical and cannot be copied or submitted again. Paste its actual executed Ethereum transaction hash to verify the receipt, matching revocation event and current owner and policy state.</p>{state.kind === "recovery" && state.message ? <p className="notice error" role="alert">{state.message}</p> : null}<label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached two canonical confirmations. A matching event has not been confirmed at that depth yet.</p> : null}<div className="btn-row"><button className="btn" type="button" disabled={state.kind === "confirming" || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent, true)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm recorded revocation"}</button><button className="text-link" type="button" disabled={state.kind === "confirming"} onClick={discardExport}>Discard recorded review</button></div></section>;
   }
 
   if (state.kind === "executed") {
@@ -402,10 +527,10 @@ function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: 
       : state.confirmation.state === "revoked"
         ? "Execution confirmed. The current draft approval is revoked."
         : "Execution confirmed, but the reviewed owner, policy or draft state changed. This execution is stale and does not make the draft ready to open.";
-    return <section className={styles.flow} aria-live="polite"><p className="kicker">Canonical execution</p><h2>{state.confirmation.state === "stale" ? "Executed, now stale" : state.confirmation.state === "approved" ? "Approval recorded" : "Approval revoked"}</h2><p>{copy}</p><dl className={styles.facts}><div><dt>Execution hash</dt><dd className="hash">{state.confirmation.hash}</dd></div><div><dt>Execution block</dt><dd>{state.confirmation.blockNumber.toString()}</dd></div></dl><button className="btn btn-dark" type="button" onClick={() => { setSelected(null); setState({ kind: "idle" }); }}>Review current state</button></section>;
+    return <section className={styles.flow} aria-live="polite"><p className="kicker">Canonical execution</p><h2>{state.confirmation.state === "stale" ? "Executed, now stale" : state.confirmation.state === "approved" ? "Approval recorded" : "Approval revoked"}</h2><p>{copy}</p><dl className={styles.facts}><div><dt>Execution hash</dt><dd className="hash">{state.confirmation.hash}</dd></div><div><dt>Execution block</dt><dd>{state.confirmation.blockNumber.toString()}</dd></div></dl><button className="btn btn-dark" type="button" onClick={() => { invalidateOperations(); setSelected(null); setState({ kind: "idle" }); }}>Review current state</button></section>;
   }
 
-  if (state.kind === "error") return <section className={styles.flow}><h2>Owner action unavailable</h2><p className="notice error" role="alert">{state.message}</p><button className="btn btn-dark" type="button" onClick={() => setState({ kind: "idle" })}>Return to owner actions</button></section>;
+  if (state.kind === "error") return <section className={styles.flow}><h2>Owner action unavailable</h2><p className="notice error" role="alert">{state.message}</p><button className="btn btn-dark" type="button" onClick={() => { invalidateOperations(); setState({ kind: "idle" }); }}>Return to owner actions</button></section>;
 
   if (selected === null) {
     return <section className={styles.flow} aria-labelledby="owner-action-title"><div><p className="kicker">Owner action</p><h2 id="owner-action-title">Choose the current draft action</h2></div><p>Only the current on-chain owner can export these zero-value calls. A signer EOA cannot stand in for a Safe account.</p><div className="btn-row"><button className="btn" type="button" disabled={!canApprove || admission.status === "approved"} onClick={() => setSelected("approveRaffle")}>{admission.status === "approved" ? "Current draft approved" : "Review approval checklist"}</button><button className="btn btn-dark" type="button" disabled={!canRevoke} onClick={() => setSelected("revokeRaffleApproval")}>Prepare revocation</button></div>{!canApprove && admission.status !== "approved" ? <p className="notice warning" role="status">Approval requires an escrowed NFT, confirmed current custody, runtime code and a future sales deadline.</p> : null}</section>;
@@ -413,10 +538,10 @@ function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: 
 
   if (state.kind === "preparing") return <section className={styles.flow} role="status"><h2>Refreshing the owner review</h2><p>Simulating the {state.actionKind === "approveRaffle" ? "approval" : "revocation"} against current chain state before export.</p><button className="btn" type="button" disabled>Preparing exact payload…</button></section>;
 
-  if (state.kind === "exported" || state.kind === "confirming" || state.kind === "pending") {
+  if (state.kind === "exported" || state.kind === "confirming" && !state.confirmationOnly || state.kind === "pending" && !state.confirmationOnly) {
     const intent = state.intent;
     const safeHref = safeQueue(intent.chainId, intent.from);
-    return <section className={styles.flow} aria-labelledby="owner-execution-title"><div><p className="kicker">External Safe execution</p><h2 id="owner-execution-title">Execute the reviewed call in Safe</h2></div><p>This export has not been submitted. A Safe proposal hash is not an execution transaction hash.</p><ol className={styles.stepList}><li>Copy the exact public call fields below.</li><li>Open the owner Safe, create the transaction, collect the required signatures and execute it.</li><li>Paste the executed Ethereum transaction hash here. LABx requires a canonical successful receipt, matching raffle event and matching post-execution state.</li></ol><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button>{safeHref ? <a className="btn btn-dark" href={safeHref} target="_blank" rel="noreferrer">Open owner Safe <span aria-hidden="true">↗</span></a> : <span className="muted">The isolated local chain has no public Safe app link.</span>}</div><details><summary>Raw contract call</summary><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></details><label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached the configured confirmation depth. A matching event has not been finalized yet.</p> : null}<div className="btn-row"><button className="btn" type="button" disabled={state.kind === "confirming" || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm canonical execution"}</button><button className="text-link" type="button" disabled={state.kind === "confirming"} onClick={() => { window.localStorage.removeItem(storageKey); setSelected(null); setState({ kind: "idle" }); setHashInput(""); }}>Discard exported review</button></div></section>;
+    return <section className={styles.flow} aria-labelledby="owner-execution-title"><div><p className="kicker">External Safe execution</p><h2 id="owner-execution-title">Execute the reviewed call in Safe</h2></div><p>This export has not been submitted. A Safe proposal hash is not an execution transaction hash.</p><ol className={styles.stepList}><li>Copy the exact public call fields below.</li><li>Open the owner Safe, create the transaction, collect the required signatures and execute it.</li><li>Paste the executed Ethereum transaction hash here. LABx requires a canonical successful receipt, matching raffle event and matching post-execution state.</li></ol><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming"} onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button>{safeHref ? <a className="btn btn-dark" href={safeHref} target="_blank" rel="noreferrer">Open owner Safe <span aria-hidden="true">↗</span></a> : <span className="muted">The isolated local chain has no public Safe app link.</span>}</div><details><summary>Raw contract call</summary><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></details><label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached two canonical confirmations. A matching event has not been confirmed at that depth yet.</p> : null}<div className="btn-row"><button className="btn" type="button" disabled={state.kind === "confirming" || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm canonical execution"}</button><button className="text-link" type="button" disabled={state.kind === "confirming"} onClick={discardExport}>Discard exported review</button></div></section>;
   }
 
   if (selected === "revokeRaffleApproval") {
