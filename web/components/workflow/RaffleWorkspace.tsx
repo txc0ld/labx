@@ -219,7 +219,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
       <div className="detail-path"><Link href={mode === "seller" ? "/seller" : "/"} className="detail-back"><span aria-hidden="true">←</span> {mode === "seller" ? "Back to studio" : "Back to explore"}</Link><button className="text-link" type="button" disabled={refreshState.kind === "loading"} onClick={() => void refresh()}>{refreshState.kind === "loading" ? "Refreshing state…" : "Refresh state"}</button></div>
       {refreshState.kind === "loading" ? <p className="notice" role="status">Refreshing verified contract state. Transaction controls are paused.</p> : null}
       {refreshState.kind === "error" ? <p className="notice error" role="alert">Refresh failed: {refreshState.message} Transaction controls remain paused. <button className="text-link" type="button" onClick={() => void refresh()}>Retry refresh</button></p> : null}
-      {writesEnabled ? <ResumeTransaction browser={browser} pendingOnly onConfirmed={refresh} /> : null}
+      <ResumeTransaction browser={browser} pendingOnly onConfirmed={refresh} />
       <section className="section piece-layout piece-console chain-piece">
         <div className="piece-visual chain-piece-visual">
           <div className="piece-visual-topline"><span>Verified on-chain raffle</span><span>#{snapshot.id.toString()}</span></div>

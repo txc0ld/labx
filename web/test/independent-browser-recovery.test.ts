@@ -114,7 +114,12 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await chain.mine();
     await chain.mine();
     await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
-    await expect.poll(async () => fixture.page.locator(".resume-transaction").count(), { timeout: 10_000 }).toBe(0);
+    await recovery.getByText(/^Confirmed in block \d+\.$/).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await recovery.getByLabel("Transaction hash").inputValue()).toBe(transactionHash);
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Refresh state", exact: true }).isDisabled(), { timeout: 10_000 }).toBe(false);
+    await expect.poll(async () => fixture.page.getByRole("radiogroup", { name: "Membership packs" }).locator("label").first().getAttribute("data-disabled"), { timeout: 10_000 }).toBe("true");
+    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await service.pending({ wallet: buyer })).toBeNull();
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(async () => fixture.page.locator(".resume-transaction").count(), { timeout: 10_000 }).toBe(0);
     expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 20_000_000n, fee: 2_500_000n });
