@@ -33,6 +33,8 @@ function fixture() {
   };
   const confirm = vi.fn(async (input: Parameters<RaffleService["confirm"]>[0]): Promise<Confirmation> => { input.beforeJournalClear?.({ receipt, pending: null }); return confirmed; });
   const service = {
+    captureOutcomeLineage: vi.fn((_input: Parameters<RaffleService["captureOutcomeLineage"]>[0]): ReturnType<RaffleService["captureOutcomeLineage"]> => null),
+    retainOutcome: vi.fn(async (input: Parameters<RaffleService["retainOutcome"]>[0]) => { input.retain({ priorHash: null }); }),
     acknowledgeOutcome: vi.fn(async (input: Parameters<RaffleService["acknowledgeOutcome"]>[0]) => { input.acknowledge(); }),
     manifest, submit: vi.fn(async () => submitted),
     pending: vi.fn(async (): ReturnType<RaffleService["pending"]> => null),
@@ -424,6 +426,43 @@ describe("operation ownership beyond transaction controls", () => {
       await vi.waitFor(() => expect(owner.getSnapshot(account)).toMatchObject([{ kind: "terminal", submitted: { hash: replacementHash } }]));
       expect(owner.getSnapshot(account)).toHaveLength(1);
     } finally { stop(); vi.unstubAllGlobals(); }
+  });
+
+  it("keeps a late terminal watch local after another tab acknowledges its checkpoint", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const held = deferred<Confirmation>();
+    f.confirm.mockImplementation(async input => {
+      const result = await held.promise;
+      input.beforeJournalClear?.({ receipt, pending: null });
+      return result;
+    });
+    const watching = owner.submit(prepared, f.wallet);
+    await vi.waitFor(() => expect(f.map.size).toBe(1));
+    f.map.clear();
+    held.resolve(confirmed);
+    expect(await watching).toMatchObject({ kind: "terminal", submitted: { hash } });
+    expect(f.map.size).toBe(0);
+    expect(owner.getSnapshot(account)).toHaveLength(1);
+  });
+
+  it("does not persist automatic historical completion after remote deletion, while explicit new history may persist", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const key = `labx:outcome:v1:31337:${contract}:${hash}:${account}:${hash}`;
+    f.map.set(key, hash);
+    const held = deferred<OutcomeInspection>();
+    f.service.inspectOutcome.mockImplementationOnce(() => held.promise);
+    const recovery = owner.recover(account);
+    await vi.waitFor(() => expect(f.service.inspectOutcome).toHaveBeenCalledOnce());
+    f.map.clear();
+    held.resolve(confirmed);
+    await recovery;
+    expect(owner.getSnapshot(account)).toMatchObject([{ kind: "terminal", submitted: { hash } }]);
+    expect(f.map.size).toBe(0);
+    await owner.resume(hash, f.wallet);
+    expect(f.map.size).toBe(0);
+    const separate = createTransactionOutcomes(f.service, () => f.storage);
+    expect(await separate.resume(hash, f.wallet)).toMatchObject({ kind: "terminal" });
+    expect([...f.map.values()]).toEqual([hash]);
   });
 
   it.each(["pending", "unknown", "error"] as const)("keeps queued H2 after remote acknowledgment despite a late H1 %s", async completion => {

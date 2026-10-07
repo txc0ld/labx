@@ -8,7 +8,7 @@ import { isWalletRequestRejected } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { hash, sameAddress } from "./validation";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { CanonicalReceipt, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
+import type { CanonicalReceipt, OutcomeLineage, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
 function connected(wallet: WalletSessionPort, chainId: number) {
   const session = wallet.getSnapshot();
   if (session.kind !== "connected" || session.chainId !== chainId) throw new Error("Connect the approved test network before continuing.");
@@ -23,6 +23,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
   const reviews = new WeakMap<PreparedAction, { action: WorkflowAction; session: Extract<WalletSnapshot, { kind: "connected" }>; transaction: PreparedAction; used: boolean }>();
   const submitting = new Set<string>();
   const canonicalReceipts = new WeakMap<CanonicalReceipt, { account: Address; nonce: number }>();
+  const outcomeLineages = new WeakMap<OutcomeLineage, { account: Address; journal: Readonly<PendingIntent> }>();
   const unresolved = "This wallet has an unresolved transaction. Reconcile its hash before another action.";
   async function prepare({ action, wallet }: Parameters<RaffleService["prepare"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
@@ -193,6 +194,25 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       return result;
     });
   }
+  function captureOutcomeLineage({ account, hash: txHash }: Parameters<RaffleService["captureOutcomeLineage"]>[0]) {
+    hash(txHash);
+    const current = journal.read(account);
+    if (!current?.hash || current.hash.toLowerCase() !== txHash.toLowerCase()) return null;
+    const token = Object.freeze({ hash: txHash });
+    outcomeLineages.set(token, { account, journal: Object.freeze({ ...current }) });
+    return token;
+  }
+  async function retainOutcome({ receipt, lineage, retain }: Parameters<RaffleService["retainOutcome"]>[0]) {
+    const canonical = canonicalReceipts.get(receipt);
+    if (!canonical) throw new Error("Verify the canonical receipt before retaining it.");
+    await journal.exclusive(canonical.account, async () => {
+      const captured = lineage ? outcomeLineages.get(lineage) : undefined;
+      const priorHash = captured && sameAddress(captured.account, canonical.account)
+        && captured.journal.nonce === canonical.nonce && receipt.blockNumber >= BigInt(captured.journal.startedBlock)
+        ? captured.journal.hash : null;
+      retain({ priorHash });
+    });
+  }
   async function acknowledgeOutcome({ receipt, acknowledge }: Parameters<RaffleService["acknowledgeOutcome"]>[0]) {
     const canonical = canonicalReceipts.get(receipt);
     if (!canonical) throw new Error("Verify the canonical receipt before acknowledging it.");
@@ -206,5 +226,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
+  return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

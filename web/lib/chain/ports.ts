@@ -1,7 +1,7 @@
 import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
-  AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
+  AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, OutcomeLineage, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
@@ -43,6 +43,8 @@ export interface RaffleService {
   submit(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<SubmittedAction>;
   confirm(input: { transaction: SubmittedAction; timeoutMs?: number; beforeJournalWatch?: (input: { transaction: ObservedTransaction; pending: OutcomeJournal }) => void; beforeJournalClear?: (input: { receipt: CanonicalReceipt; pending: OutcomeJournal | null }) => void }): Promise<Confirmation>;
   inspectOutcome(input: { hash: Hex; account: Address; timeoutMs?: number }): Promise<OutcomeInspection>;
+  captureOutcomeLineage(input: { account: Address; hash: Hex }): OutcomeLineage | null;
+  retainOutcome(input: { receipt: CanonicalReceipt; lineage?: OutcomeLineage; retain: (input: { priorHash: Hex | null }) => void }): Promise<void>;
   acknowledgeOutcome(input: { receipt: CanonicalReceipt; acknowledge: () => void }): Promise<void>;
   pending(input: { wallet: WalletSessionPort }): Promise<OutcomeJournal | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort; expectedJournal?: OutcomeJournal; beforeJournalUpdate?: (input: { transaction: SubmittedAction; nonce: number; pending: OutcomeJournal }) => void }): Promise<SubmittedAction | null>;

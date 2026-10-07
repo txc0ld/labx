@@ -92,6 +92,7 @@ export type CanonicalReceipt = ObservedTransaction & { blockNumber: bigint; stat
 export type OutcomeInspection = Exclude<Confirmation, { kind: "pending" }>
   | { kind: "pending"; hash: Hex; reason: "unmined" | "confirmations"; transaction: ObservedTransaction }
   | { kind: "unknown"; hash: Hex; reason: string };
+export type OutcomeLineage = Readonly<{ hash: Hex }>;
 export type OutcomeJournal = { id: string; hash: Hex | null; nonce: number };
 export type Confirmation =
   | { kind: "pending"; hash: Hex }

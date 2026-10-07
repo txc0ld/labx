@@ -1,7 +1,7 @@
 import { bytesToHex, decodeFunctionData, isHex, type Address, type Hex } from "viem";
 import { raffleAbi } from "./abi";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { Confirmation, PreparedAction, SubmittedAction, ObservedTransaction } from "./types";
+import type { Confirmation, PreparedAction, SubmittedAction, ObservedTransaction, OutcomeLineage } from "./types";
 import { sameAddress } from "./validation";
 import { isWalletRequestRejected } from "./wallet-errors";
 
@@ -34,7 +34,7 @@ export function sameSubmittedIntent(left: SubmittedAction, right: SubmittedActio
 function outcomeHash(outcome: TransactionOutcome): Hex | null {
   return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
 }
-type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending" | "acknowledgeOutcome">;
+type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending" | "captureOutcomeLineage" | "retainOutcome" | "acknowledgeOutcome">;
 export function createTransactionOutcomes(service: OutcomeService, storage: () => OutcomeStorage = () => window.localStorage) {
   const prefix = `labx:outcome:v1:${service.manifest.chainId}:${service.manifest.address.toLowerCase()}:${service.manifest.runtimeCodeHash.toLowerCase()}:`;
   const listeners = new Set<() => void>();
@@ -45,6 +45,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
   const redirects = new Map<string, string>();
   const recoveries = new Map<string, Promise<void>>();
   const verified = new Map<string, { id: string; nonce: number; observed: ObservedTransaction | null }>();
+  const lineages = new Map<string, OutcomeLineage>();
   const rescan = new Set<string>();
   const observed = new Map<Address, number>();
   let sequence = 0;
@@ -107,7 +108,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     if (target.getItem(key) !== value) throw new Error("Transaction recovery checkpoint could not be saved.");
   }
   // A prior hash is authorized only by service-validated journal lineage.
-  function retain(account: Address, requestedId: string, canonicalHash: Hex, nonce: number, priorHash: Hex | null = null) {
+  function retain(account: Address, requestedId: string, canonicalHash: Hex, nonce: number, persistence: { create: boolean; expectedHash: Hex }, priorHash: Hex | null = null) {
     if (priorHash && verified.has(checkpointKey(account, priorHash)) && verified.get(checkpointKey(account, priorHash))?.nonce !== nonce) priorHash = null;
     const hints = stored(account);
     const prior = priorHash ? findHash(account, priorHash) : undefined;
@@ -120,8 +121,12 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       const hash = outcomeHash(item), known = hash ? verified.get(checkpointKey(account, hash)) : undefined;
       return item.id !== id && (hash?.toLowerCase() === canonicalHash.toLowerCase() || priorHash !== null && hash?.toLowerCase() === priorHash.toLowerCase() || known?.nonce === nonce);
     });
-    save(account, id, canonicalHash);
-    for (const hint of hints) {
+    const saved = storage().getItem(checkpointKey(account, id));
+    if (saved !== null && saved.toLowerCase() !== canonicalHash.toLowerCase() && saved.toLowerCase() !== persistence.expectedHash.toLowerCase()
+      && saved.toLowerCase() !== priorHash?.toLowerCase()) throw new Error("The recovery checkpoint changed during reconciliation.");
+    const persisted = persistence.create || saved !== null;
+    if (persisted) save(account, id, canonicalHash);
+    for (const hint of persisted ? hints : []) {
       if (hint.id === id || hint.hash !== canonicalHash.toLowerCase() && (!priorHash || hint.hash !== priorHash.toLowerCase()) && verified.get(checkpointKey(account, hint.hash))?.nonce !== nonce) continue;
       const target = storage(), key = checkpointKey(account, hint.id);
       if (target.getItem(key)?.toLowerCase() !== hint.hash) throw new Error("The recovery checkpoint changed during reconciliation.");
@@ -144,6 +149,10 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       return;
     }
     const existing = getSnapshot(account).find(item => item.id === hint.id), previousHash = existing ? outcomeHash(existing) : null;
+    if (previousHash && previousHash.toLowerCase() !== hint.hash) {
+      const lineage = lineages.get(checkpointKey(account, previousHash));
+      if (lineage) lineages.set(checkpointKey(account, hint.hash), lineage);
+    }
     if (previousHash && previousHash.toLowerCase() !== hint.hash && (existing?.kind === "terminal" || !verified.has(checkpointKey(account, previousHash)))) {
       const id = operationId(account, hint.hash);
       if (!getSnapshot(account).some(item => item.id === id)) put({ id, hash: hint.hash, account, kind: "recovery" });
@@ -182,6 +191,10 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     }
     const work = (async () => {
       try {
+        if (!lineages.has(key)) {
+          const lineage = service.captureOutcomeLineage({ account, hash });
+          if (lineage) lineages.set(key, lineage);
+        }
         const confirmation = await service.inspectOutcome({ hash, account, timeoutMs: manual ? 60_000 : 0 });
         if (confirmation.kind === "pending") remember(confirmation.transaction, requestedId);
         else if (confirmation.kind !== "unknown") remember(confirmation.receipt, requestedId);
@@ -199,8 +212,16 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
           const result: TransactionOutcome = { id: requestedId, account, kind: "unverified", hash, message };
           return owned ? put(result) : result;
         }
-        const id = retain(account, requestedId, confirmation.receipt.hash, confirmation.receipt.nonce);
-        return terminalOutcome(account, id, confirmation);
+        let result: TransactionOutcome | undefined;
+        await service.retainOutcome({ receipt: confirmation.receipt, lineage: lineages.get(key), retain: ({ priorHash }) => {
+          const newer = advanced();
+          if (newer) { result = newer; return; }
+          const id = retain(account, requestedId, confirmation.receipt.hash, confirmation.receipt.nonce,
+            { create: manual && !owned && !findKnown(account, hash), expectedHash: hash }, priorHash);
+          result = terminalOutcome(account, id, confirmation);
+        } });
+        if (!result) throw new Error("Canonical receipt retention did not complete.");
+        return result;
       } catch (error) {
         const newer = advanced();
         if (newer) return newer;
@@ -275,11 +296,11 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       }
       try {
         const confirmation = await service.confirm({ transaction: submitted, beforeJournalWatch: ({ transaction, pending }) => {
-          id = retain(submitted.account, id, transaction.hash, transaction.nonce, pending.hash);
+          id = retain(submitted.account, id, transaction.hash, transaction.nonce, { create: true, expectedHash: transaction.hash }, pending.hash);
           remember(transaction, id); registered = true;
           put({ id, account: submitted.account, kind: "checking", submitted: transaction });
         }, beforeJournalClear: ({ receipt, pending }) => {
-          id = retain(submitted.account, id, receipt.hash, receipt.nonce, pending?.hash ?? null);
+          id = retain(submitted.account, id, receipt.hash, receipt.nonce, { create: pending !== null, expectedHash: submitted.hash }, pending?.hash ?? null);
           remember(receipt, id);
         } });
         return confirmation.kind === "pending"
@@ -325,7 +346,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     let id = owned?.id ?? operationId(snapshot.account, hash);
     const submitted = await service.resume({ hash, wallet, expectedJournal: pending, beforeJournalUpdate: ({ transaction, pending, nonce }) => {
       assertScope(transaction);
-      id = retain(snapshot.account, id, transaction.hash, nonce, pending?.hash ?? null);
+      id = retain(snapshot.account, id, transaction.hash, nonce, { create: true, expectedHash: transaction.hash }, pending.hash);
       remember({ ...transaction, nonce }, id);
       put({ id, account: snapshot.account, kind: "checking", submitted: transaction });
     } });

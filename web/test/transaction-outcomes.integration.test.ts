@@ -64,6 +64,41 @@ run("canonical outcome recovery on isolated Anvil", () => {
     expect([...map.values()]).toEqual([txHash]);
   });
 
+  it("validates captured journal lineage against exact issued canonical receipts without changing the journal", async () => {
+    const first = await send(chain.buyer), second = await send(chain.buyer); await depth();
+    const actual = await chain.client.getTransaction({ hash: first });
+    const original: Hex = `0x${"ad".repeat(32)}`;
+    const pending = { id: "captured", hash: original, nonce: actual.nonce, startedBlock: "1", intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) };
+    journal.write(chain.buyer, pending);
+    expect(service.captureOutcomeLineage({ account: chain.buyer, hash: second })).toBeNull();
+    const mutableAdapter = vi.spyOn(journal, "read").mockReturnValueOnce(pending);
+    const lineage = service.captureOutcomeLineage({ account: chain.buyer, hash: original });
+    mutableAdapter.mockRestore();
+    pending.nonce += 100;
+    if (!lineage) throw new Error("Expected matching journal token");
+    expect(Object.isFrozen(lineage)).toBe(true);
+    expect(Object.keys(lineage)).toEqual(["hash"]);
+    journal.remove(chain.buyer);
+    const canonical = await service.inspectOutcome({ hash: first, account: chain.buyer });
+    const unrelated = await service.inspectOutcome({ hash: second, account: chain.buyer });
+    if (canonical.kind !== "confirmed" || unrelated.kind !== "confirmed") throw new Error("Expected canonical fixture receipts");
+    const retain = vi.fn();
+    await service.retainOutcome({ receipt: canonical.receipt, lineage, retain });
+    expect(retain).toHaveBeenLastCalledWith({ priorHash: original });
+    await service.retainOutcome({ receipt: unrelated.receipt, lineage, retain });
+    expect(retain).toHaveBeenLastCalledWith({ priorHash: null });
+    await service.retainOutcome({ receipt: canonical.receipt, lineage: { ...lineage }, retain });
+    expect(retain).toHaveBeenLastCalledWith({ priorHash: null });
+    await expect(service.retainOutcome({ receipt: { ...canonical.receipt }, lineage, retain })).rejects.toThrow(/Verify the canonical/);
+    pending.nonce = actual.nonce;
+    journal.write(chain.buyer, { ...pending, startedBlock: (canonical.receipt.blockNumber + 1n).toString() });
+    const future = service.captureOutcomeLineage({ account: chain.buyer, hash: original });
+    if (!future) throw new Error("Expected future-start journal token");
+    await service.retainOutcome({ receipt: canonical.receipt, lineage: future, retain });
+    expect(retain).toHaveBeenLastCalledWith({ priorHash: null });
+    expect(journal.read(chain.buyer)?.startedBlock).toBe((canonical.receipt.blockNumber + 1n).toString());
+  });
+
   it.each(["removed", "changed"] as const)("never recreates or updates a %s journal after a delayed recovery RPC", async kind => {
     const txHash = await send(chain.usdc.address, approvalData()); await depth();
     const actual = await chain.client.getTransaction({ hash: txHash });
