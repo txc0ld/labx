@@ -4,7 +4,7 @@ import { buyerFee } from "./fees";
 import { requirePublishedTerms } from "../published-terms";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
-import type { AccountRaffleState, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, RaffleSnapshot } from "./types";
+import type { AccountRaffleState, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
 import { CATALOG_PAGE_LIMIT } from "./types";
 import { boundedNumber, positiveId, sameAddress } from "./validation";
 
@@ -20,41 +20,73 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     if (await client.getChainId() !== manifest.chainId) throw new Error("RPC network changed.");
     return at;
   }
-  async function readRaffle({ id, block }: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot> {
-    positiveId(id); const at = await checkedBlock(block);
-    const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number };
-    const [raffle, policy, lotCount, paused, owner, ethEnabled, accounting, drawStartGrace, randomnessGrace, revealGrace] = await Promise.all([
-      client.readContract({ ...base, functionName: "getRaffle", args: [id] }),
-      client.readContract({ ...base, functionName: "getRafflePolicy", args: [id] }),
-      client.readContract({ ...base, functionName: "lotCount", args: [id] }),
-      client.readContract({ ...base, functionName: "paused" }), client.readContract({ ...base, functionName: "owner" }),
-      client.readContract({ ...base, functionName: "ethPathEnabled" }), client.readContract({ ...base, functionName: "getRaffleAccounting", args: [id] }),
-      client.readContract({ ...base, functionName: "DRAW_START_GRACE" }), client.readContract({ ...base, functionName: "VRF_ABORT_AFTER" }),
+
+  type PageGlobals = Pick<RaffleSnapshot, "paused" | "owner" | "ethEnabled" | "drawStartGrace" | "randomnessGrace" | "revealGrace">;
+  const baseAt = (at: BlockRef) => ({ address: manifest.address, abi: raffleAbi, blockNumber: at.number });
+  async function readRaffleTuple(id: bigint, at: BlockRef): Promise<Raffle> {
+    const value = await client.readContract({ ...baseAt(at), functionName: "getRaffle", args: [id] });
+    if (value.seller === zeroAddress) throw new Error("Raffle not found.");
+    if (value.packCount < 1 || value.packCount > 8 || value.phase > 6) throw new Error("Raffle data is invalid.");
+    return value;
+  }
+  async function readPageGlobals(at: BlockRef): Promise<PageGlobals> {
+    const base = baseAt(at);
+    const [paused, owner, ethEnabled, drawStartGrace, randomnessGrace, revealGrace] = await Promise.all([
+      client.readContract({ ...base, functionName: "paused" }),
+      client.readContract({ ...base, functionName: "owner" }),
+      client.readContract({ ...base, functionName: "ethPathEnabled" }),
+      client.readContract({ ...base, functionName: "DRAW_START_GRACE" }),
+      client.readContract({ ...base, functionName: "VRF_ABORT_AFTER" }),
       client.readContract({ ...base, functionName: "REVEAL_GRACE" })
     ]);
-    if (raffle.seller === zeroAddress) throw new Error("Raffle not found.");
-    if (raffle.packCount < 1 || raffle.packCount > 8 || raffle.phase > 6) throw new Error("Raffle data is invalid.");
-    const packs = await Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] })));
+    return { paused, owner, ethEnabled, drawStartGrace, randomnessGrace, revealGrace };
+  }
+  async function assembleRaffle(id: bigint, at: BlockRef, raffle: Raffle, globals: PageGlobals): Promise<RaffleSnapshot> {
+    const base = baseAt(at);
+    const [policy, lotCount, accounting, packs] = await Promise.all([
+      client.readContract({ ...base, functionName: "getRafflePolicy", args: [id] }),
+      client.readContract({ ...base, functionName: "lotCount", args: [id] }),
+      client.readContract({ ...base, functionName: "getRaffleAccounting", args: [id] }),
+      Promise.all(Array.from({ length: raffle.packCount }, (_, packId) => client.readContract({ ...base, functionName: "getPack", args: [id, packId] })))
+    ]);
+    return { id, block: at, raffle, packs, policy, lotCount, accounting, ...globals };
+  }
+  async function readRaffle({ id, block }: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot> {
+    positiveId(id); const at = await checkedBlock(block);
+    const [raffle, globals] = await Promise.all([readRaffleTuple(id, at), readPageGlobals(at)]);
+    const snapshot = await assembleRaffle(id, at, raffle, globals);
     await checkedBlock(at);
-    return { id, block: at, raffle, packs, policy, lotCount, paused, owner, ethEnabled, accounting, drawStartGrace, randomnessGrace, revealGrace };
+    return snapshot;
   }
   async function readArtwork({ id, block }: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata> {
-    const snapshot = await readRaffle({ id, block });
-    const fallback = { title: snapshot.raffle.title, description: "", image: null };
+    positiveId(id); const at = await checkedBlock(block);
+    const raffle = await readRaffleTuple(id, at);
+    const fallback = { title: raffle.title, description: "", image: null };
+    let artwork: ArtworkMetadata = fallback;
     try {
-      const uri = await client.readContract({ address: snapshot.raffle.nft, abi: erc721Abi, functionName: "tokenURI", args: [snapshot.raffle.tokenId], blockNumber: snapshot.block.number });
+      const uri = await client.readContract({ address: raffle.nft, abi: erc721Abi, functionName: "tokenURI", args: [raffle.tokenId], blockNumber: at.number });
       const metadata = await browserArtworkMetadata(uri);
-      return metadata ? { ...metadata, title: snapshot.raffle.title } : fallback;
-    } catch { return fallback; }
+      artwork = metadata ? { ...metadata, title: raffle.title } : fallback;
+    } catch { /* Expected token and metadata failures use the recorded title. */ }
+    await checkedBlock(at);
+    return artwork;
   }
-  async function listRaffles({ cursor = 1n, limit = 12, block }: { cursor?: bigint; limit?: number; block?: BlockRef } = {}) {
+  async function paginateRaffles({ cursor = 1n, limit = 12, block, seller }: { cursor?: bigint; limit?: number; block?: BlockRef; seller?: Address } = {}): Promise<Page<RaffleSnapshot>> {
     positiveId(cursor); boundedNumber(limit, 1, CATALOG_PAGE_LIMIT); const at = await checkedBlock(block);
     const nextId = await client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "nextId", blockNumber: at.number });
     if (cursor > nextId) throw new Error("Catalog cursor is outside this block snapshot.");
     const end = cursor + BigInt(limit) < nextId ? cursor + BigInt(limit) : nextId;
     const ids: bigint[] = []; for (let id = cursor; id < end; id++) ids.push(id);
-    const items = await Promise.all(ids.map(id => readRaffle({ id, block: at })));
+    const tuples = await Promise.all(ids.map(async id => ({ id, raffle: await readRaffleTuple(id, at) })));
+    const selected = seller === undefined ? tuples : tuples.filter(item => sameAddress(item.raffle.seller, seller));
+    const items = selected.length === 0
+      ? []
+      : await readPageGlobals(at).then(globals => Promise.all(selected.map(item => assembleRaffle(item.id, at, item.raffle, globals))));
+    await checkedBlock(at);
     return { items, nextCursor: end < nextId ? end : null, block: at };
+  }
+  async function listRaffles(input: { cursor?: bigint; limit?: number; block?: BlockRef; seller?: Address } = {}) {
+    return paginateRaffles(input);
   }
   async function readAccount({ id, account, block }: { id: bigint; account: Address; block?: BlockRef }): Promise<AccountRaffleState> {
     const snapshot = await readRaffle({ id, block }); const at = snapshot.block.number;

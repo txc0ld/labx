@@ -132,6 +132,116 @@ describe("Redis persistence", () => {
       labx: "0x1111111111111111111111111111111111111111"
     })).rejects.toThrow(/store/i);
   });
+
+  it("bounds delayed headers and delayed bodies without aborting a later operation", async () => {
+    vi.useFakeTimers();
+    try {
+      let headerSignal: AbortSignal | undefined;
+      vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        headerSignal = init?.signal ?? undefined;
+        headerSignal?.addEventListener("abort", () => reject(headerSignal?.reason));
+        setTimeout(() => resolve(Response.json({ result: "late" })), 6_000);
+      }));
+      const delayedHeaders = upstashStore("https://redis.example", "test-token").get("reserve:slow-headers")
+        .then(() => "resolved", () => "failed");
+      const headerDeadline = new Promise<string>(resolve => setTimeout(() => resolve("missed deadline"), 5_001));
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await Promise.race([delayedHeaders, headerDeadline])).toBe("failed");
+      expect(headerSignal?.aborted).toBe(true);
+
+      let bodySignal: AbortSignal | undefined;
+      vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+        bodySignal = init?.signal ?? undefined;
+        const body = new ReadableStream({
+          start(controller) {
+            const completion = setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode('{"result":"late"}'));
+              controller.close();
+            }, 6_000);
+            bodySignal?.addEventListener("abort", () => {
+              clearTimeout(completion);
+              controller.error(bodySignal?.reason);
+            });
+          }
+        });
+        return new Response(body, { headers: { "content-type": "application/json" } });
+      });
+      const delayedBody = upstashStore("https://redis.example", "test-token").get("reserve:slow-body")
+        .then(() => "resolved", () => "failed");
+      const bodyDeadline = new Promise<string>(resolve => setTimeout(() => resolve("missed deadline"), 5_001));
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await Promise.race([delayedBody, bodyDeadline])).toBe("failed");
+      expect(bodySignal?.aborted).toBe(true);
+
+      let laterSignal: AbortSignal | undefined;
+      vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+        laterSignal = init?.signal ?? undefined;
+        return Response.json({ result: "OK" });
+      });
+      await expect(upstashStore("https://redis.example", "test-token").set("reserve:later", "saved")).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(laterSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers the original immutable commitment after an ambiguous atomic-write timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const records = new Map<string, string>();
+      let firstAtomicWrite = true;
+      vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+        if (init?.method !== "POST") {
+          return Response.json({ result: records.get(decodeURIComponent(url.split("/get/")[1])) ?? null });
+        }
+        const command = JSON.parse(String(init.body)) as string[];
+        if (command[0] !== "MSETNX") throw new Error("Unexpected Redis command");
+        const exists = records.has(command[1]) || records.has(command[3]);
+        if (!exists) {
+          records.set(command[1], command[2]);
+          records.set(command[3], command[4]);
+        }
+        if (!firstAtomicWrite) return Response.json({ result: exists ? 0 : 1 });
+        firstAtomicWrite = false;
+        const signal = init.signal;
+        const body = new ReadableStream({
+          start(controller) {
+            const completion = setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode('{"result":1}'));
+              controller.close();
+            }, 6_000);
+            signal?.addEventListener("abort", () => {
+              clearTimeout(completion);
+              controller.error(signal.reason);
+            });
+          }
+        });
+        return new Response(body, { headers: { "content-type": "application/json" } });
+      });
+      const store = upstashStore("https://redis.example", "test-token");
+      const input = {
+        seller: "0x2222222222222222222222222222222222222222" as const,
+        nft: "0x3333333333333333333333333333333333333333" as const,
+        tokenId: "1",
+        publicSummary: "An escrowed piece",
+        privateCommitment: "Private reveal data",
+        chainId: 11155111n,
+        labx: "0x1111111111111111111111111111111111111111" as const,
+        requestIdentity: `0x${"ab".repeat(32)}` as const
+      };
+      const first = createReserve(store, input).then(() => "resolved", () => "failed");
+      const deadline = new Promise<string>(resolve => setTimeout(() => resolve("missed deadline"), 5_001));
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await Promise.race([first, deadline])).toBe("failed");
+
+      const recovered = await createReserve(store, input);
+      expect(recovered.commit).toBe(records.get(`reserve-request:v3:${input.requestIdentity}`));
+      expect(records.get(`reserve:${recovered.commit}`)).toContain('"privateHash"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("local file persistence", () => {

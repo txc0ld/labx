@@ -118,34 +118,43 @@ export function activeStore(): Store {
 export function upstashStore(url: string, token: string): Store {
   return {
     async get(key) {
-      const response = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
+      const result = await redisRequest(`${url}/get/${encodeURIComponent(key)}`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store"
       });
-      const result = await redisResult(response);
       if (result !== null && typeof result !== "string") throw new Error("Store returned an invalid read result.");
       return result;
     },
     async set(key, value) {
-      const response = await fetch(url, {
+      const result = await redisRequest(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(["SET", key, value])
       });
-      if (await redisResult(response) !== "OK") throw new Error("Store did not acknowledge the write.");
+      if (result !== "OK") throw new Error("Store did not acknowledge the write.");
     },
     async setIfAbsent(entries) {
       // Redis MSETNX commits all keys or none; a pipeline of SET NX cannot do this.
-      const response = await fetch(url, {
+      const result = await redisRequest(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(["MSETNX", ...checkedEntries(entries).flat()])
       });
-      const result = await redisResult(response);
       if (result !== 0 && result !== 1) throw new Error("Store returned an invalid atomic write result.");
       return result === 1;
     }
   };
+}
+
+async function redisRequest(url: string, init: RequestInit): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return await redisResult(response);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function redisResult(response: Response): Promise<unknown> {

@@ -1,6 +1,8 @@
 import {
   decodeEventLog,
+  formatLog,
   getAbiItem,
+  numberToHex,
   toEventSelector,
   type Address,
   type PublicClient
@@ -8,16 +10,17 @@ import {
 import { raffleAbi } from "./abi";
 import type { SellerRaffleActivity, SellerFinancialEventName } from "./seller-types";
 import type { BlockRef, DeploymentManifest, Page, RaffleSnapshot } from "./types";
-import { boundedNumber, positiveId, sameAddress } from "./validation";
+import { boundedNumber, positiveId } from "./validation";
 
 type SellerReaderDependency = {
   checkedBlock(requested?: BlockRef): Promise<BlockRef>;
   readRaffle(input: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot>;
-  listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
+  listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef; seller?: Address }): Promise<Page<RaffleSnapshot>>;
 };
 
 const FINANCIAL_EVENTS = ["PackPurchased", "ProceedsClaimed", "FeeClaimed", "Refunded"] as const satisfies readonly SellerFinancialEventName[];
-const FINANCIAL_TOPICS = new Set(FINANCIAL_EVENTS.map((name) => toEventSelector(getAbiItem({ abi: raffleAbi, name }))));
+const FINANCIAL_TOPIC_LIST = FINANCIAL_EVENTS.map((name) => toEventSelector(getAbiItem({ abi: raffleAbi, name })));
+const FINANCIAL_TOPICS = new Set(FINANCIAL_TOPIC_LIST);
 
 export function createSellerReader(client: PublicClient, manifest: DeploymentManifest, reader: SellerReaderDependency) {
   async function listSellerRaffles({ seller, cursor, limit = 12, block }: {
@@ -27,11 +30,7 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     block?: BlockRef;
   }): Promise<Page<RaffleSnapshot>> {
     boundedNumber(limit, 1, 24);
-    const page = await reader.listRaffles({ cursor, limit, block });
-    return {
-      ...page,
-      items: page.items.filter((snapshot) => sameAddress(snapshot.raffle.seller, seller))
-    };
+    return reader.listRaffles({ cursor, limit, block, seller });
   }
 
   async function listRaffleActivity({ id, cursor, block }: {
@@ -45,11 +44,20 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     const fromBlock = cursor ?? manifest.deploymentBlock;
     if (fromBlock < manifest.deploymentBlock || fromBlock > at.number) throw new Error("Invalid activity block range.");
     const toBlock = fromBlock + 1_999n < at.number ? fromBlock + 1_999n : at.number;
-    const logs = await client.getLogs({ address: manifest.address, fromBlock, toBlock });
-    if (logs.length > 5_000) throw new Error("Too many events in this block range. Use a smaller range.");
+    const rawLogs = await client.request({
+      method: "eth_getLogs",
+      params: [{
+        address: manifest.address,
+        fromBlock: numberToHex(fromBlock),
+        toBlock: numberToHex(toBlock),
+        topics: [FINANCIAL_TOPIC_LIST, numberToHex(id, { size: 32 })]
+      }]
+    });
+    if (rawLogs.length > 5_000) throw new Error("Too many events in this block range. Use a smaller range.");
 
     const items: SellerRaffleActivity[] = [];
-    for (const log of logs) {
+    for (const rawLog of rawLogs) {
+      const log = formatLog(rawLog);
       const topic = log.topics[0];
       const financialTopic = topic !== undefined && FINANCIAL_TOPICS.has(topic);
       let event: ReturnType<typeof decodeEventLog<typeof raffleAbi>>;
