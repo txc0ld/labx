@@ -269,6 +269,7 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
       await expect.poll(() => cold.getSnapshot(chain.buyer), { timeout: 10_000 }).toMatchObject([
         { kind: "terminal", submitted: { hash: fixture.h2 } }
       ]);
+      await cold.synchronize(chain.buyer);
       expect(cold.getSnapshot(chain.buyer).some(item => outcomeHashForTest(item)?.toLowerCase() === fixture.h1.toLowerCase())).toBe(false);
       expect(cold.getSnapshot(chain.buyer).filter(blocking)).toEqual([]);
       expect(map.size).toBe(0);
@@ -276,6 +277,65 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     } finally {
       stop();
       release.resolve();
+      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  }, 15_000);
+
+  it("does not retain an unverified cold H1 after observed H2 was verified and acknowledged", async () => {
+    const { map, storage } = memoryStorage();
+    const fixture = await replacementFixture(storage);
+    const entered = deferred();
+    const release = deferred();
+    let delayedH1 = true;
+    const cold = createTransactionOutcomes({
+      ...fixture.service,
+      async inspectOutcome(input: Parameters<RaffleService["inspectOutcome"]>[0]) {
+        if (delayedH1 && input.hash.toLowerCase() === fixture.h1.toLowerCase()) {
+          delayedH1 = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return fixture.service.inspectOutcome(input);
+      }
+    }, () => storage);
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const listeners = new Map<string, Set<(event: { key?: string | null; newValue?: string | null; storageArea?: OutcomeStorage }) => void>>();
+    const fakeWindow = {
+      localStorage: storage,
+      addEventListener(type: string, listener: (event: { key?: string | null; newValue?: string | null; storageArea?: OutcomeStorage }) => void) {
+        const current = listeners.get(type) ?? new Set();
+        current.add(listener); listeners.set(type, current);
+      },
+      removeEventListener(type: string, listener: (event: { key?: string | null; newValue?: string | null; storageArea?: OutcomeStorage }) => void) {
+        listeners.get(type)?.delete(listener);
+      }
+    };
+    Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+    const stop = cold.observe(chain.buyer);
+    try {
+      await entered.promise;
+      const canonical = await fixture.tabB.resume(fixture.h2, fixture.wallet);
+      expect(canonical).toMatchObject({ kind: "terminal", submitted: { hash: fixture.h2 } });
+      const entry = [...map.entries()].find(([, value]) => includesHash(value, fixture.h2));
+      if (!entry) throw new Error("H2 was not saved before the simulated storage event.");
+      for (const listener of listeners.get("storage") ?? []) listener({ key: entry[0], newValue: entry[1], storageArea: storage });
+      await fixture.tabB.acknowledge(canonical, fixture.wallet);
+      expect(map.size).toBe(0);
+      for (const listener of listeners.get("storage") ?? []) listener({ key: entry[0], newValue: null, storageArea: storage });
+
+      release.resolve();
+      await cold.synchronize(chain.buyer);
+      await expect.poll(() => cold.getSnapshot(chain.buyer).find(item => outcomeHashForTest(item)?.toLowerCase() === fixture.h2.toLowerCase()), { timeout: 10_000 })
+        .toMatchObject({ kind: "terminal", submitted: { hash: fixture.h2 } });
+      expect(cold.getSnapshot(chain.buyer).some(item => outcomeHashForTest(item)?.toLowerCase() === fixture.h1.toLowerCase())).toBe(false);
+      expect(cold.getSnapshot(chain.buyer).filter(blocking)).toEqual([]);
+      expect(map.size).toBe(0);
+      expect(fixture.journal.read(chain.buyer)).toBeNull();
+    } finally {
+      stop();
+      release.resolve();
+      await cold.synchronize(chain.buyer).catch(() => undefined);
       if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
       else Reflect.deleteProperty(globalThis, "window");
     }
