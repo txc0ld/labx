@@ -304,8 +304,11 @@ run("independent transaction outcome ownership", () => {
 
     const saved = await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.treasury));
     expect(saved).toContain(hash);
-    const originalWalletText = await fixture.page.locator("#content").innerText();
-    expect(originalWalletText).toContain(hash);
+    const originalWalletRecovery = fixture.page.locator(".resume-transaction form");
+    await originalWalletRecovery.waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => originalWalletRecovery.getByLabel("Transaction hash").inputValue(), { timeout: 10_000 }).toBe(hash);
+    expect(await originalWalletRecovery.innerText()).toMatch(/Pending wallet activity|unresolved transaction/i);
+    expect(await fixture.page.locator("#content").innerText()).not.toMatch(/purchase confirmed/i);
   }, 75_000);
 
   it("inspects an old confirmed hint without changing a separate newer pending journal", async () => {
