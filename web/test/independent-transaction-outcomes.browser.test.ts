@@ -163,7 +163,7 @@ run("independent transaction outcome ownership", () => {
     });
 
     await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
-    const pending = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Transaction submitted" });
+    const pending = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction submitted" });
     await pending.waitFor({ state: "visible", timeout: 10_000 });
     const hash = (await pending.innerText()).match(/0x[0-9a-f]{64}/i)?.[0] as Hex | undefined;
     expect(hash).toMatch(/^0x[0-9a-f]{64}$/i);
