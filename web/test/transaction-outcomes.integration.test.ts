@@ -78,8 +78,7 @@ run("canonical outcome recovery on isolated Anvil", () => {
       const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
       const first = await send(chain.usdc.address, approvalData(), { nonce: `0x${nonce.toString(16)}`, gasPrice: "0x77359400" });
       journal.write(chain.buyer, { id: "replacement", hash: first, nonce, startedBlock: (await chain.client.getBlockNumber()).toString(), intentHash: transactionIntent({ to: chain.usdc.address, data: approvalData(), value: 0n }) });
-      const original = { hash: first, account: chain.buyer, chainId: 31337, to: chain.usdc.address, data: approvalData(), value: 0n };
-      expect(await owner.confirm(original)).toMatchObject({ kind: "pending" });
+      expect(await owner.resume(first, wallet)).toMatchObject({ kind: "pending" });
       const second = await send(chain.buyer, "0x", { nonce: `0x${nonce.toString(16)}`, gasPrice: "0xb2d05e00" });
       await depth();
       const terminal = await owner.resume(second, wallet);
@@ -95,7 +94,7 @@ run("canonical outcome recovery on isolated Anvil", () => {
   it("requires service-issued canonical metadata and checks fresh same/older/newer journal nonces atomically", async () => {
     const txHash = await send(chain.buyer); await depth();
     const result = await service.inspectOutcome({ hash: txHash, account: chain.buyer });
-    if (result.kind === "pending") throw new Error("Expected canonical receipt");
+    if (result.kind === "pending" || result.kind === "unknown") throw new Error("Expected canonical receipt");
     let acknowledgments = 0;
     const acknowledge = () => { acknowledgments++; };
     await expect(service.acknowledgeOutcome({ receipt: { ...result.receipt, nonce: 0 }, acknowledge })).rejects.toThrow(/Verify the canonical/);

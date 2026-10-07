@@ -87,7 +87,11 @@ export type PreparedAction = {
   readonly block: BlockRef; readonly walletRevision: number;
 };
 export type SubmittedAction = { hash: Hex; account: Address; chainId: number; to: Address | null; data: Hex; value: bigint };
-export type CanonicalReceipt = SubmittedAction & { nonce: number; blockNumber: bigint; status: "success" | "reverted" };
+export type ObservedTransaction = SubmittedAction & { nonce: number };
+export type CanonicalReceipt = ObservedTransaction & { blockNumber: bigint; status: "success" | "reverted" };
+export type OutcomeInspection = Exclude<Confirmation, { kind: "pending" }>
+  | { kind: "pending"; hash: Hex; reason: "unmined" | "confirmations"; transaction: ObservedTransaction }
+  | { kind: "unknown"; hash: Hex; reason: string };
 export type OutcomeJournal = { id: string; hash: Hex | null; nonce: number };
 export type Confirmation =
   | { kind: "pending"; hash: Hex }

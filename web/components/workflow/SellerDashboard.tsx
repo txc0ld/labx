@@ -59,7 +59,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
   return (
     <WalletGate wallet={browser.wallet}>
       <div className={styles.portal}>
-        <ResumeTransaction browser={browser} pendingOnly onConfirmed={load} />
+        <ResumeTransaction browser={browser} pendingOnly onConfirmed={load} confirmedThroughBlock={state.kind === "ready" ? state.block.number : undefined} deferRefresh={state.kind !== "ready"} />
         <section className={styles.overview} aria-labelledby="seller-overview-title">
           <div className={styles.overviewHeading}>
             <div><p className="kicker">Seller portfolio</p><h2 id="seller-overview-title">Revenue at a glance</h2></div>

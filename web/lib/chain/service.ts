@@ -1,5 +1,5 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
-import { decodeFunctionData, erc20Abi, erc721Abi, type Address, type Hex, type PublicClient } from "viem";
+import { decodeFunctionData, erc20Abi, erc721Abi, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
 import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
@@ -93,40 +93,66 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     } finally { submitting.delete(key); }
   }
 
-  async function canonicalReceipt(txHash: Hex, account: Address, timeoutMs: number, onReplaced?: () => void): Promise<CanonicalReceipt> {
-    const receipt = await client.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: Math.max(1000, Math.min(timeoutMs, 120_000)), onReplaced });
-    const actual = await client.getTransaction({ hash: receipt.transactionHash });
-    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
-    if (block.hash !== receipt.blockHash) throw new Error("The transaction block changed. Refresh its confirmation.");
-    if (!sameAddress(actual.from, account)) throw new Error("Transaction sender does not match this wallet.");
+  async function validateReceipt(receipt: TransactionReceipt, account: Address): Promise<CanonicalReceipt> {
+    const [actual, block, latest] = await Promise.all([
+      client.getTransaction({ hash: receipt.transactionHash }),
+      client.getBlock({ blockNumber: receipt.blockNumber }),
+      client.getBlockNumber({ cacheTime: 0 })
+    ]);
+    if (actual.hash.toLowerCase() !== receipt.transactionHash.toLowerCase() || actual.blockNumber !== receipt.blockNumber || actual.blockHash !== receipt.blockHash || block.hash !== receipt.blockHash) throw new Error("The transaction block changed. Refresh its confirmation.");
+    if (latest < receipt.blockNumber + 1n) throw new Error("The receipt does not yet have two canonical confirmations.");
+    if (!sameAddress(actual.from, account) || !sameAddress(receipt.from, account)) throw new Error("Transaction sender does not match this wallet.");
     const result: CanonicalReceipt = { hash: receipt.transactionHash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value,
       nonce: actual.nonce, blockNumber: receipt.blockNumber, status: receipt.status };
     canonicalReceipts.set(result, { account: actual.from, nonce: actual.nonce });
     return Object.freeze(result);
   }
+  async function canonicalReceipt(txHash: Hex, account: Address, timeoutMs: number, onReplaced?: () => void): Promise<CanonicalReceipt> {
+    return validateReceipt(await client.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: Math.max(1000, Math.min(timeoutMs, 120_000)), onReplaced }), account);
+  }
   function timedOut(error: unknown) {
     return error instanceof Error && /Timeout|timed out/i.test(error.name + error.message);
   }
-  async function inspectOutcome({ hash: txHash, account, timeoutMs = 1000 }: Parameters<RaffleService["inspectOutcome"]>[0]): ReturnType<RaffleService["inspectOutcome"]> {
-    await reader.checkedBlock(); hash(txHash);
-    const requested = await client.getTransaction({ hash: txHash });
-    if (!sameAddress(requested.from, account)) throw new Error("Transaction sender does not match this wallet.");
+  async function inspectOutcome({ hash: txHash, account, timeoutMs = 0 }: Parameters<RaffleService["inspectOutcome"]>[0]): ReturnType<RaffleService["inspectOutcome"]> {
+    hash(txHash);
     try {
-      const receipt = await canonicalReceipt(txHash, account, timeoutMs);
+      await reader.checkedBlock();
+      const requested = await client.getTransaction({ hash: txHash });
+      if (requested.hash.toLowerCase() !== txHash.toLowerCase() || !sameAddress(requested.from, account)) throw new Error("Transaction sender or hash does not match this wallet request.");
+      const observed = { hash: requested.hash, account: requested.from, chainId: manifest.chainId, to: requested.to, data: requested.input, value: requested.value, nonce: requested.nonce };
+      let receipt: CanonicalReceipt;
+      if (requested.blockNumber === null) {
+        if (!timeoutMs) return { kind: "pending", hash: txHash, reason: "unmined", transaction: observed };
+        receipt = await canonicalReceipt(txHash, account, timeoutMs);
+      } else {
+        const mined = await client.getTransactionReceipt({ hash: txHash });
+        if (mined.transactionHash.toLowerCase() !== txHash.toLowerCase() || mined.blockNumber !== requested.blockNumber || mined.blockHash !== requested.blockHash) throw new Error("The receipt does not match the requested transaction's canonical block.");
+        if (await client.getBlockNumber({ cacheTime: 0 }) < mined.blockNumber + 1n) return { kind: "pending", hash: txHash, reason: "confirmations", transaction: observed };
+        receipt = await validateReceipt(mined, account);
+      }
       if (receipt.nonce !== requested.nonce) throw new Error("The canonical receipt does not match the requested transaction nonce.");
       return receipt.status === "success"
         ? { kind: "confirmed", hash: receipt.hash, blockNumber: receipt.blockNumber, replacedHash: receipt.hash.toLowerCase() === txHash.toLowerCase() ? null : txHash, receipt }
         : { kind: "reverted", hash: receipt.hash, reason: "The transaction reverted. No successful action was recorded.", receipt };
     } catch (error) {
-      if (timedOut(error)) return { kind: "pending", hash: txHash };
-      throw error;
+      return { kind: "unknown", hash: txHash, reason: error instanceof Error ? error.message : "The transaction could not be verified. Check again when the RPC is available." };
     }
   }
-  async function confirm({ transaction, timeoutMs = 60_000, beforeJournalClear }: Parameters<RaffleService["confirm"]>[0]): ReturnType<RaffleService["confirm"]> {
+  async function confirm({ transaction, timeoutMs = 60_000, beforeJournalWatch, beforeJournalClear }: Parameters<RaffleService["confirm"]>[0]): ReturnType<RaffleService["confirm"]> {
     await reader.checkedBlock(); hash(transaction.hash);
     if (transaction.chainId !== manifest.chainId) throw new Error("Transaction network does not match this deployment.");
     let replacementSeen = false;
     try {
+      if (beforeJournalWatch) {
+        const actual = await client.getTransaction({ hash: transaction.hash });
+        if (actual.hash.toLowerCase() !== transaction.hash.toLowerCase() || !sameAddress(actual.from, transaction.account)) throw new Error("Transaction sender or hash does not match this wallet request.");
+        await journal.exclusive(transaction.account, async () => {
+          const current = journal.read(transaction.account);
+          if (!current) return;
+          if (actual.nonce !== current.nonce || actual.blockNumber !== null && actual.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash.toLowerCase() !== actual.hash.toLowerCase()) throw new Error("This transaction does not match the current unresolved wallet action.");
+          beforeJournalWatch({ transaction: { hash: actual.hash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value, nonce: actual.nonce }, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
+        });
+      }
       const receipt = await canonicalReceipt(transaction.hash, transaction.account, timeoutMs, () => { replacementSeen = true; });
       let expectedIntent = transaction.to ? transactionIntent({ ...transaction, to: transaction.to }) : null;
       await journal.exclusive(transaction.account, async () => {

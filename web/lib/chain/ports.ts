@@ -1,7 +1,7 @@
 import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
-  AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, OutcomeJournal, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
+  AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
@@ -41,8 +41,8 @@ export interface RaffleService {
   quoteMembership(input: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote>;
   prepare(input: { action: WorkflowAction; wallet: WalletSessionPort }): Promise<PreparedAction>;
   submit(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<SubmittedAction>;
-  confirm(input: { transaction: SubmittedAction; timeoutMs?: number; beforeJournalClear?: (input: { receipt: CanonicalReceipt; pending: OutcomeJournal | null }) => void }): Promise<Confirmation>;
-  inspectOutcome(input: { hash: Hex; account: Address; timeoutMs?: number }): Promise<Confirmation>;
+  confirm(input: { transaction: SubmittedAction; timeoutMs?: number; beforeJournalWatch?: (input: { transaction: ObservedTransaction; pending: OutcomeJournal }) => void; beforeJournalClear?: (input: { receipt: CanonicalReceipt; pending: OutcomeJournal | null }) => void }): Promise<Confirmation>;
+  inspectOutcome(input: { hash: Hex; account: Address; timeoutMs?: number }): Promise<OutcomeInspection>;
   acknowledgeOutcome(input: { receipt: CanonicalReceipt; acknowledge: () => void }): Promise<void>;
   pending(input: { wallet: WalletSessionPort }): Promise<{ hash: Hex | null; nonce: number } | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort; beforeJournalUpdate?: (input: { transaction: SubmittedAction; nonce: number; pending: OutcomeJournal | null }) => void }): Promise<SubmittedAction>;

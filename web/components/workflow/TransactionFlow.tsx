@@ -195,13 +195,13 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       setCurrent(expected, { kind: "pending", submitted: outcome.submitted });
     } else if (outcome.kind === "rejected") {
       setCurrent(expected, { kind: "rejected", message: outcome.message });
-    } else if (outcome.kind === "error") {
+    } else if (outcome.kind === "error" || outcome.kind === "unverified") {
       await showError(new Error(outcome.message), expected);
     }
   }
 
   async function waitForConfirmation(submitted: SubmittedAction, expected: FlowContext) {
-    await applyOutcome(await owner.confirm(submitted), expected);
+    await applyOutcome(await owner.resume(submitted.hash, expected.wallet), expected);
   }
 
   async function submit(prepared: PreparedAction) {
@@ -229,6 +229,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     const activeOperation = begin(expected);
     if (!activeOperation) return;
     try { await waitForConfirmation(submitted, expected); }
+    catch (error) { await showError(error, expected); }
     finally { end(activeOperation); }
   }
 
