@@ -188,7 +188,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.keyboard.press("Enter");
     await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible" });
 
-    for (const name of ["Raffle details", "Prize NFT", "Draw commitment", "Membership packs", "Membership 1"]) {
+    for (const name of ["Raffle details", "Prize NFT", "Membership packs", "Membership 1"]) {
       await fixture.page.getByRole("group", { name }).waitFor({ state: "visible" });
     }
 
@@ -287,24 +287,22 @@ run("rendered seller portal on isolated Anvil", () => {
     }
 
     expect(await fixture.page.getByLabel("Sales deadline in UTC", { exact: true }).count()).toBe(1);
-    expect(await fixture.page.getByLabel("Private commitment", { exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByLabel("Public commitment note", { exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByLabel("Private commitment", { exact: true }).count()).toBe(0);
     expect(await computedAccessibility("#draft-close")).toEqual({ name: "Sales deadline in UTC", description: "Enter the deadline as UTC, not local time." });
-    expect(await computedAccessibility("#draft-private")).toEqual({ name: "Private commitment", description: "Never enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable." });
 
     const futureDeadline = Number((await chain.client.getBlock()).timestamp + 86_400n);
     await fixture.page.getByLabel("Raffle title").fill("Responsive seller draft");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(futureDeadline * 1000).toISOString().slice(0, 16));
-    await fixture.page.getByLabel("Public commitment note").fill("Public responsive layout review");
-    await fixture.page.getByLabel("Private commitment").fill("Private responsive layout review");
     await fixture.page.getByLabel("Name", { exact: true }).fill("Standard membership");
     await fixture.page.getByLabel("Price in USDC").fill("25");
     await fixture.page.getByLabel("Bonus entries").fill("2");
     await fixture.page.getByLabel("Supply").fill("100");
-    await fixture.page.getByRole("button", { name: "Review raffle draft", exact: true }).click();
-    const reviewHeading = fixture.page.getByRole("heading", { name: "Review raffle draft", exact: true });
-    await fixture.page.getByRole("button", { name: "Sign and save commitment", exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    const reviewHeading = fixture.page.getByRole("heading", { name: "Prepare raffle draft", exact: true });
+    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).waitFor({ state: "visible" });
     await expect.poll(async () => reviewHeading.evaluate((heading) => {
       const bounds = heading.getBoundingClientRect();
       const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
@@ -338,12 +336,12 @@ run("rendered seller portal on isolated Anvil", () => {
 
     await expectEditStageVisible(1440);
     await fixture.page.setViewportSize({ width: 390, height: 844 });
-    await fixture.page.getByRole("button", { name: "Review raffle draft", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Review raffle draft", exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Prepare raffle draft", exact: true }).waitFor({ state: "visible" });
     await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
     await expectEditStageVisible(390);
 
-    expect(await fixture.page.locator("form").filter({ has: fixture.page.getByLabel("Raffle title") }).locator("input, textarea").evaluateAll((controls) => controls.map((control) => control.id).filter(Boolean).slice(0, 6))).toEqual(["draft-title", "draft-close", "draft-nft", "draft-token", "draft-public", "draft-private"]);
+    expect(await fixture.page.locator("form").filter({ has: fixture.page.getByLabel("Raffle title") }).locator("input, textarea").evaluateAll((controls) => controls.map((control) => control.id).filter(Boolean).slice(0, 4))).toEqual(["draft-title", "draft-close", "draft-nft", "draft-token"]);
     await fixture.page.keyboard.press("Tab");
     expect(await fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-close");
 
@@ -389,6 +387,167 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
+  }, 60_000);
+
+  it("generates hidden commitment inputs once, reuses them on retry, and rotates them for a changed NFT", async () => {
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await fixture.page.locator("summary").filter({ hasText: "Prepare a draft" }).click();
+
+    const block = await chain.client.getBlock();
+    await fixture.page.getByLabel("Raffle title").fill("Automatic commitment retry");
+    await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
+    await fixture.page.getByLabel("Token ID").fill("999");
+    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Name", { exact: true }).fill("Standard membership");
+    await fixture.page.getByLabel("Price in USDC").fill("25");
+    await fixture.page.getByLabel("Bonus entries").fill("2");
+    await fixture.page.getByLabel("Supply").fill("100");
+
+    type CapturedCommitment = { nft: string; tokenId: string; publicSummary: string; privateCommitment: string };
+    const attempts: CapturedCommitment[] = [];
+    await fixture.page.route("**/api/reserve", async route => {
+      const body: unknown = route.request().postDataJSON();
+      if (!body || typeof body !== "object" || !("input" in body) || !body.input || typeof body.input !== "object") throw new Error("Commitment request input missing.");
+      const input = body.input;
+      if (!("nft" in input) || typeof input.nft !== "string" || !("tokenId" in input) || typeof input.tokenId !== "string" || !("publicSummary" in input) || typeof input.publicSummary !== "string" || !("privateCommitment" in input) || typeof input.privateCommitment !== "string") throw new Error("Commitment request input invalid.");
+      const captured = { nft: input.nft, tokenId: input.tokenId, publicSummary: input.publicSummary, privateCommitment: input.privateCommitment };
+      attempts.push(captured);
+      if (attempts.length === 2) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, seller: chain.seller, nft: chain.nft.address, tokenId: "998", chainId: "31337", labx: chain.raffle.address, publicSummary: captured.publicSummary, publicHash: keccak256(toBytes(captured.publicSummary)), nonce: keccak256(toBytes("mismatched nonce")), commit: keccak256(toBytes("mismatched commit")) })
+        });
+        return;
+      }
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Simulated durable storage failure." }) });
+    });
+
+    const blockBeforePreparation = await chain.client.getBlockNumber({ cacheTime: 0 });
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
+    await fixture.page.getByText("Simulated durable storage failure.", { exact: true }).waitFor({ state: "visible" });
+    expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
+
+    await fixture.page.getByLabel("Token ID").fill("0999");
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
+    await fixture.page.getByText("Stored commitment does not match the reviewed request.", { exact: true }).waitFor({ state: "visible" });
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toEqual(attempts[1]);
+    expect(attempts[0]?.privateCommitment).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(attempts[0]?.publicSummary).toBe(`LABx draw setup for NFT ${chain.nft.address.toLowerCase()} token 999`);
+    expect(await fixture.page.locator("body").innerText()).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
+    expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
+
+    await fixture.page.getByLabel("Token ID").fill("998");
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
+    await fixture.page.getByText("Simulated durable storage failure.", { exact: true }).waitFor({ state: "visible" });
+    expect(attempts).toHaveLength(3);
+    expect(attempts[2]?.tokenId).toBe("998");
+    expect(attempts[2]?.publicSummary).toBe(`LABx draw setup for NFT ${chain.nft.address.toLowerCase()} token 998`);
+    expect(attempts[2]?.privateCommitment).not.toBe(attempts[0]?.privateCommitment);
+    expect(await chain.client.getBlockNumber({ cacheTime: 0 })).toBe(blockBeforePreparation);
+    expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
+    await fixture.page.unroute("**/api/reserve");
+  }, 45_000);
+
+  it("fails closed before storage or transaction review when browser entropy fails", async () => {
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await fixture.page.locator("summary").filter({ hasText: "Prepare a draft" }).click();
+    const block = await chain.client.getBlock();
+    await fixture.page.getByLabel("Raffle title").fill("Entropy failure");
+    await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
+    await fixture.page.getByLabel("Token ID").fill("997");
+    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Name", { exact: true }).fill("Membership");
+    await fixture.page.getByLabel("Price in USDC").fill("1");
+    await fixture.page.getByLabel("Bonus entries").fill("1");
+    await fixture.page.getByLabel("Supply").fill("1");
+    let reserveRequests = 0;
+    await fixture.page.route("**/api/reserve", async route => { reserveRequests += 1; await route.abort("failed"); });
+    await fixture.page.evaluate(() => {
+      Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for test"); } });
+    });
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByText("Secure random generation failed. This raffle cannot be prepared safely.", { exact: true }).waitFor({ state: "visible" });
+    expect(reserveRequests).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
+    await fixture.page.unroute("**/api/reserve");
+  }, 30_000);
+
+  it("retains the chain commitment for canonically unchanged and escrowed NFT drafts without entropy", async () => {
+    let reserveRequests = 0;
+    await fixture.page.route("**/api/reserve", async route => { reserveRequests += 1; await route.abort("failed"); });
+
+    await fixture.switchAccount(chain.seller);
+    let response = await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    let connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    const beforeUnescrowed = await chain.service.readRaffle({ id: 3n });
+    await fixture.page.locator("summary").filter({ hasText: "Edit draft" }).click();
+    const block = await chain.client.getBlock();
+    await fixture.page.getByLabel("Raffle title").fill("Canonical NFT retention");
+    await fixture.page.getByLabel("Token ID").fill("0803");
+    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.evaluate(() => {
+      Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for retention test"); } });
+    });
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByText("The saved draw setup for this NFT will be retained. No additional storage signature is needed.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.evaluate(() => { Reflect.deleteProperty(window.crypto, "getRandomValues"); });
+    await transact("Update raffle draft");
+    const afterUnescrowed = await chain.service.readRaffle({ id: 3n });
+    expect(afterUnescrowed.raffle.reserveNonce).toBe(beforeUnescrowed.raffle.reserveNonce);
+    expect(afterUnescrowed.raffle.reserveCommit).toBe(beforeUnescrowed.raffle.reserveCommit);
+
+    const escrowBlock = await chain.client.getBlock();
+    const legacyCommitment = keccak256(toBytes("legacy escrowed automatic retention"));
+    await chain.write(chain.nft, "mint", [chain.seller, 931n]);
+    await chain.write(chain.raffle, "createRaffle", [
+      chain.nft.address,
+      931n,
+      escrowBlock.timestamp + 86_400n,
+      legacyCommitment,
+      legacyCommitment,
+      "Legacy escrowed draft",
+      [{ name: "Membership", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }]
+    ], chain.seller);
+    await chain.write(chain.nft, "approve", [chain.raffle.address, 931n], chain.seller);
+    await chain.write(chain.raffle, "escrow", [31n], chain.seller);
+    const beforeEscrowed = await chain.service.readRaffle({ id: 31n });
+
+    response = await fixture.page.goto(`${fixture.baseUrl}/seller/31`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await fixture.page.locator("summary").filter({ hasText: "Edit draft" }).click();
+    expect(await fixture.page.getByLabel("NFT contract").isDisabled()).toBe(true);
+    expect(await fixture.page.getByLabel("Token ID").isDisabled()).toBe(true);
+    await fixture.page.getByLabel("Raffle title").fill("Legacy escrowed draft retained");
+    await fixture.page.evaluate(() => {
+      Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for escrow retention test"); } });
+    });
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByText("The saved draw setup for this NFT will be retained. No additional storage signature is needed.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.evaluate(() => { Reflect.deleteProperty(window.crypto, "getRandomValues"); });
+    await transact("Update raffle draft");
+    const afterEscrowed = await chain.service.readRaffle({ id: 31n });
+    expect(afterEscrowed.raffle.reserveNonce).toBe(beforeEscrowed.raffle.reserveNonce);
+    expect(afterEscrowed.raffle.reserveCommit).toBe(beforeEscrowed.raffle.reserveCommit);
+    expect(reserveRequests).toBe(0);
+    await fixture.page.unroute("**/api/reserve");
   }, 60_000);
 
   it("gates a direct seller route immediately after the wallet changes", async () => {

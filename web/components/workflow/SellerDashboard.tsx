@@ -101,7 +101,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
 
         <section className={styles.createPanel} aria-label="Create a raffle draft">
           <details>
-            <summary><span><small>New raffle</small><strong>Prepare a draft</strong><em>Review the public terms, save the private commitment, then submit the draft transaction.</em></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
+            <summary><span><small>New raffle</small><strong>Prepare a draft</strong><em>Review the raffle, sign the secure preparation request, then submit the draft transaction.</em></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
             <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
           </details>
         </section>

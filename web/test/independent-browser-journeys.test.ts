@@ -110,14 +110,12 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill(input.tokenId.toString());
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(input.deadline * 1000).toISOString().slice(0, 16));
-    await fixture.page.getByLabel("Public commitment note").fill(`Public ${input.title}`);
-    await fixture.page.getByLabel("Private commitment").fill(`Private ${input.title}`);
     await fixture.page.getByLabel("Name", { exact: true }).fill("Membership");
     await fixture.page.getByLabel("Price in USDC", { exact: true }).fill(input.price);
     await fixture.page.getByLabel("Bonus entries", { exact: true }).fill("3");
     await fixture.page.getByLabel("Supply", { exact: true }).fill(input.supply);
-    await fixture.page.getByRole("button", { name: "Review raffle draft", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Sign and save commitment", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const review = await transact("Create raffle draft");
     expect(review).toContain(chain.raffle.address);

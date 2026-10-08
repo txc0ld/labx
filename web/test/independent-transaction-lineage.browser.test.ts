@@ -48,14 +48,12 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     await page.getByLabel("NFT contract").fill(chain.nft.address);
     await page.getByLabel("Token ID").fill("9101");
     await page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 3600n) * 1000).toISOString().slice(0, 16));
-    await page.getByLabel("Public commitment note").fill("Rendered public replacement lineage");
-    await page.getByLabel("Private commitment").fill("Rendered private replacement lineage");
     await page.getByLabel("Name", { exact: true }).fill("Entry");
     await page.getByLabel("Price in USDC", { exact: true }).fill("1");
     await page.getByLabel("Bonus entries", { exact: true }).fill("1");
     await page.getByLabel("Supply", { exact: true }).fill("10");
-    await page.getByRole("button", { name: "Review raffle draft", exact: true }).click();
-    await page.getByRole("button", { name: "Sign and save commitment", exact: true }).click();
+    await page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
     await page.getByRole("button", { name: "Create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await page.getByRole("button", { name: "Create raffle draft", exact: true }).click();
     await page.locator(".transaction-review").getByRole("button", { name: "Confirm create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });

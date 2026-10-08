@@ -126,7 +126,6 @@
 }
 
 @container (min-width:54rem) {
-  .commitmentGrid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .packFields { grid-template-columns:minmax(12rem,1.25fr) repeat(3,minmax(9rem,.75fr)); }
 }
 

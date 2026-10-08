@@ -5,12 +5,14 @@ import { isAddress, type Address } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
+import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automatic-commitment";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
 import formStyles from "./SellerDraftForm.module.css";
 
 type PackDraft = { id: string; name: string; price: string; bonusEntries: string; maxSupply: string };
-type FormDraft = { nft: string; tokenId: string; title: string; closing: string; publicSummary: string; privateCommitment: string; packs: PackDraft[] };
+type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
+type CommitmentPreparation = { key: string; input: { publicSummary: string; privateCommitment: string } };
 type DraftState =
   | { kind: "editing" }
   | { kind: "review"; action: Omit<DraftInput, "reserveNonce" | "reserveCommit"> }
@@ -20,7 +22,7 @@ type DraftState =
   | { kind: "error"; message: string };
 
 const EMPTY_PACK = { name: "", price: "", bonusEntries: "", maxSupply: "" };
-const INITIAL: FormDraft = { nft: "", tokenId: "", title: "", closing: "", publicSummary: "", privateCommitment: "", packs: [{ id: "initial-pack", ...EMPTY_PACK }] };
+const INITIAL: FormDraft = { nft: "", tokenId: "", title: "", closing: "", packs: [{ id: "initial-pack", ...EMPTY_PACK }] };
 
 export type SaveCommitment = (input: { nft: Address; tokenId: string; publicSummary: string; privateCommitment: string }) => Promise<PublicReserve>;
 
@@ -31,15 +33,13 @@ function positiveInteger(value: string, label: string, maximum: number) {
   return parsed;
 }
 
-function actionFromForm(form: FormDraft, keepCommitment: boolean): Omit<DraftInput, "reserveNonce" | "reserveCommit"> {
+function actionFromForm(form: FormDraft): Omit<DraftInput, "reserveNonce" | "reserveCommit"> {
   if (!isAddress(form.nft)) throw new Error("Enter a valid NFT contract address.");
   if (!/^\d{1,78}$/.test(form.tokenId) || BigInt(form.tokenId) >= 2n ** 256n) throw new Error("Enter a valid NFT token ID.");
   const title = form.title.trim();
   if (!title || new TextEncoder().encode(title).length > 80) throw new Error("Title must contain 1–80 UTF-8 bytes.");
   const closeMilliseconds = Date.parse(`${form.closing}Z`);
   if (!Number.isFinite(closeMilliseconds) || closeMilliseconds <= Date.now()) throw new Error("Choose a future closing date.");
-  if (!keepCommitment && !form.publicSummary.trim()) throw new Error("Add a public commitment note without disclosing the private number.");
-  if (!keepCommitment && !form.privateCommitment.trim()) throw new Error("Add the private commitment that will be recovered for reveal.");
   if (form.packs.length < 1 || form.packs.length > 8) throw new Error("Configure 1–8 memberships.");
   return {
     nft: form.nft,
@@ -61,8 +61,6 @@ function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
     tokenId: snapshot.raffle.tokenId.toString(),
     title: snapshot.raffle.title,
     closing: new Date(Number(snapshot.raffle.salesEnd) * 1000).toISOString().slice(0, 16),
-    publicSummary: "",
-    privateCommitment: "",
     packs: snapshot.packs.map((pack, index) => ({ id: `existing-pack-${index + 1}`, name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() }))
   };
 }
@@ -76,6 +74,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 }) {
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
+  const commitmentPreparation = useRef<CommitmentPreparation | null>(null);
   const commitmentInFlight = useRef(false);
   const focusAfterRender = useRef<"edit" | "review" | null>(null);
   const focusAddAfterPackChange = useRef(false);
@@ -84,7 +83,6 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const reviewFocus = useRef<HTMLHeadingElement>(null);
   const addPackFocus = useRef<HTMLButtonElement>(null);
   const nextPackId = useRef(form.packs.length);
-  const keepCommitment = !!existing && !form.publicSummary.trim() && !form.privateCommitment.trim() && form.nft.toLowerCase() === existing.raffle.nft.toLowerCase() && form.tokenId === existing.raffle.tokenId.toString();
 
   useEffect(() => {
     const stage = focusAfterRender.current;
@@ -132,10 +130,20 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   function review(event: FormEvent) {
     event.preventDefault();
     try {
-      const action = actionFromForm(form, keepCommitment);
+      const action = actionFromForm(form);
+      const key = automaticCommitmentKey(action.nft, action.tokenId);
       focusAfterRender.current = "review";
-      if (existing && keepCommitment) setState({ kind: "retained", action: { ...action, reserveNonce: existing.raffle.reserveNonce, reserveCommit: existing.raffle.reserveCommit } });
-      else setState({ kind: "review", action });
+      if (existing && key === automaticCommitmentKey(existing.raffle.nft, existing.raffle.tokenId)) {
+        setState({ kind: "retained", action: { ...action, reserveNonce: existing.raffle.reserveNonce, reserveCommit: existing.raffle.reserveCommit } });
+        return;
+      }
+      let preparation = commitmentPreparation.current;
+      if (!preparation || preparation.key !== key) {
+        const generated = prepareAutomaticCommitment(action.nft, action.tokenId);
+        preparation = generated;
+        commitmentPreparation.current = preparation;
+      }
+      setState({ kind: "review", action });
     }
     catch (error) { setState({ kind: "error", message: error instanceof Error ? error.message : "Draft details are invalid." }); }
   }
@@ -145,9 +153,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     commitmentInFlight.current = true;
     setState({ kind: "saving", action });
     try {
-      const reserve = await saveCommitment({ nft: action.nft, tokenId: action.tokenId.toString(), publicSummary: form.publicSummary.trim(), privateCommitment: form.privateCommitment.trim() });
-      if (reserve.nft.toLowerCase() !== action.nft.toLowerCase() || reserve.tokenId !== action.tokenId.toString()) throw new Error("Saved commitment does not match this NFT.");
-      setForm((current) => ({ ...current, privateCommitment: "" }));
+      const key = automaticCommitmentKey(action.nft, action.tokenId);
+      const preparation = commitmentPreparation.current;
+      if (!preparation || preparation.key !== key) throw new Error("The prepared draw setup no longer matches this NFT.");
+      const reserve = await saveCommitment({ nft: action.nft, tokenId: action.tokenId.toString(), ...preparation.input });
+      if (reserve.nft.toLowerCase() !== action.nft.toLowerCase() || reserve.tokenId !== action.tokenId.toString() || reserve.publicSummary !== preparation.input.publicSummary) throw new Error("Saved commitment does not match this NFT.");
+      commitmentPreparation.current = null;
       setState({ kind: "committed", action, reserve });
     } catch (error) {
       setState({ kind: "error", message: error instanceof Error ? error.message : "The commitment could not be saved durably." });
@@ -161,21 +172,21 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     setState({ kind: "editing" });
   }
 
-  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Review raffle draft</h2><p className="notice">The existing commitment and recovery hash are retained. These edits do not require private storage access.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
+  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2><p className="notice">The saved draw setup for this NFT will be retained. No additional storage signature is needed.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
 
   if (state.kind === "review" || state.kind === "saving" || state.kind === "committed") {
     const { action } = state;
     return (
       <div className={`${formStyles.review} studio-review stack`}>
-        <h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Review raffle draft</h2>
-        <p className="notice warning" role="status">Review every public value before requesting a wallet signature. Opening later fixes the economics and deadline. Editing an existing draft always requires a fresh LABx approval.</p>
+        <h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2>
+        <p className="notice warning" role="status">Check these raffle details. The next step asks your wallet to sign a request that saves the draw setup securely. This signature does not submit a transaction. Opening later fixes the economics and deadline.</p>
         <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{formatDate(action.salesEnd)} UTC</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
         {state.kind === "committed" ? (
           <>
-            <div className="notice ok stack" role="status"><strong>Commitment saved</strong><span>Keep this recovery hash. The private value is not shown or placed on-chain.</span><span className="hash">{state.reserve.commit}</span></div>
+            <div className="notice ok stack" role="status"><strong>Raffle prepared</strong><span>The draw setup is saved securely and can be recovered with your wallet when it is time to reveal.</span></div>
             <TransactionFlow service={service} wallet={wallet} action={existing ? { kind: "updateDraft", id: existing.id, draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } } : { kind: "createDraft", draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } }} label={existing ? "Update raffle draft" : "Create raffle draft"} formatUsdc={formatUsdc} onConfirmed={onConfirmed} />
           </>
-        ) : <button className="btn" type="button" disabled={state.kind === "saving"} onClick={() => void commit(action)}>{state.kind === "saving" ? "Saving commitment…" : "Sign and save commitment"}</button>}
+        ) : <button className="btn" type="button" disabled={state.kind === "saving"} onClick={() => void commit(action)}>{state.kind === "saving" ? "Preparing raffle…" : "Sign to prepare raffle"}</button>}
         <button className="btn btn-dark" type="button" disabled={state.kind === "saving"} onClick={returnToEdit}>Edit draft</button>
       </div>
     );
@@ -183,7 +194,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   return (
     <form className={`${formStyles.form} studio-form`} onSubmit={review}>
-      <p className={`${formStyles.privacyNotice} notice warning`}>The private commitment is signed for durable storage. It is never included in the public draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
+      <p className={`${formStyles.privacyNotice} notice warning`}>LABx creates and securely stores the draw setup when you prepare the raffle. Your wallet signs that storage request before any draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
 
       <fieldset className={formStyles.formSection} ref={editStage}>
         <legend><span>01</span> Raffle details</legend>
@@ -203,24 +214,15 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         </div>
       </fieldset>
 
-      <fieldset className={formStyles.formSection}>
-        <legend><span>03</span> Draw commitment</legend>
-        <p className={formStyles.sectionHelp}>The public note is visible with the raffle. The private value is stored for the later reveal.</p>
-        <div className={`${formStyles.fieldGrid} ${formStyles.commitmentGrid}`}>
-          <label htmlFor="draft-public">Public commitment note<textarea id="draft-public" rows={4} maxLength={2000} value={form.publicSummary} onChange={(event) => update("publicSummary", event.target.value)} placeholder={existing ? "Leave both commitment fields blank to retain the existing commitment" : "A public description with no private number"} disabled={existing?.raffle.escrowed} required={!existing} /></label>
-          <div className={formStyles.describedField}><label htmlFor="draft-private">Private commitment<textarea id="draft-private" rows={4} maxLength={8000} value={form.privateCommitment} onChange={(event) => update("privateCommitment", event.target.value)} aria-describedby="private-note" disabled={existing?.raffle.escrowed} required={!existing} /></label><small id="private-note">Never enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable.</small></div>
-        </div>
-      </fieldset>
-
       <fieldset className={`${formStyles.formSection} ${formStyles.packSection}`}>
-        <legend><span>04</span> Membership packs</legend>
+        <legend><span>03</span> Membership packs</legend>
         <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>Configure 1–8 options. Price is charged in USDC; bonus entries and supply must be whole numbers.</p><span role="status" aria-live="polite" aria-atomic="true">{form.packs.length} of 8 configured</span></div>
         <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id}><legend>Membership {index + 1}</legend><div className={formStyles.packFields}><label>Name<input value={pack.name} onChange={(event) => updatePack(pack.id, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div>{form.packs.length > 1 ? <button className={`${formStyles.removePack} text-link`} type="button" onClick={() => removePack(pack.id)}>Remove membership {index + 1}</button> : null}</fieldset>)}</div>
         <button ref={addPackFocus} className="btn btn-dark" type="button" disabled={form.packs.length >= 8} onClick={addPack}>Add membership</button>
       </fieldset>
 
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
-      <div className={formStyles.reviewAction}><div><strong>Ready to check the public draft?</strong><span>Review comes before commitment storage and the wallet transaction.</span></div><button className="btn" type="submit">Review raffle draft</button></div>
+      <div className={formStyles.reviewAction}><div><strong>Ready to prepare your raffle?</strong><span>You will review the details, then sign the secure storage request before the draft transaction.</span></div><button className="btn" type="submit">Prepare raffle draft</button></div>
     </form>
   );
 }

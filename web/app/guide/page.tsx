@@ -81,7 +81,7 @@ export default function GuidePage() {
         <details className="guide-details guide-workflow-details">
           <summary>Settlement &amp; website availability</summary>
           <div className="guide-detail-body">
-            <p>Studio prepares the piece, escrow and private commitment. LABx reviews the exact NFT and draw funding before the seller can open sales. Editing the draft requires a fresh review. After the draw and reveal, settlement enables separate prize, proceeds and fee claims. The new contract version deducts a {SELLER_FEE_BPS / 100}% seller fee from total membership revenue at settlement, rounded down to the nearest 0.000001 USDC. This is separate from the buyer’s processing fee. No seller fee applies to a cancelled raffle.</p>
+            <p>Studio automatically prepares the draw commitment and saves it after the seller authorizes the request with a wallet signature. LABx reviews the exact NFT and draw funding before the seller can open sales. Editing the draft requires a fresh review. After the draw and reveal, settlement enables separate prize, proceeds and fee claims. The new contract version deducts a {SELLER_FEE_BPS / 100}% seller fee from total membership revenue at settlement, rounded down to the nearest 0.000001 USDC. This is separate from the buyer’s processing fee. No seller fee applies to a cancelled raffle.</p>
             <p>The website enables each step only when an approved deployment, the connected wallet and current contract phase allow it. A transaction is complete only after confirmation.</p>
             <div className="guide-links"><Link href="/seller">Open Studio</Link><Link href="/profile">View profile</Link><Link href="/fairness">Inspect fairness</Link></div>
           </div>

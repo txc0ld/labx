@@ -16,7 +16,7 @@ export default function FairnessPage() {
         </article>
         <article className="pearl pad">
           <h2>Commit</h2>
-          <p>The seller records a private commitment before opening. Its public hash lets anyone check the later reveal. It does not enforce a minimum sale price.</p>
+          <p>LABx automatically prepares the draw commitment and saves it after the seller authorizes the request. Its public hash lets anyone check the later reveal. It does not enforce a minimum sale price.</p>
         </article>
         <article className="terminal pad">
           <h2>VRF</h2>
