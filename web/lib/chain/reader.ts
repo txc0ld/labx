@@ -1,4 +1,4 @@
-import { decodeEventLog, erc20Abi, erc721Abi, keccak256, zeroAddress, zeroHash, type Address, type PublicClient } from "viem";
+import { decodeEventLog, erc20Abi, erc721Abi, isAddress, keccak256, zeroAddress, zeroHash, type Address, type PublicClient } from "viem";
 import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
 import { requireExpectedPolicy } from "./action-trust";
 import { buyerFee } from "./fees";
@@ -60,6 +60,14 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   async function readOwner({ block }: { block?: BlockRef } = {}) {
     const at = await checkedBlock(block);
     const owner = await client.readContract({ ...baseAt(at), functionName: "owner" });
+    await checkedBlock(at);
+    return { owner, block: at };
+  }
+  async function readNftOwner({ nft, tokenId }: { nft: Address; tokenId: bigint }) {
+    if (!isAddress(nft) || nft === zeroAddress) throw new Error("A nonzero NFT contract address is required.");
+    if (typeof tokenId !== "bigint" || tokenId < 0n || tokenId >= 2n ** 256n) throw new Error("Invalid NFT token identifier.");
+    const at = await checkedBlock();
+    const owner = await client.readContract({ address: nft, abi: erc721Abi, functionName: "ownerOf", args: [tokenId], blockNumber: at.number });
     await checkedBlock(at);
     return { owner, block: at };
   }
@@ -226,5 +234,5 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     await checkedBlock(snapshot.block);
     return { ...basic, eth };
   }
-  return { checkedBlock, assertActionTrust, readOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
+  return { checkedBlock, assertActionTrust, readOwner, readNftOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
 }

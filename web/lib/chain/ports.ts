@@ -30,6 +30,7 @@ export interface RaffleService {
   listSellerRaffles(input: { seller: Address; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   listRaffleActivity(input: { id: bigint; cursor?: bigint; block?: BlockRef }): Promise<Page<SellerRaffleActivity>>;
   readOwner(input?: { block?: BlockRef }): Promise<{ owner: Address; block: BlockRef }>;
+  readNftOwner(input: { nft: Address; tokenId: bigint }): Promise<{ owner: Address; block: BlockRef }>;
   listOwnerQueue(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   readAdmission(input: { id: bigint; block?: BlockRef }): Promise<AdmissionReview>;
   exportOwnerExecution(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<OwnerExecutionIntent>;

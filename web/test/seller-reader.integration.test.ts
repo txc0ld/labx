@@ -98,6 +98,18 @@ run("seller discovery and financial activity", () => {
     await expect(unavailable.listSellerRaffles({ seller: chain.seller, limit: 0 })).rejects.toThrow(/range/);
   });
 
+  it("reads ERC-721 ownership at one checked block and observes a later transfer", async () => {
+    const first = await chain.service.readNftOwner({ nft: chain.nft.address, tokenId: 703n });
+    expect(first.owner).toBe(chain.seller);
+    await chain.write(chain.nft, "transferFrom", [chain.seller, chain.buyer, 703n], chain.seller);
+    const transferred = await chain.service.readNftOwner({ nft: chain.nft.address, tokenId: 703n });
+    expect(transferred.owner).toBe(chain.buyer);
+    expect(transferred.block.number).toBeGreaterThan(first.block.number);
+    await expect(chain.service.readNftOwner({ nft: chain.nft.address, tokenId: 999_999n })).rejects.toThrow();
+    await expect(chain.service.readNftOwner({ nft: "0x0000000000000000000000000000000000000000", tokenId: 1n })).rejects.toThrow(/nonzero/);
+    await expect(chain.service.readNftOwner({ nft: chain.nft.address, tokenId: -1n })).rejects.toThrow(/identifier/);
+  });
+
   it("rejects a replacement that occurs while a raffle snapshot is being read", async () => {
     const service = createRaffleService(chain.client, chain.manifest);
     await service.readRaffle({ id: 2n });

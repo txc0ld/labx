@@ -166,15 +166,22 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
       __labxSelectedAccount: () => Promise<string>;
       __labxSelectAccount: (next: string) => Promise<void>;
       __labxSetAccount: (next: string) => Promise<void>;
+      __labxRejectNextSignature: (code: number, message: string) => void;
       ethereum?: unknown;
     };
     const fixture = window as unknown as FixtureWindow;
     const listeners = new Map<string, Set<Listener>>();
+    let signatureFailure: { code: number; message: string } | null = null;
     const provider = {
       async request(input: { method: string; params?: readonly unknown[] }) {
         if (input.method === "eth_accounts" || input.method === "eth_requestAccounts") return [await fixture.__labxSelectedAccount()];
         if (input.method === "eth_chainId") return `0x${chainId.toString(16)}`;
         if (input.method === "wallet_switchEthereumChain") return null;
+        if (input.method === "personal_sign" && signatureFailure) {
+          const failure = signatureFailure;
+          signatureFailure = null;
+          throw Object.assign(new Error(failure.message), { code: failure.code });
+        }
         return fixture.__labxRpc(input);
       },
       on(event: string, listener: Listener) {
@@ -190,6 +197,7 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
       await fixture.__labxSelectAccount(next);
       for (const listener of listeners.get("accountsChanged") ?? []) listener([next]);
     };
+    fixture.__labxRejectNextSignature = (code, message) => { signatureFailure = { code, message }; };
     Object.defineProperty(fixture, "ethereum", { configurable: true, value: provider });
   }, { chainId: chain.manifest.chainId }).catch(error => cleanupBrowserFailure(browser, server, error));
   const page = await context.newPage().catch(error => cleanupBrowserFailure(browser, server, error));

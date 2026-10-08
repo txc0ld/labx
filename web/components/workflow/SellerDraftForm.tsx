@@ -6,13 +6,21 @@ import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
 import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automatic-commitment";
+import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
+import { fetchWalletNfts, nftTitle, type WalletNft } from "@/lib/wallet-nfts";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
+import { useWalletSnapshot } from "./WalletGate";
 import formStyles from "./SellerDraftForm.module.css";
 
 type PackDraft = { id: string; name: string; price: string; bonusEntries: string; maxSupply: string };
 type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
 type CommitmentPreparation = { key: string; input: { publicSummary: string; privateCommitment: string } };
+type InventoryState =
+  | { kind: "idle" }
+  | { kind: "loading"; items: readonly WalletNft[] }
+  | { kind: "ready"; items: readonly WalletNft[]; nextCursor: string | null; requestedCursors: readonly string[]; message: string }
+  | { kind: "error"; items: readonly WalletNft[]; message: string };
 type DraftState =
   | { kind: "editing" }
   | { kind: "review"; action: Omit<DraftInput, "reserveNonce" | "reserveCommit"> }
@@ -23,6 +31,13 @@ type DraftState =
 
 const EMPTY_PACK = { name: "", price: "", bonusEntries: "", maxSupply: "" };
 const INITIAL: FormDraft = { nft: "", tokenId: "", title: "", closing: "", packs: [{ id: "initial-pack", ...EMPTY_PACK }] };
+
+function NftPreview({ item }: { item: WalletNft }) {
+  const [broken, setBroken] = useState(false);
+  return item.image && !broken
+    ? <img src={item.image} alt="" loading="lazy" decoding="async" crossOrigin="anonymous" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
+    : <span className={formStyles.nftPlaceholder} aria-hidden="true">NFT</span>;
+}
 
 export type SaveCommitment = (input: { nft: Address; tokenId: string; publicSummary: string; privateCommitment: string }) => Promise<PublicReserve>;
 
@@ -74,6 +89,13 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 }) {
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [inventory, setInventory] = useState<InventoryState>({ kind: "idle" });
+  const [pendingNft, setPendingNft] = useState<string | null>(null);
+  const [selectedNft, setSelectedNft] = useState<WalletNft | null>(null);
+  const walletSnapshot = useWalletSnapshot(wallet);
+  const formRef = useRef(form);
+  const serviceRef = useRef(service);
   const commitmentPreparation = useRef<CommitmentPreparation | null>(null);
   const commitmentInFlight = useRef(false);
   const focusAfterRender = useRef<"edit" | "review" | null>(null);
@@ -83,6 +105,31 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const reviewFocus = useRef<HTMLHeadingElement>(null);
   const addPackFocus = useRef<HTMLButtonElement>(null);
   const nextPackId = useRef(form.packs.length);
+  const inventoryGeneration = useRef(0);
+  const inventoryAbort = useRef<AbortController | null>(null);
+  const selectionGeneration = useRef(0);
+  const nftEditGeneration = useRef(0);
+  const titleEditGeneration = useRef(0);
+  const autoTitle = useRef<string | null>(null);
+
+  function replaceForm(update: (current: FormDraft) => FormDraft) {
+    setForm((current) => {
+      const next = update(current);
+      formRef.current = next;
+      return next;
+    });
+  }
+
+  function invalidateInventory() {
+    inventoryGeneration.current += 1;
+    inventoryAbort.current?.abort();
+    inventoryAbort.current = null;
+  }
+
+  function invalidateSelection() {
+    selectionGeneration.current += 1;
+    setPendingNft(null);
+  }
 
   useEffect(() => {
     const stage = focusAfterRender.current;
@@ -104,31 +151,159 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     addPackFocus.current?.focus();
   }, [form.packs.length]);
 
+  useEffect(() => {
+    serviceRef.current = service;
+    invalidateInventory();
+    invalidateSelection();
+    setPickerOpen(false);
+    setInventory({ kind: "idle" });
+    setSelectedNft(null);
+    return () => {
+      invalidateInventory();
+      selectionGeneration.current += 1;
+    };
+    // Account, network and revision form one wallet epoch. Any change clears inventory and selection.
+  }, [service, walletSnapshot.kind, walletSnapshot.kind === "connected" ? walletSnapshot.account : "", walletSnapshot.kind === "connected" ? walletSnapshot.chainId : 0, walletSnapshot.revision]);
+
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
-    setForm((current) => ({ ...current, [key]: value }));
+    if (key === "nft" || key === "tokenId") {
+      nftEditGeneration.current += 1;
+      invalidateSelection();
+      setSelectedNft(null);
+      replaceForm((current) => {
+        const staleAutoTitle = autoTitle.current !== null && current.title === autoTitle.current;
+        if (staleAutoTitle) autoTitle.current = null;
+        return { ...current, [key]: value, ...(staleAutoTitle ? { title: "" } : {}) };
+      });
+    } else {
+      if (key === "title") { autoTitle.current = null; titleEditGeneration.current += 1; }
+      replaceForm((current) => ({ ...current, [key]: value }));
+    }
     setState({ kind: "editing" });
   }
 
   function updatePack(id: string, key: keyof Omit<PackDraft, "id">, value: string) {
-    setForm((current) => ({ ...current, packs: current.packs.map((pack) => pack.id === id ? { ...pack, [key]: value } : pack) }));
+    replaceForm((current) => ({ ...current, packs: current.packs.map((pack) => pack.id === id ? { ...pack, [key]: value } : pack) }));
     setState({ kind: "editing" });
   }
 
   function removePack(id: string) {
     focusAddAfterPackChange.current = true;
-    setForm((current) => ({ ...current, packs: current.packs.filter((pack) => pack.id !== id) }));
+    replaceForm((current) => ({ ...current, packs: current.packs.filter((pack) => pack.id !== id) }));
     setState({ kind: "editing" });
   }
 
   function addPack() {
     nextPackId.current += 1;
     const id = `added-pack-${nextPackId.current}`;
-    setForm((current) => ({ ...current, packs: [...current.packs, { id, ...EMPTY_PACK }] }));
+    replaceForm((current) => ({ ...current, packs: [...current.packs, { id, ...EMPTY_PACK }] }));
     setState({ kind: "editing" });
+  }
+
+  async function loadInventory(cursor?: string) {
+    const snapshot = wallet.getSnapshot();
+    if (snapshot.kind !== "connected" || snapshot.chainId !== 11155111 || service.manifest.chainId !== 11155111) {
+      setInventory({ kind: "error", items: [], message: "Automatic NFT discovery is available for a connected Ethereum Sepolia wallet. You can still enter the NFT manually." });
+      return;
+    }
+    const version = ++inventoryGeneration.current;
+    inventoryAbort.current?.abort();
+    const controller = new AbortController();
+    inventoryAbort.current = controller;
+    const previous = inventory.kind === "ready" || inventory.kind === "loading" || inventory.kind === "error" ? inventory.items : [];
+    setInventory({ kind: "loading", items: previous });
+    try {
+      const page = await fetchWalletNfts({ owner: snapshot.account, ...(cursor === undefined ? {} : { cursor }), signal: controller.signal });
+      await wallet.assertCurrent(snapshot);
+      if (version !== inventoryGeneration.current || serviceRef.current !== service || !pickerOpen && cursor !== undefined) return;
+      const priorRequested = inventory.kind === "ready" ? inventory.requestedCursors : [];
+      const requestedCursors = cursor === undefined ? [] : [...priorRequested, cursor];
+      const seen = new Set<string>();
+      const merged: WalletNft[] = [];
+      for (const item of [...previous, ...page.items]) {
+        const key = `${item.contract.toLowerCase()}:${item.tokenId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (merged.length < 240) merged.push(item);
+      }
+      const repeated = page.nextCursor !== null && (page.nextCursor === cursor || requestedCursors.includes(page.nextCursor));
+      const capped = merged.length >= 240 && (page.nextCursor !== null || previous.length + page.items.length > 240);
+      const message = capped
+        ? "The display limit of 240 NFTs was reached. Enter another NFT manually if it is not shown."
+        : repeated
+          ? "Inventory pagination stopped because the provider repeated a cursor. Manual entry remains available."
+          : merged.length === 0 && page.nextCursor === null
+            ? "No supported ERC-721 NFTs were found on this page. Manual entry remains available."
+            : "Wallet inventory is point-in-time information. LABx approval still requires a separate human review.";
+      setInventory({ kind: "ready", items: merged, nextCursor: capped || repeated ? null : page.nextCursor, requestedCursors, message });
+    } catch (error) {
+      if (controller.signal.aborted || version !== inventoryGeneration.current) return;
+      setInventory({ kind: "error", items: previous, message: error instanceof Error ? error.message : "Wallet NFT inventory is unavailable. Enter the NFT manually." });
+    } finally {
+      if (version === inventoryGeneration.current) inventoryAbort.current = null;
+    }
+  }
+
+  function openPicker() {
+    if (existing?.raffle.escrowed) return;
+    setPickerOpen(true);
+    setInventory({ kind: "idle" });
+    void loadInventory();
+  }
+
+  function closePicker() {
+    invalidateInventory();
+    invalidateSelection();
+    setPickerOpen(false);
+    setInventory({ kind: "idle" });
+  }
+
+  async function chooseNft(item: WalletNft) {
+    if (existing?.raffle.escrowed) return;
+    const snapshot = wallet.getSnapshot();
+    if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId || snapshot.chainId !== 11155111) {
+      setInventory({ kind: "error", items: inventory.kind === "idle" ? [] : inventory.items, message: "Reconnect the same Ethereum Sepolia wallet before selecting an NFT." });
+      return;
+    }
+    const version = ++selectionGeneration.current;
+    const fieldVersion = nftEditGeneration.current;
+    const titleVersion = titleEditGeneration.current;
+    const key = `${item.contract.toLowerCase()}:${item.tokenId}`;
+    setPendingNft(key);
+    try {
+      await wallet.assertCurrent(snapshot);
+      const ownership = await service.readNftOwner({ nft: item.contract, tokenId: BigInt(item.tokenId) });
+      const ownerMismatch = ownership.owner.toLowerCase() !== snapshot.account.toLowerCase();
+      if (ownerMismatch) throw new Error("owner-mismatch");
+      await wallet.assertCurrent(snapshot);
+      if (version !== selectionGeneration.current || fieldVersion !== nftEditGeneration.current || serviceRef.current !== service || existing?.raffle.escrowed) return;
+      const generatedTitle = nftTitle(item);
+      replaceForm((current) => {
+        const titleUnchanged = titleVersion === titleEditGeneration.current;
+        const mayAutofill = titleUnchanged && (!current.title.trim() || autoTitle.current !== null && current.title === autoTitle.current);
+        if (mayAutofill) autoTitle.current = generatedTitle;
+        return { ...current, nft: item.contract, tokenId: item.tokenId, title: mayAutofill ? generatedTitle : current.title };
+      });
+      setSelectedNft(item);
+      setState({ kind: "editing" });
+    } catch (error) {
+      if (version === selectionGeneration.current) setInventory({
+        kind: "error",
+        items: inventory.kind === "idle" ? [] : inventory.items,
+        message: error instanceof Error && error.message === "owner-mismatch"
+          ? "This wallet no longer owns that NFT. Refresh the inventory or enter another NFT manually."
+          : "NFT ownership could not be verified for the current wallet and network. Enter the NFT manually or try again."
+      });
+    } finally {
+      if (version === selectionGeneration.current) setPendingNft(null);
+    }
   }
 
   function review(event: FormEvent) {
     event.preventDefault();
+    invalidateSelection();
+    invalidateInventory();
+    setPickerOpen(false);
     try {
       const action = actionFromForm(form);
       const key = automaticCommitmentKey(action.nft, action.tokenId);
@@ -161,13 +336,16 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       commitmentPreparation.current = null;
       setState({ kind: "committed", action, reserve });
     } catch (error) {
-      setState({ kind: "error", message: error instanceof Error ? error.message : "The commitment could not be saved durably." });
+      setState({ kind: "error", message: isWalletRequestRejected(error)
+        ? "The wallet request was cancelled. No draft transaction was submitted. You can try again."
+        : "The draw setup could not be prepared or saved. No draft transaction was submitted. Try again." });
     } finally {
       commitmentInFlight.current = false;
     }
   }
 
   function returnToEdit() {
+    invalidateSelection();
     focusAfterRender.current = "edit";
     setState({ kind: "editing" });
   }
@@ -179,11 +357,11 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     return (
       <div className={`${formStyles.review} studio-review stack`}>
         <h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2>
-        <p className="notice warning" role="status">Check these raffle details. The next step asks your wallet to sign a request that saves the draw setup securely. This signature does not submit a transaction. Opening later fixes the economics and deadline.</p>
+        <p className="notice warning" role="status">Check these raffle details. The next step asks your wallet to sign a request that saves the draw setup securely. This signature does not submit a transaction. Opening later fixes the economics and deadline.{existing ? " A successful edit requires fresh LABx approval before the raffle can open." : ""}</p>
         <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{formatDate(action.salesEnd)} UTC</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
         {state.kind === "committed" ? (
           <>
-            <div className="notice ok stack" role="status"><strong>Raffle prepared</strong><span>The draw setup is saved securely and can be recovered with your wallet when it is time to reveal.</span></div>
+            <div className="notice ok stack" role="status"><strong>Draw setup saved</strong><span>The setup is saved securely. Create or update the draft transaction next. You can recover the setup with your wallet when it is time to reveal.</span></div>
             <TransactionFlow service={service} wallet={wallet} action={existing ? { kind: "updateDraft", id: existing.id, draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } } : { kind: "createDraft", draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } }} label={existing ? "Update raffle draft" : "Create raffle draft"} formatUsdc={formatUsdc} onConfirmed={onConfirmed} />
           </>
         ) : <button className="btn" type="button" disabled={state.kind === "saving"} onClick={() => void commit(action)}>{state.kind === "saving" ? "Preparing raffle…" : "Sign to prepare raffle"}</button>}
@@ -194,7 +372,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   return (
     <form className={`${formStyles.form} studio-form`} onSubmit={review}>
-      <p className={`${formStyles.privacyNotice} notice warning`}>LABx creates and securely stores the draw setup when you prepare the raffle. Your wallet signs that storage request before any draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
+      <p className={`${formStyles.privacyNotice} notice warning`}>LABx creates and securely stores the draw setup when you prepare the raffle. Your wallet signs that storage request before a new draw setup is used.{existing ? " An unchanged NFT keeps its saved setup without another storage signature. A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
 
       <fieldset className={formStyles.formSection} ref={editStage}>
         <legend><span>01</span> Raffle details</legend>
@@ -207,7 +385,22 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
       <fieldset className={formStyles.formSection}>
         <legend><span>02</span> Prize NFT</legend>
-        <p className={formStyles.sectionHelp}>Identify the exact collection contract and token placed into this raffle.</p>
+        <div className={formStyles.nftIntro}><p className={formStyles.sectionHelp}>Choose a supported ERC-721 from the connected Sepolia wallet, or identify the exact collection contract and token manually.</p>{!existing?.raffle.escrowed ? <button className="btn btn-dark" type="button" disabled={walletSnapshot.kind !== "connected" || walletSnapshot.chainId !== 11155111 || service.manifest.chainId !== 11155111} onClick={pickerOpen ? closePicker : openPicker}>{pickerOpen ? "Close wallet NFTs" : "Choose from wallet"}</button> : null}</div>
+        {service.manifest.chainId !== 11155111 ? <p className={formStyles.inventoryNote}>Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.</p> : null}
+        {pickerOpen ? <div className={formStyles.picker} aria-label="Wallet NFTs">
+          <div className={formStyles.pickerHeading}><div><strong>Connected wallet NFTs</strong><span>These results show reported wallet holdings. Selection does not approve the NFT for LABx, prove provenance, or sign a transaction.</span></div><button className="text-link" type="button" onClick={() => { invalidateInventory(); setInventory({ kind: "idle" }); void loadInventory(); }}>Refresh</button></div>
+          {inventory.kind === "loading" ? <p role="status" aria-live="polite">Loading wallet NFTs…</p> : null}
+          {inventory.kind !== "idle" && inventory.items.length > 0 ? <ul className={formStyles.nftGallery}>{inventory.items.map((item) => {
+            const key = `${item.contract.toLowerCase()}:${item.tokenId}`;
+            const pending = pendingNft === key;
+            const selected = selectedNft?.contract.toLowerCase() === item.contract.toLowerCase() && selectedNft.tokenId === item.tokenId;
+            const label = `${item.name || item.collection || "NFT"}, contract ${item.contract}, token ${item.tokenId}`;
+            return <li key={key}><button type="button" className={formStyles.nftCard} data-selected={selected} disabled={pendingNft !== null} aria-label={`${pending ? "Verifying" : selected ? "Selected" : "Select"} ${label}`} onClick={() => void chooseNft(item)}><NftPreview item={item} /><span><strong>{item.name || item.collection || `NFT #${item.tokenId}`}</strong><small>{shortAddress(item.contract)} · token #{item.tokenId}</small><em>{pending ? "Verifying ownership…" : selected ? "Selected" : "Verify and use"}</em></span></button></li>;
+          })}</ul> : null}
+          {inventory.kind === "ready" ? <p className={formStyles.inventoryNote} role="status" aria-live="polite">{inventory.message}</p> : null}
+          {inventory.kind === "error" ? <p className="notice warning" role="alert">{inventory.message}</p> : null}
+          {inventory.kind === "ready" && inventory.nextCursor !== null ? <button className="btn btn-dark" type="button" onClick={() => void loadInventory(inventory.nextCursor ?? undefined)}>Load more wallet NFTs</button> : null}
+        </div> : null}
         <div className={`${formStyles.fieldGrid} ${formStyles.nftGrid}`}>
           <label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} autoCapitalize="none" autoCorrect="off" value={form.nft} disabled={existing?.raffle.escrowed} onChange={(event) => update("nft", event.target.value.trim())} required /></label>
           <label htmlFor="draft-token">Token ID<input id="draft-token" inputMode="numeric" value={form.tokenId} disabled={existing?.raffle.escrowed} onChange={(event) => update("tokenId", event.target.value.trim())} required /></label>
@@ -222,7 +415,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       </fieldset>
 
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
-      <div className={formStyles.reviewAction}><div><strong>Ready to prepare your raffle?</strong><span>You will review the details, then sign the secure storage request before the draft transaction.</span></div><button className="btn" type="submit">Prepare raffle draft</button></div>
+      <div className={formStyles.reviewAction}><div><strong>Ready to prepare your raffle?</strong><span>{existing ? "You will review the details. An unchanged NFT needs no new storage signature; a changed NFT does." : "You will review the details, then sign the secure storage request before the draft transaction."}</span></div><button className="btn" type="submit">Prepare raffle draft</button></div>
     </form>
   );
 }

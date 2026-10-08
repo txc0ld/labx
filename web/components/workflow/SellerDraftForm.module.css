@@ -49,6 +49,66 @@
   line-height:1.5;
 }
 
+.nftIntro,.pickerHeading {
+  display:flex;
+  align-items:start;
+  justify-content:space-between;
+  gap:1rem;
+}
+
+.nftIntro>:global(.btn) { flex:0 0 auto; }
+.picker {
+  display:grid;
+  gap:.85rem;
+  min-width:0;
+  padding:1rem;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:#fff;
+}
+.pickerHeading>div { display:grid; gap:.25rem; }
+.pickerHeading span,.inventoryNote { color:var(--charcoal); font-size:.72rem; line-height:1.45; }
+.pickerHeading>:global(.text-link) { flex:0 0 auto; min-height:2.75rem; }
+.nftGallery {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,11rem),1fr));
+  gap:.75rem;
+  margin:0;
+  padding:0;
+  list-style:none;
+}
+.nftCard {
+  display:grid;
+  width:100%;
+  min-width:0;
+  height:100%;
+  padding:.55rem;
+  border:1px solid var(--line);
+  border-radius:12px;
+  color:var(--ink);
+  background:#faf9f6;
+  text-align:left;
+  cursor:pointer;
+}
+.nftCard[data-selected="true"] { border-color:var(--ink); box-shadow:0 0 0 2px var(--lime); }
+.nftCard:focus-visible { outline:3px solid var(--lime); outline-offset:2px; }
+.nftCard:disabled { cursor:wait; opacity:.75; }
+.nftCard img,.nftPlaceholder {
+  display:grid;
+  place-items:center;
+  width:100%;
+  aspect-ratio:1;
+  border-radius:8px;
+  object-fit:cover;
+  background:#e6e5df;
+}
+.nftPlaceholder { color:var(--charcoal); font-size:.72rem; font-weight:800; letter-spacing:.12em; }
+.nftCard>span { display:grid; gap:.2rem; min-width:0; padding:.65rem .2rem .2rem; }
+.nftCard strong,.nftCard small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.nftCard small { color:var(--charcoal); font-size:.67rem; font-weight:500; }
+.nftCard em { color:var(--charcoal); font-size:.68rem; font-style:normal; font-weight:750; }
+.inventoryNote { margin:0; }
+
 .fieldGrid,.packFields {
   display:grid;
   gap:1rem;
@@ -130,9 +190,9 @@
 }
 
 @container (max-width:35.99rem) {
-  .sectionIntro,.reviewAction { align-items:stretch; flex-direction:column; }
+  .sectionIntro,.reviewAction,.nftIntro,.pickerHeading { align-items:stretch; flex-direction:column; }
   .sectionIntro>span { align-self:start; }
-  .reviewAction>:global(.btn) { width:100%; }
+  .reviewAction>:global(.btn),.nftIntro>:global(.btn) { width:100%; }
 }
 
 @media (forced-colors:active) {

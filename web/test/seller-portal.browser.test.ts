@@ -191,6 +191,10 @@ run("rendered seller portal on isolated Anvil", () => {
     for (const name of ["Raffle details", "Prize NFT", "Membership packs", "Membership 1"]) {
       await fixture.page.getByRole("group", { name }).waitFor({ state: "visible" });
     }
+    expect(await fixture.page.getByRole("button", { name: "Choose from wallet", exact: true }).isDisabled()).toBe(true);
+    await fixture.page.getByText("Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.", { exact: true }).waitFor({ state: "visible" });
+    expect(await fixture.page.getByLabel("NFT contract").isEnabled()).toBe(true);
+    expect(await fixture.page.getByLabel("Token ID").isEnabled()).toBe(true);
 
     const addMembership = fixture.page.getByRole("button", { name: "Add membership", exact: true });
     const packStatus = fixture.page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]').filter({ hasText: "configured" });
@@ -424,19 +428,27 @@ run("rendered seller portal on isolated Anvil", () => {
         });
         return;
       }
-      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ ok: false, error: "Simulated durable storage failure." }) });
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ ok: false, error: `Untrusted failure exposed ${captured.privateCommitment}` }) });
     });
 
     const blockBeforePreparation = await chain.client.getBlockNumber({ cacheTime: 0 });
     await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.evaluate(() => (window as unknown as { __labxRejectNextSignature(code: number, message: string): void }).__labxRejectNextSignature(4001, "Rejected payload contains a private commitment"));
     await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("Simulated durable storage failure.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByText("The wallet request was cancelled. No draft transaction was submitted. You can try again.", { exact: true }).waitFor({ state: "visible" });
+    expect(attempts).toHaveLength(0);
+    await fixture.page.getByLabel("Token ID").fill("0999");
+    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
+    await fixture.page.getByText("The draw setup could not be prepared or saved. No draft transaction was submitted. Try again.", { exact: true }).waitFor({ state: "visible" });
+    expect(await fixture.page.locator("body").innerText()).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
+    expect(await fixture.page.locator("body").innerText()).not.toContain("Rejected payload contains");
     expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
 
     await fixture.page.getByLabel("Token ID").fill("0999");
     await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("Stored commitment does not match the reviewed request.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByText("The draw setup could not be prepared or saved. No draft transaction was submitted. Try again.", { exact: true }).waitFor({ state: "visible" });
     expect(attempts).toHaveLength(2);
     expect(attempts[0]).toEqual(attempts[1]);
     expect(attempts[0]?.privateCommitment).toMatch(/^0x[0-9a-f]{64}$/);
@@ -447,7 +459,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByLabel("Token ID").fill("998");
     await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("Simulated durable storage failure.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByText("The draw setup could not be prepared or saved. No draft transaction was submitted. Try again.", { exact: true }).waitFor({ state: "visible" });
     expect(attempts).toHaveLength(3);
     expect(attempts[2]?.tokenId).toBe("998");
     expect(attempts[2]?.publicSummary).toBe(`LABx draw setup for NFT ${chain.nft.address.toLowerCase()} token 998`);
