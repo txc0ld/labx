@@ -1,5 +1,7 @@
 # Unified wallet connection
 
+Cancelled WalletConnect approvals are retired through one awaited UniversalProvider disconnect. This clears the provider's own session and storage before the Ethers adapter removes its listeners and connection record. Failed or incomplete cleanup retains reload quarantine. A regression uses the actual pinned provider and adapter with a controlled SignClient store to cover local session deletion without a session-delete event.
+
 Risk R2. This change replaces LABx's separate browser-wallet and WalletConnect actions with one `Connect wallet` control. On public Sepolia, the control opens Reown AppKit's full `Connect` view. AppKit's pinned Ethers adapter discovers injected and EIP-6963 wallets, including installed MetaMask, and provides the QR and mobile WalletConnect paths. Local chain 31337 fixtures use the same control but keep their deterministic injected provider isolated from hosted builds.
 
 ## Boundary design

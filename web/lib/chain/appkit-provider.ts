@@ -152,21 +152,19 @@ class LabxEthersAdapter extends EthersAdapter {
   }
 
   private async disconnectCancelled(connectorId: string) {
-    let failure: unknown;
     if (connectorId === "walletConnect") {
-      const provider = this.getWalletConnectProvider() as {
-        session?: { topic: string };
-        client: { disconnect(input: { topic: string; reason: { code: number; message: string } }): Promise<void> };
-      } | undefined;
-      const topic = provider?.session?.topic;
-      if (topic) {
-        try { await provider.client.disconnect({ topic, reason: { code: 6000, message: "Connection cancelled" } }); }
-        catch (error) { failure = error; }
-      } else failure = new Error("Cancelled WalletConnect session could not be identified.");
+      const provider: unknown = this.getWalletConnectProvider();
+      if (!provider || typeof provider !== "object" || !("session" in provider) || !("disconnect" in provider) || typeof provider.disconnect !== "function") {
+        throw new Error("Cancelled WalletConnect session could not be identified.");
+      }
+      const session = provider.session;
+      if (!session || typeof session !== "object" || !("topic" in session) || typeof session.topic !== "string" || !session.topic) {
+        throw new Error("Cancelled WalletConnect session could not be identified.");
+      }
+      await provider.disconnect();
+      if (provider.session != null) throw new Error("Cancelled WalletConnect session cleanup did not finish.");
     }
-    try { await super.disconnect({ id: connectorId }); }
-    catch (error) { failure ??= error; }
-    if (failure) throw failure;
+    await super.disconnect({ id: connectorId });
   }
 }
 

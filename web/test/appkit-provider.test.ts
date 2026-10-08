@@ -336,8 +336,11 @@ describe("official AppKit chooser boundary", () => {
     const fixture = appKitFixture();
     const approval = deferred<{ clientId: null }>();
     sdk.walletConnect.mockImplementationOnce(() => approval.promise);
-    const revoke = vi.fn(async () => {});
-    sdk.walletConnectProvider = { session: { topic: "late-topic" }, client: { disconnect: revoke }, disconnect: vi.fn(async () => {}) };
+    const remote: { session?: { topic: string }; disconnect: () => Promise<void> } = {
+      session: { topic: "late-topic" },
+      disconnect: vi.fn(async () => { remote.session = undefined; })
+    };
+    sdk.walletConnectProvider = remote;
     const { createAppKitProvider } = await loadProvider();
     const chooser = await createAppKitProvider("a".repeat(32));
     const abort = new AbortController();
@@ -353,7 +356,8 @@ describe("official AppKit chooser boundary", () => {
     await expect(blocked.connect(new AbortController().signal)).rejects.toThrow(/still pending/);
     approval.resolve({ clientId: null });
     await expect(sdkConnection).rejects.toThrow(/cancelled/);
-    expect(revoke).toHaveBeenCalledWith({ topic: "late-topic", reason: { code: 6000, message: "Connection cancelled" } });
+    expect(remote.disconnect).toHaveBeenCalledOnce();
+    expect(remote.session).toBeUndefined();
     await vi.waitFor(() => expect(sdk.adapterDisconnect).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 0));
     const retry = blocked.connect(new AbortController().signal);
@@ -362,13 +366,13 @@ describe("official AppKit chooser boundary", () => {
     await expect(retry).resolves.toBeDefined();
   });
 
-  it("requires reload when cleanup of a cancelled late WalletConnect approval fails", async () => {
+  it.each(["reject", "incomplete"])("requires reload when cancelled late WalletConnect cleanup is %s", async (failure) => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
     const approval = deferred<{ clientId: null }>();
     sdk.walletConnect.mockImplementationOnce(() => approval.promise);
-    const revoke = vi.fn(async () => { throw new Error("topic cleanup failed"); });
-    sdk.walletConnectProvider = { session: { topic: "uncertain-topic" }, client: { disconnect: revoke }, disconnect: vi.fn(async () => {}) };
+    const disconnect = vi.fn(async () => { if (failure === "reject") throw new Error("topic cleanup failed"); });
+    sdk.walletConnectProvider = { session: { topic: "uncertain-topic" }, disconnect };
     const { createAppKitProvider } = await loadProvider();
     const chooser = await createAppKitProvider("a".repeat(32));
     const abort = new AbortController();
@@ -382,8 +386,8 @@ describe("official AppKit chooser boundary", () => {
 
     approval.resolve({ clientId: null });
     await expect(sdkConnection).rejects.toThrow(/Reload this page/);
-    expect(revoke).toHaveBeenCalledWith({ topic: "uncertain-topic", reason: { code: 6000, message: "Connection cancelled" } });
-    await vi.waitFor(() => expect(sdk.adapterDisconnect).toHaveBeenCalled());
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(sdk.adapterDisconnect).not.toHaveBeenCalled();
     const retry = await createAppKitProvider("a".repeat(32));
     await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/Reload this page/);
   });
@@ -416,8 +420,11 @@ describe("official AppKit chooser boundary", () => {
     const fixture = appKitFixture();
     const approval = deferred<{ clientId: null }>();
     sdk.walletConnect.mockImplementationOnce(() => approval.promise);
-    const revoke = vi.fn(async () => {});
-    sdk.walletConnectProvider = { session: { topic: "superseded-topic" }, client: { disconnect: revoke }, disconnect: vi.fn(async () => {}) };
+    const remote: { session?: { topic: string }; disconnect: () => Promise<void> } = {
+      session: { topic: "superseded-topic" },
+      disconnect: vi.fn(async () => { remote.session = undefined; })
+    };
+    sdk.walletConnectProvider = remote;
     const { createAppKitProvider } = await loadProvider();
     const chooser = await createAppKitProvider("a".repeat(32));
     const connection = chooser.connect(new AbortController().signal);
@@ -431,7 +438,8 @@ describe("official AppKit chooser boundary", () => {
     await new Promise(resolve => setTimeout(resolve, 300));
     approval.resolve({ clientId: null });
     await expect(walletConnect).rejects.toThrow(/cancelled/);
-    expect(revoke).toHaveBeenCalledWith({ topic: "superseded-topic", reason: { code: 6000, message: "Connection cancelled" } });
+    expect(remote.disconnect).toHaveBeenCalledOnce();
+    expect(remote.session).toBeUndefined();
   });
 
   it("keeps an early selected provider when AppKit closes before the adapter operation settles", async () => {
