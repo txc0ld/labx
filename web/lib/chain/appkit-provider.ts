@@ -540,12 +540,18 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
         catch (error) { failure = error; }
         if (connected) {
           const walletConnect = appKit.getWalletProviderType() === "WALLET_CONNECT";
+          let walletConnectCleanupFailed = false;
           if (walletConnect) {
             try { await adapter.disconnectWalletConnectSession(); }
+            catch (error) {
+              walletConnectCleanupFailed = true;
+              failure ??= error;
+            }
+          }
+          if (!walletConnectCleanupFailed) {
+            try { await appKit.disconnect("eip155"); }
             catch (error) { failure ??= error; }
           }
-          try { await appKit.disconnect("eip155"); }
-          catch (error) { failure ??= error; }
         }
         if (ownedAttempt) await ownedAttempt.settled;
         if (cleanupFailed) failure ??= new WalletChooserReloadError();
