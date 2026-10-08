@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { canApplyWalletNftSelection, nftTitle, shouldAutofillWalletNftTitle } from "../lib/wallet-nfts-shared";
+import { canApplyWalletNftSelection, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "../lib/wallet-nfts-shared";
 import { createWalletNftHandler, normalizeWalletNftPage } from "../lib/wallet-nfts-server";
+import { safeArtworkUrl } from "../lib/chain/metadata";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
 const CONTRACT = "0x2222222222222222222222222222222222222222";
@@ -44,10 +45,20 @@ describe("wallet NFT inventory boundary", () => {
     expect(shouldAutofillWalletNftTitle({ currentTitle: "Typed while checking", trackedAutomaticTitle: null, titleUnchanged: false })).toBe(false);
   });
 
+  it("replaces rows on refresh and appends only a requested next page", () => {
+    const first = { contract: CONTRACT, tokenId: "1", name: "First", collection: "", image: null } satisfies WalletNft;
+    const refreshed = { ...first, tokenId: "2", name: "Refreshed" };
+    const next = { ...first, tokenId: "3", name: "Next" };
+    expect(mergeWalletNftItems({ current: [first], incoming: [refreshed], append: false }).items).toEqual([refreshed]);
+    expect(mergeWalletNftItems({ current: [first], incoming: [], append: false }).items).toEqual([]);
+    expect(mergeWalletNftItems({ current: [refreshed], incoming: [refreshed, next], append: true }).items).toEqual([refreshed, next]);
+  });
+
   it("uses the fixed Sepolia endpoint and request policy, then returns only normalized fields", async () => {
     const fetcher: typeof fetch = async (input, init) => {
-      expect(String(input)).toBe(`https://eth-sepolia.g.alchemy.com/nft/v3/${API_KEY}/getNFTsForOwner?owner=${OWNER}&withMetadata=true&pageSize=24&tokenUriTimeoutInMs=0&pageKey=opaque+%2F%2B`);
-      expect(init).toMatchObject({ method: "GET", redirect: "error", credentials: "omit", headers: { Accept: "application/json" } });
+      expect(String(input)).toBe(`https://eth-sepolia.g.alchemy.com/nft/v3/getNFTsForOwner?owner=${OWNER}&withMetadata=true&pageSize=24&tokenUriTimeoutInMs=0&pageKey=opaque+%2F%2B`);
+      expect(String(input)).not.toContain(API_KEY);
+      expect(init).toMatchObject({ method: "GET", redirect: "error", credentials: "omit", headers: { Accept: "application/json", Authorization: `Bearer ${API_KEY}` } });
       return upstream(page());
     };
     const handle = createWalletNftHandler({ apiKey: API_KEY, fetcher });
@@ -80,7 +91,7 @@ describe("wallet NFT inventory boundary", () => {
   it("filters invalid, contradictory, duplicate and spam records while normalizing uint256 and text", () => {
     const normalized = normalizeWalletNftPage(page({
       ownedNfts: [
-        { contract: { address: CONTRACT, name: "Clean\u0000 collection" }, tokenId: "0x0a", tokenType: "ERC721", name: "Named\nNFT", image: { thumbnailUrl: "https://cdn.example/a.png" } },
+        { contract: { address: CONTRACT, name: "Clean\u0000 collection" }, tokenId: "0x0a", tokenType: "ERC721", name: "Named\u0085\u202eNFT", image: { thumbnailUrl: "https://cdn.example/a.png" } },
         { contract: { address: CONTRACT }, tokenId: "10", tokenType: "ERC721" },
         { contract: { address: CONTRACT }, tokenId: "11", tokenType: "ERC1155" },
         { contract: { address: CONTRACT, tokenType: "ERC1155" }, tokenId: "12", tokenType: "ERC721" },
@@ -99,13 +110,23 @@ describe("wallet NFT inventory boundary", () => {
     expect(new TextEncoder().encode(nftTitle({ name: "😀".repeat(30), collection: "", tokenId: "1" })).length).toBeLessThanOrEqual(80);
   });
 
+  it("drops invalid normalized artwork without dropping its NFT", () => {
+    const tooLongAfterEncoding = `https://cdn.example/${"😀".repeat(500)}`;
+    const normalized = normalizeWalletNftPage(page({ ownedNfts: [{
+      contract: { address: CONTRACT, name: "Collection" }, tokenId: "1", tokenType: "ERC721", name: "Still listed", image: { cachedUrl: tooLongAfterEncoding }
+    }], pageKey: null }));
+    expect(normalized.items).toEqual([{ contract: CONTRACT, tokenId: "1", name: "Still listed", collection: "Collection", image: null }]);
+    expect(safeArtworkUrl("ipfs://cid/../secret.png")).toBeNull();
+    expect(safeArtworkUrl("ipfs://cid/./image.png")).toBeNull();
+  });
+
   it.each([
-    new Response("<html>secret upstream error</html>", { status: 500, headers: { "Content-Type": "text/html" } }),
-    new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } }),
-    upstream({ ownedNfts: "bad" }),
-    upstream(page({ pageKey: "bad\u0000cursor" }))
+    () => new Response("<html>secret upstream error</html>", { status: 500, headers: { "Content-Type": "text/html" } }),
+    () => new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } }),
+    () => upstream({ ownedNfts: "bad" }),
+    () => upstream(page({ pageKey: "bad\u0000cursor" }))
   ])("returns a generic secret-safe failure for malformed upstream responses", async providerResponse => {
-    const fetcher: typeof fetch = async () => providerResponse.clone();
+    const fetcher: typeof fetch = async () => providerResponse();
     const response = await createWalletNftHandler({ apiKey: API_KEY, fetcher })(request(`owner=${OWNER}`));
     expect(response.status).toBe(502);
     const text = await response.text();
@@ -124,6 +145,32 @@ describe("wallet NFT inventory boundary", () => {
     const response = await createWalletNftHandler({ apiKey: API_KEY, fetcher })(request(`owner=${OWNER}`));
     expect(response.status).toBe(502);
     expect(cancelled).toBe(true);
+  });
+
+  it.each([
+    { status: 502, contentType: "application/json" },
+    { status: 200, contentType: "text/html" }
+  ])("cancels an early rejected upstream body for status $status and $contentType", async ({ status, contentType }) => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("provider body")); }, cancel() { cancelled = true; } });
+    const fetcher: typeof fetch = async () => new Response(body, { status, headers: { "Content-Type": contentType } });
+    const response = await createWalletNftHandler({ apiKey: API_KEY, fetcher })(request(`owner=${OWNER}`));
+    expect(response.status).toBe(502);
+    expect(cancelled).toBe(true);
+  });
+
+  it("bounds a non-settling body cancellation by the upstream deadline and releases each active slot", async () => {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls += 1;
+      const body = new ReadableStream<Uint8Array>({ cancel: () => new Promise<void>(() => undefined) });
+      return new Response(body, { status: 502, headers: { "Content-Type": "application/json" } });
+    };
+    const handle = createWalletNftHandler({ apiKey: API_KEY, fetcher, timeoutMs: 5 });
+    const first = await Promise.all(Array.from({ length: 4 }, (_, index) => handle(request(`owner=${OWNER}&cursor=${index}`))));
+    expect(first.map(response => response.status)).toEqual([503, 503, 503, 503]);
+    expect((await handle(request(`owner=${OWNER}&cursor=after`))).status).toBe(503);
+    expect(calls).toBe(5);
   });
 
   it("times out without retrying and releases the concurrency slot", async () => {

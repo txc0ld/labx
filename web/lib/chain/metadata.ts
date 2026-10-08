@@ -1,10 +1,18 @@
 export function safeArtworkUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 2048) return null;
-  if (/^ipfs:\/\/[a-zA-Z0-9/._-]+$/.test(value)) return `https://ipfs.io/ipfs/${value.slice(7).replace(/^ipfs\//, "")}`;
+  const boundedHref = (url: URL) => {
+    const href = url.href;
+    return new TextEncoder().encode(href).length <= 2048 ? href : null;
+  };
+  if (/^ipfs:\/\/[a-zA-Z0-9/._-]+$/.test(value)) {
+    const path = value.slice(7).replace(/^ipfs\//, "");
+    if (!path || path.split("/").some(segment => !segment || segment === "." || segment === "..")) return null;
+    return boundedHref(new URL(`https://ipfs.io/ipfs/${path}`));
+  }
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password || url.port || url.hostname.includes(":") || /^\d+(?:\.\d+){3}$/.test(url.hostname) || /(^|\.)(localhost|local|internal|test)$/.test(url.hostname) || !url.hostname.includes(".")) return null;
-    return url.href;
+    return boundedHref(url);
   } catch { return null; }
 }
 export function parseArtworkMetadata(value: unknown): { title: string; description: string; image: string | null } {

@@ -92,7 +92,7 @@
 }
 .nftCard[data-selected="true"] { border-color:var(--ink); box-shadow:0 0 0 2px var(--lime); }
 .nftCard:focus-visible { outline:3px solid var(--lime); outline-offset:2px; }
-.nftCard:disabled { cursor:wait; opacity:.75; }
+.picker [aria-disabled="true"] { cursor:wait; opacity:.75; }
 .nftCard img,.nftPlaceholder {
   display:grid;
   place-items:center;
