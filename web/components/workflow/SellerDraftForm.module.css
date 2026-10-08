@@ -117,6 +117,14 @@
 
 .fieldGrid label,.packFields label { align-content:start; min-width:0; }
 .describedField { display:grid; align-content:start; gap:.3rem; min-width:0; }
+.describedField,.describedField>label { grid-template-columns:minmax(0,1fr); }
+
+.describedField input[type="datetime-local"] {
+  display:block;
+  inline-size:100%;
+  min-inline-size:0;
+  max-inline-size:100%;
+}
 
 .fieldGrid small,.packFields small {
   color:var(--charcoal);
