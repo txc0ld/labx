@@ -5,7 +5,7 @@ import type { WalletSessionPort } from "@/lib/chain/ports";
 import type { ConnectionStatus, WalletConnector } from "@/lib/chain/wallet-connectors";
 
 const idle: ConnectionStatus = { kind: "idle" };
-const fallbackOptions = [{ connector: "injected", label: "Browser wallet", unavailable: null }] as const;
+const fallbackOptions = [{ connector: "appkit", label: "Connect wallet", unavailable: null }] as const;
 
 export function WalletConnectionControls({ wallet }: { wallet: WalletSessionPort }) {
   const subscribe = useCallback((listener: () => void) => wallet.subscribe(listener), [wallet]);
@@ -15,6 +15,7 @@ export function WalletConnectionControls({ wallet }: { wallet: WalletSessionPort
   const controls = useRef<HTMLDivElement>(null);
   const initiator = useRef<HTMLButtonElement | null>(null);
   const initiatedStatus = useRef<ConnectionStatus | undefined>(undefined);
+  const pendingOwner = useRef<object | null>(null);
   const [fallbackError, setFallbackError] = useState<string | null>(null);
   useEffect(() => {
     if (status.kind === "pending") {
@@ -31,15 +32,22 @@ export function WalletConnectionControls({ wallet }: { wallet: WalletSessionPort
     });
     return () => cancelAnimationFrame(frame);
   }, [status, wallet]);
+  useEffect(() => () => {
+    const owner = pendingOwner.current;
+    if (owner) wallet.cancelConnection?.(owner);
+  }, [wallet]);
   async function connect(connector: WalletConnector, trigger: HTMLButtonElement) {
+    const owner = {};
+    pendingOwner.current = owner;
     initiator.current = trigger;
     setFallbackError(null);
     try {
-      const connection = wallet.connect(connector);
+      const connection = wallet.connect({ connector, owner });
       initiatedStatus.current = wallet.getConnectionStatus?.();
       await connection;
     }
     catch { if (!wallet.getConnectionStatus) setFallbackError("Wallet connection failed. Please retry."); }
+    finally { if (pendingOwner.current === owner) pendingOwner.current = null; }
   }
   const options = wallet.connectionOptions ?? fallbackOptions;
   const error = status.kind === "error" ? status.message : fallbackError;
@@ -51,9 +59,13 @@ export function WalletConnectionControls({ wallet }: { wallet: WalletSessionPort
             {status.kind === "pending" && status.connector === option.connector ? "Opening wallet…" : option.label}
           </button>
         ))}
-        {status.kind === "pending" ? <button className="btn btn-dark" type="button" onClick={() => wallet.disconnect()}>Cancel connection</button> : null}
+        {status.kind === "pending" ? <button className="btn btn-dark" type="button" onClick={() => {
+          const owner = pendingOwner.current;
+          if (owner && wallet.cancelConnection) wallet.cancelConnection(owner);
+          else wallet.disconnect();
+        }}>Cancel connection</button> : null}
       </div>
-      {status.kind === "pending" ? <p role="status">{status.connector === "walletconnect" ? "Choose a wallet or scan the QR code. Approve Ethereum Sepolia in your wallet." : "Approve the test-network connection in your browser wallet."}</p> : null}
+      {status.kind === "pending" ? <p role="status">Choose an installed wallet or scan the QR code, then approve Ethereum Sepolia in that wallet.</p> : null}
       {snapshot.kind === "disconnected" ? options.filter(option => option.unavailable).map(option => <p className="muted" key={option.connector}>{option.unavailable}</p>) : null}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </div>

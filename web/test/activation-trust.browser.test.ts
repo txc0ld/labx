@@ -173,7 +173,7 @@ run("activation drift beside browser recovery", () => {
     await fixture.page.addInitScript(({ key, txHash }) => localStorage.setItem(key, txHash), { key: outcomeKey, txHash: cancellationHash });
     await visit("/piece/2", c.stranger);
     const identity = fixture.page.locator(".wallet-identity", { hasText: `${c.stranger.slice(0, 6)}…${c.stranger.slice(-4)}` });
-    const connect = fixture.page.getByRole("button", { name: "Browser wallet", exact: true });
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     await expect.poll(async () => await identity.isVisible() || await connect.isVisible(), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible()) await connect.click();
     await identity.waitFor({ state: "visible", timeout: 15_000 });

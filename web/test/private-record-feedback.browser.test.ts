@@ -230,7 +230,7 @@ run("wallet-scoped private-record feedback", () => {
     await fixture.page.getByText("Wrong network", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByRole("button", { name: "Disconnect wallet", exact: true }).click();
     await setFixtureSession({ chainId: 31337, account: chain.buyer });
-    await fixture.page.getByRole("button", { name: "Browser wallet", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Connect wallet", exact: true }).click();
     await reloadRecords(chain.buyer);
     await disconnected.respond({ delivered: true });
     await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);

@@ -6,14 +6,15 @@ import type {
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
 
-import type { ConnectionOption, ConnectionStatus, WalletConnector } from "./wallet-connectors";
+import type { ConnectionOption, ConnectionStatus, WalletConnectOptions } from "./wallet-connectors";
 
 export interface WalletSessionPort {
   readonly connectionOptions?: readonly ConnectionOption[];
   getConnectionStatus?(): ConnectionStatus;
   getSnapshot(): WalletSnapshot;
   subscribe(listener: () => void): () => void;
-  connect(connector?: WalletConnector): Promise<WalletSnapshot>;
+  connect(options?: WalletConnectOptions): Promise<WalletSnapshot>;
+  cancelConnection?(owner: object): void;
   refresh(): Promise<WalletSnapshot>;
   disconnect(): void;
   assertCurrent(expected: Extract<WalletSnapshot, { kind: "connected" }>): Promise<void>;

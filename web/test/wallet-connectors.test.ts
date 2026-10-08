@@ -1,172 +1,231 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserWalletSession, type RemoteWallet } from "../lib/chain/wallet-connectors";
+import { BrowserWalletSession, type WalletChooser } from "../lib/chain/wallet-connectors";
 import type { WalletProvider } from "../lib/chain/types";
 
 const account = "0x1111111111111111111111111111111111111111";
+const otherAccount = "0x2222222222222222222222222222222222222222";
 const projectId = "a".repeat(32);
+
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
   let reject: (reason: Error) => void = () => {};
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function providerFixture(chain = "0xaa36a7") {
+
+function providerFixture(selectedAccount = account, chain = "0xaa36a7") {
   const calls: string[] = [];
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const request = vi.fn(async ({ method }: Parameters<WalletProvider["request"]>[0]): Promise<unknown> => {
     calls.push(method);
     if (method === "eth_chainId") return chain;
-    if (method === "eth_accounts" || method === "eth_requestAccounts") return [account];
+    if (method === "eth_accounts" || method === "eth_requestAccounts") return [selectedAccount];
     if (method === "wallet_switchEthereumChain") return null;
     if (method === "personal_sign") return "0xab";
     if (method === "eth_sendTransaction") return `0x${"ab".repeat(32)}`;
-    throw new Error("Unexpected RPC");
+    throw new Error(`Unexpected RPC ${method}`);
   });
   const provider: WalletProvider = {
     request,
     on(event, listener) { const group = listeners.get(event) ?? new Set(); group.add(listener); listeners.set(event, group); },
     removeListener(event, listener) { listeners.get(event)?.delete(listener); }
   };
-  const remote: RemoteWallet = { provider, connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
-  return { provider, remote, request, calls, listeners, emit(event: string) { for (const listener of listeners.get(event) ?? []) listener(); } };
+  return {
+    provider, request, calls, listeners,
+    emit(event: string) { for (const listener of listeners.get(event) ?? []) listener(); }
+  };
 }
 
-describe("browser connector authority", () => {
-  it("keeps relay loading lazy and preserves injected requests", async () => {
-    const f = providerFixture(), load = vi.fn(async () => f.remote);
-    const wallet = new BrowserWalletSession(f.provider, 11155111, projectId, load);
-    await wallet.refresh();
+function chooserFixture(provider: WalletProvider) {
+  const chooser: WalletChooser = {
+    connect: vi.fn(async () => provider),
+    disconnect: vi.fn(async () => {})
+  };
+  return chooser;
+}
+
+describe("unified wallet authority", () => {
+  it("shows one chooser action and does no passive provider or SDK work", async () => {
+    const injected = providerFixture();
+    const load = vi.fn(async () => chooserFixture(injected.provider));
+    const wallet = new BrowserWalletSession(injected.provider, 11155111, projectId, load);
+    expect(wallet.connectionOptions).toEqual([{ connector: "appkit", label: "Connect wallet", unavailable: null }]);
     expect(load).not.toHaveBeenCalled();
-    expect(f.calls).toEqual(["eth_chainId", "eth_accounts"]);
-    await wallet.connect("injected");
-    expect(f.calls).toContain("wallet_switchEthereumChain");
-    expect(f.calls).toContain("eth_requestAccounts");
+    expect(injected.calls).toEqual([]);
+    expect((await wallet.refresh()).kind).toBe("disconnected");
     expect(load).not.toHaveBeenCalled();
+    expect(injected.calls).toEqual([]);
   });
-  it.each([undefined, "bad-id"])("does not initialize without usable configuration %s", async value => {
+
+  it.each([undefined, "bad-id"])("does not initialize the production chooser without usable configuration %s", async value => {
     const load = vi.fn();
-    const wallet = new BrowserWalletSession(undefined, 11155111, value, load);
-    await expect(wallet.connect("walletconnect")).rejects.toThrow(/configured/);
+    const wallet = new BrowserWalletSession(providerFixture().provider, 11155111, value, load);
+    await expect(wallet.connect()).rejects.toThrow(/configured/);
     expect(load).not.toHaveBeenCalled();
   });
-  it("preserves local fixtures and disables only WalletConnect", async () => {
-    const f = providerFixture("0x7a69"), load = vi.fn();
-    const wallet = new BrowserWalletSession(f.provider, 31337, projectId, load);
-    expect((await wallet.connect("injected")).kind).toBe("connected");
-    await expect(wallet.connect("walletconnect")).rejects.toThrow(/local/);
-    expect(wallet.getSnapshot().kind).toBe("connected");
+
+  it("keeps the local 31337 fixture behind the same Connect wallet action", async () => {
+    const local = providerFixture(account, "0x7a69");
+    const load = vi.fn();
+    const wallet = new BrowserWalletSession(local.provider, 31337, undefined, load);
+    expect(wallet.connectionOptions).toEqual([{ connector: "appkit", label: "Connect wallet", unavailable: null }]);
+    expect(await wallet.connect()).toMatchObject({ kind: "connected", account, chainId: 31337 });
+    expect(local.calls).toContain("wallet_switchEthereumChain");
+    expect(local.calls).toContain("eth_requestAccounts");
     expect(load).not.toHaveBeenCalled();
   });
-  it("establishes Sepolia through the remote provider and disconnects remotely and locally", async () => {
-    const f = providerFixture();
-    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => f.remote);
-    const snapshot = await wallet.connect("walletconnect");
-    expect(snapshot).toMatchObject({ kind: "connected", account, chainId: 11155111 });
-    expect(f.calls).toEqual(["eth_chainId", "eth_accounts"]);
+
+  it("adopts only the exact provider returned by AppKit", async () => {
+    const ambient = providerFixture(account);
+    const selected = providerFixture(otherAccount);
+    const chooser = chooserFixture(selected.provider);
+    const wallet = new BrowserWalletSession(ambient.provider, 11155111, projectId, async () => chooser);
+    const snapshot = await wallet.connect();
+    expect(snapshot).toMatchObject({ kind: "connected", account: otherAccount, chainId: 11155111 });
+    expect(ambient.calls).toEqual([]);
+    expect(selected.calls).toEqual(["eth_chainId", "eth_accounts"]);
+  });
+
+  it("deduplicates only the same owned attempt", async () => {
+    const selected = providerFixture();
+    const approval = deferred<WalletProvider>();
+    const chooser = chooserFixture(selected.provider);
+    chooser.connect = vi.fn(() => approval.promise);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    const owner = {};
+    const first = wallet.connect({ owner });
+    expect(wallet.connect({ owner })).toBe(first);
+    await expect(wallet.connect({ owner: {} })).rejects.toThrow(/still pending/);
+    approval.resolve(selected.provider);
+    await expect(first).resolves.toMatchObject({ kind: "connected", account });
+  });
+
+  it("cancels only the matching owned attempt and ignores late provider approval", async () => {
+    const selected = providerFixture();
+    const approval = deferred<WalletProvider>();
+    const chooser = chooserFixture(selected.provider);
+    chooser.connect = vi.fn(() => approval.promise);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    const owner = {}, wrongOwner = {};
+    const connecting = wallet.connect({ owner });
+    const rejected = expect(connecting).rejects.toThrow(/cancelled/);
+    await vi.waitFor(() => expect(chooser.connect).toHaveBeenCalledOnce());
+    wallet.cancelConnection(wrongOwner);
+    expect(wallet.getConnectionStatus().kind).toBe("pending");
+    wallet.cancelConnection(owner);
+    expect(wallet.getSnapshot().kind).toBe("disconnected");
+    approval.resolve(selected.provider);
+    await rejected;
+    expect(selected.calls).toEqual([]);
+    expect(chooser.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("bounds a wallet approval and retires the timed-out chooser", async () => {
+    vi.useFakeTimers();
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    chooser.connect = vi.fn(() => new Promise<WalletProvider>(() => {}));
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    const connecting = wallet.connect();
+    const rejected = expect(connecting).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await rejected;
+    await vi.runAllTimersAsync();
+    expect(chooser.disconnect).toHaveBeenCalledOnce();
+    expect(wallet.getSnapshot().kind).toBe("disconnected");
+    vi.useRealTimers();
+  });
+
+  it("does not let an old owner cancel a newer attempt", async () => {
+    const firstProvider = providerFixture(), nextProvider = providerFixture(otherAccount);
+    const firstApproval = deferred<WalletProvider>(), nextApproval = deferred<WalletProvider>();
+    const firstChooser = chooserFixture(firstProvider.provider), nextChooser = chooserFixture(nextProvider.provider);
+    firstChooser.connect = vi.fn(() => firstApproval.promise);
+    nextChooser.connect = vi.fn(() => nextApproval.promise);
+    const load = vi.fn().mockResolvedValueOnce(firstChooser).mockResolvedValueOnce(nextChooser);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, load);
+    const oldOwner = {};
+    const first = wallet.connect({ owner: oldOwner });
+    const firstRejected = expect(first).rejects.toThrow(/cancelled/);
+    await vi.waitFor(() => expect(firstChooser.connect).toHaveBeenCalledOnce());
+    wallet.cancelConnection(oldOwner);
+    firstApproval.resolve(firstProvider.provider);
+    await firstRejected;
+    const newOwner = {};
+    const next = wallet.connect({ owner: newOwner });
+    wallet.cancelConnection(oldOwner);
+    nextApproval.resolve(nextProvider.provider);
+    await expect(next).resolves.toMatchObject({ kind: "connected", account: otherAccount });
+  });
+
+  it("disconnects the selected chooser and ignores its retired events", async () => {
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    await wallet.connect();
     wallet.disconnect();
-    expect(f.remote.disconnect).toHaveBeenCalledOnce();
-    f.emit("accountsChanged");
+    expect(wallet.getSnapshot().kind).toBe("disconnected");
+    await vi.waitFor(() => expect(chooser.disconnect).toHaveBeenCalledOnce());
+    selected.emit("accountsChanged");
     expect((await wallet.refresh()).kind).toBe("disconnected");
   });
-  it.each(["disconnect", "session_delete"])("retires remote sessions on %s", async event => {
-    const f = providerFixture();
-    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => f.remote);
-    await wallet.connect("walletconnect");
-    f.emit(event);
+
+  it.each(["disconnect", "session_delete"])("retires the chooser on provider %s", async event => {
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    await wallet.connect();
+    selected.emit(event);
     expect(wallet.getSnapshot().kind).toBe("disconnected");
-    expect(f.remote.disconnect).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(chooser.disconnect).toHaveBeenCalledOnce());
   });
-  it("rejects wrong networks and permits an explicit retry after rejection", async () => {
-    const wrong = providerFixture("0x1"), good = providerFixture();
-    const load = vi.fn().mockResolvedValueOnce(wrong.remote).mockResolvedValueOnce(good.remote);
+
+  it("rejects the wrong network and permits an explicit retry", async () => {
+    const wrong = providerFixture(account, "0x1"), good = providerFixture();
+    const load = vi.fn()
+      .mockResolvedValueOnce(chooserFixture(wrong.provider))
+      .mockResolvedValueOnce(chooserFixture(good.provider));
     const wallet = new BrowserWalletSession(undefined, 11155111, projectId, load);
-    await expect(wallet.connect("walletconnect")).rejects.toThrow(/Sepolia/);
+    await expect(wallet.connect()).rejects.toThrow(/Sepolia/);
     expect(wallet.getSnapshot().kind).toBe("disconnected");
-    expect((await wallet.connect("walletconnect")).kind).toBe("connected");
+    expect(await wallet.connect()).toMatchObject({ kind: "connected", account });
   });
-  it("deduplicates clicks, cancels pending loading and ignores its late provider", async () => {
-    const f = providerFixture(), late = deferred<RemoteWallet>(), load = vi.fn(() => late.promise);
-    const wallet = new BrowserWalletSession(f.provider, 11155111, projectId, load);
-    const first = wallet.connect("walletconnect");
-    expect(wallet.connect("walletconnect")).toBe(first);
-    const rejected = expect(first).rejects.toThrow(/cancelled/);
-    const injected = await wallet.connect("injected");
-    late.resolve(f.remote);
-    await rejected;
-    expect(wallet.getSnapshot()).toEqual(injected);
-    expect(f.remote.connect).not.toHaveBeenCalled();
-    expect(f.remote.disconnect).toHaveBeenCalledOnce();
-  });
-  it("rejects a cancelled connection's late approval without touching the retry", async () => {
-    const old = providerFixture(), next = providerFixture(), approval = deferred<void>();
-    old.remote.connect = vi.fn(() => approval.promise);
-    const loading = vi.fn().mockResolvedValueOnce(old.remote).mockResolvedValueOnce(next.remote);
-    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, loading);
-    const cancelled = wallet.connect("walletconnect");
-    const rejected = expect(cancelled).rejects.toThrow(/cancelled/);
-    await vi.waitFor(() => expect(old.remote.connect).toHaveBeenCalledOnce());
-    wallet.disconnect();
-    const snapshot = await wallet.connect("walletconnect");
-    approval.resolve(); await rejected;
-    old.emit("accountsChanged"); old.emit("disconnect");
-    expect(wallet.getSnapshot()).toEqual(snapshot);
-    expect(next.remote.disconnect).not.toHaveBeenCalled();
-  });
-  it("ignores retired provider events, including previously captured callbacks", async () => {
-    const old = providerFixture(), next = providerFixture();
-    const wallet = new BrowserWalletSession(old.provider, 11155111, projectId, async () => next.remote);
-    await wallet.connect("injected");
-    const callback = [...old.listeners.get("accountsChanged") ?? []][0];
-    const snapshot = await wallet.connect("walletconnect");
-    callback?.();
-    expect(wallet.getSnapshot()).toEqual(snapshot);
-    expect([...old.listeners.values()].every(group => group.size === 0)).toBe(true);
-  });
-  it("rejects old actions after provider changes during journal acquisition", async () => {
-    const old = providerFixture(), next = providerFixture(), gate = deferred<void>(), entered = deferred<void>();
-    const wallet = new BrowserWalletSession(old.provider, 11155111, projectId, async () => next.remote);
-    const expected = await wallet.connect("injected");
-    if (expected.kind !== "connected") throw new Error("No fixture session");
+
+  it("rejects old actions when the selected provider changes during a journal wait", async () => {
+    const old = providerFixture(), next = providerFixture(otherAccount);
+    const load = vi.fn()
+      .mockResolvedValueOnce(chooserFixture(old.provider))
+      .mockResolvedValueOnce(chooserFixture(next.provider));
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, load);
+    const expected = await wallet.connect();
+    if (expected.kind !== "connected") throw new Error("Missing fixture session");
+    const gate = deferred<void>(), entered = deferred<void>();
     const sending = wallet.requestTransaction(expected, { to: account, value: 0n, data: "0x" }, async () => { entered.resolve(); await gate.promise; });
     const rejected = expect(sending).rejects.toThrow(/changed/);
     await entered.promise;
-    await wallet.connect("walletconnect");
-    gate.resolve(); await rejected;
+    await wallet.connect();
+    gate.resolve();
+    await rejected;
     expect(old.calls).not.toContain("eth_sendTransaction");
     expect(next.calls).not.toContain("eth_sendTransaction");
   });
-  it("rejects old signature preparation and stale refresh results after switching providers", async () => {
-    const old = providerFixture(), next = providerFixture(), chain = deferred<unknown>();
-    const wallet = new BrowserWalletSession(old.provider, 11155111, projectId, async () => next.remote);
-    const expected = await wallet.connect("injected");
-    if (expected.kind !== "connected") throw new Error("No fixture session");
+
+  it("rejects stale refresh and signature work after provider replacement", async () => {
+    const old = providerFixture(), next = providerFixture(otherAccount);
+    const load = vi.fn()
+      .mockResolvedValueOnce(chooserFixture(old.provider))
+      .mockResolvedValueOnce(chooserFixture(next.provider));
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, load);
+    const expected = await wallet.connect();
+    if (expected.kind !== "connected") throw new Error("Missing fixture session");
+    const chain = deferred<unknown>();
     old.request.mockImplementationOnce(() => chain.promise);
     const signing = wallet.signMessage({ expected, message: "LABx test authorization" });
     const rejected = expect(signing).rejects.toThrow(/changed/);
-    const snapshot = await wallet.connect("walletconnect");
-    chain.resolve("0xaa36a7"); await rejected;
-    expect(wallet.getSnapshot()).toEqual(snapshot);
+    await wallet.connect();
+    chain.resolve("0xaa36a7");
+    await rejected;
     expect(old.calls).not.toContain("personal_sign");
     expect(next.calls).not.toContain("personal_sign");
   });
-  it("does not allow disposed sessions to reconnect or sign", async () => {
-    const f = providerFixture();
-    const wallet = new BrowserWalletSession(f.provider, 11155111, projectId, async () => f.remote);
-    const expected = await wallet.connect();
-    if (expected.kind !== "connected") throw new Error("No fixture session");
-    wallet.dispose();
-    await expect(wallet.signMessage({ expected, message: "LABx authorization" })).rejects.toThrow();
-    expect(() => wallet.connect()).toThrow(/disposed/);
-    expect(f.calls).not.toContain("personal_sign");
-  });
-  it.each(["Rejected by wallet", "Proposal expired"])("handles %s without adopting a session", async reason => {
-    const f = providerFixture();
-    f.remote.connect = vi.fn(async () => { throw new Error(reason); });
-    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => f.remote);
-    await expect(wallet.connect("walletconnect")).rejects.toThrow(reason);
-    expect(wallet.getSnapshot().kind).toBe("disconnected");
-    expect(wallet.getConnectionStatus().kind).toBe("error");
-    expect(f.remote.disconnect).toHaveBeenCalledOnce();
-  });
-
 });
