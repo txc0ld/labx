@@ -68,39 +68,89 @@ describe("atomic multi-key persistence", () => {
 
 describe("hosted persistence configuration", () => {
   beforeEach(() => {
-    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL", undefined);
+    vi.stubEnv("DATABASE_URL", undefined);
+    vi.stubEnv("NEON_DATABASE", undefined);
     vi.stubEnv("UPSTASH_REDIS_REST_URL", undefined);
     vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", undefined);
     vi.stubEnv("LABX_STORE", undefined);
   });
 
-  it.each([
-    [undefined, undefined, undefined],
-    ["https://redis.example", undefined, undefined],
-    [undefined, "test-token", undefined],
-    [undefined, undefined, "memory"],
-    ["https://redis.example", undefined, "memory"],
-    [undefined, "test-token", "memory"]
-  ])("refuses ephemeral hosted storage (%s, %s, %s)", (url, token, mode) => {
-    vi.stubEnv("UPSTASH_REDIS_REST_URL", url);
-    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", token);
-    vi.stubEnv("LABX_STORE", mode);
-    expect(() => activeStore()).toThrow(/persistent.*Redis/i);
-  });
-
-  it("uses configured Redis even when hosted memory mode is requested", async () => {
-    vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://redis.example");
-    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "test-token");
-    vi.stubEnv("LABX_STORE", "memory");
-    vi.stubGlobal("fetch", async () => Response.json({ result: "persisted commitment" }));
-    expect(await activeStore().get("reserve:hosted-fixture")).toBe("persisted commitment");
-  });
-
-  it("keeps explicitly selected memory storage available locally", async () => {
-    vi.stubEnv("VERCEL", undefined);
+  it("keeps file as the local default and allows explicit local memory", async () => {
+    expect(activeStore()).toBeDefined();
     vi.stubEnv("LABX_STORE", "memory");
     await activeStore().set("reserve:local-demo-fixture", "local demo commitment");
     expect(await activeStore().get("reserve:local-demo-fixture")).toBe("local demo commitment");
+  });
+
+  it("uses only the explicitly selected provider when both credential sets exist", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://fixture:private@db.example/labx?sslmode=require");
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://redis.example");
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "test-token");
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).includes("redis.example")) return Response.json({ result: "redis value" });
+      return Response.json({
+        fields: [{ name: "value", dataTypeID: 25 }],
+        rows: [["neon value"]],
+        command: "SELECT",
+        rowCount: 1
+      });
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    vi.stubEnv("LABX_STORE", "neon");
+    expect(await activeStore().get("selected-provider")).toBe("neon value");
+    expect(fetcher).toHaveBeenLastCalledWith(expect.not.stringContaining("redis.example"), expect.anything());
+
+    vi.stubEnv("LABX_STORE", "upstash");
+    expect(await activeStore().get("selected-provider")).toBe("redis value");
+    expect(fetcher).toHaveBeenLastCalledWith(expect.stringContaining("redis.example"), expect.anything());
+  });
+
+  it.each([
+    ["neon", undefined, "https://redis.example", "test-token"],
+    ["upstash", "postgresql://fixture:private@db.example/labx", undefined, "test-token"],
+    ["upstash", "postgresql://fixture:private@db.example/labx", "https://redis.example", undefined]
+  ])("refuses missing credentials for selected provider %s", (mode, databaseUrl, redisUrl, redisToken) => {
+    vi.stubEnv("LABX_STORE", mode);
+    vi.stubEnv("DATABASE_URL", databaseUrl);
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", redisUrl);
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", redisToken);
+    expect(() => activeStore()).toThrow(/storage.*configured/i);
+  });
+
+  it("accepts the Neon alias alone or equal dual values and rejects conflicting values", () => {
+    const url = "postgresql://fixture:private@db.example/labx?sslmode=require";
+    vi.stubEnv("LABX_STORE", "neon");
+    vi.stubEnv("NEON_DATABASE", url);
+    expect(activeStore()).toBeDefined();
+
+    vi.stubEnv("DATABASE_URL", url);
+    expect(activeStore()).toBeDefined();
+
+    vi.stubEnv("DATABASE_URL", "postgresql://fixture:other@other.example/labx?sslmode=require");
+    expect(() => activeStore()).toThrow(/configuration.*ambiguous/i);
+  });
+
+  it.each([
+    "not-a-database-url",
+    "https://db.example/labx",
+    "postgresql://fixture:private@db.example/labx?sslmode=disable"
+  ])("rejects invalid Neon configuration without exposing it: %s", (url) => {
+    vi.stubEnv("LABX_STORE", "neon");
+    vi.stubEnv("NEON_DATABASE", url);
+    expect(() => activeStore()).toThrow(/^Neon storage is not configured\.$/);
+  });
+
+  it.each([undefined, "file", "memory", "unknown"])("fails closed for hosted provider selection %s", (mode) => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("LABX_STORE", mode);
+    expect(() => activeStore()).toThrow(/persistent storage/i);
+  });
+
+  it("rejects unknown provider selection locally", () => {
+    vi.stubEnv("LABX_STORE", "unknown");
+    expect(() => activeStore()).toThrow(/storage provider/i);
   });
 });
 

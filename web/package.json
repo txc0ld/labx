@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@neondatabase/serverless": "1.2.0",
     "@reown/appkit": "1.8.19",
     "@walletconnect/ethereum-provider": "2.25.0",
     "lucide-react": "1.52.0",

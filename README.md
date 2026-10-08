@@ -72,6 +72,8 @@ Pausing blocks new purchases and opening, while recovery and existing claims rem
 
 ## Configuration
 
-Use `.env.example` for names, never for credentials. Durable server records require both Upstash settings on Vercel. Local file persistence is for a single development process.
+Use `.env.example` for names, never for credentials. Hosted durable records use an explicit provider: set `LABX_STORE=neon` with the server-only pooled `DATABASE_URL` (the existing server-only `NEON_DATABASE` name is accepted as an alias), or set `LABX_STORE=upstash` with both Upstash values. If both Neon variable names are present, they must be identical. Credentials must never use a `NEXT_PUBLIC_*` name. Missing, conflicting, unknown and ephemeral hosted selections fail closed. Local development with no selection uses `web/data/store.json` in one process; explicit `file` and `memory` modes are local-only.
+
+Before selecting Neon in a hosted environment, apply [`web/db/migrations/001_labx_store.sql`](web/db/migrations/001_labx_store.sql) with a direct, non-pooled migration connection and verify the table columns and named constraints. The application role needs schema `USAGE` and table `SELECT`, `INSERT` and `UPDATE`; migration credentials stay separate. Inventory existing durable records before a provider switch. This repository does not migrate Redis or local-file records, and preview and production must not unintentionally share private records.
 
 A public contract address alone must not enable financial actions. The v3 portal requires an approved deployment manifest and verifies chain, bytecode, contract version and payment token. Approval of a new manifest and any hosted release are separate from local source implementation. See [LAUNCH.md](LAUNCH.md).
