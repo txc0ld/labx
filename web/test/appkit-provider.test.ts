@@ -60,6 +60,8 @@ vi.mock("@reown/appkit-controllers", () => ({
 }));
 vi.mock("@reown/appkit-adapter-ethers", () => ({
   EthersAdapter: class {
+    connectors: Array<{ id: string; type: string }> = [];
+    connections: unknown[] = [];
     connect(params: unknown) { return sdk.externalConnect(params); }
     connectWalletConnect(chainId?: number | string) { return sdk.walletConnect(chainId); }
     disconnect(params: unknown) { return sdk.adapterDisconnect(params); }
@@ -525,8 +527,10 @@ describe("official AppKit chooser boundary", () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
     fixture.setProviderType("WALLET_CONNECT");
-    const remoteDisconnect = vi.fn(async () => {});
-    sdk.walletConnectProvider = { disconnect: remoteDisconnect };
+    let remote: { session?: { topic: string }; disconnect: () => Promise<void> };
+    const remoteDisconnect = vi.fn(async () => { remote.session = undefined; });
+    remote = { session: { topic: "normal-cleanup-topic" }, disconnect: remoteDisconnect };
+    sdk.walletConnectProvider = remote;
     const { createAppKitProvider } = await loadProvider();
     const chooser = await createAppKitProvider("a".repeat(32));
     const connecting = chooser.connect(new AbortController().signal);
@@ -544,8 +548,13 @@ describe("official AppKit chooser boundary", () => {
     const fixture = appKitFixture();
     fixture.setProviderType("WALLET_CONNECT");
     const remote = deferred<void>();
-    const remoteDisconnect = vi.fn(() => remote.promise);
-    sdk.walletConnectProvider = { disconnect: remoteDisconnect };
+    let walletProvider: { session?: { topic: string }; disconnect: () => Promise<void> };
+    const remoteDisconnect = vi.fn(async () => {
+      await remote.promise;
+      walletProvider.session = undefined;
+    });
+    walletProvider = { session: { topic: "slow-cleanup-topic" }, disconnect: remoteDisconnect };
+    sdk.walletConnectProvider = walletProvider;
     const [{ createAppKitProvider }, { bounded }] = await Promise.all([loadProvider(), import("../lib/chain/wallet-connectors")]);
     const chooser = await createAppKitProvider("a".repeat(32));
     const connecting = chooser.connect(new AbortController().signal);
@@ -577,7 +586,14 @@ describe("official AppKit chooser boundary", () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
     fixture.setProviderType("WALLET_CONNECT");
-    sdk.walletConnectProvider = { disconnect: vi.fn(async () => { throw new Error("remote cleanup failed"); }) };
+    const provider: { session?: { topic: string }; disconnect: () => Promise<void> } = {
+      session: { topic: "failed-cleanup-topic" },
+      disconnect: vi.fn(async () => {
+        provider.session = undefined;
+        throw new Error("local cleanup failed after clearing the session field");
+      })
+    };
+    sdk.walletConnectProvider = provider;
     const { createAppKitProvider } = await loadProvider();
     const chooser = await createAppKitProvider("a".repeat(32));
     const connecting = chooser.connect(new AbortController().signal);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserWalletSession, type WalletChooser } from "../lib/chain/wallet-connectors";
+import { BrowserWalletSession, type WalletChooser, WalletChooserReloadError } from "../lib/chain/wallet-connectors";
 import type { WalletProvider } from "../lib/chain/types";
 
 const account = "0x1111111111111111111111111111111111111111";
@@ -184,6 +184,39 @@ describe("unified wallet authority", () => {
     await vi.waitFor(() => expect(chooser.disconnect).toHaveBeenCalledOnce());
     selected.emit("accountsChanged");
     expect((await wallet.refresh()).kind).toBe("disconnected");
+  });
+
+  it("preserves the chooser reload instruction when cleanup is quarantined", async () => {
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    chooser.disconnect = vi.fn(async () => { throw new WalletChooserReloadError(); });
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    await wallet.connect();
+
+    wallet.disconnect();
+
+    await vi.waitFor(() => expect(wallet.getConnectionStatus()).toEqual({
+      kind: "error",
+      message: "The wallet chooser could not initialize safely. Reload this page before retrying."
+    }));
+  });
+
+  it("does not report an unconfirmed cleanup as disconnected", async () => {
+    vi.useFakeTimers();
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    chooser.disconnect = vi.fn(() => new Promise<void>(() => {}));
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    await wallet.connect();
+
+    wallet.disconnect();
+    await vi.advanceTimersByTimeAsync(8_001);
+
+    expect(wallet.getConnectionStatus()).toEqual({
+      kind: "error",
+      message: "Wallet cleanup could not be confirmed. Reload this page before connecting again."
+    });
+    vi.useRealTimers();
   });
 
   it.each(["disconnect", "session_delete"])("retires the chooser on provider %s", async event => {

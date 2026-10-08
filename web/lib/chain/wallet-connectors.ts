@@ -79,9 +79,14 @@ export class BrowserWalletSession extends WalletSession {
     this.chooser = undefined;
     if (!chooser) return;
     const attempt = this.attempt;
-    this.cleanup = this.cleanup.catch(() => {}).then(() => bounded(chooser.disconnect(), 8_000)).catch(() => {
+    this.cleanup = this.cleanup.catch(() => {}).then(() => bounded(chooser.disconnect(), 8_000)).catch(error => {
       if (attempt === this.attempt && this.connection.kind === "idle") {
-        this.status({ kind: "error", message: "Disconnected locally. Remove the LABx session in your wallet if it is still listed." });
+        this.status({
+          kind: "error",
+          message: error instanceof WalletChooserReloadError
+            ? error.message
+            : "Wallet cleanup could not be confirmed. Reload this page before connecting again."
+        });
       }
     });
   }

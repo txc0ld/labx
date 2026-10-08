@@ -20,8 +20,18 @@ type Attempt = {
   settle: () => void;
 };
 
+type WalletConnectCleanup = {
+  provider: object;
+  topic: string;
+  completed: boolean;
+  failure?: unknown;
+  promise: Promise<void>;
+  complete: () => void;
+};
+
 class LabxEthersAdapter extends EthersAdapter {
   private attempt: Attempt | undefined;
+  private walletConnectCleanup: WalletConnectCleanup | undefined;
 
   beginAttempt() {
     if (this.attempt) throw new WalletChooserBusyError();
@@ -116,7 +126,48 @@ class LabxEthersAdapter extends EthersAdapter {
   }
 
   override async connectWalletConnect(chainId?: number | string) {
-    return this.track("walletConnect", () => super.connectWalletConnect(chainId));
+    return this.track("walletConnect", async () => {
+      const result = await super.connectWalletConnect(chainId);
+      this.observeWalletConnectSession(this.getWalletConnectProvider());
+      return result;
+    });
+  }
+
+  override async setUniversalProvider(provider: Parameters<EthersAdapter["setUniversalProvider"]>[0]) {
+    const walletProvider = provider as unknown as WalletConnectEventProvider;
+    walletProvider.on?.("connect", () => {
+      try { this.observeWalletConnectSession(walletProvider); }
+      catch { cleanupFailed = true; }
+    });
+    walletProvider.on?.("session_delete", event => {
+      this.completeWalletConnectSession(walletProvider, sessionDeleteTopic(event));
+    });
+    walletProvider.on?.("disconnect", event => {
+      this.completeWalletConnectSession(walletProvider, disconnectTopic(event));
+    });
+    return super.setUniversalProvider(provider);
+  }
+
+  override disconnect(params: Parameters<EthersAdapter["disconnect"]>[0]) {
+    const connector = params.id
+      ? this.connectors.find(candidate => candidate.id.toLowerCase() === params.id?.toLowerCase())
+      : undefined;
+    if (!connector || connector.type !== "INJECTED") return super.disconnect(params);
+    return this.disconnectInjected(connector.id, connector.provider);
+  }
+
+  private async disconnectInjected(connectorId: string, provider: unknown) {
+    const connection = this.getConnection({
+      connectorId,
+      connections: this.connections,
+      connectors: this.connectors
+    });
+    await this.revokeInjectedPermissions(provider);
+    this.removeProviderListeners(connectorId);
+    this.deleteConnection(connectorId);
+    if (this.connections.length === 0) this.emit("disconnect");
+    else this.emitFirstAvailableConnection();
+    return { connections: connection ? [connection] : [] };
   }
 
   private async track<T>(connectorId: string, operation: () => Promise<T>): Promise<T> {
@@ -153,19 +204,128 @@ class LabxEthersAdapter extends EthersAdapter {
 
   private async disconnectCancelled(connectorId: string) {
     if (connectorId === "walletConnect") {
-      const provider: unknown = this.getWalletConnectProvider();
-      if (!provider || typeof provider !== "object" || !("session" in provider) || !("disconnect" in provider) || typeof provider.disconnect !== "function") {
-        throw new Error("Cancelled WalletConnect session could not be identified.");
-      }
-      const session = provider.session;
-      if (!session || typeof session !== "object" || !("topic" in session) || typeof session.topic !== "string" || !session.topic) {
-        throw new Error("Cancelled WalletConnect session could not be identified.");
-      }
-      await provider.disconnect();
-      if (provider.session != null) throw new Error("Cancelled WalletConnect session cleanup did not finish.");
+      await this.disconnectWalletConnectSession();
     }
-    await super.disconnect({ id: connectorId });
+    await this.disconnect({ id: connectorId });
   }
+
+  async disconnectWalletConnectSession() {
+    const candidate: unknown = this.getWalletConnectProvider();
+    if (!isWalletConnectEventProvider(candidate)) {
+      throw new Error("WalletConnect session could not be identified.");
+    }
+    const activeTopic = sessionTopic(candidate);
+    const cleanup = activeTopic
+      ? this.observeWalletConnectSession(candidate)
+      : this.walletConnectCleanup;
+    if (!cleanup || cleanup.provider !== candidate || (activeTopic && cleanup.topic !== activeTopic)) {
+      throw new Error("WalletConnect session could not be identified.");
+    }
+    if (!activeTopic) {
+      if (cleanup.failure) throw cleanup.failure;
+      await cleanup.promise;
+      return;
+    }
+    try {
+      await candidate.disconnect();
+    } catch (error) {
+      cleanup.failure = error;
+      throw error;
+    }
+    if (sessionTopic(candidate) != null) {
+      const error = new Error("WalletConnect session cleanup did not finish.");
+      cleanup.failure = error;
+      throw error;
+    }
+    this.completeWalletConnectSession(candidate, activeTopic);
+    await cleanup.promise;
+  }
+
+  private observeWalletConnectSession(provider: unknown, required = true) {
+    if (!isWalletConnectEventProvider(provider)) {
+      if (required) throw new Error("WalletConnect session could not be identified.");
+      return undefined;
+    }
+    const topic = sessionTopic(provider);
+    if (!topic) {
+      if (required) throw new Error("WalletConnect session could not be identified.");
+      return undefined;
+    }
+    const current = this.walletConnectCleanup;
+    if (current?.provider === provider && current.topic === topic && !current.completed) return current;
+    if (current && !current.completed) {
+      throw new Error("Another WalletConnect session cleanup is still pending.");
+    }
+    let complete = () => {};
+    const cleanup: WalletConnectCleanup = {
+      provider,
+      topic,
+      completed: false,
+      failure: undefined,
+      promise: new Promise<void>(resolve => { complete = resolve; }),
+      complete
+    };
+    cleanup.complete = () => {
+      if (cleanup.completed) return;
+      cleanup.completed = true;
+      cleanup.failure = undefined;
+      complete();
+    };
+    this.walletConnectCleanup = cleanup;
+    return cleanup;
+  }
+
+  private completeWalletConnectSession(provider: object, topic: string | undefined) {
+    const cleanup = this.walletConnectCleanup;
+    if (!topic || !cleanup || cleanup.provider !== provider || cleanup.topic !== topic) return;
+    cleanup.complete();
+  }
+
+  private async revokeInjectedPermissions(provider: unknown) {
+    if (!isRequestProvider(provider)) return;
+    try {
+      const permissions = await provider.request({ method: "wallet_getPermissions" });
+      if (Array.isArray(permissions) && permissions.some(permission => isEthAccountsPermission(permission))) {
+        await provider.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] });
+      }
+    } catch (error) {
+      console.info("Could not revoke permissions from wallet. Disconnecting...", error);
+    }
+  }
+}
+
+type WalletConnectEventProvider = {
+  session?: unknown;
+  disconnect(): Promise<void>;
+  on?(event: string, listener: (value?: unknown) => void): void;
+};
+
+function isWalletConnectEventProvider(value: unknown): value is WalletConnectEventProvider {
+  return Boolean(value && typeof value === "object" && "disconnect" in value && typeof value.disconnect === "function");
+}
+
+function sessionTopic(provider: { session?: unknown }): string | undefined {
+  const session = provider.session;
+  if (!session || typeof session !== "object" || !("topic" in session)) return undefined;
+  return typeof session.topic === "string" && session.topic ? session.topic : undefined;
+}
+
+function sessionDeleteTopic(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("topic" in value)) return undefined;
+  return typeof value.topic === "string" && value.topic ? value.topic : undefined;
+}
+
+function disconnectTopic(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("data" in value)) return undefined;
+  return typeof value.data === "string" && value.data ? value.data : undefined;
+}
+
+function isRequestProvider(value: unknown): value is Pick<WalletProvider, "request"> {
+  return Boolean(value && typeof value === "object" && "request" in value && typeof value.request === "function");
+}
+
+function isEthAccountsPermission(value: unknown) {
+  return Boolean(value && typeof value === "object" && "parentCapability" in value && value.parentCapability === "eth_accounts");
 }
 
 type AppKitRuntime = { appKit: AppKit; adapter: LabxEthersAdapter };
@@ -381,8 +541,7 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
         if (connected) {
           const walletConnect = appKit.getWalletProviderType() === "WALLET_CONNECT";
           if (walletConnect) {
-            const provider = adapter.getWalletConnectProvider() as { disconnect?(): Promise<void> } | undefined;
-            try { await provider?.disconnect?.(); }
+            try { await adapter.disconnectWalletConnectSession(); }
             catch (error) { failure ??= error; }
           }
           try { await appKit.disconnect("eip155"); }
