@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EthersAdapter } from "@reown/appkit-adapter-ethers";
 import { OptionsController } from "@reown/appkit-controllers";
+import UniversalProvider from "@walletconnect/universal-provider";
 import type { WalletProvider } from "../lib/chain/types";
 
 const prior = {
@@ -38,6 +39,48 @@ describe("pinned EthersAdapter EIP-6963 discovery", () => {
     expect(announced.map(connector => connector.id).sort()).toEqual(["io.first", "io.second"]);
     expect(announced.find(connector => connector.id === "io.first")?.provider).toBe(first);
     expect(announced.find(connector => connector.id === "io.second")?.provider).toBe(second);
+  });
+});
+
+describe("pinned UniversalProvider EVM boundary", () => {
+  it("returns the approved chain ID as a decimal number", async () => {
+    const storage = {
+      getItem: vi.fn(async () => undefined),
+      setItem: vi.fn(async () => {}),
+      removeItem: vi.fn(async () => {})
+    };
+    const client = {
+      core: { projectId: "a".repeat(32), storage },
+      request: vi.fn(),
+      session: { get: vi.fn(), getAll: vi.fn(() => []), length: 1 }
+    };
+    const universal = new UniversalProvider({
+      projectId: "a".repeat(32),
+      metadata: { name: "LABx", description: "LABx test", url: "https://labx.test", icons: [] },
+      client
+    } as never);
+    universal.client = client as never;
+    universal.session = {
+      topic: "test-topic",
+      namespaces: {
+        eip155: {
+          accounts: [`eip155:11155111:0x1111111111111111111111111111111111111111`],
+          methods: ["personal_sign"],
+          events: ["accountsChanged", "chainChanged"]
+        }
+      }
+    } as never;
+    universal.namespaces = {
+      eip155: {
+        chains: ["eip155:11155111"],
+        methods: ["personal_sign"],
+        events: ["accountsChanged", "chainChanged"],
+        rpcMap: { "eip155:11155111": "https://ethereum-sepolia-rpc.publicnode.com" }
+      }
+    };
+    (universal as unknown as { createProviders(): void }).createProviders();
+
+    await expect(universal.request({ method: "eth_chainId" })).resolves.toBe(11155111);
   });
 });
 

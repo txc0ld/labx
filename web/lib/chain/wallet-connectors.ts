@@ -125,6 +125,7 @@ export class BrowserWalletSession extends WalletSession {
 
   cancelConnection(owner: object) {
     if (!this.inFlight || this.activeOwner !== owner) return;
+    if (this.getSnapshot().kind === "connected") return;
     ++this.attempt;
     super.disconnect();
     this.retire();

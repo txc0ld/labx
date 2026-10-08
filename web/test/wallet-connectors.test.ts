@@ -120,6 +120,22 @@ describe("unified wallet authority", () => {
     expect(chooser.disconnect).toHaveBeenCalledOnce();
   });
 
+  it("does not let synchronous gate unmount cancel a newly established session", async () => {
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    const owner = {};
+    const unsubscribe = wallet.subscribe(() => {
+      if (wallet.getSnapshot().kind === "connected") wallet.cancelConnection(owner);
+    });
+    const snapshot = await wallet.connect({ owner });
+    unsubscribe();
+
+    expect(snapshot).toMatchObject({ kind: "connected", account, chainId: 11155111 });
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "connected", account, chainId: 11155111 });
+    expect(chooser.disconnect).not.toHaveBeenCalled();
+  });
+
   it("bounds a wallet approval and retires the timed-out chooser", async () => {
     vi.useFakeTimers();
     const selected = providerFixture();

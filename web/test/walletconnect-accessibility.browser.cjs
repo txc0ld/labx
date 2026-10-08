@@ -77,6 +77,23 @@ const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.Scri
     });
     await page.getByRole('button', { name: 'Close wallet connection' }).waitFor();
     await page.evaluate(() => window.disposeAdapter());
-    console.log('PASS: actual Chromium shadow DOM labels, dialog/checkbox names, native semantics, QR keyboard single activation, dynamic replacement/upgrade, outside scope and disposal.');
+    await page.evaluate(() => {
+      for (const priorModal of document.querySelectorAll('w3m-modal')) priorModal.remove();
+      window.disposeAdapter = window.adapter.observeWalletConnectModal(document);
+      const modal = document.createElement('w3m-modal');
+      const root = modal.attachShadow({ mode: 'open' });
+      root.innerHTML = '<wui-card role="dialog" data-testid="w3m-modal-card"><section id="nested"></section></wui-card>';
+      const nested = root.querySelector('#nested').attachShadow({ mode: 'open' });
+      const list = document.createElement('w3m-connector-list');
+      window.listUpdates = 0;
+      list.requestUpdate = () => { window.listUpdates++; };
+      nested.append(list);
+      document.body.append(modal);
+    });
+    await page.waitForFunction(() => document.querySelector('w3m-modal')?.shadowRoot?.querySelector('[role="dialog"]')?.getAttribute('aria-label') === 'WalletConnect');
+    await page.evaluate(() => window.adapter.refreshWalletConnectConnectorLists(document));
+    assert.equal(await page.evaluate(() => window.listUpdates), 1);
+    await page.evaluate(() => window.disposeAdapter());
+    console.log('PASS: actual Chromium shadow DOM labels, dialog/checkbox names, native semantics, QR keyboard single activation, lazy modal insertion, connector-list refresh, dynamic replacement/upgrade, outside scope and disposal.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

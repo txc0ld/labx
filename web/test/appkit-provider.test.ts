@@ -9,7 +9,10 @@ const sdk = vi.hoisted(() => ({
   externalConnect: vi.fn(),
   walletConnect: vi.fn(),
   adapterDisconnect: vi.fn(),
-  walletConnectProvider: undefined as unknown
+  walletConnectProvider: undefined as unknown,
+  connectorCallbacks: new Set<() => void>(),
+  observeModal: vi.fn((..._args: unknown[]) => vi.fn()),
+  refreshConnectorLists: vi.fn()
 }));
 
 vi.mock("@reown/appkit", () => ({
@@ -47,6 +50,14 @@ vi.mock("@reown/appkit", () => ({
 }));
 vi.mock("@reown/appkit/constants", () => ({ PACKAGE_VERSION: "1.8.19" }));
 vi.mock("@reown/appkit/networks", () => ({ sepolia: { id: 11155111, chainNamespace: "eip155" } }));
+vi.mock("@reown/appkit-controllers", () => ({
+  ConnectorController: {
+    subscribeKey: vi.fn((_key: string, callback: () => void) => {
+      sdk.connectorCallbacks.add(callback);
+      return () => sdk.connectorCallbacks.delete(callback);
+    })
+  }
+}));
 vi.mock("@reown/appkit-adapter-ethers", () => ({
   EthersAdapter: class {
     connect(params: unknown) { return sdk.externalConnect(params); }
@@ -54,6 +65,10 @@ vi.mock("@reown/appkit-adapter-ethers", () => ({
     disconnect(params: unknown) { return sdk.adapterDisconnect(params); }
     getWalletConnectProvider() { return sdk.walletConnectProvider; }
   }
+}));
+vi.mock("../lib/chain/walletconnect-accessibility", () => ({
+  observeWalletConnectModal: sdk.observeModal,
+  refreshWalletConnectConnectorLists: sdk.refreshConnectorLists
 }));
 
 const account = "0x1111111111111111111111111111111111111111";
@@ -65,7 +80,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function providerFixture(selectedAccount = account, chain = "0xaa36a7") {
+function providerFixture(selectedAccount = account, chain: unknown = "0xaa36a7") {
   const request = vi.fn(async ({ method }: Parameters<WalletProvider["request"]>[0]) => {
     if (method === "eth_chainId") return chain;
     if (method === "eth_accounts") return [selectedAccount];
@@ -82,15 +97,16 @@ function appKitFixture() {
   let accountState: { isConnected: boolean; address?: string } = { isConnected: false };
   let providerType = "INJECTED";
   let connectingWallet: object | undefined;
+  let openState = false;
   const appKit = {
     ready: vi.fn(async () => {}),
-    open: vi.fn(async () => { for (const callback of states) callback({ open: true }); }),
-    close: vi.fn(async () => { for (const callback of states) callback({ open: false }); }),
+    open: vi.fn(async () => { openState = true; for (const callback of states) callback({ open: true }); }),
+    close: vi.fn(async () => { openState = false; for (const callback of states) callback({ open: false }); }),
     disconnect: vi.fn(async () => {}),
     getProvider: vi.fn(() => provider),
     getAccount: vi.fn(() => accountState),
     getWalletProviderType: vi.fn(() => providerType),
-    getState: vi.fn(() => ({ connectingWallet })),
+    getState: vi.fn(() => ({ connectingWallet, open: openState })),
     subscribeAccount(callback: (state: typeof accountState) => void) { accounts.add(callback); return () => accounts.delete(callback); },
     subscribeState(callback: (state: { open: boolean }) => void) { states.add(callback); return () => states.delete(callback); },
     subscribeEvents(callback: (state: { data: { event: string } }) => void) { events.add(callback); return () => events.delete(callback); }
@@ -103,7 +119,8 @@ function appKitFixture() {
       accountState = { isConnected: true, address };
       for (const callback of accounts) callback(accountState);
     },
-    close() { for (const callback of states) callback({ open: false }); },
+    emitOpen(open: boolean) { openState = open; for (const callback of states) callback({ open }); },
+    close() { openState = false; for (const callback of states) callback({ open: false }); },
     emitEvent(event: string) { for (const callback of events) callback({ data: { event } }); },
     selectWallet() { connectingWallet = {}; },
     runExternal() {
@@ -129,10 +146,11 @@ afterEach(() => {
   sdk.appKit = undefined;
   sdk.activeAdapter = undefined;
   sdk.walletConnectProvider = undefined;
+  sdk.connectorCallbacks.clear();
 });
 
 describe("official AppKit chooser boundary", () => {
-  it("lazily configures the supported Ethers adapter and returns its exact selected provider", async () => {
+  it("lazily configures the supported Ethers adapter and bridges its exact selected provider", async () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
     const selected = providerFixture();
@@ -161,10 +179,66 @@ describe("official AppKit chooser boundary", () => {
     await vi.waitFor(() => expect(fixture.appKit.open).toHaveBeenCalledWith({ view: "Connect", namespace: "eip155" }));
     await fixture.runExternal();
     fixture.connect(selected);
-    await expect(connecting).resolves.toBe(selected);
+    const provider = await connecting;
+    expect(provider).not.toBe(selected);
+    await expect(provider.request({ method: "eth_chainId" })).resolves.toBe("0xaa36a7");
     expect(selected.request).toHaveBeenCalledWith({ method: "eth_chainId" });
     expect(selected.request).toHaveBeenCalledWith({ method: "eth_accounts" });
     expect(fixture.listenerCounts()).toEqual({ states: 0, accounts: 0, events: 0 });
+  });
+
+  it("normalizes a numeric UniversalProvider chain and forwards listeners with the raw provider receiver", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const raw = {
+      marker: "raw-provider",
+      async request(this: { marker: string }, { method }: Parameters<WalletProvider["request"]>[0]) {
+        expect(this.marker).toBe("raw-provider");
+        if (method === "eth_chainId") return 11155111;
+        if (method === "eth_accounts") return [account];
+        return "forwarded";
+      },
+      on(this: { marker: string }, event: string, listener: (...args: unknown[]) => void) {
+        expect(this.marker).toBe("raw-provider");
+        const eventListeners = listeners.get(event) ?? new Set();
+        eventListeners.add(listener);
+        listeners.set(event, eventListeners);
+      },
+      removeListener(this: { marker: string }, event: string, listener: (...args: unknown[]) => void) {
+        expect(this.marker).toBe("raw-provider");
+        listeners.get(event)?.delete(listener);
+      }
+    } satisfies WalletProvider & { marker: string };
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(raw);
+    const provider = await connecting;
+    await expect(provider.request({ method: "eth_chainId" })).resolves.toBe("0xaa36a7");
+    await expect(provider.request({ method: "wallet_method" })).resolves.toBe("forwarded");
+
+    const changed = vi.fn();
+    provider.on?.("chainChanged", changed);
+    for (const listener of listeners.get("chainChanged") ?? []) listener(11155111);
+    expect(changed).toHaveBeenLastCalledWith("0xaa36a7");
+    for (const listener of listeners.get("chainChanged") ?? []) listener("11155111");
+    expect(changed).toHaveBeenLastCalledWith("0xaa36a7");
+    provider.removeListener?.("chainChanged", changed);
+    for (const listener of listeners.get("chainChanged") ?? []) listener(11155111);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects unsafe numeric chain identifiers from the selected provider", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture(account, Number.MAX_SAFE_INTEGER + 1));
+    await expect(connecting).rejects.toThrow(/invalid network/);
   });
 
   it("requires reload after singleton initialization fails", async () => {
@@ -217,6 +291,46 @@ describe("official AppKit chooser boundary", () => {
     expect(fixture.listenerCounts()).toEqual({ states: 0, accounts: 0, events: 0 });
   });
 
+  it("does not let an inactive late-loaded chooser close the active chooser", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const { createAppKitProvider } = await loadProvider();
+    const active = await createAppKitProvider("a".repeat(32));
+    const inactive = await createAppKitProvider("a".repeat(32));
+    const connecting = active.connect(new AbortController().signal);
+    await vi.waitFor(() => expect(fixture.appKit.open).toHaveBeenCalledOnce());
+    await inactive.disconnect();
+    expect(fixture.appKit.close).not.toHaveBeenCalled();
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await expect(connecting).resolves.toBeDefined();
+  });
+
+  it("refreshes the mounted official connector list when a wallet is announced late", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    class FocusTarget { isConnected = true; focus() {} }
+    const focusTarget = new FocusTarget();
+    const pageDocument = { activeElement: focusTarget };
+    vi.stubGlobal("HTMLElement", FocusTarget);
+    vi.stubGlobal("document", pageDocument);
+    const fixture = appKitFixture();
+    const selected = providerFixture();
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    await vi.waitFor(() => expect(fixture.appKit.open).toHaveBeenCalledOnce());
+
+    for (const callback of sdk.connectorCallbacks) callback();
+    expect(sdk.refreshConnectorLists).toHaveBeenCalledOnce();
+    await fixture.runExternal();
+    fixture.connect(selected);
+    await expect(connecting).resolves.toBeDefined();
+
+    sdk.refreshConnectorLists.mockClear();
+    for (const callback of sdk.connectorCallbacks) callback();
+    expect(sdk.refreshConnectorLists).not.toHaveBeenCalled();
+  });
+
   it("quarantines a cancelled WalletConnect approval, revokes its late topic, then permits retry", async () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
@@ -248,6 +362,55 @@ describe("official AppKit chooser boundary", () => {
     await expect(retry).resolves.toBeDefined();
   });
 
+  it("requires reload when cleanup of a cancelled late WalletConnect approval fails", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const approval = deferred<{ clientId: null }>();
+    sdk.walletConnect.mockImplementationOnce(() => approval.promise);
+    const revoke = vi.fn(async () => { throw new Error("topic cleanup failed"); });
+    sdk.walletConnectProvider = { session: { topic: "uncertain-topic" }, client: { disconnect: revoke }, disconnect: vi.fn(async () => {}) };
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const abort = new AbortController();
+    const connecting = chooser.connect(abort.signal);
+    const rejection = connecting.catch(error => error);
+    fixture.selectWallet();
+    const sdkConnection = fixture.runWalletConnect();
+    await vi.waitFor(() => expect(sdk.walletConnect).toHaveBeenCalledOnce());
+    abort.abort();
+    expect((await rejection as Error).message).toMatch(/cancelled/);
+
+    approval.resolve({ clientId: null });
+    await expect(sdkConnection).rejects.toThrow(/Reload this page/);
+    expect(revoke).toHaveBeenCalledWith({ topic: "uncertain-topic", reason: { code: 6000, message: "Connection cancelled" } });
+    await vi.waitFor(() => expect(sdk.adapterDisconnect).toHaveBeenCalled());
+    const retry = await createAppKitProvider("a".repeat(32));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/Reload this page/);
+  });
+
+  it("requires reload when cleanup of a completed cancelled connector fails", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const controllerClose = deferred<void>();
+    fixture.appKit.close.mockImplementationOnce(() => controllerClose.promise).mockResolvedValue(undefined);
+    sdk.adapterDisconnect.mockRejectedValueOnce(new Error("permission cleanup failed"));
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const abort = new AbortController();
+    const connecting = chooser.connect(abort.signal);
+    const rejection = connecting.catch(error => error);
+    const sdkConnection = fixture.runExternal();
+    await vi.waitFor(() => expect(fixture.appKit.close).toHaveBeenCalledOnce());
+    abort.abort();
+    expect((await rejection as Error).message).toMatch(/cancelled/);
+    controllerClose.resolve();
+    await sdkConnection;
+    await vi.waitFor(() => expect(sdk.adapterDisconnect).toHaveBeenCalled());
+
+    const retry = await createAppKitProvider("a".repeat(32));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/Reload this page/);
+  });
+
   it("does not let a WalletConnect proposal and an extension choice overlap in one modal attempt", async () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
@@ -271,6 +434,85 @@ describe("official AppKit chooser boundary", () => {
     expect(revoke).toHaveBeenCalledWith({ topic: "superseded-topic", reason: { code: 6000, message: "Connection cancelled" } });
   });
 
+  it("keeps an early selected provider when AppKit closes before the adapter operation settles", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const adapter = deferred<{ address: string }>();
+    sdk.externalConnect.mockImplementationOnce(() => adapter.promise);
+    const selected = providerFixture();
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    const sdkConnection = fixture.runExternal();
+    await vi.waitFor(() => expect(sdk.externalConnect).toHaveBeenCalledOnce());
+
+    fixture.connect(selected);
+    fixture.close();
+    let settled = false;
+    void connecting.finally(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    adapter.resolve({ address: account });
+    await sdkConnection;
+    await expect(connecting).resolves.toBeDefined();
+  });
+
+  it("rejects provider replacement before the adapter operation settles", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const adapter = deferred<{ address: string }>();
+    sdk.externalConnect.mockImplementationOnce(() => adapter.promise);
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    const rejected = expect(connecting).rejects.toThrow(/selected wallet changed/);
+    const sdkConnection = fixture.runExternal();
+    await vi.waitFor(() => expect(sdk.externalConnect).toHaveBeenCalledOnce());
+    fixture.connect(providerFixture());
+    fixture.connect(providerFixture());
+    await rejected;
+    adapter.resolve({ address: account });
+    await expect(sdkConnection).rejects.toThrow(/cancelled/);
+  });
+
+  it("holds a cancelled slow modal open until the late chooser is closed", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const prefetch = deferred<void>();
+    fixture.appKit.open.mockImplementationOnce(async () => {
+      await prefetch.promise;
+      fixture.emitOpen(true);
+    });
+    const lateClose = deferred<void>();
+    let closeCount = 0;
+    fixture.appKit.close.mockImplementation(async () => {
+      closeCount++;
+      if (closeCount === 2) await lateClose.promise;
+      fixture.emitOpen(false);
+    });
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const abort = new AbortController();
+    const connecting = chooser.connect(abort.signal);
+    await vi.waitFor(() => expect(fixture.appKit.open).toHaveBeenCalledOnce());
+    abort.abort();
+    await expect(connecting).rejects.toThrow(/cancelled/);
+
+    const retry = await createAppKitProvider("a".repeat(32));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/still pending/);
+    prefetch.resolve();
+    await vi.waitFor(() => expect(fixture.appKit.close).toHaveBeenCalledTimes(2));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/still pending/);
+    lateClose.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const retried = retry.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await expect(retried).resolves.toBeDefined();
+  });
+
   it("awaits WalletConnect cleanup before clearing the connected chooser", async () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
@@ -287,5 +529,80 @@ describe("official AppKit chooser boundary", () => {
     expect(remoteDisconnect).toHaveBeenCalledOnce();
     expect(fixture.appKit.disconnect).toHaveBeenCalledWith("eip155");
     expect(remoteDisconnect.mock.invocationCallOrder[0]).toBeLessThan(fixture.appKit.disconnect.mock.invocationCallOrder[0]);
+  });
+
+  it("keeps the singleton cleanup barrier beyond the session cleanup UI timeout", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    fixture.setProviderType("WALLET_CONNECT");
+    const remote = deferred<void>();
+    const remoteDisconnect = vi.fn(() => remote.promise);
+    sdk.walletConnectProvider = { disconnect: remoteDisconnect };
+    const [{ createAppKitProvider }, { bounded }] = await Promise.all([loadProvider(), import("../lib/chain/wallet-connectors")]);
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await connecting;
+
+    const cleanup = chooser.disconnect();
+    await vi.waitFor(() => expect(remoteDisconnect).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    const uiCleanup = bounded(cleanup, 8_000).catch(error => error);
+    await vi.advanceTimersByTimeAsync(8_001);
+    expect((await uiCleanup as Error).message).toMatch(/timed out/);
+    const retry = await createAppKitProvider("a".repeat(32));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/still pending/);
+    const passiveCleanup = retry.disconnect();
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/still pending/);
+
+    remote.resolve();
+    await cleanup;
+    await passiveCleanup;
+    const retried = retry.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await expect(retried).resolves.toBeDefined();
+  });
+
+  it("requires reload when underlying singleton cleanup fails", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    fixture.setProviderType("WALLET_CONNECT");
+    sdk.walletConnectProvider = { disconnect: vi.fn(async () => { throw new Error("remote cleanup failed"); }) };
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await connecting;
+    await expect(chooser.disconnect()).rejects.toThrow(/Reload this page/);
+
+    const retry = await createAppKitProvider("a".repeat(32));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/Reload this page/);
+  });
+
+  it("keeps the singleton barrier while injected AppKit cleanup is pending", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const sdkCleanup = deferred<void>();
+    fixture.appKit.disconnect.mockImplementationOnce(() => sdkCleanup.promise);
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    const connecting = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await connecting;
+
+    const cleanup = chooser.disconnect();
+    await vi.waitFor(() => expect(fixture.appKit.disconnect).toHaveBeenCalledOnce());
+    const retry = await createAppKitProvider("a".repeat(32));
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/still pending/);
+    sdkCleanup.resolve();
+    await cleanup;
+    const retried = retry.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await expect(retried).resolves.toBeDefined();
   });
 });

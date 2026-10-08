@@ -1,6 +1,6 @@
 // Scoped compatibility adapter for AppKit 1.8.19's open shadow DOM.
-export function observeWalletConnectModal(modal: HTMLElement): () => void {
-  const observed = new Set<ShadowRoot | HTMLElement>();
+export function observeWalletConnectModal(source: Document | HTMLElement): () => void {
+  const observed = new Set<Document | ShadowRoot | HTMLElement>();
   const named = new WeakSet<Element>();
   const pendingDefinitions = new Set<string>();
   const keyboardControls = new Map<HTMLElement, (event: KeyboardEvent) => void>();
@@ -11,17 +11,19 @@ export function observeWalletConnectModal(modal: HTMLElement): () => void {
     if (control.getAttribute("aria-label") !== value) control.setAttribute("aria-label", value);
     named.add(control);
   }
-  function scan(root: ShadowRoot | HTMLElement) {
+  function observe(root: Document | ShadowRoot | HTMLElement) {
+    if (observed.has(root)) return;
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["icon", "name", "aria-label"] });
+    observed.add(root);
+  }
+  function scan(root: Document | ShadowRoot | HTMLElement) {
     if (disposed) return;
-    if (!observed.has(root)) {
-      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["icon", "name", "aria-label"] });
-      observed.add(root);
-    }
+    observe(root);
     if (root instanceof HTMLElement && root.shadowRoot) scan(root.shadowRoot);
     for (const element of root.querySelectorAll("*")) {
       if (["w3m-header", "wui-icon-button", "wui-certified-switch", "wui-toggle", "w3m-all-wallets-view"].includes(element.localName) && !customElements.get(element.localName) && !pendingDefinitions.has(element.localName)) {
         pendingDefinitions.add(element.localName);
-        void customElements.whenDefined(element.localName).then(() => { if (!disposed) scan(modal); });
+        void customElements.whenDefined(element.localName).then(() => { if (!disposed) scanSource(); });
       }
       if (element.matches('[data-testid="w3m-modal-card"][role="alertdialog"], [data-testid="w3m-modal-card"][role="dialog"]')) label(element, "WalletConnect");
       if (element.matches("w3m-header")) {
@@ -56,8 +58,18 @@ export function observeWalletConnectModal(modal: HTMLElement): () => void {
       if (element.shadowRoot) scan(element.shadowRoot);
     }
   }
-  const observer = new MutationObserver(() => scan(modal));
-  scan(modal);
+  function scanSource() {
+    if (source instanceof HTMLElement) {
+      scan(source);
+      return;
+    }
+    observe(source);
+    for (const modal of source.querySelectorAll("w3m-modal")) {
+      if (modal instanceof HTMLElement) scan(modal);
+    }
+  }
+  const observer = new MutationObserver(scanSource);
+  scanSource();
   return () => {
     disposed = true;
     observer.disconnect();
@@ -65,4 +77,18 @@ export function observeWalletConnectModal(modal: HTMLElement): () => void {
     for (const [control, listener] of keyboardControls) control.removeEventListener("keydown", listener);
     keyboardControls.clear();
   };
+}
+
+export function refreshWalletConnectConnectorLists(source: Document | HTMLElement): void {
+  const visit = (root: Document | ShadowRoot | HTMLElement) => {
+    if (root instanceof HTMLElement && root.shadowRoot) visit(root.shadowRoot);
+    for (const element of root.querySelectorAll("*")) {
+      if (element.localName === "w3m-connector-list" && "requestUpdate" in element && typeof element.requestUpdate === "function") {
+        element.requestUpdate();
+      }
+      if (element.shadowRoot) visit(element.shadowRoot);
+    }
+  };
+  if (source instanceof HTMLElement) visit(source);
+  else for (const modal of source.querySelectorAll("w3m-modal")) if (modal instanceof HTMLElement) visit(modal);
 }

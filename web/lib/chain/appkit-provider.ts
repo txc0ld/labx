@@ -2,7 +2,8 @@ import { AppKit, CoreHelperUtil, type CreateAppKit } from "@reown/appkit";
 import { PACKAGE_VERSION } from "@reown/appkit/constants";
 import { sepolia } from "@reown/appkit/networks";
 import { EthersAdapter } from "@reown/appkit-adapter-ethers";
-import { observeWalletConnectModal } from "./walletconnect-accessibility";
+import { ConnectorController } from "@reown/appkit-controllers";
+import { observeWalletConnectModal, refreshWalletConnectConnectorLists } from "./walletconnect-accessibility";
 import { bounded, type WalletChooser, WalletChooserBusyError, WalletChooserReloadError } from "./wallet-connectors";
 import type { WalletProvider } from "./types";
 
@@ -28,7 +29,7 @@ class LabxEthersAdapter extends EthersAdapter {
     let settleController = () => {};
     const attempt: Attempt = {
       cancelled: false,
-      pending: 0,
+      pending: 1,
       awaitingStart: false,
       completed: new Set(),
       controllerSettled: new Promise<void>(resolve => { settleController = resolve; }),
@@ -45,7 +46,7 @@ class LabxEthersAdapter extends EthersAdapter {
   cancelAttempt(attempt: Attempt, awaitingStart = false, error = new Error("Wallet connection cancelled.")) {
     if (this.attempt !== attempt || attempt.cancelled) return;
     attempt.cancelled = true;
-    attempt.awaitingStart = awaitingStart && attempt.pending === 0 && attempt.completed.size === 0;
+    attempt.awaitingStart = awaitingStart && attempt.pending === 1 && attempt.completed.size === 0;
     for (const listener of attempt.cancellationListeners) listener(error);
     void this.settleCancelled(attempt);
   }
@@ -56,6 +57,13 @@ class LabxEthersAdapter extends EthersAdapter {
     this.attempt = undefined;
     attempt.cancellationListeners.clear();
     attempt.settle();
+  }
+
+  finishChooser(attempt: Attempt) {
+    if (this.attempt !== attempt) return;
+    attempt.pending--;
+    if (attempt.cancelled) void this.settleCancelled(attempt);
+    else this.finishAttempt(attempt);
   }
 
   onCancel(attempt: Attempt, listener: (error: Error) => void) {
@@ -71,6 +79,17 @@ class LabxEthersAdapter extends EthersAdapter {
   waitForController(attempt: Attempt) {
     if (this.attempt !== attempt) throw new Error("Wallet connection attempt is no longer active.");
     return attempt.controllerSettled;
+  }
+
+  async trackOpening<T>(attempt: Attempt, operation: () => Promise<T>): Promise<T> {
+    if (this.attempt !== attempt) throw new Error("Wallet connection attempt is no longer active.");
+    attempt.pending++;
+    try {
+      return await operation();
+    } finally {
+      attempt.pending--;
+      if (attempt.cancelled) void this.settleCancelled(attempt);
+    }
   }
 
   async trackController<T>(operation: () => Promise<T>): Promise<T> {
@@ -108,7 +127,11 @@ class LabxEthersAdapter extends EthersAdapter {
     try {
       const result = await operation();
       if (attempt.cancelled) {
-        await this.disconnectCancelled(connectorId);
+        try { await this.disconnectCancelled(connectorId); }
+        catch {
+          cleanupFailed = true;
+          throw new WalletChooserReloadError();
+        }
         throw new Error("Wallet connection cancelled.");
       }
       attempt.completed.add(connectorId);
@@ -123,11 +146,13 @@ class LabxEthersAdapter extends EthersAdapter {
     if (this.attempt !== attempt || attempt.pending || attempt.awaitingStart) return;
     const connectors = [...attempt.completed];
     attempt.completed.clear();
-    await Promise.allSettled(connectors.map(connector => this.disconnectCancelled(connector)));
+    const cleanup = await Promise.allSettled(connectors.map(connector => this.disconnectCancelled(connector)));
+    if (cleanup.some(result => result.status === "rejected")) cleanupFailed = true;
     this.finishAttempt(attempt);
   }
 
   private async disconnectCancelled(connectorId: string) {
+    let failure: unknown;
     if (connectorId === "walletConnect") {
       const provider = this.getWalletConnectProvider() as {
         session?: { topic: string };
@@ -135,11 +160,13 @@ class LabxEthersAdapter extends EthersAdapter {
       } | undefined;
       const topic = provider?.session?.topic;
       if (topic) {
-        await provider.client.disconnect({ topic, reason: { code: 6000, message: "Connection cancelled" } });
-      }
+        try { await provider.client.disconnect({ topic, reason: { code: 6000, message: "Connection cancelled" } }); }
+        catch (error) { failure = error; }
+      } else failure = new Error("Cancelled WalletConnect session could not be identified.");
     }
     try { await super.disconnect({ id: connectorId }); }
-    catch {}
+    catch (error) { failure ??= error; }
+    if (failure) throw failure;
   }
 }
 
@@ -163,6 +190,9 @@ class LabxAppKit extends AppKit {
 
 let runtime: Promise<AppKitRuntime> | undefined;
 let pendingAttempt: Attempt | undefined;
+let cleanupLease: { owner: object; promise: Promise<void> } | undefined;
+let cleanupFailed = false;
+const providerBridges = new WeakMap<object, WalletProvider>();
 
 export async function createAppKitProvider(projectId: string): Promise<WalletChooser> {
   runtime ??= initialize(projectId).catch(() => { throw new WalletChooserReloadError(); });
@@ -207,29 +237,43 @@ async function initialize(projectId: string): Promise<AppKitRuntime> {
 }
 
 function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
+  const owner = {};
   let connected = false;
+  let ownedAttempt: Attempt | undefined;
+  let disconnecting: Promise<void> | undefined;
   return {
     async connect(signal) {
+      if (cleanupFailed) throw new WalletChooserReloadError();
+      if (cleanupLease) throw new WalletChooserBusyError();
       if (pendingAttempt) throw new WalletChooserBusyError();
       const attempt = adapter.beginAttempt();
+      ownedAttempt = attempt;
       pendingAttempt = attempt;
       let opened = false;
+      let observedProvider: WalletProvider | undefined;
       let stopAccessibility: (() => void) | undefined;
+      let unsubscribeConnectors = () => {};
       let settled = false;
       let resultCleanup = () => {};
       const result = new Promise<WalletProvider>((resolve, reject) => {
         const accept = async () => {
           if (settled || signal.aborted || attempt.cancelled) return;
-          const provider = appKit.getProvider<unknown>("eip155");
+          const rawProvider = appKit.getProvider<unknown>("eip155");
           const account = appKit.getAccount("eip155");
-          if (!account?.isConnected || !isWalletProvider(provider)) return;
+          if (!account?.isConnected || !isWalletProvider(rawProvider)) return;
+          if (observedProvider && observedProvider !== rawProvider) {
+            cancel(new Error("The selected wallet changed while connecting. Please retry."));
+            return;
+          }
+          observedProvider = rawProvider;
+          const provider = bridgeProvider(rawProvider);
           try {
             const [chain, accounts] = await Promise.all([
               provider.request({ method: "eth_chainId" }),
               provider.request({ method: "eth_accounts" })
             ]);
             if (settled || signal.aborted || attempt.cancelled) return;
-            if (appKit.getProvider("eip155") !== provider) {
+            if (appKit.getProvider("eip155") !== rawProvider) {
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }
@@ -238,7 +282,7 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
             }
             await adapter.waitForController(attempt);
             if (settled || signal.aborted || attempt.cancelled) return;
-            if (appKit.getProvider("eip155") !== provider) {
+            if (appKit.getProvider("eip155") !== rawProvider) {
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }
@@ -248,7 +292,7 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
               provider.request({ method: "eth_accounts" })
             ]);
             if (settled || signal.aborted || attempt.cancelled) return;
-            if (appKit.getProvider("eip155") !== provider || typeof currentChain !== "string" || Number(BigInt(currentChain)) !== 11155111 || !Array.isArray(currentAccounts) || typeof currentAccounts[0] !== "string" || currentAccounts[0].toLowerCase() !== currentAccount?.address?.toLowerCase()) {
+            if (appKit.getProvider("eip155") !== rawProvider || currentAccount?.address?.toLowerCase() !== account.address?.toLowerCase() || typeof currentChain !== "string" || Number(BigInt(currentChain)) !== 11155111 || !Array.isArray(currentAccounts) || typeof currentAccounts[0] !== "string" || currentAccounts[0].toLowerCase() !== currentAccount?.address?.toLowerCase()) {
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }
@@ -270,7 +314,7 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
         const unsubscribeAccount = appKit.subscribeAccount(() => { void accept(); }, "eip155");
         const unsubscribeState = appKit.subscribeState(state => {
           if (state.open) opened = true;
-          else if (opened && !connected && !adapter.hasCompletedConnection(attempt)) cancel();
+          else if (opened && !connected && !observedProvider && !adapter.hasCompletedConnection(attempt)) cancel();
         });
         const unsubscribeEvents = appKit.subscribeEvents(state => {
           const event = state.data?.event;
@@ -280,17 +324,32 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
         });
         const abort = () => cancel();
         signal.addEventListener("abort", abort, { once: true });
-        void appKit.open({ view: "Connect", namespace: "eip155" }).then(() => {
-          if (signal.aborted || attempt.cancelled) return;
-          const modal = typeof document === "undefined" ? null : document.querySelector("w3m-modal");
-          if (typeof HTMLElement !== "undefined" && modal instanceof HTMLElement) stopAccessibility = observeWalletConnectModal(modal);
-        }).catch(error => cancel(error instanceof Error ? error : new Error("Wallet chooser could not open.")));
+        if (typeof document !== "undefined") {
+          stopAccessibility = observeWalletConnectModal(document);
+          unsubscribeConnectors = ConnectorController.subscribeKey("connectors", () => {
+            if (!settled && !signal.aborted && !attempt.cancelled) refreshWalletConnectConnectorLists(document);
+          });
+        }
+        const opening = adapter.trackOpening(attempt, async () => {
+          await appKit.open({ view: "Connect", namespace: "eip155" });
+          if (signal.aborted || attempt.cancelled) {
+            try { await appKit.close(); }
+            catch {
+              cleanupFailed = true;
+              throw new WalletChooserReloadError();
+            }
+            return false;
+          }
+          return true;
+        });
+        void opening.catch(error => cancel(error instanceof Error ? error : new Error("Wallet chooser could not open.")));
         resultCleanup = () => {
           unsubscribeAccount();
           unsubscribeState();
           unsubscribeEvents();
           unsubscribeCancellation();
           signal.removeEventListener("abort", abort);
+          unsubscribeConnectors();
           stopAccessibility?.();
         };
       });
@@ -298,9 +357,13 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
         return await result;
       } finally {
         resultCleanup();
-        void appKit.close().catch(() => {});
         if (!connected) {
           adapter.cancelAttempt(attempt, Boolean(appKit.getState().connectingWallet));
+        }
+        try { await appKit.close(); }
+        catch { cleanupFailed = true; }
+        adapter.finishChooser(attempt);
+        if (!connected) {
           void attempt.settled.finally(() => {
             if (pendingAttempt === attempt) pendingAttempt = undefined;
           });
@@ -310,20 +373,95 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
       }
     },
     async disconnect() {
-      await appKit.close().catch(() => {});
-      if (connected) {
-        const walletConnect = appKit.getWalletProviderType() === "WALLET_CONNECT";
-        if (walletConnect) {
-          const provider = adapter.getWalletConnectProvider() as { disconnect?(): Promise<void> } | undefined;
-          await provider?.disconnect?.().catch(() => {});
+      if (disconnecting) return disconnecting;
+      if (cleanupLease && cleanupLease.owner !== owner) return cleanupLease.promise;
+      if (!connected && !ownedAttempt) return;
+      disconnecting = (async () => {
+        let failure: unknown;
+        try { await appKit.close(); }
+        catch (error) { failure = error; }
+        if (connected) {
+          const walletConnect = appKit.getWalletProviderType() === "WALLET_CONNECT";
+          if (walletConnect) {
+            const provider = adapter.getWalletConnectProvider() as { disconnect?(): Promise<void> } | undefined;
+            try { await provider?.disconnect?.(); }
+            catch (error) { failure ??= error; }
+          }
+          try { await appKit.disconnect("eip155"); }
+          catch (error) { failure ??= error; }
         }
-        await appKit.disconnect("eip155").catch(() => {});
-      }
-      connected = false;
+        if (ownedAttempt) await ownedAttempt.settled;
+        if (cleanupFailed) failure ??= new WalletChooserReloadError();
+        connected = false;
+        ownedAttempt = undefined;
+        if (failure) throw new WalletChooserReloadError();
+      })();
+      const lease = { owner, promise: disconnecting };
+      cleanupLease = lease;
+      void disconnecting.then(() => {
+        if (cleanupLease === lease) cleanupLease = undefined;
+      }, () => { cleanupFailed = true; });
+      return disconnecting;
     }
   };
 }
 
 function isWalletProvider(provider: unknown): provider is WalletProvider {
   return Boolean(provider && typeof provider === "object" && "request" in provider && typeof provider.request === "function");
+}
+
+function bridgeProvider(raw: WalletProvider): WalletProvider {
+  const key = raw as object;
+  const existing = providerBridges.get(key);
+  if (existing) return existing;
+  const listeners = new Map<string, Map<(...args: unknown[]) => void, (...args: unknown[]) => void>>();
+  const bridge: WalletProvider = {
+    async request(input) {
+      const result = await raw.request.call(raw, input);
+      return input.method === "eth_chainId" ? normalizedChainId(result) : result;
+    },
+    on(event, listener) {
+      const forwarded = event === "chainChanged"
+        ? (chain: unknown, ...rest: unknown[]) => {
+            let forwardedChain = chain;
+            try { forwardedChain = normalizedChainEvent(chain); }
+            catch {}
+            listener(forwardedChain, ...rest);
+          }
+        : listener;
+      const eventListeners = listeners.get(event) ?? new Map();
+      eventListeners.set(listener, forwarded);
+      listeners.set(event, eventListeners);
+      raw.on?.call(raw, event, forwarded);
+    },
+    removeListener(event, listener) {
+      const eventListeners = listeners.get(event);
+      const forwarded = eventListeners?.get(listener) ?? listener;
+      eventListeners?.delete(listener);
+      if (eventListeners?.size === 0) listeners.delete(event);
+      raw.removeListener?.call(raw, event, forwarded);
+    }
+  };
+  providerBridges.set(key, bridge);
+  return bridge;
+}
+
+function normalizedChainEvent(value: unknown): string {
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const numeric = BigInt(value);
+    if (numeric > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Wallet returned an invalid network.");
+    return `0x${numeric.toString(16)}`;
+  }
+  return normalizedChainId(value);
+}
+
+function normalizedChainId(value: unknown): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error("Wallet returned an invalid network.");
+    return `0x${value.toString(16)}`;
+  }
+  if (typeof value !== "string" || !/^0x[0-9a-f]+$/i.test(value)) throw new Error("Wallet returned an invalid network.");
+  const numeric = BigInt(value);
+  if (numeric > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Wallet returned an invalid network.");
+  return `0x${numeric.toString(16)}`;
 }
