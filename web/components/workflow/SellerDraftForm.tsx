@@ -9,7 +9,7 @@ import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
 import formStyles from "./SellerDraftForm.module.css";
 
-type PackDraft = { name: string; price: string; bonusEntries: string; maxSupply: string };
+type PackDraft = { id: string; name: string; price: string; bonusEntries: string; maxSupply: string };
 type FormDraft = { nft: string; tokenId: string; title: string; closing: string; publicSummary: string; privateCommitment: string; packs: PackDraft[] };
 type DraftState =
   | { kind: "editing" }
@@ -19,8 +19,8 @@ type DraftState =
   | { kind: "retained"; action: DraftInput }
   | { kind: "error"; message: string };
 
-const EMPTY_PACK: PackDraft = { name: "", price: "", bonusEntries: "", maxSupply: "" };
-const INITIAL: FormDraft = { nft: "", tokenId: "", title: "", closing: "", publicSummary: "", privateCommitment: "", packs: [{ ...EMPTY_PACK }] };
+const EMPTY_PACK = { name: "", price: "", bonusEntries: "", maxSupply: "" };
+const INITIAL: FormDraft = { nft: "", tokenId: "", title: "", closing: "", publicSummary: "", privateCommitment: "", packs: [{ id: "initial-pack", ...EMPTY_PACK }] };
 
 export type SaveCommitment = (input: { nft: Address; tokenId: string; publicSummary: string; privateCommitment: string }) => Promise<PublicReserve>;
 
@@ -63,7 +63,7 @@ function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
     closing: new Date(Number(snapshot.raffle.salesEnd) * 1000).toISOString().slice(0, 16),
     publicSummary: "",
     privateCommitment: "",
-    packs: snapshot.packs.map((pack) => ({ name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() }))
+    packs: snapshot.packs.map((pack, index) => ({ id: `existing-pack-${index + 1}`, name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() }))
   };
 }
 
@@ -78,28 +78,54 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const commitmentInFlight = useRef(false);
   const focusAfterRender = useRef<"edit" | "review" | null>(null);
+  const focusAddAfterPackChange = useRef(false);
   const editFocus = useRef<HTMLInputElement>(null);
+  const editStage = useRef<HTMLFieldSetElement>(null);
   const reviewFocus = useRef<HTMLHeadingElement>(null);
+  const addPackFocus = useRef<HTMLButtonElement>(null);
+  const nextPackId = useRef(form.packs.length);
   const keepCommitment = !!existing && !form.publicSummary.trim() && !form.privateCommitment.trim() && form.nft.toLowerCase() === existing.raffle.nft.toLowerCase() && form.tokenId === existing.raffle.tokenId.toString();
 
   useEffect(() => {
-    const target = focusAfterRender.current === "review" ? reviewFocus.current : focusAfterRender.current === "edit" ? editFocus.current : null;
+    const stage = focusAfterRender.current;
+    const target = stage === "review" ? reviewFocus.current : stage === "edit" ? editFocus.current : null;
     if (!target) return;
+    const scrollTarget = stage === "edit" ? editStage.current : target;
+    if (!scrollTarget) return;
     focusAfterRender.current = null;
     const frame = requestAnimationFrame(() => {
+      scrollTarget.scrollIntoView({ block: "start" });
       target.focus({ preventScroll: true });
-      target.scrollIntoView({ block: "start" });
     });
     return () => cancelAnimationFrame(frame);
   }, [state.kind]);
+
+  useEffect(() => {
+    if (!focusAddAfterPackChange.current) return;
+    focusAddAfterPackChange.current = false;
+    addPackFocus.current?.focus({ preventScroll: true });
+  }, [form.packs.length]);
 
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
     setForm((current) => ({ ...current, [key]: value }));
     setState({ kind: "editing" });
   }
 
-  function updatePack(index: number, key: keyof PackDraft, value: string) {
-    setForm((current) => ({ ...current, packs: current.packs.map((pack, packIndex) => packIndex === index ? { ...pack, [key]: value } : pack) }));
+  function updatePack(id: string, key: keyof Omit<PackDraft, "id">, value: string) {
+    setForm((current) => ({ ...current, packs: current.packs.map((pack) => pack.id === id ? { ...pack, [key]: value } : pack) }));
+    setState({ kind: "editing" });
+  }
+
+  function removePack(id: string) {
+    focusAddAfterPackChange.current = true;
+    setForm((current) => ({ ...current, packs: current.packs.filter((pack) => pack.id !== id) }));
+    setState({ kind: "editing" });
+  }
+
+  function addPack() {
+    nextPackId.current += 1;
+    const id = `added-pack-${nextPackId.current}`;
+    setForm((current) => ({ ...current, packs: [...current.packs, { id, ...EMPTY_PACK }] }));
     setState({ kind: "editing" });
   }
 
@@ -159,12 +185,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     <form className={`${formStyles.form} studio-form`} onSubmit={review}>
       <p className={`${formStyles.privacyNotice} notice warning`}>The private commitment is signed for durable storage. It is never included in the public draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
 
-      <fieldset className={formStyles.formSection}>
+      <fieldset className={formStyles.formSection} ref={editStage}>
         <legend><span>01</span> Raffle details</legend>
         <p className={formStyles.sectionHelp}>Name the public raffle and choose when membership sales close.</p>
         <div className={`${formStyles.fieldGrid} ${formStyles.detailsGrid}`}>
           <label htmlFor="draft-title">Raffle title<input ref={editFocus} id="draft-title" value={form.title} onChange={(event) => update("title", event.target.value)} required /></label>
-          <label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} aria-describedby="deadline-note" required /><small id="deadline-note">Enter the deadline as UTC, not local time.</small></label>
+          <div className={formStyles.describedField}><label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} aria-describedby="deadline-note" required /></label><small id="deadline-note">Enter the deadline as UTC, not local time.</small></div>
         </div>
       </fieldset>
 
@@ -182,15 +208,15 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         <p className={formStyles.sectionHelp}>The public note is visible with the raffle. The private value is stored for the later reveal.</p>
         <div className={`${formStyles.fieldGrid} ${formStyles.commitmentGrid}`}>
           <label htmlFor="draft-public">Public commitment note<textarea id="draft-public" rows={4} maxLength={2000} value={form.publicSummary} onChange={(event) => update("publicSummary", event.target.value)} placeholder={existing ? "Leave both commitment fields blank to retain the existing commitment" : "A public description with no private number"} disabled={existing?.raffle.escrowed} required={!existing} /></label>
-          <label htmlFor="draft-private">Private commitment<textarea id="draft-private" rows={4} maxLength={8000} value={form.privateCommitment} onChange={(event) => update("privateCommitment", event.target.value)} aria-describedby="private-note" disabled={existing?.raffle.escrowed} required={!existing} /><small id="private-note">Never enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable.</small></label>
+          <div className={formStyles.describedField}><label htmlFor="draft-private">Private commitment<textarea id="draft-private" rows={4} maxLength={8000} value={form.privateCommitment} onChange={(event) => update("privateCommitment", event.target.value)} aria-describedby="private-note" disabled={existing?.raffle.escrowed} required={!existing} /></label><small id="private-note">Never enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable.</small></div>
         </div>
       </fieldset>
 
       <fieldset className={`${formStyles.formSection} ${formStyles.packSection}`}>
         <legend><span>04</span> Membership packs</legend>
-        <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>Configure 1–8 options. Price is charged in USDC; bonus entries and supply must be whole numbers.</p><span>{form.packs.length} of 8 configured</span></div>
-        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={index}><legend>Membership {index + 1}</legend><div className={formStyles.packFields}><label>Name<input value={pack.name} onChange={(event) => updatePack(index, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(index, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(index, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(index, "maxSupply", event.target.value)} required /></label></div>{form.packs.length > 1 ? <button className={`${formStyles.removePack} text-link`} type="button" onClick={() => { setForm((current) => ({ ...current, packs: current.packs.filter((_, packIndex) => packIndex !== index) })); setState({ kind: "editing" }); }}>Remove membership {index + 1}</button> : null}</fieldset>)}</div>
-        <button className="btn btn-dark" type="button" disabled={form.packs.length >= 8} onClick={() => { setForm((current) => ({ ...current, packs: [...current.packs, { ...EMPTY_PACK }] })); setState({ kind: "editing" }); }}>Add membership</button>
+        <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>Configure 1–8 options. Price is charged in USDC; bonus entries and supply must be whole numbers.</p><span role="status" aria-live="polite" aria-atomic="true">{form.packs.length} of 8 configured</span></div>
+        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id}><legend>Membership {index + 1}</legend><div className={formStyles.packFields}><label>Name<input value={pack.name} onChange={(event) => updatePack(pack.id, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div>{form.packs.length > 1 ? <button className={`${formStyles.removePack} text-link`} type="button" onClick={() => removePack(pack.id)}>Remove membership {index + 1}</button> : null}</fieldset>)}</div>
+        <button ref={addPackFocus} className="btn btn-dark" type="button" disabled={form.packs.length >= 8} onClick={addPack}>Add membership</button>
       </fieldset>
 
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}

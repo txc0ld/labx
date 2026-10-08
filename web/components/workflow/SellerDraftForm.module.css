@@ -13,6 +13,7 @@
   min-width:0;
   margin:0;
   padding:clamp(1rem,2.5cqi,1.5rem);
+  scroll-margin-top:9rem;
   border:1px solid var(--line-dark);
   border-radius:18px;
   background:rgba(250,249,246,.74);
@@ -55,6 +56,7 @@
 }
 
 .fieldGrid label,.packFields label { align-content:start; min-width:0; }
+.describedField { display:grid; align-content:start; gap:.3rem; min-width:0; }
 
 .fieldGrid small,.packFields small {
   color:var(--charcoal);

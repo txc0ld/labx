@@ -192,12 +192,90 @@ run("rendered seller portal on isolated Anvil", () => {
       await fixture.page.getByRole("group", { name }).waitFor({ state: "visible" });
     }
 
-    await fixture.page.getByRole("button", { name: "Add membership", exact: true }).focus();
+    const addMembership = fixture.page.getByRole("button", { name: "Add membership", exact: true });
+    const packStatus = fixture.page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]').filter({ hasText: "configured" });
+    const firstPack = fixture.page.getByRole("group", { name: "Membership 1" });
+    await firstPack.getByLabel("Name", { exact: true }).fill("Keep first");
+    await firstPack.getByLabel("Price in USDC", { exact: true }).fill("10");
+    await firstPack.getByLabel("Bonus entries", { exact: true }).fill("1");
+    await firstPack.getByLabel("Supply", { exact: true }).fill("10");
+
+    await addMembership.focus();
     await fixture.page.keyboard.press("Enter");
-    await fixture.page.getByRole("group", { name: "Membership 2" }).waitFor({ state: "visible" });
+    let secondPack = fixture.page.getByRole("group", { name: "Membership 2" });
+    await secondPack.waitFor({ state: "visible" });
+    await secondPack.getByLabel("Name", { exact: true }).fill("Remove last");
+    await secondPack.getByLabel("Price in USDC", { exact: true }).fill("20");
+    await secondPack.getByLabel("Bonus entries", { exact: true }).fill("2");
+    await secondPack.getByLabel("Supply", { exact: true }).fill("20");
     await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
     await fixture.page.keyboard.press("Enter");
-    expect(await fixture.page.getByRole("group", { name: "Membership 2" }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
+    expect(await packStatus.textContent()).toBe("1 of 8 configured");
+    expect(await firstPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep first");
+
+    await fixture.page.keyboard.press("Enter");
+    secondPack = fixture.page.getByRole("group", { name: "Membership 2" });
+    await secondPack.waitFor({ state: "visible" });
+    await secondPack.getByLabel("Name", { exact: true }).fill("Remove middle");
+    await secondPack.getByLabel("Price in USDC", { exact: true }).fill("20");
+    await secondPack.getByLabel("Bonus entries", { exact: true }).fill("2");
+    await secondPack.getByLabel("Supply", { exact: true }).fill("20");
+    await addMembership.focus();
+    await fixture.page.keyboard.press("Enter");
+    const thirdPack = fixture.page.getByRole("group", { name: "Membership 3" });
+    await thirdPack.waitFor({ state: "visible" });
+    await thirdPack.getByLabel("Name", { exact: true }).fill("Keep last");
+    await thirdPack.getByLabel("Price in USDC", { exact: true }).fill("30");
+    await thirdPack.getByLabel("Bonus entries", { exact: true }).fill("3");
+    await thirdPack.getByLabel("Supply", { exact: true }).fill("30");
+    await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
+    await fixture.page.keyboard.press("Enter");
+    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
+    expect(await packStatus.textContent()).toBe("2 of 8 configured");
+    expect(await firstPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep first");
+    secondPack = fixture.page.getByRole("group", { name: "Membership 2" });
+    expect(await secondPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep last");
+    expect(await secondPack.getByLabel("Price in USDC", { exact: true }).inputValue()).toBe("30");
+    await secondPack.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
+    await fixture.page.keyboard.press("Enter");
+    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
+
+    for (let count = 2; count <= 8; count += 1) {
+      await addMembership.focus();
+      await fixture.page.keyboard.press("Enter");
+      expect(await packStatus.textContent()).toBe(`${count} of 8 configured`);
+    }
+    expect(await addMembership.isDisabled()).toBe(true);
+    await fixture.page.getByRole("button", { name: "Remove membership 8", exact: true }).focus();
+    await fixture.page.keyboard.press("Enter");
+    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
+    expect(await addMembership.isEnabled()).toBe(true);
+    expect(await packStatus.textContent()).toBe("7 of 8 configured");
+    for (let count = 7; count >= 2; count -= 1) {
+      await fixture.page.getByRole("button", { name: `Remove membership ${count}`, exact: true }).click();
+    }
+    expect(await packStatus.textContent()).toBe("1 of 8 configured");
+    expect(await firstPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep first");
+
+    async function computedAccessibility(selector: string) {
+      const session = await fixture.page.context().newCDPSession(fixture.page);
+      try {
+        const { root } = await session.send("DOM.getDocument");
+        const { nodeId } = await session.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+        const { node } = await session.send("DOM.describeNode", { nodeId });
+        const tree = await session.send("Accessibility.getPartialAXTree", { backendNodeId: node.backendNodeId, fetchRelatives: false });
+        const accessible = tree.nodes.find((candidate) => candidate.backendDOMNodeId === node.backendNodeId) ?? tree.nodes[0];
+        return { name: String(accessible?.name?.value ?? ""), description: String(accessible?.description?.value ?? "") };
+      } finally {
+        await session.detach();
+      }
+    }
+
+    expect(await fixture.page.getByLabel("Sales deadline in UTC", { exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByLabel("Private commitment", { exact: true }).count()).toBe(1);
+    expect(await computedAccessibility("#draft-close")).toEqual({ name: "Sales deadline in UTC", description: "Enter the deadline as UTC, not local time." });
+    expect(await computedAccessibility("#draft-private")).toEqual({ name: "Private commitment", description: "Never enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable." });
 
     const futureDeadline = Number((await chain.client.getBlock()).timestamp + 86_400n);
     await fixture.page.getByLabel("Raffle title").fill("Responsive seller draft");
@@ -221,18 +299,36 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-review-1440.png"), fullPage: false });
     await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
 
-    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-title");
-    const editPosition = await fixture.page.locator("#draft-title").evaluate(async (input) => {
-      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      const bounds = input.getBoundingClientRect();
-      const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
-      return {
-        belowHeader: bounds.top >= headerBottom,
-        inViewport: bounds.bottom <= window.innerHeight,
-        unobscured: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === input
-      };
-    });
-    expect(editPosition).toEqual({ belowHeader: true, inViewport: true, unobscured: true });
+    async function expectEditStageVisible(width: number) {
+      await fixture.page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-title");
+      const editPosition = await fixture.page.locator("#draft-title").evaluate(async (input) => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        const label = document.querySelector('label[for="draft-title"]');
+        if (!(label instanceof HTMLLabelElement)) return null;
+        const bounds = input.getBoundingClientRect();
+        const labelBounds = label.getBoundingClientRect();
+        const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+        const labelHit = document.elementFromPoint(labelBounds.x + Math.min(20, labelBounds.width / 2), (labelBounds.top + bounds.top) / 2);
+        return {
+          labelBelowHeader: labelBounds.top >= headerBottom,
+          labelInViewport: labelBounds.top >= 0 && labelBounds.top < window.innerHeight,
+          labelHit: labelHit === label || label.contains(labelHit),
+          inputBelowHeader: bounds.top >= headerBottom,
+          inputInViewport: bounds.bottom <= window.innerHeight,
+          inputHit: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === input
+        };
+      });
+      expect(editPosition).toEqual({ labelBelowHeader: true, labelInViewport: true, labelHit: true, inputBelowHeader: true, inputInViewport: true, inputHit: true });
+    }
+
+    await expectEditStageVisible(1440);
+    await fixture.page.setViewportSize({ width: 390, height: 844 });
+    await fixture.page.getByRole("button", { name: "Review raffle draft", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Review raffle draft", exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
+    await expectEditStageVisible(390);
+
     expect(await fixture.page.locator("form").filter({ has: fixture.page.getByLabel("Raffle title") }).locator("input, textarea").evaluateAll((controls) => controls.map((control) => control.id).filter(Boolean).slice(0, 6))).toEqual(["draft-title", "draft-close", "draft-nft", "draft-token", "draft-public", "draft-private"]);
     await fixture.page.keyboard.press("Tab");
     expect(await fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-close");
@@ -279,7 +375,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
-  }, 45_000);
+  }, 60_000);
 
   it("gates a direct seller route immediately after the wallet changes", async () => {
     await fixture.page.setViewportSize({ width: 390, height: 844 });
@@ -290,7 +386,7 @@ run("rendered seller portal on isolated Anvil", () => {
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.page.getByRole("heading", { name: "Seller portfolio 2" }).waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.getByRole("heading", { name: "Revenue and obligations" }).waitFor({ state: "visible" });
-    await fixture.page.screenshot({ path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/portal-independent/seller-detail-mobile.png"), fullPage: true });
+    await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-detail-mobile.png"), fullPage: true });
     await fixture.switchAccount(chain.stranger);
     await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet." }).waitFor({ state: "visible", timeout: 5_000 });
     expect(await fixture.page.getByText(/Opening policy|Approve NFT|Escrow NFT/).count()).toBe(0);
