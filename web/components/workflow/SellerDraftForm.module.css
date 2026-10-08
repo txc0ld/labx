@@ -63,7 +63,7 @@
   line-height:1.45;
 }
 
-.fieldGrid input,.fieldGrid textarea,.packFields input { min-width:0; }
+.fieldGrid input,.fieldGrid textarea,.packFields input { min-width:0; scroll-margin-top:8rem; }
 
 .sectionIntro {
   display:flex;

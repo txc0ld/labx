@@ -1,4 +1,5 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
@@ -18,9 +19,10 @@ run("rendered seller portal on isolated Anvil", () => {
   const longPackName = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
-  const evidenceDir = resolve(process.cwd(), "../../artifacts/unified-wallet-20261008/seller-layout/builder");
+  let evidenceDir: string;
 
   beforeAll(async () => {
+    evidenceDir = process.env.LABX_SELLER_EVIDENCE_DIR ? resolve(process.env.LABX_SELLER_EVIDENCE_DIR) : mkdtempSync(resolve(tmpdir(), "labx-seller-portal-"));
     mkdirSync(evidenceDir, { recursive: true });
     chain = await localChain();
     const block = await chain.client.getBlock();
@@ -175,6 +177,7 @@ run("rendered seller portal on isolated Anvil", () => {
 
   it("keeps the complete seller workspace and draft form aligned across supported widths", async () => {
     await fixture.page.setViewportSize({ width: 1440, height: 900 });
+    await fixture.page.emulateMedia({ reducedMotion: "reduce" });
     await connectSeller();
     await expect.poll(async () => fixture.page.getByText(/Complete at block/).isVisible(), { timeout: 15_000 }).toBe(true);
     expect(await fixture.page.getByRole("link", { name: /Manage raffle/ }).count()).toBe(26);
@@ -212,12 +215,24 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByRole("button", { name: "Sign and save commitment", exact: true }).waitFor({ state: "visible" });
     await expect.poll(async () => reviewHeading.evaluate((heading) => {
       const bounds = heading.getBoundingClientRect();
-      return document.activeElement === heading && bounds.top >= 0 && bounds.bottom <= window.innerHeight;
+      const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+      return document.activeElement === heading && bounds.top >= headerBottom && bounds.bottom <= window.innerHeight;
     })).toBe(true);
     await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-review-1440.png"), fullPage: false });
     await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
 
     await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-title");
+    const editPosition = await fixture.page.locator("#draft-title").evaluate(async (input) => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const bounds = input.getBoundingClientRect();
+      const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+      return {
+        belowHeader: bounds.top >= headerBottom,
+        inViewport: bounds.bottom <= window.innerHeight,
+        unobscured: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === input
+      };
+    });
+    expect(editPosition).toEqual({ belowHeader: true, inViewport: true, unobscured: true });
     expect(await fixture.page.locator("form").filter({ has: fixture.page.getByLabel("Raffle title") }).locator("input, textarea").evaluateAll((controls) => controls.map((control) => control.id).filter(Boolean).slice(0, 6))).toEqual(["draft-title", "draft-close", "draft-nft", "draft-token", "draft-public", "draft-private"]);
     await fixture.page.keyboard.press("Tab");
     expect(await fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-close");
