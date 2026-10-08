@@ -4,7 +4,7 @@ import { getAddress, isAddress, type Address } from "viem";
 import { safeArtworkUrl } from "./chain/metadata";
 import { MAX_RESPONSE_BYTES, boundedWalletNftText, isValidWalletNftCursor, nftTitle, normalizeTokenId, objectRecord, type WalletNft, type WalletNftPage } from "./wallet-nfts-shared";
 
-export { nftTitle, type WalletNft, type WalletNftPage } from "./wallet-nfts-shared";
+export { canApplyWalletNftSelection, nftTitle, shouldAutofillWalletNftTitle, type WalletNft, type WalletNftPage } from "./wallet-nfts-shared";
 
 function parseClientPage(value: unknown): WalletNftPage {
   const root = objectRecord(value);

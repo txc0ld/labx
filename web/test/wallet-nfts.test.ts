@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { nftTitle } from "../lib/wallet-nfts-shared";
+import { canApplyWalletNftSelection, nftTitle, shouldAutofillWalletNftTitle } from "../lib/wallet-nfts-shared";
 import { createWalletNftHandler, normalizeWalletNftPage } from "../lib/wallet-nfts-server";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
@@ -29,6 +29,21 @@ function page(overrides: Record<string, unknown> = {}) {
 }
 
 describe("wallet NFT inventory boundary", () => {
+  it("rejects a delayed ownership result after the existing NFT becomes immutable", () => {
+    const captured = { capturedSelectionGeneration: 4, capturedNftEditGeneration: 2 };
+    expect(canApplyWalletNftSelection({ ...captured, currentSelectionGeneration: 4, currentNftEditGeneration: 2, sameService: true, identityLocked: false })).toBe(true);
+    expect(canApplyWalletNftSelection({ ...captured, currentSelectionGeneration: 5, currentNftEditGeneration: 2, sameService: true, identityLocked: true })).toBe(false);
+    expect(canApplyWalletNftSelection({ ...captured, currentSelectionGeneration: 4, currentNftEditGeneration: 2, sameService: true, identityLocked: true })).toBe(false);
+  });
+
+  it("autofills only an unchanged blank or tracked automatic title", () => {
+    expect(shouldAutofillWalletNftTitle({ currentTitle: "", trackedAutomaticTitle: null, titleUnchanged: true })).toBe(true);
+    expect(shouldAutofillWalletNftTitle({ currentTitle: "First NFT", trackedAutomaticTitle: "First NFT", titleUnchanged: true })).toBe(true);
+    expect(shouldAutofillWalletNftTitle({ currentTitle: "Seller title", trackedAutomaticTitle: null, titleUnchanged: true })).toBe(false);
+    expect(shouldAutofillWalletNftTitle({ currentTitle: "", trackedAutomaticTitle: null, titleUnchanged: false })).toBe(false);
+    expect(shouldAutofillWalletNftTitle({ currentTitle: "Typed while checking", trackedAutomaticTitle: null, titleUnchanged: false })).toBe(false);
+  });
+
   it("uses the fixed Sepolia endpoint and request policy, then returns only normalized fields", async () => {
     const fetcher: typeof fetch = async (input, init) => {
       expect(String(input)).toBe(`https://eth-sepolia.g.alchemy.com/nft/v3/${API_KEY}/getNFTsForOwner?owner=${OWNER}&withMetadata=true&pageSize=24&tokenUriTimeoutInMs=0&pageKey=opaque+%2F%2B`);

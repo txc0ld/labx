@@ -38,3 +38,21 @@ export function normalizeTokenId(value: unknown): string | null {
 export function isValidWalletNftCursor(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_CURSOR_LENGTH && !CONTROL_CHARACTERS.test(value);
 }
+
+export function canApplyWalletNftSelection(input: {
+  capturedSelectionGeneration: number;
+  currentSelectionGeneration: number;
+  capturedNftEditGeneration: number;
+  currentNftEditGeneration: number;
+  sameService: boolean;
+  identityLocked: boolean;
+}): boolean {
+  return input.capturedSelectionGeneration === input.currentSelectionGeneration
+    && input.capturedNftEditGeneration === input.currentNftEditGeneration
+    && input.sameService
+    && !input.identityLocked;
+}
+
+export function shouldAutofillWalletNftTitle(input: { currentTitle: string; trackedAutomaticTitle: string | null; titleUnchanged: boolean }): boolean {
+  return input.titleUnchanged && (!input.currentTitle.trim() || input.trackedAutomaticTitle !== null && input.currentTitle === input.trackedAutomaticTitle);
+}

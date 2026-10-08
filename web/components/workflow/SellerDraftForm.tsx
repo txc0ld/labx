@@ -7,7 +7,7 @@ import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
 import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automatic-commitment";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
-import { fetchWalletNfts, nftTitle, type WalletNft } from "@/lib/wallet-nfts";
+import { canApplyWalletNftSelection, fetchWalletNfts, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
 import { useWalletSnapshot } from "./WalletGate";
@@ -94,8 +94,11 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const [pendingNft, setPendingNft] = useState<string | null>(null);
   const [selectedNft, setSelectedNft] = useState<WalletNft | null>(null);
   const walletSnapshot = useWalletSnapshot(wallet);
+  const identityLocked = existing?.raffle.escrowed === true;
   const formRef = useRef(form);
   const serviceRef = useRef(service);
+  const identityLockedRef = useRef(identityLocked);
+  identityLockedRef.current = identityLocked;
   const commitmentPreparation = useRef<CommitmentPreparation | null>(null);
   const commitmentInFlight = useRef(false);
   const focusAfterRender = useRef<"edit" | "review" | null>(null);
@@ -164,6 +167,16 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     };
     // Account, network and revision form one wallet epoch. Any change clears inventory and selection.
   }, [service, walletSnapshot.kind, walletSnapshot.kind === "connected" ? walletSnapshot.account : "", walletSnapshot.kind === "connected" ? walletSnapshot.chainId : 0, walletSnapshot.revision]);
+
+  useEffect(() => {
+    invalidateSelection();
+    if (identityLocked) {
+      invalidateInventory();
+      setPickerOpen(false);
+      setInventory({ kind: "idle" });
+      setSelectedNft(null);
+    }
+  }, [identityLocked, existing?.raffle.nft, existing?.raffle.tokenId]);
 
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
     if (key === "nft" || key === "tokenId") {
@@ -245,7 +258,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }
 
   function openPicker() {
-    if (existing?.raffle.escrowed) return;
+    if (identityLockedRef.current) return;
     setPickerOpen(true);
     setInventory({ kind: "idle" });
     void loadInventory();
@@ -259,7 +272,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }
 
   async function chooseNft(item: WalletNft) {
-    if (existing?.raffle.escrowed) return;
+    if (identityLockedRef.current) return;
     const snapshot = wallet.getSnapshot();
     if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId || snapshot.chainId !== 11155111) {
       setInventory({ kind: "error", items: inventory.kind === "idle" ? [] : inventory.items, message: "Reconnect the same Ethereum Sepolia wallet before selecting an NFT." });
@@ -276,11 +289,18 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       const ownerMismatch = ownership.owner.toLowerCase() !== snapshot.account.toLowerCase();
       if (ownerMismatch) throw new Error("owner-mismatch");
       await wallet.assertCurrent(snapshot);
-      if (version !== selectionGeneration.current || fieldVersion !== nftEditGeneration.current || serviceRef.current !== service || existing?.raffle.escrowed) return;
+      if (!canApplyWalletNftSelection({
+        capturedSelectionGeneration: version,
+        currentSelectionGeneration: selectionGeneration.current,
+        capturedNftEditGeneration: fieldVersion,
+        currentNftEditGeneration: nftEditGeneration.current,
+        sameService: serviceRef.current === service,
+        identityLocked: identityLockedRef.current
+      })) return;
       const generatedTitle = nftTitle(item);
       replaceForm((current) => {
         const titleUnchanged = titleVersion === titleEditGeneration.current;
-        const mayAutofill = titleUnchanged && (!current.title.trim() || autoTitle.current !== null && current.title === autoTitle.current);
+        const mayAutofill = shouldAutofillWalletNftTitle({ currentTitle: current.title, trackedAutomaticTitle: autoTitle.current, titleUnchanged });
         if (mayAutofill) autoTitle.current = generatedTitle;
         return { ...current, nft: item.contract, tokenId: item.tokenId, title: mayAutofill ? generatedTitle : current.title };
       });
@@ -385,7 +405,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
       <fieldset className={formStyles.formSection}>
         <legend><span>02</span> Prize NFT</legend>
-        <div className={formStyles.nftIntro}><p className={formStyles.sectionHelp}>Choose a supported ERC-721 from the connected Sepolia wallet, or identify the exact collection contract and token manually.</p>{!existing?.raffle.escrowed ? <button className="btn btn-dark" type="button" disabled={walletSnapshot.kind !== "connected" || walletSnapshot.chainId !== 11155111 || service.manifest.chainId !== 11155111} onClick={pickerOpen ? closePicker : openPicker}>{pickerOpen ? "Close wallet NFTs" : "Choose from wallet"}</button> : null}</div>
+        <div className={formStyles.nftIntro}><p className={formStyles.sectionHelp}>Choose a supported ERC-721 from the connected Sepolia wallet, or identify the exact collection contract and token manually.</p>{!identityLocked ? <button className="btn btn-dark" type="button" disabled={walletSnapshot.kind !== "connected" || walletSnapshot.chainId !== 11155111 || service.manifest.chainId !== 11155111} onClick={pickerOpen ? closePicker : openPicker}>{pickerOpen ? "Close wallet NFTs" : "Choose from wallet"}</button> : null}</div>
         {service.manifest.chainId !== 11155111 ? <p className={formStyles.inventoryNote}>Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.</p> : null}
         {pickerOpen ? <div className={formStyles.picker} aria-label="Wallet NFTs">
           <div className={formStyles.pickerHeading}><div><strong>Connected wallet NFTs</strong><span>These results show reported wallet holdings. Selection does not approve the NFT for LABx, prove provenance, or sign a transaction.</span></div><button className="text-link" type="button" onClick={() => { invalidateInventory(); setInventory({ kind: "idle" }); void loadInventory(); }}>Refresh</button></div>
