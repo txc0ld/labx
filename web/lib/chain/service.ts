@@ -50,7 +50,10 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const account = entry.session.account, key = account.toLowerCase();
     await wallet.assertCurrent(entry.session);
     const accountCode = await client.getCode({ address: account });
-    if (accountCode && accountCode !== "0x") throw new Error("Direct transactions from contract wallets are unsupported. Owner approval and revocation require the reviewed payload for external execution and its executed Ethereum transaction hash.");
+    if (accountCode && accountCode !== "0x") {
+      if (/^0xef0100[0-9a-f]{40}$/i.test(accountCode)) throw new Error("This wallet is in smart-account mode, which LABx does not support for direct transactions yet. In your wallet, switch this address back to a standard account on this network and confirm the change. Then retry this action.");
+      throw new Error("Direct transactions from contract wallets are unsupported. Owner approval and revocation require the reviewed payload for external execution and its executed Ethereum transaction hash.");
+    }
     if (entry.used) throw new Error("This review is invalid or already submitted. Review again.");
     if (submitting.has(key) || journal.read(account)) throw new Error(unresolved);
     submitting.add(key); entry.used = true;
