@@ -88,6 +88,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   onConfirmed?: () => void | Promise<void>;
 }) {
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
+  const [localDateFormatter, setLocalDateFormatter] = useState<Intl.DateTimeFormat | null>(null);
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [inventory, setInventory] = useState<InventoryState>({ kind: "idle" });
@@ -119,6 +120,18 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const nftEditGeneration = useRef(0);
   const titleEditGeneration = useRef(0);
   const autoTitle = useRef<string | null>(null);
+
+  useEffect(() => {
+    setLocalDateFormatter(new Intl.DateTimeFormat(undefined, {
+      day: "numeric", month: "short", year: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short"
+    }));
+  }, []);
+
+  const closingMilliseconds = Date.parse(`${form.closing}Z`);
+  const localDeadline = localDateFormatter && Number.isFinite(closingMilliseconds)
+    ? <time className={formStyles.localDeadline} dateTime={new Date(closingMilliseconds).toISOString()}>({localDateFormatter.format(closingMilliseconds)} your time)</time>
+    : null;
 
   function replaceForm(update: (current: FormDraft) => FormDraft) {
     const next = update(formRef.current);
@@ -388,7 +401,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     setState({ kind: "editing" });
   }
 
-  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2><p className="notice">The saved draw setup for this NFT will be retained. No additional storage signature is needed.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
+  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2><p className="notice">The saved draw setup for this NFT will be retained. No additional storage signature is needed.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC{localDeadline}</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
 
   if (state.kind === "review" || state.kind === "saving" || state.kind === "committed") {
     const { action } = state;
@@ -396,7 +409,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       <div className={`${formStyles.review} studio-review stack`}>
         <h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2>
         <p className="notice warning" role="status">Check these raffle details. The next step asks your wallet to sign a request that saves the draw setup securely. This signature does not submit a transaction. Opening later fixes the economics and deadline.{existing ? " A successful edit requires fresh LABx approval before the raffle can open." : ""}</p>
-        <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{formatDate(action.salesEnd)} UTC</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
+        <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{formatDate(action.salesEnd)} UTC{localDeadline}</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
         {state.kind === "committed" ? (
           <>
             <div className="notice ok stack" role="status"><strong>Draw setup saved</strong><span>The setup is saved securely. Create or update the draft transaction next. You can recover the setup with your wallet when it is time to reveal.</span></div>
@@ -429,7 +442,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         <p className={formStyles.sectionHelp}>Name the public raffle and choose when membership sales close.</p>
         <div className={`${formStyles.fieldGrid} ${formStyles.detailsGrid}`}>
           <label htmlFor="draft-title">Raffle title<input ref={editFocus} id="draft-title" value={form.title} onChange={(event) => update("title", event.target.value)} required /></label>
-          <div className={formStyles.describedField}><label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} aria-describedby="deadline-note" required /></label><small id="deadline-note">Enter the deadline as UTC, not local time.</small></div>
+          <div className={formStyles.describedField}><label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} aria-describedby="deadline-note" required /></label><small id="deadline-note">Enter the deadline as UTC, not local time.{localDeadline}</small></div>
         </div>
       </fieldset>
 

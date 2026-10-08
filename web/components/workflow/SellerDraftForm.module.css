@@ -133,6 +133,8 @@
   line-height:1.45;
 }
 
+.localDeadline { display:block; color:var(--charcoal); font-size:.72rem; font-weight:500; line-height:1.45; overflow-wrap:anywhere; }
+
 .fieldGrid input,.fieldGrid textarea,.packFields input { min-width:0; scroll-margin-top:8rem; }
 
 .sectionIntro {
