@@ -92,7 +92,7 @@ run("wallet NFT picker adversarial browser behavior", () => {
     baseUrl = `http://127.0.0.1:${port}`;
     ownsDistPath = true;
     server = spawn("npm", ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", String(port)], {
-      cwd: process.cwd(), detached: true, env: { ...process.env, NEXT_PUBLIC_SITE_URL: baseUrl, LABX_NEXT_DIST_DIR: ".next-wallet-nft-verification" }, stdio: ["ignore", "pipe", "pipe"]
+      cwd: process.cwd(), detached: true, env: { ...process.env, ALCHEMY_NFT_API_KEY: "", NEXT_PUBLIC_SITE_URL: baseUrl, LABX_NEXT_DIST_DIR: ".next-wallet-nft-verification" }, stdio: ["ignore", "pipe", "pipe"]
     });
     server.stdout?.on("data", chunk => output.push(String(chunk)));
     server.stderr?.on("data", chunk => output.push(String(chunk)));

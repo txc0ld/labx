@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { canApplyWalletNftSelection, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "../lib/wallet-nfts-shared";
+import { MAX_RESPONSE_BYTES, canApplyWalletNftSelection, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "../lib/wallet-nfts-shared";
 import { createWalletNftHandler, normalizeWalletNftPage } from "../lib/wallet-nfts-server";
 import { safeArtworkUrl } from "../lib/chain/metadata";
+import { fetchWalletNfts } from "../lib/wallet-nfts";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
 const CONTRACT = "0x2222222222222222222222222222222222222222";
@@ -118,6 +119,40 @@ describe("wallet NFT inventory boundary", () => {
     expect(normalized.items).toEqual([{ contract: CONTRACT, tokenId: "1", name: "Still listed", collection: "Collection", image: null }]);
     expect(safeArtworkUrl("ipfs://cid/../secret.png")).toBeNull();
     expect(safeArtworkUrl("ipfs://cid/./image.png")).toBeNull();
+  });
+
+  it("drops previews deterministically until the complete server envelope fits the client boundary", async () => {
+    const escapedText = "\\\"".repeat(80);
+    const cursor = "\\\"".repeat(1_024);
+    const image = `https://cdn.example/${"a".repeat(2_028)}`;
+    const ownedNfts = Array.from({ length: 24 }, (_, index) => ({
+      contract: { address: CONTRACT, name: escapedText },
+      tokenId: String(index + 1),
+      tokenType: "ERC721",
+      name: escapedText,
+      image: { cachedUrl: image }
+    }));
+    const handle = createWalletNftHandler({ apiKey: API_KEY, fetcher: async () => upstream({ ownedNfts, pageKey: cursor }) });
+    const serverResponse = await handle(request(`owner=${OWNER}`));
+    expect(serverResponse.status).toBe(200);
+    const body = await serverResponse.text();
+    expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(MAX_RESPONSE_BYTES);
+
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async () => new Response(body, { status: 200, headers: { "Content-Type": "application/json" } }));
+    try {
+      const clientPage = await fetchWalletNfts({ owner: OWNER, signal: new AbortController().signal });
+      expect(clientPage.items).toHaveLength(24);
+      expect(clientPage.nextCursor).toBe(cursor);
+      expect(clientPage.items[0]?.image).toBe(image);
+      expect(clientPage.items.at(-1)?.image).toBeNull();
+      const firstNull = clientPage.items.findIndex(item => item.image === null);
+      expect(firstNull).toBeGreaterThan(0);
+      expect(clientPage.items.slice(0, firstNull).every(item => item.image === image)).toBe(true);
+      expect(clientPage.items.slice(firstNull).every(item => item.image === null)).toBe(true);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
   });
 
   it.each([

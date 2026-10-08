@@ -10,7 +10,7 @@ The seller preparation boundary now maps wallet rejection and other save/sign fa
 
 Focused builder checks on the source candidate:
 
-- `npm test -- --run test/wallet-nfts.test.ts test/automatic-commitment.test.ts`: PASS, 27 tests.
+- `npm test -- --run test/wallet-nfts.test.ts test/automatic-commitment.test.ts`: PASS, 28 tests.
 - `npx tsc --noEmit --pretty false`: PASS.
 - `RUN_WALLET_NFT_VERIFICATION=1 npx vitest run test/wallet-nft-picker.verification.browser.test.ts`: PASS, 2 mounted browser tests at 320, 390, 768 and 1440 pixels.
 

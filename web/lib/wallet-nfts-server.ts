@@ -27,6 +27,10 @@ function previewUrl(item: Record<string, unknown>): string | null {
   return null;
 }
 
+function responseBytes(page: WalletNftPage): number {
+  return new TextEncoder().encode(JSON.stringify({ ok: true, ...page })).length;
+}
+
 export function normalizeWalletNftPage(value: unknown): WalletNftPage {
   const root = objectRecord(value);
   if (!root || !Array.isArray(root.ownedNfts) || root.ownedNfts.length > 100) throw new PublicFailure(502, "Wallet NFT inventory is temporarily unavailable.");
@@ -49,7 +53,14 @@ export function normalizeWalletNftPage(value: unknown): WalletNftPage {
     items.push({ contract: normalizedContract, tokenId, name: boundedWalletNftText(item.name ?? item.title, 160), collection: boundedWalletNftText(contract.name, 160), image: previewUrl(item) });
   }
   const page = { items, nextCursor, chainId: 11155111 } satisfies WalletNftPage;
-  if (new TextEncoder().encode(JSON.stringify(page)).length > MAX_RESPONSE_BYTES) throw new PublicFailure(502, "Wallet NFT inventory is temporarily unavailable.");
+  if (responseBytes(page) <= MAX_RESPONSE_BYTES) return page;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item.image) continue;
+    items[index] = { ...item, image: null };
+    if (responseBytes(page) <= MAX_RESPONSE_BYTES) return page;
+  }
+  if (responseBytes(page) > MAX_RESPONSE_BYTES) throw new PublicFailure(502, "Wallet NFT inventory is temporarily unavailable.");
   return page;
 }
 
