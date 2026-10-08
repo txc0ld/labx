@@ -66,15 +66,30 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
             <div className={styles.scanStatus} aria-live="polite"><span className={styles.statusDot} data-active={scanning} aria-hidden="true" />{scanning ? `Scanning all raffles${raffles.length ? ` · ${raffles.length} found` : ""}` : state.kind === "ready" ? `Complete at block ${state.block.number.toString()}` : "Scan incomplete"}</div>
           </div>
           {totals ? (
-            <dl className={styles.metrics}>
-              <Metric label="Earned net revenue" value={totals.earnedNetProceeds} note="Settled proceeds after seller commission" primary />
-              <Metric label="Already claimed" value={totals.paidProceeds} note="Settled proceeds paid to this seller" />
-              <Metric label="Ready to claim" value={totals.claimableProceeds} note="Settled seller proceeds still in escrow" />
-              <Metric label="Pending principal" value={totals.pendingPrincipal} note="Open or drawing; not earned revenue" />
-              <Metric label="Refund liability" value={totals.refundLiability} note="Outstanding principal only for cancelled raffles" />
-              <Metric label="Processing fees paid" value={totals.buyerFees} note="Historical buyer fees; never seller revenue or refund liability" />
-              <Metric label="Gross pack sales" value={totals.grossPrincipal} note="Includes sales later cancelled and refunded" />
-            </dl>
+            <div className={styles.metricClusters}>
+              <section className={styles.metricCluster} aria-labelledby="seller-proceeds-title">
+                <h3 id="seller-proceeds-title">Seller proceeds</h3>
+                <dl className={styles.metrics}>
+                  <Metric label="Earned net revenue" value={totals.earnedNetProceeds} note="Settled proceeds after seller commission" primary />
+                  <Metric label="Already claimed" value={totals.paidProceeds} note="Settled proceeds paid to this seller" />
+                  <Metric label="Ready to claim" value={totals.claimableProceeds} note="Settled seller proceeds still in escrow" />
+                </dl>
+              </section>
+              <section className={styles.metricCluster} aria-labelledby="seller-exposure-title">
+                <h3 id="seller-exposure-title">Pending &amp; refunds</h3>
+                <dl className={styles.metrics}>
+                  <Metric label="Pending principal" value={totals.pendingPrincipal} note="Open or drawing; not earned revenue" />
+                  <Metric label="Refund liability" value={totals.refundLiability} note="Outstanding principal only for cancelled raffles" />
+                </dl>
+              </section>
+              <section className={styles.metricCluster} aria-labelledby="seller-sales-context-title">
+                <h3 id="seller-sales-context-title">Sales history</h3>
+                <dl className={styles.metrics}>
+                  <Metric label="Gross pack sales" value={totals.grossPrincipal} note="Includes sales later cancelled and refunded" />
+                  <Metric label="Processing fees paid" value={totals.buyerFees} note="Historical buyer fees; never seller revenue or refund liability" />
+                </dl>
+              </section>
+            </div>
           ) : (
             <div className={styles.totalsPending} role={state.kind === "incomplete" ? "alert" : "status"}>
               <strong>{state.kind === "incomplete" ? "Portfolio totals are incomplete" : "Calculating complete portfolio totals"}</strong>
@@ -84,24 +99,22 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
           )}
         </section>
 
-        <div className={styles.contentGrid}>
-          <section className={styles.raffles} aria-labelledby="seller-raffles-title">
-            <div className={styles.sectionHeading}><div><p className="kicker">Your raffles</p><h2 id="seller-raffles-title">Manage the lifecycle</h2></div>{state.kind === "ready" ? <span>{state.raffles.length} total</span> : null}</div>
-            {scanning && raffles.length === 0 ? <RaffleSkeleton /> : null}
-            {state.kind === "ready" && state.raffles.length === 0 ? (
-              <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles for this wallet yet</strong><p>Create a draft below. Nothing is published until you review and sign the on-chain transaction.</p></div></div>
-            ) : null}
-            {raffles.length > 0 ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ol> : null}
-            {state.kind === "incomplete" && raffles.length > 0 ? <p className={`${styles.inlineWarning} notice warning`}>Showing discovered raffles only. Revenue totals remain hidden until the full scan succeeds.</p> : null}
-          </section>
+        <section className={styles.createPanel} aria-label="Create a raffle draft">
+          <details>
+            <summary><span><small>New raffle</small><strong>Prepare a draft</strong><em>Review the public terms, save the private commitment, then submit the draft transaction.</em></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
+            <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
+          </details>
+        </section>
 
-          <aside className={styles.createPanel}>
-            <details>
-              <summary><span><small>New raffle</small><strong>Prepare a draft</strong></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
-              <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
-            </details>
-          </aside>
-        </div>
+        <section className={styles.raffles} aria-labelledby="seller-raffles-title">
+          <div className={styles.sectionHeading}><div><p className="kicker">Your raffles</p><h2 id="seller-raffles-title">Manage the lifecycle</h2></div>{state.kind === "ready" ? <span>{state.raffles.length} total</span> : null}</div>
+          {scanning && raffles.length === 0 ? <RaffleSkeleton /> : null}
+          {state.kind === "ready" && state.raffles.length === 0 ? (
+            <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles for this wallet yet</strong><p>Prepare a draft above. Nothing is published until you review and sign the on-chain transaction.</p></div></div>
+          ) : null}
+          {raffles.length > 0 ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ol> : null}
+          {state.kind === "incomplete" && raffles.length > 0 ? <p className={`${styles.inlineWarning} notice warning`}>Showing discovered raffles only. Revenue totals remain hidden until the full scan succeeds.</p> : null}
+        </section>
       </div>
     </WalletGate>
   );

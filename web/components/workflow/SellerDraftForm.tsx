@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { isAddress, type Address } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
+import formStyles from "./SellerDraftForm.module.css";
 
 type PackDraft = { name: string; price: string; bonusEntries: string; maxSupply: string };
 type FormDraft = { nft: string; tokenId: string; title: string; closing: string; publicSummary: string; privateCommitment: string; packs: PackDraft[] };
@@ -76,7 +77,21 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const commitmentInFlight = useRef(false);
+  const focusAfterRender = useRef<"edit" | "review" | null>(null);
+  const editFocus = useRef<HTMLInputElement>(null);
+  const reviewFocus = useRef<HTMLHeadingElement>(null);
   const keepCommitment = !!existing && !form.publicSummary.trim() && !form.privateCommitment.trim() && form.nft.toLowerCase() === existing.raffle.nft.toLowerCase() && form.tokenId === existing.raffle.tokenId.toString();
+
+  useEffect(() => {
+    const target = focusAfterRender.current === "review" ? reviewFocus.current : focusAfterRender.current === "edit" ? editFocus.current : null;
+    if (!target) return;
+    focusAfterRender.current = null;
+    const frame = requestAnimationFrame(() => {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [state.kind]);
 
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -92,6 +107,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     event.preventDefault();
     try {
       const action = actionFromForm(form, keepCommitment);
+      focusAfterRender.current = "review";
       if (existing && keepCommitment) setState({ kind: "retained", action: { ...action, reserveNonce: existing.raffle.reserveNonce, reserveCommit: existing.raffle.reserveCommit } });
       else setState({ kind: "review", action });
     }
@@ -114,12 +130,18 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     }
   }
 
-  if (state.kind === "retained" && existing) return <div className="studio-review stack"><p className="notice">The existing commitment and recovery hash are retained. These edits do not require private storage access.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="text-link" type="button" onClick={() => setState({ kind: "editing" })}>Edit draft</button></div>;
+  function returnToEdit() {
+    focusAfterRender.current = "edit";
+    setState({ kind: "editing" });
+  }
+
+  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Review raffle draft</h2><p className="notice">The existing commitment and recovery hash are retained. These edits do not require private storage access.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
 
   if (state.kind === "review" || state.kind === "saving" || state.kind === "committed") {
     const { action } = state;
     return (
-      <div className="studio-review stack">
+      <div className={`${formStyles.review} studio-review stack`}>
+        <h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Review raffle draft</h2>
         <p className="notice warning" role="status">Review every public value before requesting a wallet signature. Opening later fixes the economics and deadline. Editing an existing draft always requires a fresh LABx approval.</p>
         <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{formatDate(action.salesEnd)} UTC</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
         {state.kind === "committed" ? (
@@ -128,22 +150,51 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
             <TransactionFlow service={service} wallet={wallet} action={existing ? { kind: "updateDraft", id: existing.id, draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } } : { kind: "createDraft", draft: { ...action, reserveNonce: state.reserve.nonce, reserveCommit: state.reserve.commit } }} label={existing ? "Update raffle draft" : "Create raffle draft"} formatUsdc={formatUsdc} onConfirmed={onConfirmed} />
           </>
         ) : <button className="btn" type="button" disabled={state.kind === "saving"} onClick={() => void commit(action)}>{state.kind === "saving" ? "Saving commitment…" : "Sign and save commitment"}</button>}
-        <button className="text-link" type="button" disabled={state.kind === "saving"} onClick={() => setState({ kind: "editing" })}>Edit draft</button>
+        <button className="btn btn-dark" type="button" disabled={state.kind === "saving"} onClick={returnToEdit}>Edit draft</button>
       </div>
     );
   }
 
   return (
-    <form className="studio-form stack" onSubmit={review}>
-      <p className="notice warning">The private commitment is signed for durable storage. It is never included in the public draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
-      <label htmlFor="draft-title">Raffle title<input id="draft-title" value={form.title} onChange={(event) => update("title", event.target.value)} required /></label>
-      <div className="form-pair"><label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} value={form.nft} disabled={existing?.raffle.escrowed} onChange={(event) => update("nft", event.target.value.trim())} required /></label><label htmlFor="draft-token">Token ID<input id="draft-token" inputMode="numeric" value={form.tokenId} disabled={existing?.raffle.escrowed} onChange={(event) => update("tokenId", event.target.value.trim())} required /></label></div>
-      <label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} required /></label>
-      <label htmlFor="draft-public">Public commitment note<textarea id="draft-public" rows={3} maxLength={2000} value={form.publicSummary} onChange={(event) => update("publicSummary", event.target.value)} placeholder={existing ? "Leave both commitment fields blank to retain the existing commitment" : "A public description with no private number"} disabled={existing?.raffle.escrowed} required={!existing} /></label>
-      <label htmlFor="draft-private">Private commitment<textarea id="draft-private" rows={3} maxLength={8000} value={form.privateCommitment} onChange={(event) => update("privateCommitment", event.target.value)} aria-describedby="private-note" disabled={existing?.raffle.escrowed} required={!existing} /></label><p className="muted" id="private-note">Do not enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable.</p>
-      <fieldset className="pack-builder stack"><legend>Membership packs</legend>{form.packs.map((pack, index) => <div className="pack-builder-row" key={index}><label>Name<input value={pack.name} onChange={(event) => updatePack(index, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(index, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(index, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(index, "maxSupply", event.target.value)} required /></label>{form.packs.length > 1 ? <button className="text-link" type="button" onClick={() => { setForm((current) => ({ ...current, packs: current.packs.filter((_, packIndex) => packIndex !== index) })); setState({ kind: "editing" }); }}>Remove</button> : null}</div>)}</fieldset>
-      <div className="btn-row"><button className="btn" type="submit">Review raffle draft</button><button className="btn btn-dark" type="button" disabled={form.packs.length >= 8} onClick={() => { setForm((current) => ({ ...current, packs: [...current.packs, { ...EMPTY_PACK }] })); setState({ kind: "editing" }); }}>Add membership</button></div>
-      {state.kind === "error" ? <p className="notice error" role="alert">{state.message}</p> : null}
+    <form className={`${formStyles.form} studio-form`} onSubmit={review}>
+      <p className={`${formStyles.privacyNotice} notice warning`}>The private commitment is signed for durable storage. It is never included in the public draft transaction.{existing ? " A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
+
+      <fieldset className={formStyles.formSection}>
+        <legend><span>01</span> Raffle details</legend>
+        <p className={formStyles.sectionHelp}>Name the public raffle and choose when membership sales close.</p>
+        <div className={`${formStyles.fieldGrid} ${formStyles.detailsGrid}`}>
+          <label htmlFor="draft-title">Raffle title<input ref={editFocus} id="draft-title" value={form.title} onChange={(event) => update("title", event.target.value)} required /></label>
+          <label htmlFor="draft-close">Sales deadline in UTC<input id="draft-close" type="datetime-local" value={form.closing} onChange={(event) => update("closing", event.target.value)} aria-describedby="deadline-note" required /><small id="deadline-note">Enter the deadline as UTC, not local time.</small></label>
+        </div>
+      </fieldset>
+
+      <fieldset className={formStyles.formSection}>
+        <legend><span>02</span> Prize NFT</legend>
+        <p className={formStyles.sectionHelp}>Identify the exact collection contract and token placed into this raffle.</p>
+        <div className={`${formStyles.fieldGrid} ${formStyles.nftGrid}`}>
+          <label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} autoCapitalize="none" autoCorrect="off" value={form.nft} disabled={existing?.raffle.escrowed} onChange={(event) => update("nft", event.target.value.trim())} required /></label>
+          <label htmlFor="draft-token">Token ID<input id="draft-token" inputMode="numeric" value={form.tokenId} disabled={existing?.raffle.escrowed} onChange={(event) => update("tokenId", event.target.value.trim())} required /></label>
+        </div>
+      </fieldset>
+
+      <fieldset className={formStyles.formSection}>
+        <legend><span>03</span> Draw commitment</legend>
+        <p className={formStyles.sectionHelp}>The public note is visible with the raffle. The private value is stored for the later reveal.</p>
+        <div className={`${formStyles.fieldGrid} ${formStyles.commitmentGrid}`}>
+          <label htmlFor="draft-public">Public commitment note<textarea id="draft-public" rows={4} maxLength={2000} value={form.publicSummary} onChange={(event) => update("publicSummary", event.target.value)} placeholder={existing ? "Leave both commitment fields blank to retain the existing commitment" : "A public description with no private number"} disabled={existing?.raffle.escrowed} required={!existing} /></label>
+          <label htmlFor="draft-private">Private commitment<textarea id="draft-private" rows={4} maxLength={8000} value={form.privateCommitment} onChange={(event) => update("privateCommitment", event.target.value)} aria-describedby="private-note" disabled={existing?.raffle.escrowed} required={!existing} /><small id="private-note">Never enter a wallet key, seed phrase or account password. An escrowed draft retains its existing commitment; titles, prices and deadlines remain editable.</small></label>
+        </div>
+      </fieldset>
+
+      <fieldset className={`${formStyles.formSection} ${formStyles.packSection}`}>
+        <legend><span>04</span> Membership packs</legend>
+        <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>Configure 1–8 options. Price is charged in USDC; bonus entries and supply must be whole numbers.</p><span>{form.packs.length} of 8 configured</span></div>
+        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={index}><legend>Membership {index + 1}</legend><div className={formStyles.packFields}><label>Name<input value={pack.name} onChange={(event) => updatePack(index, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(index, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(index, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(index, "maxSupply", event.target.value)} required /></label></div>{form.packs.length > 1 ? <button className={`${formStyles.removePack} text-link`} type="button" onClick={() => { setForm((current) => ({ ...current, packs: current.packs.filter((_, packIndex) => packIndex !== index) })); setState({ kind: "editing" }); }}>Remove membership {index + 1}</button> : null}</fieldset>)}</div>
+        <button className="btn btn-dark" type="button" disabled={form.packs.length >= 8} onClick={() => { setForm((current) => ({ ...current, packs: [...current.packs, { ...EMPTY_PACK }] })); setState({ kind: "editing" }); }}>Add membership</button>
+      </fieldset>
+
+      {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
+      <div className={formStyles.reviewAction}><div><strong>Ready to check the public draft?</strong><span>Review comes before commitment storage and the wallet transaction.</span></div><button className="btn" type="submit">Review raffle draft</button></div>
     </form>
   );
 }

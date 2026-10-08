@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
@@ -17,8 +18,10 @@ run("rendered seller portal on isolated Anvil", () => {
   const longPackName = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
+  const evidenceDir = resolve(process.cwd(), "../../artifacts/unified-wallet-20261008/seller-layout/builder");
 
   beforeAll(async () => {
+    mkdirSync(evidenceDir, { recursive: true });
     chain = await localChain();
     const block = await chain.client.getBlock();
     for (let offset = 0; offset < 26; offset += 1) {
@@ -170,7 +173,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await expect.poll(async () => fixture.page.locator(".transaction-review").count(), { timeout: 15_000 }).toBe(0);
   }
 
-  it("renders a complete multi-page portfolio without horizontal overflow on desktop and mobile", async () => {
+  it("keeps the complete seller workspace and draft form aligned across supported widths", async () => {
     await fixture.page.setViewportSize({ width: 1440, height: 900 });
     await connectSeller();
     await expect.poll(async () => fixture.page.getByText(/Complete at block/).isVisible(), { timeout: 15_000 }).toBe(true);
@@ -181,16 +184,78 @@ run("rendered seller portal on isolated Anvil", () => {
     await summary.focus();
     await fixture.page.keyboard.press("Enter");
     await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible" });
-    await fixture.page.screenshot({ path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/portal-independent/seller-desktop.png"), fullPage: true });
+
+    for (const name of ["Raffle details", "Prize NFT", "Draw commitment", "Membership packs", "Membership 1"]) {
+      await fixture.page.getByRole("group", { name }).waitFor({ state: "visible" });
+    }
+
+    await fixture.page.getByRole("button", { name: "Add membership", exact: true }).focus();
+    await fixture.page.keyboard.press("Enter");
+    await fixture.page.getByRole("group", { name: "Membership 2" }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
+    await fixture.page.keyboard.press("Enter");
+    expect(await fixture.page.getByRole("group", { name: "Membership 2" }).count()).toBe(0);
+
+    const futureDeadline = Number((await chain.client.getBlock()).timestamp + 86_400n);
+    await fixture.page.getByLabel("Raffle title").fill("Responsive seller draft");
+    await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
+    await fixture.page.getByLabel("Token ID").fill("999");
+    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(futureDeadline * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Public commitment note").fill("Public responsive layout review");
+    await fixture.page.getByLabel("Private commitment").fill("Private responsive layout review");
+    await fixture.page.getByLabel("Name", { exact: true }).fill("Standard membership");
+    await fixture.page.getByLabel("Price in USDC").fill("25");
+    await fixture.page.getByLabel("Bonus entries").fill("2");
+    await fixture.page.getByLabel("Supply").fill("100");
+    await fixture.page.getByRole("button", { name: "Review raffle draft", exact: true }).click();
+    const reviewHeading = fixture.page.getByRole("heading", { name: "Review raffle draft", exact: true });
+    await fixture.page.getByRole("button", { name: "Sign and save commitment", exact: true }).waitFor({ state: "visible" });
+    await expect.poll(async () => reviewHeading.evaluate((heading) => {
+      const bounds = heading.getBoundingClientRect();
+      return document.activeElement === heading && bounds.top >= 0 && bounds.bottom <= window.innerHeight;
+    })).toBe(true);
+    await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-review-1440.png"), fullPage: false });
+    await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
+
+    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-title");
+    expect(await fixture.page.locator("form").filter({ has: fixture.page.getByLabel("Raffle title") }).locator("input, textarea").evaluateAll((controls) => controls.map((control) => control.id).filter(Boolean).slice(0, 6))).toEqual(["draft-title", "draft-close", "draft-nft", "draft-token", "draft-public", "draft-private"]);
+    await fixture.page.keyboard.press("Tab");
+    expect(await fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-close");
+
+    const createPanel = fixture.page.locator("section[aria-label='Create a raffle draft']");
+    for (const width of [320, 390, 768, 1024, 1440, 1680]) {
+      await fixture.page.setViewportSize({ width, height: width < 700 ? 844 : 900 });
+      expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+      const clippedControls = await createPanel.locator("input:visible, textarea:visible, button:visible").evaluateAll((controls, panel) => {
+        const panelBounds = (panel as Element).getBoundingClientRect();
+        return controls.filter((control) => {
+          const bounds = control.getBoundingClientRect();
+          return bounds.left < panelBounds.left - 1 || bounds.right > panelBounds.right + 1 || bounds.left < -1 || bounds.right > document.documentElement.clientWidth + 1;
+        }).map((control) => (control as HTMLElement).outerHTML);
+      }, await createPanel.elementHandle());
+      expect(clippedControls).toEqual([]);
+      await createPanel.screenshot({ path: resolve(evidenceDir, `seller-create-${width}.png`) });
+      await fixture.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await createPanel.evaluate((panel) => {
+        const bounds = panel.getBoundingClientRect();
+        window.scrollTo({ top: window.scrollY + bounds.top - 120 });
+      });
+      await fixture.page.screenshot({ path: resolve(evidenceDir, `seller-create-${width}-viewport.png`), fullPage: false });
+    }
+
+    await fixture.page.setViewportSize({ width: 768, height: 900 });
+    await fixture.page.evaluate(() => { document.documentElement.style.zoom = "2"; });
+    expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await createPanel.screenshot({ path: resolve(evidenceDir, "seller-create-768-zoom-200.png") });
+    await fixture.page.evaluate(() => { document.documentElement.style.zoom = ""; });
 
     await fixture.page.emulateMedia({ reducedMotion: "reduce" });
     await fixture.page.setViewportSize({ width: 390, height: 844 });
-    await connectSeller();
     const overview = fixture.page.getByRole("heading", { name: "Revenue at a glance" }).locator("xpath=ancestor::section[1]");
-    const columns = await overview.locator("dl").evaluate((element: Element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
+    const columns = await overview.locator("dl").first().evaluate((element: Element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
     expect(columns).toBe(2);
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await fixture.page.screenshot({ path: resolve(process.cwd(), "../../artifacts/seller-portal-fees-20261007/portal-independent/seller-mobile.png"), fullPage: true });
+    await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-workspace-390.png"), fullPage: false });
 
     const longPackResponse = await fixture.page.goto(`${fixture.baseUrl}/piece/26`, { waitUntil: "domcontentloaded" });
     expect(longPackResponse?.status()).toBe(200);
