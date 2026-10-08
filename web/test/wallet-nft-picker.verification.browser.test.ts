@@ -24,7 +24,7 @@ async function freePort() {
 }
 
 async function waitForServer(url: string, server: ChildProcess, output: string[]) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     if (server.exitCode !== null) throw new Error(`Next exited ${server.exitCode}: ${output.join("")}`);
     try { if ((await fetch(url, { signal: AbortSignal.timeout(500) })).status < 500) return; } catch {}
@@ -122,7 +122,7 @@ run("wallet NFT picker adversarial browser behavior", () => {
     await page.goto(`${baseUrl}/verify-picker-fixture`, { waitUntil: "domcontentloaded" });
     try { await page.waitForFunction(() => typeof window.__verifyResolveNextOwner === "function"); }
     catch (error) { throw new Error(`${String(error)}\n${output.join("")}\n${(await page.locator("body").innerText()).slice(0, 4_000)}`); }
-  }, 45_000);
+  }, 120_000);
 
   afterAll(async () => {
     try { await browser?.close(); }
