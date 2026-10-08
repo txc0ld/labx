@@ -145,6 +145,9 @@ describe("hosted persistence configuration", () => {
   it.each([undefined, "file", "memory", "unknown"])("fails closed for hosted provider selection %s", (mode) => {
     vi.stubEnv("VERCEL", "1");
     vi.stubEnv("LABX_STORE", mode);
+    vi.stubEnv("DATABASE_URL", "postgresql://fixture:private@db.example/labx?sslmode=require");
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://redis.example");
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "test-token");
     expect(() => activeStore()).toThrow(/persistent storage/i);
   });
 

@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { neon } from "@neondatabase/serverless";
 import { createReserve } from "../lib/reserve";
 import { neonStore } from "../lib/store";
+
+vi.mock("@neondatabase/serverless", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@neondatabase/serverless")>();
+  return { ...actual, neon: vi.fn(actual.neon) };
+});
 
 const databaseUrl = "postgresql://fixture:private@db.example/labx?sslmode=require";
 const invalidAtomicEntries: Record<string, string>[] = [
@@ -37,6 +43,20 @@ afterEach(() => {
 });
 
 describe("Neon HTTP storage", () => {
+  it("sanitizes driver constructor failures", () => {
+    vi.mocked(neon).mockImplementationOnce(() => {
+      throw new Error(`Driver rejected ${databaseUrl}`);
+    });
+    let message = "constructor did not throw";
+    try {
+      neonStore(databaseUrl);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toBe("Neon storage is not configured.");
+    expect(message).not.toContain("private");
+  });
+
   it("round-trips exact text through bound get, set and atomic batch queries", async () => {
     const records = new Map<string, string>();
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {

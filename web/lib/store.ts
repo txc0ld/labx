@@ -143,7 +143,7 @@ function configuredNeonDatabaseUrl(): string {
 }
 
 export function neonStore(databaseUrl: string): Store {
-  const sql = neon(checkedDatabaseUrl(databaseUrl));
+  const sql = neonClient(databaseUrl);
   return {
     async get(key) {
       try {
@@ -197,6 +197,14 @@ RETURNING key`,
       }
     }
   };
+}
+
+function neonClient(databaseUrl: string): NeonQueryFunction<false, false> {
+  try {
+    return neon(checkedDatabaseUrl(databaseUrl));
+  } catch {
+    throw new Error("Neon storage is not configured.");
+  }
 }
 
 function checkedDatabaseUrl(databaseUrl: string): string {
