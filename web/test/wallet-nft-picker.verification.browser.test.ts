@@ -76,6 +76,10 @@ run("wallet NFT picker adversarial browser behavior", () => {
   let baseUrl = "";
   let firstPageCalls = 0;
   let releaseNextPage: (() => void) | undefined;
+  const resolveNextPage = () => {
+    const release: unknown = releaseNextPage;
+    if (typeof release === "function") release();
+  };
 
   beforeAll(async () => {
     if (existsSync(routePath)) throw new Error(`Verification route already exists: ${routePath}`);
@@ -148,10 +152,26 @@ run("wallet NFT picker adversarial browser behavior", () => {
     await expect.poll(() => releaseNextPage).toBeTypeOf("function");
     expect(await loadMore.getAttribute("aria-busy")).toBe("true");
     expect(await loadMore.evaluate(element => element === document.activeElement)).toBe(true);
-    releaseNextPage?.();
+    resolveNextPage();
     await form.getByRole("button", { name: /Select Moved NFT/ }).waitFor();
     expect(await form.getByRole("button", { name: "Load more wallet NFTs" }).count()).toBe(0);
     await expect.poll(() => page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Refresh");
+
+    firstPageCalls = 0;
+    releaseNextPage = undefined;
+    await form.getByRole("button", { name: "Refresh" }).click();
+    const secondLoadMore = form.getByRole("button", { name: "Load more wallet NFTs" });
+    await secondLoadMore.waitFor();
+    await secondLoadMore.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => releaseNextPage).toBeTypeOf("function");
+    const title = form.getByLabel("Raffle title");
+    await title.fill("Typed while wallet NFTs load");
+    resolveNextPage();
+    await expect.poll(() => form.getByRole("button", { name: "Load more wallet NFTs" }).count()).toBe(0);
+    expect(await title.evaluate(element => element === document.activeElement)).toBe(true);
+    expect(await title.inputValue()).toBe("Typed while wallet NFTs load");
+    await title.fill("");
 
     await form.getByRole("button", { name: /Select First NFT/ }).focus();
     await page.keyboard.press("Enter");

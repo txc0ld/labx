@@ -112,7 +112,6 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const addPackFocus = useRef<HTMLButtonElement>(null);
   const refreshFocus = useRef<HTMLButtonElement>(null);
   const loadMoreFocus = useRef<HTMLButtonElement>(null);
-  const restorePaginationFocus = useRef(false);
   const nextPackId = useRef(form.packs.length);
   const inventoryGeneration = useRef(0);
   const inventoryAbort = useRef<AbortController | null>(null);
@@ -158,12 +157,6 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     focusAddAfterPackChange.current = false;
     addPackFocus.current?.focus();
   }, [form.packs.length]);
-
-  useEffect(() => {
-    if (!restorePaginationFocus.current || inventory.kind === "loading") return;
-    restorePaginationFocus.current = false;
-    if (inventory.kind !== "ready" || inventory.nextCursor === null) refreshFocus.current?.focus();
-  }, [inventory]);
 
   useEffect(() => {
     serviceRef.current = service;
@@ -242,7 +235,6 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     const controller = new AbortController();
     inventoryAbort.current = controller;
     const append = cursor !== undefined;
-    restorePaginationFocus.current = append && loadMoreFocus.current === document.activeElement;
     const previous = append && (inventory.kind === "ready" || inventory.kind === "loading" || inventory.kind === "error") ? inventory.items : [];
     const priorRequested = append && (inventory.kind === "ready" || inventory.kind === "loading") ? inventory.requestedCursors : [];
     setSelectionError("");
@@ -262,9 +254,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
           : merged.items.length === 0 && page.nextCursor === null
             ? "No supported ERC-721 NFTs were found on this page. Manual entry remains available."
             : "Wallet inventory is point-in-time information. LABx approval still requires a separate human review.";
-      setInventory({ kind: "ready", items: merged.items, nextCursor: capped || repeated ? null : page.nextCursor, requestedCursors, message });
+      const nextCursor = capped || repeated ? null : page.nextCursor;
+      if (append && nextCursor === null && loadMoreFocus.current === document.activeElement) refreshFocus.current?.focus();
+      setInventory({ kind: "ready", items: merged.items, nextCursor, requestedCursors, message });
     } catch {
       if (controller.signal.aborted || version !== inventoryGeneration.current) return;
+      if (append && loadMoreFocus.current === document.activeElement) refreshFocus.current?.focus();
       setInventory({ kind: "error", items: previous, message: "Wallet NFT inventory is unavailable. Enter the NFT manually or try again." });
     } finally {
       if (version === inventoryGeneration.current) inventoryAbort.current = null;
