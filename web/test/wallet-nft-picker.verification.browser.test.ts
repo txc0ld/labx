@@ -71,6 +71,8 @@ run("wallet NFT picker adversarial browser behavior", () => {
   const tsconfigPath = resolve("tsconfig.json");
   let originalNextEnv = "";
   let originalTsconfig = "";
+  let ownsRoutePath = false;
+  let ownsDistPath = false;
   let baseUrl = "";
   let firstPageCalls = 0;
   let releaseNextPage: (() => void) | undefined;
@@ -80,9 +82,11 @@ run("wallet NFT picker adversarial browser behavior", () => {
     if (existsSync(distPath)) throw new Error(`Verification dist directory already exists: ${distPath}`);
     originalNextEnv = readFileSync(nextEnvPath, "utf8");
     originalTsconfig = readFileSync(tsconfigPath, "utf8");
+    ownsRoutePath = true;
     cpSync(fixturePath, routePath, { recursive: true });
     const port = await freePort();
     baseUrl = `http://127.0.0.1:${port}`;
+    ownsDistPath = true;
     server = spawn("npm", ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: process.cwd(), detached: true, env: { ...process.env, NEXT_PUBLIC_SITE_URL: baseUrl, LABX_NEXT_DIST_DIR: ".next-wallet-nft-verification" }, stdio: ["ignore", "pipe", "pipe"]
     });
@@ -121,8 +125,8 @@ run("wallet NFT picker adversarial browser behavior", () => {
     finally {
       try { await stopOwnedServer(server); }
       finally {
-        rmSync(routePath, { recursive: true, force: true });
-        rmSync(distPath, { recursive: true, force: true });
+        if (ownsRoutePath) rmSync(routePath, { recursive: true, force: true });
+        if (ownsDistPath) rmSync(distPath, { recursive: true, force: true });
         if (originalNextEnv) writeFileSync(nextEnvPath, originalNextEnv);
         if (originalTsconfig) writeFileSync(tsconfigPath, originalTsconfig);
       }
@@ -147,6 +151,7 @@ run("wallet NFT picker adversarial browser behavior", () => {
     releaseNextPage?.();
     await form.getByRole("button", { name: /Select Moved NFT/ }).waitFor();
     expect(await form.getByRole("button", { name: "Load more wallet NFTs" }).count()).toBe(0);
+    await expect.poll(() => page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Refresh");
 
     await form.getByRole("button", { name: /Select First NFT/ }).focus();
     await page.keyboard.press("Enter");

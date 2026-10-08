@@ -110,6 +110,9 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const editStage = useRef<HTMLFieldSetElement>(null);
   const reviewFocus = useRef<HTMLHeadingElement>(null);
   const addPackFocus = useRef<HTMLButtonElement>(null);
+  const refreshFocus = useRef<HTMLButtonElement>(null);
+  const loadMoreFocus = useRef<HTMLButtonElement>(null);
+  const restorePaginationFocus = useRef(false);
   const nextPackId = useRef(form.packs.length);
   const inventoryGeneration = useRef(0);
   const inventoryAbort = useRef<AbortController | null>(null);
@@ -155,6 +158,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     focusAddAfterPackChange.current = false;
     addPackFocus.current?.focus();
   }, [form.packs.length]);
+
+  useEffect(() => {
+    if (!restorePaginationFocus.current || inventory.kind === "loading") return;
+    restorePaginationFocus.current = false;
+    if (inventory.kind !== "ready" || inventory.nextCursor === null) refreshFocus.current?.focus();
+  }, [inventory]);
 
   useEffect(() => {
     serviceRef.current = service;
@@ -233,6 +242,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     const controller = new AbortController();
     inventoryAbort.current = controller;
     const append = cursor !== undefined;
+    restorePaginationFocus.current = append && loadMoreFocus.current === document.activeElement;
     const previous = append && (inventory.kind === "ready" || inventory.kind === "loading" || inventory.kind === "error") ? inventory.items : [];
     const priorRequested = append && (inventory.kind === "ready" || inventory.kind === "loading") ? inventory.requestedCursors : [];
     setSelectionError("");
@@ -433,7 +443,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         <div className={formStyles.nftIntro}><p className={formStyles.sectionHelp}>Choose a supported ERC-721 from the connected Sepolia wallet, or identify the exact collection contract and token manually.</p>{!identityLocked ? <button className="btn btn-dark" type="button" aria-controls={pickerId} aria-expanded={pickerOpen} disabled={walletSnapshot.kind !== "connected" || walletSnapshot.chainId !== 11155111 || service.manifest.chainId !== 11155111} onClick={pickerOpen ? closePicker : openPicker}>{pickerOpen ? "Close wallet NFTs" : "Choose from wallet"}</button> : null}</div>
         {service.manifest.chainId !== 11155111 ? <p className={formStyles.inventoryNote}>Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.</p> : null}
         {pickerOpen ? <div id={pickerId} className={formStyles.picker} role="region" aria-label="Wallet NFTs" aria-busy={inventoryBusy || pendingNft !== null}>
-          <div className={formStyles.pickerHeading}><div><strong>Connected wallet NFTs</strong><span>These results show reported wallet holdings. Selection does not approve the NFT for LABx, prove provenance, or sign a transaction.</span></div><button className="text-link" type="button" aria-disabled={inventoryBusy} aria-busy={inventoryBusy} onClick={() => { if (inventoryBusy) return; invalidateInventory(); setInventory({ kind: "idle" }); setSelectionError(""); void loadInventory(); }}>Refresh</button></div>
+          <div className={formStyles.pickerHeading}><div><strong>Connected wallet NFTs</strong><span>These results show reported wallet holdings. Selection does not approve the NFT for LABx, prove provenance, or sign a transaction.</span></div><button ref={refreshFocus} className={`btn btn-dark ${formStyles.refreshButton}`} type="button" aria-disabled={inventoryBusy} aria-busy={inventoryBusy} onClick={() => { if (inventoryBusy) return; invalidateInventory(); setInventory({ kind: "idle" }); setSelectionError(""); void loadInventory(); }}>Refresh</button></div>
           <p className={formStyles.inventoryNote} role="status" aria-live="polite" aria-atomic="true">{inventoryStatus}</p>
           {inventory.kind !== "idle" && inventory.items.length > 0 ? <ul className={formStyles.nftGallery}>{inventory.items.map((item) => {
             const key = `${item.contract.toLowerCase()}:${item.tokenId}`;
@@ -446,7 +456,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
           {inventory.kind === "error" ? <p className="notice warning" role="alert">{inventory.message}</p> : null}
           <p className={formStyles.inventoryNote} role="status" aria-live="polite" aria-atomic="true">{selectionStatus}</p>
           {selectionError ? <p className="notice warning" role="alert">{selectionError}</p> : null}
-          {loadMoreCursor !== null ? <button className="btn btn-dark" type="button" aria-disabled={inventoryBusy} aria-busy={inventoryBusy} onClick={() => { if (!inventoryBusy) void loadInventory(loadMoreCursor); }}>Load more wallet NFTs</button> : null}
+          {loadMoreCursor !== null ? <button ref={loadMoreFocus} className="btn btn-dark" type="button" aria-disabled={inventoryBusy} aria-busy={inventoryBusy} onClick={() => { if (!inventoryBusy) void loadInventory(loadMoreCursor); }}>Load more wallet NFTs</button> : null}
         </div> : null}
         <div className={`${formStyles.fieldGrid} ${formStyles.nftGrid}`}>
           <label htmlFor="draft-nft">NFT contract<input id="draft-nft" spellCheck={false} autoCapitalize="none" autoCorrect="off" value={form.nft} disabled={existing?.raffle.escrowed} onChange={(event) => update("nft", event.target.value.trim())} required /></label>
