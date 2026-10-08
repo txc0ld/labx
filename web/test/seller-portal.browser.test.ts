@@ -246,12 +246,26 @@ run("rendered seller portal on isolated Anvil", () => {
       await fixture.page.keyboard.press("Enter");
       expect(await packStatus.textContent()).toBe(`${count} of 8 configured`);
     }
-    expect(await addMembership.isDisabled()).toBe(true);
-    await fixture.page.getByRole("button", { name: "Remove membership 8", exact: true }).focus();
-    await fixture.page.keyboard.press("Enter");
-    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
-    expect(await addMembership.isEnabled()).toBe(true);
-    expect(await packStatus.textContent()).toBe("7 of 8 configured");
+    for (const width of [390, 1440]) {
+      await fixture.page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      expect(await addMembership.isDisabled()).toBe(true);
+      await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
+      await fixture.page.keyboard.press("Enter");
+      await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
+      expect(await addMembership.isEnabled()).toBe(true);
+      expect(await packStatus.textContent()).toBe("7 of 8 configured");
+      const focusPosition = await addMembership.evaluate(async (button) => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        const bounds = button.getBoundingClientRect();
+        const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+        return {
+          visible: bounds.top >= Math.max(0, headerBottom) && bounds.bottom <= window.innerHeight,
+          unobscured: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === button
+        };
+      });
+      expect(focusPosition).toEqual({ visible: true, unobscured: true });
+      if (width === 390) await fixture.page.keyboard.press("Enter");
+    }
     for (let count = 7; count >= 2; count -= 1) {
       await fixture.page.getByRole("button", { name: `Remove membership ${count}`, exact: true }).click();
     }

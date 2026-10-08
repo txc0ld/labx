@@ -103,7 +103,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   useEffect(() => {
     if (!focusAddAfterPackChange.current) return;
     focusAddAfterPackChange.current = false;
-    addPackFocus.current?.focus({ preventScroll: true });
+    addPackFocus.current?.focus();
   }, [form.packs.length]);
 
   function update<K extends keyof Omit<FormDraft, "packs">>(key: K, value: FormDraft[K]) {
