@@ -1,3 +1,5 @@
+import { getAddress } from "viem";
+import { consentKey, readWalletConsent, sameConsent, saveWalletConsent, type WalletConsent } from "./wallet-consent";
 import { AppKit, CoreHelperUtil, type CreateAppKit } from "@reown/appkit";
 import { PACKAGE_VERSION } from "@reown/appkit/constants";
 import { sepolia } from "@reown/appkit/networks";
@@ -347,19 +349,62 @@ class LabxAppKit extends AppKit {
 }
 
 let runtime: Promise<AppKitRuntime> | undefined;
+let runtimeScope: string | undefined;
 let pendingAttempt: Attempt | undefined;
 let cleanupLease: { owner: object; promise: Promise<void> } | undefined;
 let cleanupFailed = false;
 const providerBridges = new WeakMap<object, WalletProvider>();
 
-export async function createAppKitProvider(projectId: string): Promise<WalletChooser> {
-  runtime ??= initialize(projectId).catch(() => { throw new WalletChooserReloadError(); });
+export async function createAppKitProvider(projectId: string, scope?: string): Promise<WalletChooser> {
+  const key = scope ? consentKey(projectId, scope) : undefined;
+  if (runtime && runtimeScope !== key) throw new WalletChooserReloadError();
+  runtimeScope = key;
+  runtime ??= initialize(projectId, key).catch(() => { throw new WalletChooserReloadError(); });
   const current = await runtime;
-  return createChooser(current);
+  return createChooser(current, key);
 }
 
-async function initialize(projectId: string): Promise<AppKitRuntime> {
-  const adapter = new LabxEthersAdapter();
+function savedConsent(key: string | undefined) {
+  if (!key) return null;
+  try { return readWalletConsent(key); } catch { return null; }
+}
+
+export function hasAuthorizedRestoreSession(provider: unknown, consent: WalletConsent): boolean {
+  if (!provider || typeof provider !== "object" || !("session" in provider)) return false;
+  const session = provider.session;
+  if (!session || typeof session !== "object" || !("expiry" in session) || typeof session.expiry !== "number" || !Number.isSafeInteger(session.expiry) || session.expiry <= Date.now() / 1000 || !("namespaces" in session) || !session.namespaces || typeof session.namespaces !== "object" || !("eip155" in session.namespaces)) return false;
+  const namespace = session.namespaces.eip155;
+  if (!namespace || typeof namespace !== "object" || !("accounts" in namespace) || !Array.isArray(namespace.accounts) || !("methods" in namespace) || !Array.isArray(namespace.methods)) return false;
+  return namespace.accounts.some(account => typeof account === "string" && account.toLowerCase() === `eip155:${consent.chainId}:${consent.account.toLowerCase()}`)
+    && namespace.methods.includes("personal_sign") && namespace.methods.includes("eth_sendTransaction");
+}
+
+async function initialize(projectId: string, key?: string): Promise<AppKitRuntime> {
+  // Lexical capture is initialized before AppKit's constructor invokes virtual hooks.
+  class RestoringAdapter extends LabxEthersAdapter {
+    override async syncConnection(params: Parameters<EthersAdapter["syncConnection"]>[0]): ReturnType<EthersAdapter["syncConnection"]> {
+      const consent = savedConsent(key);
+      const connector = this.connectors.find(candidate => candidate.id === params.id);
+      const selectedProvider = connector?.provider;
+      if (!consent || consent.chainId !== 11155111 || consent.connectorId !== params.id || ConnectorController.getConnectorId("eip155") !== consent.connectorId || !connector || !selectedProvider || !isWalletProvider(selectedProvider)) throw new Error("No matching authorized wallet connection.");
+      const [accounts, chain] = await Promise.all([selectedProvider.request({ method: "eth_accounts" }), selectedProvider.request({ method: "eth_chainId" })]);
+      if (!sameConsent(savedConsent(key), consent) || this.connectors.find(candidate => candidate.id === consent.connectorId)?.provider !== selectedProvider || ConnectorController.getConnectorId("eip155") !== consent.connectorId || !Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== consent.account.toLowerCase() || Number(BigInt(normalizedChainId(chain))) !== consent.chainId) throw new Error("The saved wallet connection changed.");
+      if (typeof selectedProvider.on !== "function" || typeof selectedProvider.removeListener !== "function") throw new Error("The wallet cannot report account or network changes safely.");
+      this.listenProviderEvents(connector.id, selectedProvider as Parameters<typeof this.listenProviderEvents>[1]);
+      return { address: getAddress(accounts[0]), chainId: consent.chainId, provider: selectedProvider, type: connector.type, id: connector.id };
+    }
+    override async syncConnections() { /* Never select a fallback wallet during SDK initialization. */ }
+  }
+  const adapter = new RestoringAdapter();
+  class RestoringAppKit extends LabxAppKit {
+    override async syncExistingConnection() {
+      const consent = savedConsent(key);
+      if (!consent || consent.chainId !== 11155111 || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return;
+      if (consent.connectorId === "walletConnect" && !hasAuthorizedRestoreSession(adapter.getWalletConnectProvider(), consent)) return;
+      await super.syncExistingConnection();
+    }
+    override async syncAdapterConnections() { /* Restoration is limited to the previously selected connector. */ }
+  }
   const metadata = {
     name: "LABx",
     description: "LABx on Ethereum Sepolia",
@@ -375,7 +420,7 @@ async function initialize(projectId: string): Promise<AppKitRuntime> {
     enableInjected: true,
     enableEIP6963: true,
     enableCoinbase: false,
-    enableReconnect: false,
+    enableReconnect: true,
     enableNetworkSwitch: false,
     features: { analytics: false, email: false, socials: false, onramp: false, swaps: false },
     themeMode: "light",
@@ -386,7 +431,7 @@ async function initialize(projectId: string): Promise<AppKitRuntime> {
       rpcMap: { "eip155:11155111": "https://ethereum-sepolia-rpc.publicnode.com" }
     }
   };
-  const appKit = new LabxAppKit({
+  const appKit = new RestoringAppKit({
     ...options,
     sdkVersion: CoreHelperUtil.generateSdkVersion([adapter], "html", PACKAGE_VERSION)
   }, adapter);
@@ -394,12 +439,35 @@ async function initialize(projectId: string): Promise<AppKitRuntime> {
   return { appKit, adapter };
 }
 
-function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
+function createChooser({ appKit, adapter }: AppKitRuntime, key?: string): WalletChooser {
   const owner = {};
   let connected = false;
+  let connectedConnector: string | undefined;
+  let connectedProvider: unknown;
   let ownedAttempt: Attempt | undefined;
   let disconnecting: Promise<void> | undefined;
   return {
+    remember(snapshot) {
+      if (!key) return;
+      if (!connected || !connectedConnector || ConnectorController.getConnectorId("eip155") !== connectedConnector || appKit.getProvider("eip155") !== connectedProvider || appKit.getAccount("eip155")?.address?.toLowerCase() !== snapshot.account.toLowerCase() || snapshot.chainId !== 11155111) throw new Error("The selected wallet changed before it could be saved.");
+      saveWalletConsent(key, { connectorId: connectedConnector, account: snapshot.account, chainId: snapshot.chainId });
+    },
+    async restore(signal) {
+      const consent = savedConsent(key);
+      if (signal.aborted || !consent || cleanupFailed || cleanupLease || pendingAttempt || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return null;
+      const raw = appKit.getProvider<unknown>("eip155");
+      if (!isWalletProvider(raw)) return null;
+      if (consent.connectorId === "walletConnect" && (raw !== adapter.getWalletConnectProvider() || !hasAuthorizedRestoreSession(raw, consent))) return null;
+      const provider = bridgeProvider(raw);
+      for (let read = 0; read < 2; read++) {
+        const [chain, accounts] = await Promise.all([provider.request({ method: "eth_chainId" }), provider.request({ method: "eth_accounts" })]);
+        const account = appKit.getAccount("eip155");
+        if (signal.aborted || !sameConsent(savedConsent(key), consent) || ConnectorController.getConnectorId("eip155") !== consent.connectorId || appKit.getProvider("eip155") !== raw || !account?.isConnected || account.address?.toLowerCase() !== consent.account.toLowerCase() || typeof chain !== "string" || Number(BigInt(chain)) !== consent.chainId || !Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== consent.account.toLowerCase()) return null;
+        if (consent.connectorId === "walletConnect" && (raw !== adapter.getWalletConnectProvider() || !hasAuthorizedRestoreSession(raw, consent))) return null;
+      }
+      connected = true;
+      return provider;
+    },
     async connect(signal) {
       if (cleanupFailed) throw new WalletChooserReloadError();
       if (cleanupLease) throw new WalletChooserBusyError();
@@ -454,6 +522,8 @@ function createChooser({ appKit, adapter }: AppKitRuntime): WalletChooser {
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }
+            connectedConnector = key ? ConnectorController.getConnectorId("eip155") : undefined;
+            connectedProvider = rawProvider;
             settled = true;
             connected = true;
             adapter.finishAttempt(attempt);

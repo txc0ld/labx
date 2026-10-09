@@ -167,7 +167,7 @@ describe("official AppKit chooser boundary", () => {
       enableInjected: true,
       enableEIP6963: true,
       enableCoinbase: false,
-      enableReconnect: false,
+      enableReconnect: true,
       enableNetworkSwitch: false,
       features: { analytics: false, email: false, socials: false, onramp: false, swaps: false },
       universalProviderConfigOverride: {
