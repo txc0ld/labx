@@ -98,7 +98,7 @@ run("independent five-tier rendered journey", () => {
 
   it("creates the exact five tiers responsively and repairs expired legacy drafts without remapping them", async () => {
     await goto("/seller");
-    const draftSummary = fixture.page.locator("summary").filter({ hasText: "Prepare a draft" });
+    const draftSummary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
     await draftSummary.waitFor({ state: "visible", timeout: 15_000 });
     await draftSummary.click();
     await fixture.page.getByText("5 standard tiers", { exact: true }).waitFor({ state: "visible" });

@@ -181,11 +181,12 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.setViewportSize({ width: 1440, height: 900 });
     await fixture.page.emulateMedia({ reducedMotion: "reduce" });
     await connectSeller();
+    await fixture.page.getByText("Revenue and sales", { exact: true }).click();
     await expect.poll(async () => fixture.page.getByText(/Complete at block/).isVisible(), { timeout: 15_000 }).toBe(true);
     expect(await fixture.page.getByRole("link", { name: /Manage raffle/ }).count()).toBe(26);
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
-    const summary = fixture.page.locator("summary").filter({ hasText: "Prepare a draft" });
+    const summary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
     await summary.focus();
     await fixture.page.keyboard.press("Enter");
     await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible" });
@@ -289,7 +290,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.locator("summary").filter({ hasText: "Prepare a draft" }).click();
+    await fixture.page.locator("summary").filter({ hasText: "Create a raffle" }).click();
     const block = await chain.client.getBlock();
     await fixture.page.getByLabel("Raffle title").fill("Private preparation failure");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
@@ -327,7 +328,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(response?.status()).toBe(200);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.locator("summary").filter({ hasText: "Prepare a draft" }).click();
+    await fixture.page.locator("summary").filter({ hasText: "Create a raffle" }).click();
     const block = await chain.client.getBlock();
     await fixture.page.getByLabel("Raffle title").fill("Entropy failure");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
