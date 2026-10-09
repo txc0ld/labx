@@ -4,6 +4,7 @@ import { createPublicClient, http } from "viem";
 import { configuredBrowserService } from "../lib/chain/browser";
 import { createRaffleService } from "../lib/chain/service";
 import { createCommitment, readPrivateRecords, recoverCommitment, saveAgreement, sendPurchaseReceipt } from "../lib/chain/api";
+import { PreparationNotDispatchedError } from "../lib/chain/submission-errors";
 import { WalletSession } from "../lib/chain/wallet-session";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
 import type { Address } from "viem";
@@ -49,6 +50,18 @@ describe("private API wallet binding before context fetch", () => {
     release(new Response(JSON.stringify({ ok: true, context })));
     await assertion;
     expect(vi.mocked(control.provider.request).mock.calls.some(([request]) => request.method === "personal_sign")).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("classifies an expired signature before POST as proven non-dispatch", async () => {
+    const control = await fixture();
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(control.wallet, "signMessage").mockImplementation(async () => { vi.mocked(Date.now).mockReturnValue(now + 301_000); return "0xab"; });
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, context })));
+    vi.stubGlobal("fetch", fetcher);
+    const beforeRequest = vi.fn();
+    await expect(createCommitment(control.wallet, { nft: manifest.address, tokenId: "1", publicSummary: "Summary", privateCommitment: "Private" }, { assertIntent: () => {}, beforeRequest })).rejects.toBeInstanceOf(PreparationNotDispatchedError);
+    expect(beforeRequest).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it("allows unchanged-wallet records and preserves origin/terms/deployment validation", async () => {

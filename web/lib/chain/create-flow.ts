@@ -73,7 +73,8 @@ export async function retireUnsentCreate({ service, wallet, storage, key, expect
 }) {
   assertIntent();
   const raw = storage.getItem(key);
-  if (raw === null || JSON.stringify(readCreateRecord(storage, key)) !== JSON.stringify(expected)) throw new Error("The saved creation changed. Reload before editing.");
+  const saved = readCreateRecord(storage, key);
+  if (raw === null || saved === null || serializeCreateRecord(saved) !== serializeCreateRecord(expected)) throw new Error("The saved creation changed. Reload before editing.");
   if (expected.kind === "draft" && (expected.id !== null || expected.creationHash !== null || expected.pending !== null)) throw new Error("Recover the on-chain creation before editing.");
   if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before editing.");
   assertIntent();
@@ -85,14 +86,21 @@ export async function retireUnsentCreate({ service, wallet, storage, key, expect
   storage.removeItem(key);
   if (storage.getItem(key) !== null) throw new Error("The saved creation could not be retired.");
 }
+export function serializeCreateRecord(record: CreateRecord) {
+  if (record.kind === "preparing") return JSON.stringify({ kind: record.kind, data: record.data, requestIdentity: record.requestIdentity });
+  const p = record.pending, checkpoint = p?.checkpoint, f = record.lastFailure;
+  return JSON.stringify({ kind: record.kind, data: record.data, id: record.id, creationHash: record.creationHash,
+    pending: p ? { step: p.step, hash: p.hash, ...(checkpoint ? { checkpoint: { id: checkpoint.id, nonce: checkpoint.nonce, intentHash: checkpoint.intentHash, startedBlock: checkpoint.startedBlock } } : {}) } : null,
+    ...(f ? { lastFailure: { step: f.step, hash: f.hash, nonce: f.nonce, blockNumber: f.blockNumber } } : {}) });
+}
 export function writeCreateRecord(storage: Storage, key: string, record: CreateRecord) {
-  const raw = JSON.stringify(record);
+  const raw = serializeCreateRecord(record);
   storage.setItem(key, raw);
   if (storage.getItem(key) !== raw) throw new Error("Creation recovery could not be saved. No new wallet request is allowed.");
 }
 export function retireCompletedCreate(storage: Storage, key: string, expected: Extract<CreateRecord, { kind: "draft" }>, id: bigint) {
   const saved = readCreateRecord(storage, key);
-  if (saved?.kind !== "draft" || saved.id !== id.toString() || saved.pending !== null || JSON.stringify(saved) !== JSON.stringify(expected)) throw new Error("Creation recovery changed before completion.");
+  if (saved?.kind !== "draft" || saved.id !== id.toString() || saved.pending !== null || serializeCreateRecord(saved) !== serializeCreateRecord(expected)) throw new Error("Creation recovery changed before completion.");
   const raw = JSON.stringify({ id: id.toString(), creationHash: saved.creationHash });
   const historyKey = `${key}:completed:${id}`;
   storage.setItem(historyKey, raw);

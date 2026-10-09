@@ -617,6 +617,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
           }
           window.localStorage.removeItem(storageKey);
           setHashInput(confirmation.hash);
+          discoveryOperation.current = null;
           setState({ kind: "executed", confirmation });
           await onRecorded();
           return;
@@ -708,7 +709,9 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         try {
           if (!navigator.locks) throw new Error("Safe recovery requires secure Web Locks.");
           await navigator.locks.request(storageKey, () => {
-            if (window.localStorage.getItem(storageKey) !== serializeOwnerExecutionIntent(rejected)) return;
+            const raw = window.localStorage.getItem(storageKey);
+            if (raw === null) { retired = true; return; }
+            if (raw !== serializeOwnerExecutionIntent(rejected)) return;
             const exposure = window.localStorage.getItem(exposureKey);
             if (exposure !== null && canonicalIntent(exposure) === canonicalIntent(serializeOwnerExecutionIntent(rejected))) return;
             window.localStorage.removeItem(storageKey);
@@ -720,7 +723,9 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
           invalidateOperations();
           exported = null;
           setDiscoveryBusy(false);
-          setState({ kind: "error", message: "The wallet request was cancelled. Review and click Approve to try again." });
+          setState(current => current.kind === "executed" ? current : { kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Review and click Approve to try again." : "The Safe request was not sent. Check browser storage, then review and click Approve again." });
+        } else if (scopeCurrent()) {
+          setState(current => current.kind === "executed" ? current : handoffState(rejected, false, "The wallet request stopped. Saved recovery is still being watched; check Advanced recovery before another request."));
         }
       } else if (isCurrent(operation)) {
         if (exported) {

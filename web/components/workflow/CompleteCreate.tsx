@@ -47,6 +47,7 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
         const completed = readCreateRecord(localStorage, key);
         if (completed?.kind !== "draft") throw new Error("Creation recovery changed.");
         retireCompletedCreate(localStorage, key, completed, result.id);
+        setState({ kind: "idle" });
         await onConfirmed();
       });
     } catch (error) {

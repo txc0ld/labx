@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { keccak256 } from "viem";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
-import { encodeDraft, finishCreate, type CreateRecord } from "../lib/chain/create-flow";
+import { encodeDraft, finishCreate, recoverCreateTransaction, type CreateRecord } from "../lib/chain/create-flow";
 import type { DraftInput } from "../lib/chain/types";
+import { memoryPendingJournal, transactionIntent } from "../lib/chain/pending-journal";
+import { hash } from "../lib/chain/validation";
 import { createRaffleService } from "../lib/chain/service";
 import { STANDARD_MEMBERSHIP_TIERS } from "../lib/membership-tiers";
 
@@ -26,7 +28,7 @@ run("one-intent creation and capability-owned owner requests", () => {
       return tx;
     });
     const execute = (assertIntent = () => {}) => finishCreate({ service: c.service, wallet: wallet.session, draft, record, save: next => { record = next; }, assertIntent, onStep: () => {} });
-    return { wallet, draft, sent, execute, record: () => record };
+    return { wallet, draft, sent, execute, record: () => record, replaceRecord: (next: typeof record) => { record = next; } };
   }
   it("creates, approves the exact token and escrows once, then resumes without duplicate sends", async () => {
     const flow = await setup();
@@ -92,6 +94,53 @@ run("one-intent creation and capability-owned owner requests", () => {
     expect(flow.sent).toHaveLength(beforeRetry);
     expect((await flow.execute()).raffle.escrowed).toBe(true);
     expect(flow.sent.filter(sent => sent === step)).toHaveLength(2);
+  });
+  it("retires an exact reverted NFT approval and resumes only after another activation", async () => {
+    await c.write(c.nft, "setApprovalForAll", [c.operator, true], c.seller);
+    const flow = await setup();
+    const prepare = c.service.prepare;
+    let currentStep = "", reverted = false;
+    vi.spyOn(c.service, "prepare").mockImplementation(async input => { currentStep = input.action.kind; return prepare(input); });
+    const request = flow.wallet.session.requestTransaction.bind(flow.wallet.session);
+    vi.spyOn(flow.wallet.session, "requestTransaction").mockImplementation(async (session, tx, before, dispatched) => {
+      if (currentStep !== "approvePrize" || reverted) return request(session, tx, before, dispatched);
+      reverted = true;
+      await before?.();
+      await c.write(c.nft, "transferFrom", [c.seller, c.stranger, 1n]);
+      dispatched?.();
+      return hash(await c.rpc("eth_sendTransaction", [{ from: c.seller, to: tx.to, data: tx.data, value: "0x0", nonce: `0x${tx.nonce?.toString(16)}`, gas: "0x989680" }]));
+    });
+    await expect(flow.execute()).rejects.toThrow(/reverted or was cancelled/);
+    expect(flow.record().pending).toBeNull();
+    expect(flow.record().lastFailure?.step).toBe("approvePrize");
+    expect(flow.sent).toEqual(["createDraft", "approvePrize"]);
+    await c.write(c.nft, "transferFrom", [c.stranger, c.seller, 1n], c.stranger);
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(flow.sent).toEqual(["createDraft", "approvePrize", "approvePrize", "escrow"]);
+  });
+  it("adopts only the exact crash-gap journal and recovers a missing hash without another send", async () => {
+    const journal = memoryPendingJournal(); c.service = createRaffleService(c.client, c.manifest, journal);
+    const flow = await setup();
+    const block = await c.client.getBlock();
+    const data = encodeDraft(flow.draft);
+    const checkpoint = { id: "crash-gap", nonce: 0, startedBlock: block.number.toString(), intentHash: transactionIntent({ to: c.manifest.address, data, value: 0n }) };
+    journal.write(c.seller, { ...checkpoint, hash: null });
+    await expect(flow.execute()).rejects.toThrow(/Advanced recovery/);
+    expect(flow.record().pending?.checkpoint).toEqual(checkpoint);
+    expect(flow.sent).toEqual([]);
+    const txHash = hash(await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.manifest.address, data, gas: "0x989680" }]));
+    await c.client.waitForTransactionReceipt({ hash: txHash }); await c.mine();
+    await recoverCreateTransaction({ service: c.service, wallet: flow.wallet.session, record: flow.record(), save: flow.replaceRecord, assertIntent: () => {}, hash: txHash });
+    expect(flow.record().id).toBe("1"); expect(flow.record().pending).toBeNull(); expect(flow.sent).toEqual([]);
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(flow.sent).toEqual(["approvePrize", "escrow"]);
+  });
+  it("blocks unrelated crash-gap journals without adopting them", async () => {
+    const journal = memoryPendingJournal(); c.service = createRaffleService(c.client, c.manifest, journal);
+    const flow = await setup();
+    journal.write(c.seller, { id: "other", nonce: 0, startedBlock: "1", intentHash: keccak256("0x1234"), hash: null });
+    await expect(flow.execute()).rejects.toThrow(/unrelated wallet transaction/);
+    expect(flow.record().pending).toBeNull(); expect(flow.sent).toEqual([]);
   });
   it("cleans both creation and journal when its pre-dispatch checkpoint callback fails", async () => {
     const flow = await setup();

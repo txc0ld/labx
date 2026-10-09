@@ -190,4 +190,23 @@ run("explicit Advanced owner recovery", () => {
     expect(await page.getByRole("button", { name: "Approve", exact: true }).isEnabled()).toBe(true);
   }, 30_000);
 
+  it("keeps file-based revocation import instructions after download and reload", async () => {
+    const page = fixture.page;
+    await page.goto(`${fixture.baseUrl}/review/2`);
+    const prepare = page.getByRole("button", { name: "Prepare revocation", exact: true });
+    await prepare.waitFor(); await prepare.click();
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download revocation file", exact: true }).click();
+    expect((await download).suggestedFilename()).toMatch(/revoke/);
+    await page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor();
+    const instructions = page.getByText(/import the downloaded JSON file with Transaction Builder/);
+    expect(await instructions.isVisible()).toBe(true);
+    expect(await page.getByText(/Complete the signatures and execution in your connected Safe/).count()).toBe(0);
+    await page.reload();
+    await page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor();
+    expect(await instructions.isVisible()).toBe(true);
+    const again = page.waitForEvent("download");
+    await (await advanced()).click(); await again;
+  }, 30_000);
+
 });
