@@ -588,7 +588,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     try {
       const page = await service.discoverOwnerExecutions({ intent, cursor: discoveryCursor.current, timeoutMs: 10_000 });
       if (!isCurrent(operation)) return;
-      setDiscoveryOutcome({ kind: "range", fromBlock: page.scanned.fromBlock, toBlock: page.scanned.toBlock, head: page.head.number, caughtUp: page.caughtUp, reset: page.reset });
+      const rangeOutcome: DiscoveryState = { kind: "range", fromBlock: page.scanned.fromBlock, toBlock: page.scanned.toBlock, head: page.head.number, caughtUp: page.caughtUp, reset: page.reset };
       let pendingHash: Hex | null = null;
       let candidateError: string | null = null;
       for (const candidate of page.candidates) {
@@ -610,6 +610,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       }
       if (!isCurrent(operation)) return;
       if (pendingHash !== null) {
+        setDiscoveryOutcome(rangeOutcome);
         setHashInput(pendingHash);
         const confirmationOnly = isRevokeConfirmationRecovery(intent, review);
         setState(current => current.kind === "pending" && current.intent === intent && current.hash === pendingHash && current.confirmationOnly === confirmationOnly
@@ -621,6 +622,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         setDiscoveryOutcome({ kind: "error", message: `${candidateError} LABx will retry while this page is visible.` });
         return;
       }
+      setDiscoveryOutcome(rangeOutcome);
       discoveryCursor.current = page.cursor;
     } catch (error) {
       if (isCurrent(operation)) setDiscoveryOutcome({ kind: "error", message: error instanceof Error ? error.message : "Automatic execution discovery is unavailable. Retry when the RPC is available." });

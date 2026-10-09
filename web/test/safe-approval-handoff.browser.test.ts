@@ -38,6 +38,18 @@ run("Safe approval handoff", () => {
     ], chain.seller);
     await chain.write(chain.nft, "approve", [chain.raffle.address, 902n], chain.seller);
     await chain.write(chain.raffle, "escrow", [2n], chain.seller);
+    await chain.write(chain.nft, "mint", [chain.seller, 903n]);
+    await chain.write(chain.raffle, "createRaffle", [
+      chain.nft.address,
+      903n,
+      block.timestamp + 86_400n,
+      digest,
+      digest,
+      "Safe candidate confirmation polling",
+      [{ name: "Membership", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]
+    ], chain.seller);
+    await chain.write(chain.nft, "approve", [chain.raffle.address, 903n], chain.seller);
+    await chain.write(chain.raffle, "escrow", [3n], chain.seller);
     fixture = await browserChain(chain, chain.seller);
   }, 60_000);
 
@@ -178,5 +190,63 @@ run("Safe approval handoff", () => {
     expect(await originalStatus?.evaluate(node => node.isConnected)).toBe(true);
     expect(await flow.getByRole("alert").filter({ hasText: /poll unavailable/i }).count()).toBe(0);
     await fixture.page.unroute(`${chain.url}/`);
+  }, 45_000);
+
+  it("keeps one error status while repeated discovered-candidate confirmation fails", async () => {
+    const response = await fixture.page.goto(`${fixture.baseUrl}/review/3`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await fixture.switchAccount(chain.operator);
+    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
+    for (const checkbox of await fixture.page.getByRole("checkbox").all()) await checkbox.check();
+    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
+    const heading = fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true });
+    await heading.waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => heading.locator("../..").getAttribute("aria-busy"), { timeout: 10_000 }).toBe("false");
+
+    const review = await chain.service.readAdmission({ id: 3n });
+    if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
+    const receipt = await chain.write(chain.raffle, "approveRaffle", [3n, review.snapshot.admission.reviewHash]);
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
+    await fixture.page.getByText(/has not reached two canonical confirmations/i).waitFor({ state: "visible", timeout: 10_000 });
+
+    await chain.mine();
+    await chain.mine();
+    let receiptCalls = 0;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body = route.request().postDataJSON() as { id?: number; method?: string } | undefined;
+      if (body?.method !== "eth_getTransactionReceipt") return route.continue();
+      receiptCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32_000, message: "candidate receipt unavailable" } })
+      });
+    });
+
+    const flow = heading.locator("../..");
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect.poll(() => receiptCalls, { timeout: 10_000 }).toBeGreaterThan(0);
+    const politeError = flow.getByRole("status").filter({ hasText: /candidate receipt unavailable/i });
+    await politeError.waitFor({ state: "visible", timeout: 10_000 });
+    const firstPollCalls = receiptCalls;
+    const originalStatus = await politeError.elementHandle();
+    const originalText = await politeError.textContent();
+
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect.poll(() => receiptCalls, { timeout: 10_000 }).toBeGreaterThan(firstPollCalls);
+    await expect.poll(() => flow.getAttribute("aria-busy"), { timeout: 10_000 }).toBe("false");
+    expect(await originalStatus?.evaluate(node => node.isConnected)).toBe(true);
+    expect(await politeError.textContent()).toBe(originalText);
+    expect(await flow.getByRole("alert").filter({ hasText: /candidate receipt unavailable/i }).count()).toBe(0);
+
+    await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
+    expect(await fixture.page.getByRole("button", { name: "Check execution again", exact: true }).isEnabled()).toBe(true);
+    await fixture.page.unroute(`${chain.url}/`);
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
   }, 45_000);
 });
