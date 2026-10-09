@@ -121,7 +121,7 @@ run("independent one-click Safe approval", () => {
       const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
       if (await connect.isVisible().catch(() => false)) await connect.click();
       await fixture.page.getByRole("heading", { name: "Seller studio", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-      const draftSummary = fixture.page.locator("summary").filter({ hasText: "Prepare a draft" });
+      const draftSummary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
       await draftSummary.waitFor({ state: "visible", timeout: 15_000 });
       await draftSummary.click();
       await instrumentSellerProvider();
