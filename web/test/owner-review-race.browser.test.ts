@@ -46,15 +46,28 @@ run("owner review async lifetimes", () => {
   }
 
   async function prepareExport() {
-    await fixture.page.getByRole("button", { name: "Prepare exact approval", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  }
+
+  async function hideAutomaticDiscovery() {
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body = route.request().postDataJSON() as { id?: number; method?: string } | undefined;
+      if (body?.method === "eth_getLogs") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ jsonrpc: "2.0", id: body.id, result: [] }) });
+      } else await route.continue();
+    });
+  }
+
+  async function restoreAutomaticDiscovery() {
+    await fixture.page.unroute(`${chain.url}/`);
   }
 
   it("does not resurrect a discarded export when an older clipboard write completes", async () => {
     await openChecklist();
     await prepareExport();
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.evaluate(() => {
       let resolveCopy: (() => void) | undefined;
       Object.defineProperty(navigator, "clipboard", {
@@ -64,6 +77,7 @@ run("owner review async lifetimes", () => {
       (window as unknown as Window & { __resolveOwnerCopy(): void }).__resolveOwnerCopy = () => resolveCopy?.();
     });
 
+    await fixture.page.getByText("Manual call fields and technical details", { exact: true }).click();
     await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Discard exported review", exact: true }).click();
     await fixture.page.evaluate(() => (window as unknown as Window & { __resolveOwnerCopy(): void }).__resolveOwnerCopy());
@@ -71,7 +85,7 @@ run("owner review async lifetimes", () => {
     await fixture.page.getByRole("heading", { name: "Choose the current draft action", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
-    expect(await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).count()).toBe(0);
   }, 30_000);
 
   it("does not persist a delayed export after the wallet session changes", async () => {
@@ -101,7 +115,7 @@ run("owner review async lifetimes", () => {
       };
     });
 
-    await fixture.page.getByRole("button", { name: "Prepare exact approval", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
     await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __ownerHeldCalls: number }).__ownerHeldCalls), { timeout: 5_000 }).toBeGreaterThan(0);
     await fixture.page.evaluate(() => (window as unknown as Window & { __stopHoldingOwnerCalls(): void }).__stopHoldingOwnerCalls());
     await fixture.page.getByRole("link", { name: "Back to review queue", exact: true }).click();
@@ -122,6 +136,7 @@ run("owner review async lifetimes", () => {
     if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     const receipt = await chain.write(chain.raffle, "approveRaffle", [1n, review.snapshot.admission.reviewHash]);
     await chain.mine();
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
 
     const held: Route[] = [];
@@ -154,8 +169,9 @@ run("owner review async lifetimes", () => {
     const prepare = fixture.page.getByRole("button", { name: "Prepare revocation", exact: true });
     await prepare.waitFor({ state: "visible", timeout: 10_000 });
     await prepare.click();
-    await fixture.page.getByRole("button", { name: "Prepare exact revocation", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await hideAutomaticDiscovery();
 
     const review = await chain.service.readAdmission({ id: 1n });
     if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
@@ -167,10 +183,11 @@ run("owner review async lifetimes", () => {
 
     await fixture.page.getByRole("heading", { name: "Confirm the recorded revocation", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).count()).toBe(0);
-    expect(await fixture.page.getByRole("link", { name: /Open owner Safe/ }).count()).toBe(0);
+    expect(await fixture.page.getByRole("link", { name: /Open this exact Safe/ }).count()).toBe(0);
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.getByRole("button", { name: "Confirm recorded revocation", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await restoreAutomaticDiscovery();
     const stored = await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:")));
     expect(stored).toEqual([]);
   }, 30_000);

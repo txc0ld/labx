@@ -63,11 +63,12 @@ run("activation drift beside browser recovery", () => {
     await viewport(375);
     expect(await fixture.page.getByRole("button", { name: "Current draft approved", exact: true }).isDisabled()).toBe(true);
     await fixture.page.getByRole("button", { name: "Prepare revocation", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Prepare exact revocation", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor({ timeout: 15_000 });
     const review = await c.service.readAdmission({ id: 1n });
     if (!review.snapshot.admission.reviewHash) throw new Error("Missing revocation hash.");
     const receipt = await c.write(c.raffle, "revokeRaffleApproval", [1n, review.snapshot.admission.reviewHash]); await c.mine();
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ timeout: 15_000 });

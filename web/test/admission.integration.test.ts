@@ -224,12 +224,17 @@ run("admission review and external owner execution", () => {
     expect(await c.service.pending({ wallet })).toBeNull();
     const outer = await c.write(safe, "execute", [intent.to, intent.data], c.stranger); await c.mine();
     const tx = await c.client.getTransaction({ hash: outer.transactionHash }); expect(tx.from.toLowerCase()).toBe(c.stranger.toLowerCase()); expect(tx.to?.toLowerCase()).toBe(safe.address.toLowerCase());
+    const approvalDiscovery = await c.service.discoverOwnerExecutions({ intent, timeoutMs: 2000 });
+    expect(approvalDiscovery.candidates).toEqual([outer.transactionHash]);
     expect(await c.service.confirmOwnerExecution({ intent, hash: outer.transactionHash, timeoutMs: 2000 })).toMatchObject({ kind: "executed", state: "approved" });
     const revoke = await exported(id, safe.address, true);
     const wrongDigest = encodeFunctionData({ abi: raffleAbi, functionName: "revokeRaffleApproval", args: [id, zeroHash] });
     const failed = await c.write(safe, "execute", [c.raffle.address, wrongDigest], c.stranger); await c.mine();
     await expect(c.service.confirmOwnerExecution({ intent: revoke.intent, hash: failed.transactionHash, timeoutMs: 2000 })).rejects.toThrow(/no matching/);
     const revoked = await c.write(safe, "execute", [revoke.intent.to, revoke.intent.data], c.stranger); await c.mine();
+    const revocationDiscovery = await c.service.discoverOwnerExecutions({ intent: revoke.intent, timeoutMs: 2000 });
+    expect(revocationDiscovery.candidates).toEqual([revoked.transactionHash]);
+    expect(revocationDiscovery.candidates).not.toContain(failed.transactionHash);
     expect(await c.service.confirmOwnerExecution({ intent: revoke.intent, hash: revoked.transactionHash, timeoutMs: 2000 })).toMatchObject({ kind: "executed", state: "revoked" });
     const approval = await exported(id, safe.address);
     await c.write(safe, "execute", [approval.intent.to, approval.intent.data], c.stranger);

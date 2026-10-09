@@ -53,12 +53,25 @@ run("independent owner review race verification", () => {
   }
 
   async function prepareApproval() {
-    await fixture.page.getByRole("button", { name: "Prepare exact approval", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }
 
   async function ownerStorageKeys() {
     return fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:")));
+  }
+
+  async function hideAutomaticDiscovery() {
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body = route.request().postDataJSON() as { id?: number; method?: string } | undefined;
+      if (body?.method === "eth_getLogs") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ jsonrpc: "2.0", id: body.id, result: [] }) });
+      } else await route.continue();
+    });
+  }
+
+  async function restoreAutomaticDiscovery() {
+    await fixture.page.unroute(`${chain.url}/`);
   }
 
   it("retires a delayed prepare error after a same-account wallet revision and permits a fresh saved export", async () => {
@@ -92,7 +105,7 @@ run("independent owner review race verification", () => {
       };
     });
 
-    await fixture.page.getByRole("button", { name: "Prepare exact approval", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
     await expect.poll(() => fixture.page.evaluate(() =>
       (window as unknown as Window & { __ownerHeldCalls: number }).__ownerHeldCalls), { timeout: 5_000 }).toBeGreaterThan(0);
     await fixture.page.evaluate(async account => {
@@ -117,7 +130,7 @@ run("independent owner review race verification", () => {
     await prepareApproval();
     expect(await ownerStorageKeys()).toHaveLength(1);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await ownerStorageKeys()).toHaveLength(1);
   }, 30_000);
 
@@ -134,6 +147,7 @@ run("independent owner review race verification", () => {
       (window as unknown as Scope).__resolveIndependentOwnerCopy = () => resolveCopy?.();
     });
 
+    await fixture.page.getByText("Manual call fields and technical details", { exact: true }).click();
     await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Discard exported review", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
@@ -143,11 +157,12 @@ run("independent owner review race verification", () => {
       (window as unknown as Window & { __resolveIndependentOwnerCopy(): void }).__resolveIndependentOwnerCopy());
 
     await fixture.page.waitForTimeout(250);
+    await fixture.page.getByText("Manual call fields and technical details", { exact: true }).click();
     expect(await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).count()).toBe(1);
     expect(await fixture.page.getByRole("button", { name: "Payload copied", exact: true }).count()).toBe(0);
     expect(await ownerStorageKeys()).toHaveLength(1);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }, 30_000);
 
   it("retires a deferred confirmation resolved in the same task as a same-account wallet event", async () => {
@@ -157,6 +172,8 @@ run("independent owner review race verification", () => {
     if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     const receipt = await chain.write(chain.raffle, "approveRaffle", [4n, review.snapshot.admission.reviewHash]);
     await chain.mine();
+    await hideAutomaticDiscovery();
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.evaluate(() => {
       type HeldResponse = { response: Response; resolve(response: Response): void };
@@ -198,10 +215,11 @@ run("independent owner review race verification", () => {
       scope.__releaseOwnerResponses();
     }, chain.operator);
 
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.waitForTimeout(250);
     expect(await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).count()).toBe(0);
     expect(await ownerStorageKeys()).toHaveLength(1);
+    await restoreAutomaticDiscovery();
   }, 30_000);
 
   it("reloads an exactly advanced revocation as confirmation-only and confirms its receipt", async () => {
@@ -210,8 +228,9 @@ run("independent owner review race verification", () => {
     await chain.write(chain.raffle, "approveRaffle", [3n, approved.snapshot.admission.reviewHash]);
     await openReview(3n);
     await fixture.page.getByRole("button", { name: "Prepare revocation", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Prepare exact revocation", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await hideAutomaticDiscovery();
 
     const before = await chain.service.readAdmission({ id: 3n });
     if (before.snapshot.admission.reviewHash === null) throw new Error("Approved review hash missing.");
@@ -230,11 +249,12 @@ run("independent owner review race verification", () => {
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await fixture.page.getByRole("heading", { name: "Confirm the recorded revocation", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).count()).toBe(0);
-    expect(await fixture.page.getByRole("link", { name: /Open owner Safe/ }).count()).toBe(0);
+    expect(await fixture.page.getByRole("link", { name: /Open this exact Safe/ }).count()).toBe(0);
 
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.getByRole("button", { name: "Confirm recorded revocation", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await restoreAutomaticDiscovery();
     expect(await ownerStorageKeys()).toEqual([]);
   }, 30_000);
 
@@ -245,6 +265,7 @@ run("independent owner review race verification", () => {
     if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     const receipt = await chain.write(chain.raffle, "approveRaffle", [5n, review.snapshot.admission.reviewHash]);
     await chain.mine();
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
     const approvalHeading = fixture.page.getByRole("heading", { name: "Approval recorded", exact: true });

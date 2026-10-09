@@ -122,8 +122,11 @@ describe("owner admission UI", () => {
     expect(workspace).not.toContain("account.principal + account.fee");
     expect(review).toContain("serializeOwnerExecutionIntent(intent)");
     expect(review).toContain("parseOwnerExecutionIntent(raw, service.manifest, owner)");
-    expect(review).toContain("A Safe proposal hash is not an execution transaction hash");
+    expect(review).toContain("A Safe transaction proposal hash is not an executed Ethereum transaction hash");
     expect(review).toContain("has not reached two canonical confirmations");
+    expect(review).toContain("Download approval file");
+    expect(review).toContain("Connect the Safe to LABx");
+    expect(review).toContain("discoverOwnerExecutions");
     expect(review).not.toContain("matching event has not been finalized");
   });
 });

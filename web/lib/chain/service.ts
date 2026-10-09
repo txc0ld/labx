@@ -4,6 +4,7 @@ import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
 import { ownerExecutionConfirmer } from "./owner-execution";
+import { ownerExecutionDiscoverer } from "./owner-execution-discovery";
 import { isWalletRequestRejected } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { hash, sameAddress } from "./validation";
@@ -254,5 +255,6 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
+  return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution,
+    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

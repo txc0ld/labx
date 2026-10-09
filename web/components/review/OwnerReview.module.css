@@ -33,7 +33,8 @@
 .card,
 .panel,
 .identity,
-.flow {
+.flow,
+.connectionHelp {
   border: 1px solid var(--line-dark);
   border-radius: 22px;
   background-color: rgba(252, 251, 248, .96);
@@ -118,7 +119,8 @@
 
 .panel,
 .identity,
-.flow {
+.flow,
+.connectionHelp {
   display: grid;
   gap: 1rem;
   padding: clamp(1rem, 3vw, 1.5rem);
@@ -205,6 +207,35 @@
   border-color: var(--ink);
 }
 
+.connectionHelp {
+  max-width: 58rem;
+  margin-inline: auto;
+  border-color: var(--ink);
+}
+
+.connectionHelp a,
+.flow summary {
+  text-decoration: underline;
+  text-underline-offset: .2em;
+}
+
+.executionSummary {
+  border: 1px solid var(--line-dark);
+  border-radius: 14px;
+  padding: 0 .85rem;
+  background: #fff;
+}
+
+.flow details {
+  display: grid;
+  gap: .8rem;
+  min-width: 0;
+}
+
+.flow details[open] summary {
+  margin-bottom: .8rem;
+}
+
 .payload {
   overflow-x: auto;
   margin: 0;
@@ -237,6 +268,14 @@
   color: var(--charcoal);
   font-size: .8rem;
   line-height: 1.5;
+}
+
+.stepList li {
+  min-width: 0;
+}
+
+.stepList :global(.btn) {
+  margin: .2rem .35rem .35rem 0;
 }
 
 .empty {
@@ -288,7 +327,8 @@
   .card,
   .panel,
   .identity,
-  .flow {
+  .flow,
+  .connectionHelp {
     border-radius: 17px;
   }
 

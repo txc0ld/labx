@@ -5,6 +5,7 @@ import type {
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
+import type { OwnerExecutionDiscoveryCursor, OwnerExecutionDiscoveryPage } from "./owner-execution-discovery";
 
 import type { ConnectionOption, ConnectionStatus, WalletConnectOptions } from "./wallet-connectors";
 
@@ -34,6 +35,7 @@ export interface RaffleService {
   listOwnerQueue(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   readAdmission(input: { id: bigint; block?: BlockRef }): Promise<AdmissionReview>;
   exportOwnerExecution(input: { prepared: PreparedAction; wallet: WalletSessionPort }): Promise<OwnerExecutionIntent>;
+  discoverOwnerExecutions(input: { intent: OwnerExecutionIntent; cursor?: OwnerExecutionDiscoveryCursor; timeoutMs?: number }): Promise<OwnerExecutionDiscoveryPage>;
   confirmOwnerExecution(input: { intent: OwnerExecutionIntent; hash: Hex; timeoutMs?: number }): Promise<OwnerExecutionConfirmation>;
   readRaffle(input: { id: bigint; block?: BlockRef }): Promise<RaffleSnapshot>;
   readArtwork(input: { id: bigint; block?: BlockRef }): Promise<ArtworkMetadata>;

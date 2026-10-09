@@ -136,12 +136,13 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
-    await fixture.page.getByRole("button", { name: "Prepare exact approval", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Execute the reviewed call in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const review = await chain.service.readAdmission({ id });
     if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     const receipt = await chain.write(chain.raffle, "approveRaffle", [id, review.snapshot.admission.reviewHash]);
     await chain.mine();
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
