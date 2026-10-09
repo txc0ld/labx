@@ -172,4 +172,43 @@ run("manual Safe export versus deferred provider rejection", () => {
     const returnToActions = fixture.page.getByRole("button", { name: "Return to owner actions", exact: true });
     await expect.poll(async () => await directRetry.isEnabled().catch(() => false) || await returnToActions.isEnabled().catch(() => false), { timeout: 5_000 }).toBe(true);
   }, 45_000);
+
+  it("labels a downloaded revocation as a file handoff and never as a connected Safe request", async () => {
+    const review = await chain.service.readAdmission({ id: 1n });
+    if (!review.snapshot.admission.reviewHash) throw new Error("The revocation fixture has no review digest.");
+    await chain.write(chain.raffle, "approveRaffle", [1n, review.snapshot.admission.reviewHash]);
+    await fixture.page.goto(`${fixture.baseUrl}/review/1`, { waitUntil: "domcontentloaded" });
+    await fixture.switchAccount(chain.operator);
+    await fixture.page.evaluate(() => {
+      for (const key of Object.keys(localStorage)) if (key.startsWith("labx:owner-review:")) localStorage.removeItem(key);
+    });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    const prepareRevocation = fixture.page.getByRole("button", { name: "Prepare revocation", exact: true });
+    await expect.poll(async () => await connect.isVisible().catch(() => false) || await prepareRevocation.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await prepareRevocation.waitFor({ timeout: 15_000 });
+    await fixture.page.evaluate(() => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Scope = Window & { ethereum: { request: Request }; __independentRevocationSends: number };
+      const scope = window as unknown as Scope;
+      const request = scope.ethereum.request.bind(scope.ethereum);
+      scope.__independentRevocationSends = 0;
+      scope.ethereum.request = input => {
+        if (input.method === "eth_sendTransaction") scope.__independentRevocationSends += 1;
+        return request(input);
+      };
+    });
+
+    await prepareRevocation.click();
+    const downloaded = fixture.page.waitForEvent("download");
+    await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
+    await downloaded;
+    await fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor({ timeout: 15_000 });
+
+    expect(await fixture.page.getByText(/saved call has no recorded wallet request/i).isVisible()).toBe(true);
+    expect(await fixture.page.getByText(/Downloading alone does not change the raffle/i).isVisible()).toBe(true);
+    expect(await fixture.page.getByText(/import the downloaded JSON file with Transaction Builder/i).isVisible()).toBe(true);
+    expect(await fixture.page.evaluate(() => (window as unknown as Window & { __independentRevocationSends: number }).__independentRevocationSends)).toBe(0);
+  }, 45_000);
 });
