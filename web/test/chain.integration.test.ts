@@ -28,8 +28,13 @@ run("isolated Anvil seller and membership journeys", () => {
     expect((await chain.service.confirm({ transaction, timeoutMs: 3000 })).kind).toBe("confirmed");
     return { prepared, transaction };
   }
-  function standardPacks(priceUsdc = 25_000_000n, bonusEntries = 3, maxSupply = 20): DraftInput["packs"] {
-    return STANDARD_MEMBERSHIP_TIERS.map((name) => ({ name, priceUsdc, bonusEntries, maxSupply }));
+  function standardPacks(): DraftInput["packs"] {
+    return STANDARD_MEMBERSHIP_TIERS.map((name, index) => ({
+      name,
+      priceUsdc: 25_000_000n + BigInt(index) * 5_000_000n,
+      bonusEntries: 3 + index,
+      maxSupply: 20 + index
+    }));
   }
   async function draft(tokenId: bigint) {
     await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
