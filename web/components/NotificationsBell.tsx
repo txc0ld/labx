@@ -3,12 +3,18 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type LatestActivity = { deployment: string; identity: string };
+export type NotificationActivity = {
+  deployment: string;
+  identity: string;
+  blockNumber: string;
+  logIndex: number;
+};
 const POLL_MS = 60_000;
+const READ_EVENT = "labx-notifications-read";
 
 export function NotificationsBell() {
   const [unread, setUnread] = useState(false);
-  const latestRef = useRef<LatestActivity | null>(null);
+  const latestRef = useRef<NotificationActivity | null>(null);
   const lastStartedAtRef = useRef(Number.NEGATIVE_INFINITY);
   const inFlightRef = useRef<Promise<void> | null>(null);
 
@@ -34,11 +40,13 @@ export function NotificationsBell() {
         if (!item || typeof item !== "object") return;
         const blockHash = Reflect.get(item, "blockHash");
         const transactionHash = Reflect.get(item, "transactionHash");
+        const blockNumber = Reflect.get(item, "blockNumber");
         const logIndex = Reflect.get(item, "logIndex");
-        if (typeof blockHash !== "string" || typeof transactionHash !== "string" || !Number.isSafeInteger(logIndex)) return;
-        const activity = { deployment, identity: `${blockHash}:${transactionHash}:${logIndex}` };
-        latestRef.current = activity;
-        setUnread(readLastSeen(deployment) !== activity.identity);
+        if (typeof blockHash !== "string" || typeof transactionHash !== "string" || !isBlockNumber(blockNumber) || !isLogIndex(logIndex)) return;
+        const activity = { deployment, identity: `${blockHash}:${transactionHash}:${logIndex}`, blockNumber, logIndex };
+        const latest = selectLatestActivity(latestRef.current, activity);
+        latestRef.current = latest;
+        setUnread(readLastSeen(latest.deployment) !== latest.identity);
       } catch {
         // The bell remains usable as a link when the public feed is unavailable.
       }
@@ -55,17 +63,22 @@ export function NotificationsBell() {
     void refresh(controller.signal);
     const interval = window.setInterval(() => void refresh(controller.signal), POLL_MS);
     const onVisibility = () => void refresh(controller.signal);
-    const onRead = () => {
+    const onRead = (event: Event) => {
+      const read = parseReadActivity(event);
+      if (!read) return;
       const latest = latestRef.current;
-      if (latest) setUnread(readLastSeen(latest.deployment) !== latest.identity);
+      const reconciled = reconcileNotificationRead(latest, read);
+      if (!reconciled) return;
+      latestRef.current = reconciled.latest;
+      setUnread(reconciled.unread);
     };
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("labx-notifications-read", onRead);
+    window.addEventListener(READ_EVENT, onRead);
     return () => {
       controller.abort();
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("labx-notifications-read", onRead);
+      window.removeEventListener(READ_EVENT, onRead);
     };
   }, [refresh]);
 
@@ -97,13 +110,59 @@ export function NotificationsBell() {
   );
 }
 
-export function markNotificationRead(deployment: string, identity: string): void {
+export function markNotificationRead(activity: NotificationActivity): void {
   try {
-    localStorage.setItem(storageKey(deployment), identity);
-    window.dispatchEvent(new Event("labx-notifications-read"));
+    localStorage.setItem(storageKey(activity.deployment), activity.identity);
+    window.dispatchEvent(new CustomEvent(READ_EVENT, { detail: activity }));
   } catch {
     // Device-local unread state is optional.
   }
+}
+
+export function selectLatestActivity(
+  current: NotificationActivity | null,
+  candidate: NotificationActivity
+): NotificationActivity {
+  if (!current || current.deployment !== candidate.deployment) return candidate;
+  return compareActivity(candidate, current) >= 0 ? candidate : current;
+}
+
+export function reconcileNotificationRead(
+  latest: NotificationActivity | null,
+  read: NotificationActivity
+): { latest: NotificationActivity; unread: boolean } | null {
+  if (!latest) return { latest: read, unread: false };
+  if (latest.deployment !== read.deployment) return null;
+  return compareActivity(read, latest) >= 0
+    ? { latest: read, unread: false }
+    : { latest, unread: true };
+}
+
+function compareActivity(left: NotificationActivity, right: NotificationActivity): number {
+  const leftBlock = BigInt(left.blockNumber);
+  const rightBlock = BigInt(right.blockNumber);
+  if (leftBlock !== rightBlock) return leftBlock < rightBlock ? -1 : 1;
+  return left.logIndex - right.logIndex;
+}
+
+function parseReadActivity(event: Event): NotificationActivity | null {
+  const value = Reflect.get(event, "detail");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const deployment = Reflect.get(value, "deployment");
+  const identity = Reflect.get(value, "identity");
+  const blockNumber = Reflect.get(value, "blockNumber");
+  const logIndex = Reflect.get(value, "logIndex");
+  return typeof deployment === "string" && typeof identity === "string" && isBlockNumber(blockNumber) && isLogIndex(logIndex)
+    ? { deployment, identity, blockNumber, logIndex }
+    : null;
+}
+
+function isBlockNumber(value: unknown): value is string {
+  return typeof value === "string" && /^(0|[1-9]\d{0,77})$/.test(value);
+}
+
+function isLogIndex(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function storageKey(deployment: string): string {

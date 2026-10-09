@@ -9,6 +9,7 @@ type FeedItem = {
   label: "Draft awaiting review" | "Raffle live";
   raffleId: string;
   occurredAt: string;
+  blockNumber: string;
   blockHash: string;
   transactionHash: string;
   logIndex: number;
@@ -129,7 +130,12 @@ export function NotificationFeed() {
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           {deployment ? (
-            <button className="notification-read-button" type="button" onClick={() => markNotificationRead(deployment, latestIdentity)}>
+            <button className="notification-read-button" type="button" onClick={() => markNotificationRead({
+              deployment,
+              identity: latestIdentity,
+              blockNumber: latest.blockNumber,
+              logIndex: latest.logIndex
+            })}>
               Mark current activity read
             </button>
           ) : null}
@@ -176,14 +182,15 @@ function parseFeedItem(value: unknown): FeedItem {
   const label = Reflect.get(value, "label");
   const raffleId = Reflect.get(value, "raffleId");
   const occurredAt = Reflect.get(value, "occurredAt");
+  const blockNumber = Reflect.get(value, "blockNumber");
   const blockHash = Reflect.get(value, "blockHash");
   const transactionHash = Reflect.get(value, "transactionHash");
   const logIndex = Reflect.get(value, "logIndex");
   const href = Reflect.get(value, "href");
   const draft = kind === "draft-created" && label === "Draft awaiting review" && href === `/review/${raffleId}`;
   const opened = kind === "sales-opened" && label === "Raffle live" && href === `/piece/${raffleId}`;
-  if ((!draft && !opened) || typeof raffleId !== "string" || typeof occurredAt !== "string" || typeof blockHash !== "string" || typeof transactionHash !== "string" || !Number.isSafeInteger(logIndex)) throw new Error();
-  return { kind, label, raffleId, occurredAt, blockHash, transactionHash, logIndex, href };
+  if ((!draft && !opened) || typeof raffleId !== "string" || typeof occurredAt !== "string" || typeof blockNumber !== "string" || !/^(0|[1-9]\d{0,77})$/.test(blockNumber) || typeof blockHash !== "string" || typeof transactionHash !== "string" || !Number.isSafeInteger(logIndex) || Number(logIndex) < 0) throw new Error();
+  return { kind, label, raffleId, occurredAt, blockNumber, blockHash, transactionHash, logIndex, href };
 }
 
 function mergeItems(current: FeedItem[], incoming: FeedItem[]): FeedItem[] {
