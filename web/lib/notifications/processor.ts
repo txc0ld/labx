@@ -3,8 +3,8 @@ import { serverWorkflow } from "../chain/server";
 import type { BlockRef } from "../chain/types";
 import type { Store } from "../points";
 import type { MailSender } from "../receipt-delivery";
-import { deliverNotification } from "./delivery";
-import { adaptNotificationWorkflow, NotificationRangeTooDenseError, NotificationReadBudgetError, NotificationRpcTimeoutError, parseNotificationEvent, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow, type VerifiedEventPage } from "./events";
+import { deliverNotification, NotificationSendCapacityError } from "./delivery";
+import { adaptNotificationWorkflow, createNotificationReadBudget, NotificationRangeTooDenseError, NotificationReadBudgetError, NotificationRpcTimeoutError, parseNotificationEvent, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow, type VerifiedEventPage } from "./events";
 
 const PAGE_BLOCKS = 250n;
 const MAX_INGESTION_PAGES = 2;
@@ -12,7 +12,9 @@ const MAX_RETRY_PAGES = 4;
 const MAX_EVENT_CHECKS = 400;
 const MAX_SENDS = 3;
 const DELIVERY_RUNTIME_MS = 31_000;
-const INGESTION_RUNTIME_MS = 10_000;
+// Includes progress-proof reads and page persistence as well as source calls.
+const INGESTION_RUNTIME_MS = 18_000;
+const RESPONSE_MARGIN_MS = 1_000;
 const SOURCE_CALL_MS = 6_000;
 const MAIL_SEND_RUNTIME_MS = 10_000;
 const PROCESSOR_RUNTIME_MS = 43_000;
@@ -43,7 +45,7 @@ export type NotificationProcessorSource = {
   latest: BlockRef;
   finalized(): Promise<BlockRef>;
   block(number: bigint): Promise<BlockRef & { gasLimit?: bigint }>;
-  events(fromBlock: bigint, toBlock: bigint): Promise<VerifiedEventPage>;
+  events(fromBlock: bigint, toBlock: bigint, deadline: number): Promise<VerifiedEventPage>;
 };
 
 export type NotificationRunReport = {
@@ -86,8 +88,10 @@ export async function notificationProcessorSource(): Promise<NotificationProcess
       if (checked.number !== number) throw new Error("Notification block number is invalid.");
       return checked;
     },
-    async events(fromBlock, toBlock) {
-      return readFinalizedEvents({ fromBlock, toBlock, workflow: pinnedWorkflow });
+    async events(fromBlock, toBlock, deadline) {
+      const budget = createNotificationReadBudget();
+      budget.deadline = Math.min(budget.deadline, deadline);
+      return readFinalizedEvents({ fromBlock, toBlock, workflow: pinnedWorkflow, budget });
     }
   };
 }
@@ -108,6 +112,8 @@ export async function processNotifications(args: {
   if (!Number.isSafeInteger(requestDeadline) || requestDeadline <= Date.now()) {
     throw new Error("Notification processing deadline is invalid.");
   }
+  const requestStore = deadlineStore(args.store, requestDeadline);
+  const workDeadline = requestDeadline - Math.min(RESPONSE_MARGIN_MS, Math.floor((requestDeadline - Date.now()) / 10));
   const prefix = `raffle-notifications:v1:${args.source.deployment}`;
   const activationKey = `${prefix}:activation`;
   const activationCandidate: StoredActivation = {
@@ -116,8 +122,8 @@ export async function processNotifications(args: {
     blockNumber: args.source.latest.number.toString(),
     blockHash: args.source.latest.hash
   };
-  const createdActivation = await args.store.setIfAbsent({ [activationKey]: JSON.stringify(activationCandidate) });
-  const activationRaw = await args.store.get(activationKey);
+  const createdActivation = await requestStore.setIfAbsent({ [activationKey]: JSON.stringify(activationCandidate) });
+  const activationRaw = await requestStore.get(activationKey);
   if (activationRaw === null) throw new Error("Notification activation was not persisted.");
   const activation = parseActivation(activationRaw, args.source.deployment);
   const activationBlock = BigInt(activation.blockNumber);
@@ -126,14 +132,14 @@ export async function processNotifications(args: {
   if (createdActivation) return { ...empty, status: "activated" };
 
   const terminalKey = `${prefix}:activation-reconciliation`;
-  const existingTerminal = await args.store.get(terminalKey);
+  const existingTerminal = await requestStore.get(terminalKey);
   if (existingTerminal !== null) {
     parseActivationReconciliation(existingTerminal);
     return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary needs reconciliation." };
   }
 
   const verifiedBoundaryKey = `${prefix}:activation-verified`;
-  const verifiedBoundary = await args.store.get(verifiedBoundaryKey);
+  const verifiedBoundary = await requestStore.get(verifiedBoundaryKey);
   if (verifiedBoundary === null) {
     const finalized = await withinDeadline(() => args.source.finalized(), SOURCE_CALL_MS, requestDeadline);
     empty.finalizedBlock = finalized.number.toString();
@@ -141,10 +147,10 @@ export async function processNotifications(args: {
     const boundary = await withinDeadline(() => args.source.block(activationBlock), SOURCE_CALL_MS, requestDeadline);
     if (boundary.hash.toLowerCase() !== activation.blockHash.toLowerCase()) {
       const marker = JSON.stringify({ version: 1, reason: "activation-boundary-changed", recordedAt: now });
-      await args.store.setIfAbsent({ [terminalKey]: marker });
+      await requestStore.setIfAbsent({ [terminalKey]: marker });
       return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary changed and needs reconciliation." };
     }
-    await args.store.setIfAbsent({ [verifiedBoundaryKey]: JSON.stringify({ version: 1, blockNumber: activation.blockNumber, blockHash: activation.blockHash }) });
+    await requestStore.setIfAbsent({ [verifiedBoundaryKey]: JSON.stringify({ version: 1, blockNumber: activation.blockNumber, blockHash: activation.blockHash }) });
   } else {
     parseVerifiedBoundary(verifiedBoundary, activation);
   }
@@ -152,13 +158,9 @@ export async function processNotifications(args: {
   const ingestionHintKey = `${prefix}:ingestion-hint`;
   const retryHintKey = `${prefix}:retry-hint`;
   const lastPageKey = `${prefix}:last-ingested-page`;
-  const retryStart = await verifiedProgressHint(args.store, await args.store.get(retryHintKey), firstEventBlock, prefix, "retry");
-  const retryStarts = await retryPageStarts(args.store, prefix, retryStart);
-  const lastPage = parseOptionalHint(await args.store.get(lastPageKey));
-  if (lastPage !== null && !retryStarts.includes(lastPage)) retryStarts.push(lastPage);
-  const delivery = {
-    deadline: minimumDeadline(Date.now() + DELIVERY_RUNTIME_MS, requestDeadline - INGESTION_RUNTIME_MS),
-    requestDeadline,
+  const retryStarted = Date.now();
+  const delivery: DeliveryState = {
+    deadline: minimumDeadline(retryStarted + DELIVERY_RUNTIME_MS, workDeadline - INGESTION_RUNTIME_MS),
     remainingRuntime: DELIVERY_RUNTIME_MS,
     checkedEvents: 0,
     sends: 0,
@@ -166,57 +168,73 @@ export async function processNotifications(args: {
     pending: 0,
     processingFailures: 0,
     reconciliationRequired: 0,
-    retryNext: retryStart,
-    lastIncident: await readLatestIncident(args.store, prefix)
+    retryNext: firstEventBlock
   };
-  const retryStarted = Date.now();
+  const retryStore = deadlineStore(requestStore, delivery.deadline);
+  let retryStarts: bigint[] = [];
   try {
-    await processDeliveryPages(args, prefix, retryStarts, delivery, now, deliveryClock);
+    delivery.retryNext = await verifiedProgressHint(retryStore, await retryStore.get(retryHintKey), firstEventBlock, prefix, "retry");
+    retryStarts = await retryPageStarts(retryStore, prefix, delivery.retryNext);
+    const lastPage = parseOptionalHint(await retryStore.get(lastPageKey));
+    if (lastPage !== null && !retryStarts.includes(lastPage)) retryStarts.push(lastPage);
+    delivery.lastIncident = await readLatestIncident(retryStore, prefix);
+    await processDeliveryPages({ ...args, store: retryStore }, prefix, retryStarts, delivery, now, deliveryClock);
   } catch (error) {
     if (!(error instanceof NotificationRuntimeDeadlineError)) throw error;
     delivery.processingFailures += 1;
   }
   delivery.remainingRuntime = remainingRuntime(delivery.remainingRuntime, retryStarted);
 
-  let ingestionStart = await verifiedProgressHint(args.store, await args.store.get(ingestionHintKey), firstEventBlock, prefix, "ingestion");
+  let ingestionStart = firstEventBlock;
   let ingestedPages = 0;
   let ingestedEvents = 0;
   const ingestedStarts: bigint[] = [];
   let ingestion: NotificationRunReport["ingestion"] = { status: "idle" };
-  const ingestionDeadline = minimumDeadline(Date.now() + INGESTION_RUNTIME_MS, requestDeadline);
+  const ingestionDeadline = minimumDeadline(Date.now() + INGESTION_RUNTIME_MS, workDeadline);
+  const ingestionStore = deadlineStore(requestStore, ingestionDeadline);
   let finalizedBlock = activation.blockNumber;
+  let progressVerified = false;
   try {
+    ingestionStart = await verifiedProgressHint(ingestionStore, await ingestionStore.get(ingestionHintKey), firstEventBlock, prefix, "ingestion");
+    progressVerified = true;
     const finalized = await withinDeadline(() => args.source.finalized(), SOURCE_CALL_MS, ingestionDeadline);
     finalizedBlock = finalized.number.toString();
     if (finalized.number < activationBlock) throw new Error("Finalized height regressed below activation.");
     while (ingestionStart <= finalized.number && ingestedPages < MAX_INGESTION_PAGES && Date.now() < ingestionDeadline) {
       const requestedEnd = minimum(ingestionStart + PAGE_BLOCKS - 1n, finalized.number);
-      const page = await loadOrCreatePage(args.store, args.source, prefix, ingestionStart, finalized.number, ingestionDeadline);
-      await args.store.set(ingestionHintKey, page.nextBlock);
-      await args.store.set(lastPageKey, page.startBlock);
+      const page = await loadOrCreatePage(ingestionStore, args.source, prefix, ingestionStart, finalized.number, ingestionDeadline);
+      await ingestionStore.set(ingestionHintKey, page.nextBlock);
+      await ingestionStore.set(lastPageKey, page.startBlock);
       ingestionStart = BigInt(page.nextBlock);
       ingestedStarts.push(BigInt(page.startBlock));
       ingestedPages += 1;
       ingestedEvents += page.events.length;
       ingestion = { status: "advanced", fromBlock: page.startBlock, toBlock: page.actualEnd };
-      await args.store.set(`${prefix}:ingestion-status`, JSON.stringify({ version: 1, state: "advanced", nextBlock: page.nextBlock, recordedAt: now }));
+      await ingestionStore.set(`${prefix}:ingestion-status`, JSON.stringify({ version: 1, state: "advanced", nextBlock: page.nextBlock, recordedAt: now }));
       if (BigInt(page.actualEnd) < requestedEnd) break;
     }
   } catch (error) {
+    if (!progressVerified && !(error instanceof NotificationRuntimeDeadlineError)) throw error;
     const reason = ingestionFailureReason(error);
     const incident = `${prefix}:incident:ingestion:${ingestionStart}`;
     const marker = JSON.stringify({ version: 1, kind: "ingestion", reason, fromBlock: ingestionStart.toString(), recordedAt: now });
-    await args.store.setIfAbsent({ [incident]: marker });
-    await args.store.set(`${prefix}:ingestion-status`, marker);
-    await writeLatestIncident(args.store, prefix, { id: incident, kind: "ingestion", reason });
-    delivery.lastIncident = { id: incident, kind: "ingestion", reason };
-    ingestion = { status: "blocked", fromBlock: ingestionStart.toString(), reason, incident };
+    ingestion = { status: "blocked", fromBlock: ingestionStart.toString(), reason };
+    try {
+      await requestStore.setIfAbsent({ [incident]: marker });
+      ingestion.incident = incident;
+      await requestStore.set(`${prefix}:ingestion-status`, marker);
+      const summary = { id: incident, kind: "ingestion" as const, reason };
+      await writeLatestIncident(requestStore, prefix, summary);
+      delivery.lastIncident = summary;
+    } catch {
+      // Report the failure even if the request has no time to persist diagnostics.
+    }
   }
 
   const freshStarts = ingestedStarts.filter(start => !retryStarts.includes(start));
-  delivery.deadline = minimumDeadline(Date.now() + delivery.remainingRuntime, requestDeadline);
+  delivery.deadline = minimumDeadline(Date.now() + delivery.remainingRuntime, workDeadline);
   try {
-    await processDeliveryPages(args, prefix, freshStarts, delivery, now, deliveryClock);
+    await processDeliveryPages({ ...args, store: deadlineStore(requestStore, delivery.deadline) }, prefix, freshStarts, delivery, now, deliveryClock);
   } catch (error) {
     if (!(error instanceof NotificationRuntimeDeadlineError)) throw error;
     delivery.processingFailures += 1;
@@ -260,7 +278,8 @@ async function loadOrCreatePage(
       if (Date.now() >= deadline) throw new NotificationRpcTimeoutError();
       let candidate: VerifiedEventPage;
       try {
-        candidate = await withinDeadline(() => source.events(start, actualEnd), SOURCE_CALL_MS, deadline);
+        const readDeadline = minimumDeadline(Date.now() + SOURCE_CALL_MS, deadline);
+        candidate = await withinDeadline(() => source.events(start, actualEnd, readDeadline), SOURCE_CALL_MS, readDeadline);
       } catch (error) {
         if (!(error instanceof NotificationRangeTooDenseError) || actualEnd === start) throw error;
         actualEnd = start + (actualEnd - start) / 2n;
@@ -315,7 +334,6 @@ async function loadOrCreatePage(
 
 type DeliveryState = {
   deadline: number;
-  requestDeadline: number;
   remainingRuntime: number;
   checkedEvents: number;
   sends: number;
@@ -343,8 +361,7 @@ async function processDeliveryPages(
 ): Promise<void> {
   for (const pageStart of starts) {
     if (!canStartDeliveryWork(state)) break;
-    const phaseStore = deadlineStore(args.store, state.deadline);
-    const completionStore = deadlineStore(args.store, state.requestDeadline);
+    const phaseStore = args.store;
     const raw = await phaseStore.get(pageKey(prefix, pageStart));
     if (raw === null) continue;
     const page = parsePage(raw, args.source.deployment, pageStart);
@@ -360,7 +377,8 @@ async function processDeliveryPages(
       const event = page.events[index]!;
       try {
         const result = await deliverNotification({
-          store: completionStore,
+          store: phaseStore,
+          canStartSend: () => canStartDeliveryWork(state),
           event,
           deployment: args.source.deployment,
           origin: args.source.origin,
@@ -370,7 +388,7 @@ async function processDeliveryPages(
               throw new NotificationRuntimeDeadlineError();
             }
             state.sends += 1;
-            return args.sender(payload, key);
+            return withinRuntime(() => args.sender(payload, key), state.deadline);
           },
           from: args.from,
           transportIdentity: args.transportIdentity,
@@ -379,25 +397,29 @@ async function processDeliveryPages(
         });
         if (result.status === "accepted") {
           state.accepted += 1;
-          await markEventTerminal(completionStore, prefix, pageStart, index);
+          await markEventTerminal(phaseStore, prefix, pageStart, index);
         } else if (result.status === "pending") state.pending += 1;
         else {
           state.reconciliationRequired += 1;
-          await markEventTerminal(completionStore, prefix, pageStart, index);
+          await markEventTerminal(phaseStore, prefix, pageStart, index);
           const incident = `${result.key}:reconciliation`;
           const summary = { id: incident, kind: "reconciliation" as const, reason: result.reason };
-          await writeLatestIncident(completionStore, prefix, summary);
+          await writeLatestIncident(phaseStore, prefix, summary);
           state.lastIncident = summary;
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof NotificationRuntimeDeadlineError || error instanceof NotificationSendCapacityError) {
+          state.processingFailures += 1;
+          break;
+        }
         const incident = `${pageKey(prefix, pageStart)}:event-incident:${index}`;
         const marker = JSON.stringify({ version: 1, kind: "delivery", reason: "processing-failed", blockNumber: event.blockNumber, logIndex: event.logIndex, recordedAt: now });
         const summary = { id: incident, kind: "delivery" as const, reason: "processing-failed" };
         state.processingFailures += 1;
         state.pending += 1;
         try {
-          await completionStore.setIfAbsent({ [incident]: marker });
-          await writeLatestIncident(completionStore, prefix, summary);
+          await phaseStore.setIfAbsent({ [incident]: marker });
+          await writeLatestIncident(phaseStore, prefix, summary);
           state.lastIncident = summary;
         } catch {
           // The run report remains degraded even when the bounded incident write is uncertain.
@@ -407,7 +429,7 @@ async function processDeliveryPages(
       scanned += 1;
       index = page.events.length === 0 ? 0 : (index + 1) % page.events.length;
       try {
-        await completionStore.set(resumeKey, index.toString());
+        await phaseStore.set(resumeKey, index.toString());
       } catch {
         state.processingFailures += 1;
         break;
@@ -644,7 +666,7 @@ function baseReport(activationBlock: string, finalizedBlock: string, next: bigin
 function ingestionFailureReason(error: unknown): IngestionFailureReason {
   if (error instanceof NotificationRangeTooDenseError) return "range-too-dense";
   if (error instanceof NotificationReadBudgetError) return "rpc-budget-exhausted";
-  if (error instanceof NotificationRpcTimeoutError) return "rpc-timeout";
+  if (error instanceof NotificationRpcTimeoutError || error instanceof NotificationRuntimeDeadlineError) return "rpc-timeout";
   return "source-unavailable";
 }
 
@@ -698,33 +720,24 @@ function deadlineStore(store: Store, deadline: number): Store {
 }
 
 async function withinDeadline<T>(operation: () => Promise<T>, milliseconds: number, deadline: number): Promise<T> {
-  const available = minimumDeadline(milliseconds, deadline - Date.now());
-  if (!Number.isFinite(available) || available <= 0) throw new NotificationRpcTimeoutError();
-  const started = Date.now();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const result = await Promise.race([
-      operation(),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new NotificationRpcTimeoutError()), available); })
-    ]);
-    if (Date.now() - started > available || Date.now() > deadline) throw new NotificationRpcTimeoutError();
-    return result;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  return withinRuntime(operation, minimumDeadline(Date.now() + milliseconds, deadline), () => new NotificationRpcTimeoutError());
 }
 
-async function withinRuntime<T>(operation: () => Promise<T>, deadline: number): Promise<T> {
+async function withinRuntime<T>(
+  operation: () => Promise<T>,
+  deadline: number,
+  expired: () => Error = () => new NotificationRuntimeDeadlineError()
+): Promise<T> {
   const available = deadline - Date.now();
-  if (!Number.isFinite(available) || available <= 0) throw new NotificationRuntimeDeadlineError();
+  if (!Number.isFinite(available) || available <= 0) throw expired();
   const started = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
       operation(),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new NotificationRuntimeDeadlineError()), available); })
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(expired()), available); })
     ]);
-    if (Date.now() - started > available || Date.now() > deadline) throw new NotificationRuntimeDeadlineError();
+    if (Date.now() - started > available || Date.now() > deadline) throw expired();
     return result;
   } finally {
     if (timer !== undefined) clearTimeout(timer);

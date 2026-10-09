@@ -217,7 +217,7 @@ describe("notification cron boundary", () => {
       })(new Request("https://labx.example/api/cron/notifications", { headers: { Authorization: "Bearer 1234567890abcdef" } }));
       expect(response.status).toBe(200);
       expect(fakeNow).toBeLessThan(60_000);
-      expect(sender).toHaveBeenCalledTimes(2);
+      expect(sender).toHaveBeenCalledTimes(1);
       expect(eventReads).toBe(1);
     } finally {
       Date.now = originalNow;

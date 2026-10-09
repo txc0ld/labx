@@ -328,10 +328,12 @@ async function rpcRead<T>(budget: NotificationReadBudget, operation: () => Promi
   budget.remaining -= 1;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
+    const result = await Promise.race([
       operation(),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new NotificationRpcTimeoutError()), remainingMs); })
     ]);
+    if (Date.now() >= budget.deadline) throw new NotificationRpcTimeoutError();
+    return result;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

@@ -18,6 +18,10 @@ type DeliveryReservation = {
   payload: MailPayload;
 };
 
+export class NotificationSendCapacityError extends Error {
+  constructor() { super("Notification send capacity is unavailable."); }
+}
+
 export type NotificationDeliveryResult =
   | { status: "accepted"; repeated: boolean; key: string }
   | { status: "pending"; key: string }
@@ -34,6 +38,7 @@ export async function deliverNotification(args: {
   transportIdentity: string;
   now?: number;
   clock?: () => number;
+  canStartSend?: () => boolean;
 }): Promise<NotificationDeliveryResult> {
   const now = args.now ?? Date.now();
   requireDeliveryConfig(args.from, args.transportIdentity, args.origin, now);
@@ -41,6 +46,7 @@ export async function deliverNotification(args: {
   const key = `raffle-notification:${keccak256(toBytes(identity))}`;
   return deliverReservedMail({
     store: args.store,
+    canStartSend: args.canStartSend,
     sender: args.sender,
     identity,
     key,
@@ -89,9 +95,11 @@ async function deliverReservedMail(args: {
   payload: MailPayload;
   transportIdentity: string;
   clock: () => number;
+  canStartSend?: () => boolean;
 }): Promise<NotificationDeliveryResult> {
   let raw = await args.store.get(args.key);
   if (raw === null) {
+    if (args.canStartSend && !args.canStartSend()) throw new NotificationSendCapacityError();
     const reservationTime = args.clock();
     requireTimestamp(reservationTime);
     const candidate: DeliveryReservation = {
@@ -135,6 +143,7 @@ async function deliverReservedMail(args: {
     return recordReconciliation(args.store, reconciliationKey, reason, sendTime, args.key);
   }
 
+  if (args.canStartSend && !args.canStartSend()) throw new NotificationSendCapacityError();
   let acknowledged = false;
   try {
     acknowledged = await args.sender(reservation.payload, args.key);

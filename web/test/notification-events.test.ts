@@ -157,6 +157,23 @@ describe("finalized notification event reader", () => {
     await expect(readFinalizedEvents({ fromBlock: eventBlock, toBlock: eventBlock, workflow })).rejects.toThrow(/gas bound/);
   });
 
+  it("rejects a late RPC result without starting the next RPC", async () => {
+    const workflow = await source([])();
+    const nextRead = vi.spyOn(workflow.client, "getBlock");
+    let fakeNow = 0;
+    workflow.client.getChainId = async () => { fakeNow = 1_001; return manifest.chainId; };
+    const time = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+    try {
+      await expect(readFinalizedEvents({
+        fromBlock: eventBlock, toBlock: finalizedBlock,
+        workflow: async () => workflow, budget: { remaining: 32, deadline: 1_000 }
+      })).rejects.toBeInstanceOf(NotificationRpcTimeoutError);
+      expect(nextRead).not.toHaveBeenCalled();
+    } finally {
+      time.mockRestore();
+    }
+  });
+
   it("does not recursively split a transient timeout", async () => {
     let calls = 0;
     const reader: NotificationChainReader = {
