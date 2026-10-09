@@ -206,8 +206,10 @@ run("wallet NFT picker adversarial browser behavior", () => {
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       const card = form.getByRole("button", { name: /Fresh NFT/ });
-      await card.evaluate(element => element.blur());
-      for (let step = 0; step < 64 && !await card.evaluate(element => element === document.activeElement); step += 1) await page.keyboard.press("Tab");
+      const refresh = form.getByRole("button", { name: "Refresh" });
+      await refresh.focus();
+      expect(await refresh.evaluate(element => element === document.activeElement)).toBe(true);
+      await page.keyboard.press("Tab");
       expect(await card.evaluate(element => element === document.activeElement)).toBe(true);
       expect(await card.evaluate(element => element.matches(":focus-visible"))).toBe(true);
       expect(await card.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe("none");
