@@ -87,3 +87,7 @@
 @media (max-width:460px) { .overview { padding:1rem; border-radius:18px; } .metric { min-height:8.25rem; padding:.8rem; } .detailRevenue dl { grid-template-columns:1fr; } .scanStatus { width:100%; border-radius:12px; } .cardFacts>div { display:grid; } .cardFacts dd { text-align:left; } .activity { padding:1rem; border-radius:18px; } }
 @media (max-width:350px) { .metricCluster:first-child .metrics,.metricCluster:not(:first-child) .metrics { grid-template-columns:1fr; } .metric,.metric:nth-child(2n),.metricCluster:not(:first-child) .metric { min-height:7.5rem; border-right:0; border-bottom:1px solid #3c3c39; } .metric:last-child,.metricCluster:not(:first-child) .metric:last-child { border-bottom:0; } .metricCluster:first-child .metric:last-child { grid-column:auto; } }
 @media (prefers-reduced-motion:reduce) { .statusDot[data-active="true"] { animation:none; opacity:1; } .summaryIcon,.raffleList>li { transition:none; } .raffleList>li:active { transform:none; } }
+
+.revenueDisclosure { min-inline-size:0; }
+.revenueDisclosure > summary { padding-block:1rem; font-size:1.1rem; font-weight:650; cursor:pointer; }
+.revenueDisclosure[open] > summary { margin-block-end:.5rem; }

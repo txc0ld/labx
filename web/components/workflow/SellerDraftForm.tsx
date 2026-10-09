@@ -509,7 +509,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   return (
     <form className={`${formStyles.form} studio-form`} onSubmit={existing ? review : event => void create(event)}>
-      <p className={`${formStyles.privacyNotice} notice warning`}>Create securely saves the draw setup, creates the draft and locks your NFT in raffle custody. Multiple wallet confirmations may follow. These are separate transactions.{existing ? " An unchanged NFT keeps its saved setup without another storage signature. A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
+      <p className={`${formStyles.privacyNotice} notice warning`}>{existing ? "Editing this draft requires LABx approval again before listing. An unchanged NFT keeps its saved draw setup." : "Create locks your NFT. After LABx approves the raffle, press List to open sales."}</p>
 
       <fieldset className={formStyles.formSection} ref={editStage}>
         <legend><span>01</span> Raffle details</legend>
@@ -554,7 +554,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
       {!existing && creation.kind === "error" ? <p className="notice error" role="alert">{creation.message}</p> : null}
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
-      <div className={formStyles.reviewAction}><div><strong>Ready to prepare your raffle?</strong><span>{existing ? "You will review the details. An unchanged NFT needs no new storage signature; a changed NFT does." : "Create locks your NFT. Confirm the storage signature and each transaction in your wallet."}</span></div><button className="btn" type="submit">{existing ? "Prepare raffle draft" : "Create"}</button></div>
+      <div className={formStyles.reviewAction}><div><strong>{existing ? "Ready to save your changes?" : "Ready to create?"}</strong><span>{existing ? "You will review the details. An unchanged NFT needs no new storage signature; a changed NFT does." : "Follow the prompts in your wallet. Creating needs a signature and separate transaction confirmations."}</span></div><button className="btn" type="submit">{existing ? "Prepare raffle draft" : "Create"}</button></div>
     </form>
   );
 }

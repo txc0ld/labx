@@ -23,6 +23,7 @@ import { DrawProgress } from "./DrawProgress";
 import { RaffleArtwork } from "./RaffleArtwork";
 import { SellerActivity } from "./SellerActivity";
 import styles from "./SellerPortal.module.css";
+import checkout from "./BuyerCheckout.module.css";
 
 export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null, trustReason?: string | null) => readonly ActionAvailability[];
 export type RecoverCommitment = (commit: Hex) => Promise<ReserveRecord>;
@@ -426,17 +427,34 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
               })}
             </div>
           </section>
-          <section className="order-panel" aria-labelledby="order-title">
-            <div className="quantity-control"><label htmlFor="membership-qty"><span id="order-title">Quantity</span><input id="membership-qty" inputMode="numeric" type="number" min={1} max={20} step={1} aria-describedby="membership-qty-help membership-qty-error" aria-invalid={!quantityValid} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></label><span id="membership-qty-help">Choose 1 to 20 per purchase. Live supply is checked before review.</span></div>
-            <div className="order-total" aria-live="polite"><span>Total</span><strong>{quote ? formatUsdc(quote.totalUsdc) : "—"} <small>USDC</small></strong>{quote ? <p>{formatUsdc(quote.principal)} membership principal + {formatUsdc(quote.fee)} nonrefundable processing fee · {quote.bonusEntries.toString()} bonus entries</p> : <p>{quoteState === "loading" ? "Refreshing quote…" : "Choose an available membership."}</p>}</div>
-          </section>
+          <section className={checkout.panel} aria-labelledby="order-title">
+          <h2 id="order-title" className={checkout.heading}>Your membership</h2>
+          <div className={checkout.quantity}>
+            <label htmlFor="membership-qty">Quantity</label>
+            <input id="membership-qty" inputMode="numeric" type="number" min={1} max={20} step={1} aria-describedby={`membership-qty-help${quantityValid ? "" : " membership-qty-error"}`} aria-invalid={!quantityValid} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} />
+            <p id="membership-qty-help">1–20 per purchase, subject to availability.</p>
+          </div>
+          <div className={`order-total ${checkout.summary}`} aria-live="polite" aria-atomic="true">
+            {quote ? <dl className={checkout.breakdown}>
+              <div><dt>Memberships</dt><dd>{formatUsdc(quote.principal)} USDC</dd></div>
+              <div><dt>Processing fee <span>Nonrefundable</span></dt><dd>{formatUsdc(quote.fee)} USDC</dd></div>
+              <div className={checkout.total}><dt>Total</dt><dd>{formatUsdc(quote.totalUsdc)} <small>USDC</small></dd></div>
+            </dl> : <p>{quoteState === "loading" ? "Refreshing quote…" : "Choose an available membership."}</p>}
+            {quote ? <p className={checkout.entries}>{quote.bonusEntries.toString()} bonus entries included</p> : null}
+          </div>
           {!quantityValid ? <p id="membership-qty-error" className="notice error" role="alert">Quantity must be a whole number from 1 to 20.</p> : null}
           {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
           {payment === "eth" && quote?.eth.kind === "unavailable" ? <div className="notice warning stack" role="status"><p>ETH payment is no longer available for this quote. Choose USDC and review the total again.</p><button className="btn" type="button" onClick={() => { setPayment("usdc"); setAgreements({ terms: false, rules: false, age: false }); setAgreementState("idle"); agreementGeneration.current += 1; }}>Use USDC</button></div> : null}
-          {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd>{formatDate(quote.eth.deadline)} UTC</dd></div></dl> : null}</> : <p className="muted">ETH payment unavailable{quote?.eth.kind === "unavailable" ? `: ${quote.eth.reason}` : "."}</p>}
+          {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd>{formatDate(quote.eth.deadline)} UTC</dd></div></dl> : null}</> : <div className={checkout.payment}><span>Pay with USDC</span>{quote?.eth.kind === "unavailable" ? <details><summary>About payment</summary><p>ETH payment unavailable: {quote.eth.reason}</p></details> : null}</div>}
           {!termsMatch ? <p className="notice error" role="alert">The raffle’s published terms do not match this website version. Purchasing is blocked.</p> : (
-            <fieldset className="agreements stack"><legend>Confirm before purchase</legend><label><input type="checkbox" checked={agreements.terms} onChange={(event) => setAgreements((value) => ({ ...value, terms: event.target.checked }))} /> I agree to the <Link href="/legal">membership terms</Link>.</label><label><input type="checkbox" checked={agreements.rules} onChange={(event) => setAgreements((value) => ({ ...value, rules: event.target.checked }))} /> I agree to the <Link href="/rules">draw rules</Link>.</label><label><input type="checkbox" checked={agreements.age} onChange={(event) => setAgreements((value) => ({ ...value, age: event.target.checked }))} /> I confirm I am at least 18.</label></fieldset>
+            <fieldset className={`agreements ${checkout.agreements}`}>
+              <legend>Before you continue</legend>
+              <label><input type="checkbox" checked={agreements.terms} onChange={(event) => setAgreements((value) => ({ ...value, terms: event.target.checked }))} /><span>I agree to the <Link href="/legal">membership terms</Link>.</span></label>
+              <label><input type="checkbox" checked={agreements.rules} onChange={(event) => setAgreements((value) => ({ ...value, rules: event.target.checked }))} /><span>I agree to the <Link href="/rules">draw rules</Link>.</span></label>
+              <label><input type="checkbox" checked={agreements.age} onChange={(event) => setAgreements((value) => ({ ...value, age: event.target.checked }))} /><span>I confirm I am at least 18.</span></label>
+            </fieldset>
           )}
+          <div className={checkout.action}>
           <WalletGate wallet={browser.wallet}>
             {!account ? <p className="notice" role="status">Loading balance and allowance…</p> : insufficientUsdc ? <p className="notice warning" role="status">This wallet does not have enough USDC for the reviewed total.</p> : needsApproval && payment === "usdc" ? (
               approval?.enabled && quote ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label="Approve exact USDC" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
@@ -444,6 +462,8 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
               : agreementState !== "saved" ? <div className="stack"><button className="btn" type="button" disabled={!recordAgreement || agreementState === "saving" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recordReviewedAgreement()}>{agreementState === "saving" ? "Recording agreement…" : "Sign and record agreement"}</button>{!recordAgreement ? <p className="notice warning" role="status">Agreement storage is not configured. Purchasing is unavailable.</p> : null}{agreementState === "error" ? <p className="notice error" role="alert">{agreementError}</p> : null}</div>
                 : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{purchase?.reason || "Purchase is not available."}</p>}
           </WalletGate>
+          </div>
+          </section>
         </>
       ) : !salesOpen ? <p className="notice" role="status">Membership sales are not open{snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.</p> : null}
       {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable principal</span><strong>{formatUsdc(account.principal)} USDC</strong><small>{formatUsdc(account.fee)} USDC processing fee paid to date remains historical and nonrefundable. Cancellation refunds principal only.</small></div> : null}

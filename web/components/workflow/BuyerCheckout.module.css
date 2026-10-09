@@ -1,0 +1,48 @@
+.panel {
+  display: grid;
+  gap: 1.5rem;
+  min-inline-size: 0;
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border: 1px solid var(--line-dark);
+  border-radius: 24px;
+  background: var(--paper, #faf9f6);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 4%);
+}
+
+.heading { margin: 0; font-size: 1.35rem; line-height: 1.25; }
+.quantity { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; }
+.quantity label { flex: 1 1 6rem; font-size: 1rem; }
+.quantity input { flex: 0 1 5.5rem; max-inline-size: 100%; min-inline-size: 0; text-align: center; border: 1px solid var(--line-dark); }
+.quantity p { flex-basis: 100%; margin: 0; color: var(--charcoal); font-size: .875rem; line-height: 1.5; }
+.panel .summary { display: block; min-inline-size: 0; padding: 0; }
+.panel .summary p { text-align: start; font-size: .875rem; }
+.breakdown { display: grid; gap: 1rem; margin: 0; }
+.breakdown > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .35rem 1rem; }
+.breakdown dt { font-size: .9375rem; }
+.breakdown dt span { display: block; margin-block-start: .15rem; font-size: .8125rem; color: var(--charcoal); }
+.breakdown dd { margin: 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.breakdown .total { margin-block-start: .25rem; padding-block-start: 1rem; border-block-start: 1px solid var(--line-dark); }
+.total dt { font-size: 1.125rem; font-weight: 700; }
+.total dd { font-size: 2rem; line-height: 1.2; letter-spacing: -.04em; }
+.total small { font-size: .875rem; letter-spacing: 0; }
+.entries { margin: .65rem 0 0; font-size: .875rem; color: var(--charcoal); }
+.payment { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; font-size: .875rem; }
+.payment > span { font-weight: 650; }
+.payment details { max-inline-size: 100%; color: var(--charcoal); }
+.payment summary { cursor: pointer; text-decoration: underline; text-underline-offset: .2em; }
+.payment p { margin-block-end: 0; line-height: 1.5; }
+.panel .agreements { display: grid; gap: .5rem; min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.panel .agreements legend { padding: 0; margin-block-end: .75rem; font-size: .9375rem; font-weight: 700; }
+.panel .agreements label { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); align-items: start; gap: .75rem; min-block-size: 44px; padding-block: .5rem; font-size: .9375rem; line-height: 1.5; cursor: pointer; }
+.panel .agreements input { margin: .1rem 0 0; padding: 0; accent-color: var(--ink); }
+.panel .agreements span { min-inline-size: 0; overflow-wrap: anywhere; }
+.panel .agreements a { color: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: .2em; }
+.action { min-inline-size: 0; }
+.action :global(.workflow-gate) { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.action :global(.workflow-gate) h3 { font-size: 1.125rem; }
+.action :global(.workflow-gate) p { margin-block-end: 0; font-size: .9375rem; line-height: 1.5; }
+.action :global(.btn) { inline-size: 100%; }
+
+.panel :global(.payment-choice) { gap:.75rem; }
+.panel :global(.payment-choice) label { flex:1 1 6rem; gap:.65rem; min-block-size:44px; padding:.5rem .65rem; border:1px solid var(--line-dark); border-radius:12px; font-size:.9375rem; }
+.panel :global(.payment-choice) input { flex:0 0 1.25rem; inline-size:1.25rem; block-size:1.25rem; min-block-size:1.25rem; margin:0; padding:0; box-shadow:none; accent-color:var(--ink); }

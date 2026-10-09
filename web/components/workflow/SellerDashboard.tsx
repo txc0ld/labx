@@ -60,6 +60,25 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
     <WalletGate wallet={browser.wallet}>
       <div className={styles.portal}>
         <ResumeTransaction browser={browser} pendingOnly onConfirmed={load} confirmedThroughBlock={state.kind === "ready" ? state.block.number : undefined} deferRefresh={state.kind !== "ready"} />
+
+        <section className={styles.createPanel} aria-label="Create a raffle draft">
+          <details>
+            <summary><span><small>New raffle</small><strong>Create a raffle</strong><em>Choose your NFT, set memberships, then press Create. LABx reviews it before you list.</em></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
+            <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
+          </details>
+        </section>
+
+        <section className={styles.raffles} aria-labelledby="seller-raffles-title">
+          <div className={styles.sectionHeading}><div><h2 id="seller-raffles-title">Your raffles</h2></div>{state.kind === "ready" ? <span>{state.raffles.length} total</span> : null}</div>
+          {scanning && raffles.length === 0 ? <RaffleSkeleton /> : null}
+          {state.kind === "ready" && state.raffles.length === 0 ? (
+            <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles for this wallet yet</strong><p>Start with Create a raffle above. You choose when to list after LABx approval.</p></div></div>
+          ) : null}
+          {raffles.length > 0 ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ol> : null}
+          {state.kind === "incomplete" && raffles.length > 0 ? <p className={`${styles.inlineWarning} notice warning`}>Showing discovered raffles only. Revenue totals remain hidden until the full scan succeeds.</p> : null}
+        </section>
+        <details className={styles.revenueDisclosure}>
+          <summary>Revenue and sales</summary>
         <section className={styles.overview} aria-labelledby="seller-overview-title">
           <div className={styles.overviewHeading}>
             <div><p className="kicker">Seller portfolio</p><h2 id="seller-overview-title">Revenue at a glance</h2></div>
@@ -99,22 +118,8 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
           )}
         </section>
 
-        <section className={styles.createPanel} aria-label="Create a raffle draft">
-          <details>
-            <summary><span><small>New raffle</small><strong>Prepare a draft</strong><em>Review the raffle, sign the secure preparation request, then submit the draft transaction.</em></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
-            <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
-          </details>
-        </section>
+        </details>
 
-        <section className={styles.raffles} aria-labelledby="seller-raffles-title">
-          <div className={styles.sectionHeading}><div><p className="kicker">Your raffles</p><h2 id="seller-raffles-title">Manage the lifecycle</h2></div>{state.kind === "ready" ? <span>{state.raffles.length} total</span> : null}</div>
-          {scanning && raffles.length === 0 ? <RaffleSkeleton /> : null}
-          {state.kind === "ready" && state.raffles.length === 0 ? (
-            <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles for this wallet yet</strong><p>Prepare a draft above. Nothing is published until you review and sign the on-chain transaction.</p></div></div>
-          ) : null}
-          {raffles.length > 0 ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ol> : null}
-          {state.kind === "incomplete" && raffles.length > 0 ? <p className={`${styles.inlineWarning} notice warning`}>Showing discovered raffles only. Revenue totals remain hidden until the full scan succeeds.</p> : null}
-        </section>
       </div>
     </WalletGate>
   );
