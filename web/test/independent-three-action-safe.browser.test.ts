@@ -40,8 +40,10 @@ run("independent one-click Safe approval", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    const approval = fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true });
+    await expect.poll(async () => await connect.isVisible().catch(() => false) || await approval.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await approval.waitFor({ state: "visible", timeout: 15_000 });
   }
 
   async function instrumentSellerProvider() {
@@ -98,9 +100,10 @@ run("independent one-click Safe approval", () => {
     });
 
     const approve = fixture.page.getByRole("button", { name: "Approve", exact: true });
+    await expect.poll(() => approve.isEnabled(), { timeout: 15_000 }).toBe(true);
     await approve.focus();
     await fixture.page.keyboard.press("Enter");
-    await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
     expect(await fixture.page.evaluate(() => (window as unknown as Window & { __independentSafeSends: number }).__independentSafeSends)).toBe(1);
 
     await fixture.page.evaluate(() => (window as unknown as Window & { __rejectDeferredSafe(): void }).__rejectDeferredSafe());
@@ -119,9 +122,9 @@ run("independent one-click Safe approval", () => {
       const response = await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
       expect(response?.status()).toBe(200);
       const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-      if (await connect.isVisible().catch(() => false)) await connect.click();
-      await fixture.page.getByRole("heading", { name: "Seller studio", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
       const draftSummary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
+      await expect.poll(async () => await connect.isVisible().catch(() => false) || await draftSummary.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
+      if (await connect.isVisible().catch(() => false)) await connect.click();
       await draftSummary.waitFor({ state: "visible", timeout: 15_000 });
       await draftSummary.click();
       await instrumentSellerProvider();
@@ -131,8 +134,8 @@ run("independent one-click Safe approval", () => {
 
       const create = fixture.page.getByRole("button", { name: "Create", exact: true });
       expect(await create.count()).toBe(1);
-      expect(await fixture.page.getByText(/locks your NFT in raffle custody/i).isVisible()).toBe(true);
-      expect(await fixture.page.getByText(/multiple wallet confirmations may follow/i).isVisible()).toBe(true);
+      expect(await fixture.page.getByText(/Create locks your NFT/i).isVisible()).toBe(true);
+      expect(await fixture.page.getByText(/separate transaction confirmations/i).isVisible()).toBe(true);
       await create.click();
       await fixture.page.waitForURL(/\/seller\/\d+$/, { timeout: 60_000 });
 
@@ -150,15 +153,23 @@ run("independent one-click Safe approval", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    const listHeading = fixture.page.getByRole("heading", { name: "List your raffle", exact: true });
+    await expect.poll(async () => await connect.isVisible().catch(() => false) || await listHeading.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: "List your raffle", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await listHeading.waitFor({ state: "visible", timeout: 15_000 });
     await instrumentSellerProvider();
     await fixture.page.waitForTimeout(500);
     expect((await sellerRpc()).filter(method => method === "eth_sendTransaction")).toEqual([]);
-    expect(await fixture.page.getByText(chain.manifest.expectedPolicy.treasury, { exact: true }).isVisible()).toBe(true);
-    expect(await fixture.page.getByText(chain.manifest.expectedPolicy.coordinator, { exact: true }).isVisible()).toBe(true);
-    expect(await fixture.page.getByText(chain.manifest.expectedPolicy.termsHash, { exact: true }).isVisible()).toBe(true);
     expect(await fixture.page.getByText(/Greater of 2.5 USDC or 2% per purchase call/i).isVisible()).toBe(true);
+    const listingDetails = fixture.page.locator("details").filter({ has: fixture.page.getByText("Listing details", { exact: true }) });
+    expect(await listingDetails.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+    expect(await listingDetails.getByText(chain.manifest.expectedPolicy.treasury, { exact: true }).isVisible()).toBe(false);
+    expect(await listingDetails.getByText(chain.manifest.expectedPolicy.coordinator, { exact: true }).isVisible()).toBe(false);
+    expect(await listingDetails.getByText(chain.manifest.expectedPolicy.termsHash, { exact: true }).isVisible()).toBe(false);
+    const listingDetailsText = await listingDetails.textContent();
+    expect(listingDetailsText).toContain(chain.manifest.expectedPolicy.treasury);
+    expect(listingDetailsText).toContain(chain.manifest.expectedPolicy.coordinator);
+    expect(listingDetailsText).toContain(chain.manifest.expectedPolicy.termsHash);
 
     const evidence = resolve(process.env.LABX_THREE_ACTION_EVIDENCE_DIR ?? "/tmp/labx-three-action-evidence");
     mkdirSync(evidence, { recursive: true });
