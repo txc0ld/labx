@@ -110,6 +110,7 @@ jobs:
             test/independent-transaction-lineage.browser.test.ts \
             test/independent-three-action-safe.browser.test.ts \
             test/wallet-restoration.browser.test.ts \
+            test/independent-wallet-restoration.browser.test.ts \
             --maxWorkers=1
         env:
           RUN_BROWSER_ACCEPTANCE: "1"
@@ -128,5 +129,6 @@ jobs:
           RUN_INDEPENDENT_TRANSACTION_LINEAGE_BROWSER: "1"
           RUN_INDEPENDENT_THREE_ACTION_BROWSER: "1"
           RUN_WALLET_RESTORE_BROWSER: "1"
+          RUN_INDEPENDENT_WALLET_RESTORE_BROWSER: "1"
           LABX_WALLET_NFT_EVIDENCE_DIR: "../artifacts/wallet-nft-picker"
           LABX_SELLER_SIMPLIFICATION_EVIDENCE_DIR: "../artifacts/seller-simplification"

@@ -38,7 +38,10 @@ run("activation drift beside browser recovery", () => {
     await fixture.page.goto(`${fixture.baseUrl}${path}`, { waitUntil: "domcontentloaded" });
     await fixture.switchAccount(account);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
+    const identity = fixture.page.locator(".wallet-identity", { hasText: `${account.slice(0, 6)}…${account.slice(-4)}` });
+    await expect.poll(async () => await connect.isVisible() || await identity.isVisible(), { timeout: 15_000 }).toBe(true);
+    if (await connect.isVisible()) await connect.click();
+    await identity.waitFor({ state: "visible", timeout: 15_000 });
   }
   async function viewport(width: number) {
     await fixture.page.setViewportSize({ width, height: 900 });
