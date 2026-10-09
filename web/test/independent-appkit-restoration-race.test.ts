@@ -66,14 +66,23 @@ const account = "0x1111111111111111111111111111111111111111";
 const project = "b".repeat(32);
 const scope = "independent-actual-sdk-race";
 
-async function setupActualSdk(changeSelectorOnAccountRead: number, connector: "injected" | "walletConnect" = "injected") {
+async function setupActualSdk(
+  changeSelectorOnAccountRead: number,
+  connector: "injected" | "walletConnect" = "injected",
+  usageGate?: Promise<void>
+) {
   const localRecords = new Map<string, string>();
   const localStorage = {
     getItem: (key: string) => localRecords.get(key) ?? null,
     setItem: (key: string, value: string) => { localRecords.set(key, value); },
     removeItem: (key: string) => { localRecords.delete(key); }
   };
-  vi.stubGlobal("window", { location: { origin: "https://labx.test" }, localStorage });
+  vi.stubGlobal("window", {
+    location: { origin: "https://labx.test" },
+    localStorage,
+    addEventListener: () => {},
+    removeEventListener: () => {}
+  });
   vi.stubGlobal("localStorage", localStorage);
   sdk.accountReads = 0;
   sdk.walletConnectDisconnects = 0;
@@ -124,7 +133,7 @@ async function setupActualSdk(changeSelectorOnAccountRead: number, connector: "i
   });
   const { ApiController, ConnectorController, CoreHelperUtil } = await import("@reown/appkit-controllers");
   sdk.changeSelector = connector => ConnectorController.setConnectorId(connector, "eip155");
-  vi.spyOn(ApiController, "fetchUsage").mockResolvedValue(undefined);
+  vi.spyOn(ApiController, "fetchUsage").mockImplementation(() => usageGate ?? Promise.resolve());
   vi.spyOn(CoreHelperUtil, "isMobile").mockReturnValue(false);
   saveWalletConsent(consentKey(project, scope), { connectorId: sdk.connectorId, account, chainId: 11155111 });
   return methods;
@@ -249,5 +258,31 @@ describe("independent installed AppKit restoration race", () => {
 
     expect(sdk.walletConnectDisconnects).toBe(1);
     expect(replacementDisconnect).not.toHaveBeenCalled();
+  });
+
+  it("fully tears down an SDK session adopted before readiness when Disconnect wins the loading race", async () => {
+    const usage = (() => {
+      let resolve = () => {};
+      return { promise: new Promise<void>(yes => { resolve = yes; }), resolve };
+    })();
+    await setupActualSdk(0, "walletConnect", usage.promise);
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+
+    const restoration = wallet.restore();
+    await vi.waitFor(() => {
+      expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider);
+      expect(sdk.instance?.getAccount("eip155")).toMatchObject({ isConnected: true, address: account });
+    });
+    wallet.disconnect();
+    usage.resolve();
+    await restoration;
+
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(sdk.walletConnectDisconnects).toBe(1));
+    expect(sdk.instance?.getProvider("eip155")).toBeUndefined();
   });
 });
