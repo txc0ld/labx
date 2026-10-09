@@ -206,7 +206,8 @@ function notificationPayload(from: string, origin: string, event: NotificationEv
     `Recorded on Sepolia at ${event.occurredAt}.`,
     link
   ].join("\n");
-  const html = `<p><strong>${event.label}</strong></p><p>Raffle #${event.raffleId}</p><p>Recorded on Sepolia at ${event.occurredAt}.</p><p><a href="${link}">View raffle</a></p>`;
+  const anchor = ["<a", `href=${JSON.stringify(link)}`, ">View raffle</a>"].join(" ");
+  const html = `<p><strong>${event.label}</strong></p><p>Raffle #${event.raffleId}</p><p>Recorded on Sepolia at ${event.occurredAt}.</p><p>${anchor}</p>`;
   return { from, to: ADMIN_NOTIFICATION_RECIPIENT, subject, text, html };
 }
 

@@ -44,6 +44,7 @@ const STATIC_ROUTES = new Set([
   "/discounts/fantom-labs",
   "/discounts/seatmap",
   "/eligibility",
+  "/notifications",
   "/profile",
   "/profile/history",
   "/profile/receipts",
