@@ -3,13 +3,14 @@ import { keccak256 } from "viem";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { encodeDraft, finishCreate, type CreateRecord } from "../lib/chain/create-flow";
 import type { DraftInput } from "../lib/chain/types";
+import { createRaffleService } from "../lib/chain/service";
 import { STANDARD_MEMBERSHIP_TIERS } from "../lib/membership-tiers";
 
 const run = process.env.RUN_CHAIN_INTEGRATION === "1" ? describe : describe.skip;
 run("one-intent creation and capability-owned owner requests", () => {
   let c: LocalChain, checkpoint: unknown;
   beforeAll(async () => { c = await localChain(); await c.write(c.nft, "mint", [c.seller, 1n]); }, 30_000);
-  beforeEach(async () => { checkpoint = await c.rpc("evm_snapshot"); });
+  beforeEach(async () => { checkpoint = await c.rpc("evm_snapshot"); c.service = createRaffleService(c.client, c.manifest); });
   afterEach(async () => { vi.restoreAllMocks(); await c.rpc("evm_revert", [checkpoint]); });
   afterAll(() => c?.close());
   async function setup() {
@@ -71,6 +72,37 @@ run("one-intent creation and capability-owned owner requests", () => {
     expect(flow.sent).toEqual([]);
     await expect(finishCreate({ service: c.service, wallet: flow.wallet.session, draft: flow.draft, record: flow.record(), save: () => { throw new Error("storage offline"); }, assertIntent: () => {}, onStep: () => {} })).rejects.toThrow("storage offline");
     expect(flow.sent).toEqual([]);
+  });
+  it.each(["createDraft", "approvePrize", "escrow"])("retires a canonically cancelled %s and waits for an explicit retry", async step => {
+    const flow = await setup();
+    const originalPrepare = c.service.prepare;
+    let currentStep = "", cancelled = false;
+    vi.spyOn(c.service, "prepare").mockImplementation(async input => { currentStep = input.action.kind; return originalPrepare(input); });
+    const request = flow.wallet.session.requestTransaction.bind(flow.wallet.session);
+    vi.spyOn(flow.wallet.session, "requestTransaction").mockImplementation((session, tx, before, dispatched) => {
+      if (currentStep === step && !cancelled) { cancelled = true; return request(session, { ...tx, to: c.seller, data: "0x" }, before, dispatched); }
+      return request(session, tx, before, dispatched);
+    });
+    await expect(flow.execute()).rejects.toThrow(/reverted or was cancelled/);
+    expect(flow.record().pending).toBeNull();
+    expect(flow.record().lastFailure?.step).toBe(step);
+    expect(await c.service.pending({ wallet: flow.wallet.session })).toBeNull();
+    const beforeRetry = flow.sent.length;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(flow.sent).toHaveLength(beforeRetry);
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(flow.sent.filter(sent => sent === step)).toHaveLength(2);
+  });
+  it("cleans both creation and journal when its pre-dispatch checkpoint callback fails", async () => {
+    const flow = await setup();
+    const send = vi.spyOn(flow.wallet.session, "requestTransaction");
+    let saved = flow.record(), refused = false;
+    await expect(finishCreate({ service: c.service, wallet: flow.wallet.session, draft: flow.draft, record: saved,
+      save: next => { saved = next; if (next.pending && !refused) { refused = true; throw new Error("checkpoint readback failed"); } }, assertIntent: () => {}, onStep: () => {} })).rejects.toThrow("checkpoint readback failed");
+    expect(send).toHaveBeenCalledOnce();
+    expect(saved.pending).toBeNull();
+    expect(await c.service.pending({ wallet: flow.wallet.session })).toBeNull();
+    expect(await c.client.getTransactionCount({ address: c.seller })).toBe(0);
   });
   it("dispatches the exact owner capability once and treats the response only as a wallet reference", async () => {
     const flow = await setup(); await flow.execute();

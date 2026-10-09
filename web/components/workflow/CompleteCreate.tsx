@@ -1,8 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { createStorageKey, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord, retireCompletedCreate } from "@/lib/chain/create-flow";
+import { captureCreateGeneration, assertCreateGeneration, recoverCreateTransaction, createStorageKey, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord, retireCompletedCreate } from "@/lib/chain/create-flow";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
+import type { Hex } from "viem";
+import { CreateRecoveryControls } from "./CreateRecoveryControls";
 import { useWalletSnapshot } from "./WalletGate";
 
 export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirmed }: {
@@ -13,7 +15,7 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
   const lifetime = useRef({ mounted: false, busy: false, operation: 0, generation: 0, revision: session.revision, service, wallet, snapshot, disabled });
   if (lifetime.current.revision !== session.revision || lifetime.current.service !== service || lifetime.current.wallet !== wallet || lifetime.current.snapshot !== snapshot || lifetime.current.disabled !== disabled) Object.assign(lifetime.current, { generation: lifetime.current.generation + 1, revision: session.revision, service, wallet, snapshot, disabled });
   useEffect(() => { lifetime.current.mounted = true; return () => { lifetime.current.mounted = false; lifetime.current.generation++; }; }, []);
-  async function create() {
+  async function create(recoveryHash?: Hex) {
     if (disabled || lifetime.current.busy || session.kind !== "connected") return;
     const generation = lifetime.current.generation;
     lifetime.current.busy = true;
@@ -22,8 +24,12 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
     try {
       if (!navigator.locks) throw new Error("Creation recovery requires secure Web Locks.");
       const baseKey = createStorageKey(service, session.account);
+      const clicked = captureCreateGeneration(localStorage, baseKey);
+      const raffleClicked = captureCreateGeneration(localStorage, `${baseKey}:raffle:${snapshot.id}`);
       await navigator.locks.request(baseKey, async () => {
         assertIntent();
+        assertCreateGeneration(localStorage, baseKey, clicked);
+        assertCreateGeneration(localStorage, `${baseKey}:raffle:${snapshot.id}`, raffleClicked);
         const r = snapshot.raffle;
         const draft = { nft: r.nft, tokenId: r.tokenId, salesEnd: r.salesEnd, reserveNonce: r.reserveNonce, reserveCommit: r.reserveCommit, title: r.title, packs: snapshot.packs };
         const active = readCreateRecord(localStorage, baseKey);
@@ -31,6 +37,11 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
         const record = readCreateRecord(localStorage, key) ?? { kind: "draft", data: encodeDraft(draft), id: snapshot.id.toString(), creationHash: null, pending: null };
         if (record.kind !== "draft") throw new Error("Recover the saved draw setup first.");
         writeCreateRecord(localStorage, key, record);
+        if (recoveryHash) {
+          setState({ kind: "busy", message: "Checking the saved creation transaction…" });
+          await recoverCreateTransaction({ service, wallet, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, hash: recoveryHash });
+          assertIntent(); setState({ kind: "idle" }); return;
+        }
         const result = await finishCreate({ service, wallet, draft, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, onStep: message => { assertIntent(); setState({ kind: "busy", message }); } });
         assertIntent();
         const completed = readCreateRecord(localStorage, key);
@@ -47,5 +58,5 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
       }
     }
   }
-  return <section className="workflow-next stack"><h2>Create your raffle</h2><p>Create completes this saved draft and locks the NFT in raffle custody. Confirm each requested transaction in your wallet.</p>{state.kind !== "idle" ? <p role={state.kind === "error" ? "alert" : "status"}>{state.message}</p> : null}<button className="btn" type="button" disabled={disabled || state.kind === "busy"} onClick={() => void create()}>{state.kind === "busy" ? "Creating…" : "Create"}</button></section>;
+  return <section className="workflow-next stack"><h2>Create your raffle</h2><p>Create completes this saved draft and locks the NFT in raffle custody. Confirm each requested transaction in your wallet.</p>{state.kind !== "idle" ? <p role={state.kind === "error" ? "alert" : "status"}>{state.message}</p> : null}<button className="btn" type="button" disabled={disabled || state.kind === "busy"} onClick={() => void create()}>{state.kind === "busy" ? "Creating…" : "Create"}</button><CreateRecoveryControls disabled={disabled || state.kind === "busy"} onRecover={hash => void create(hash)} /></section>;
 }

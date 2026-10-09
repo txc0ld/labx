@@ -52,6 +52,7 @@ export async function createCommitment(wallet: WalletSessionPort, input: Commitm
   options?.beforeRequest(identity);
   const signature = await wallet.signMessage({ assertIntent: options?.assertIntent, message: workflowMessage("commitment", context, expected.account, normalized, deadline), expected });
   options?.assertIntent();
+  if (Math.floor(Date.now() / 1000) >= Number(deadline)) throw new Error("The preparation signature expired. Click Create to try again.");
   dispatched = true;
   const result = publicReserve(await request("/api/reserve", { address: expected.account, input: normalized, deadline, signature }));
   await wallet.assertCurrent(expected);

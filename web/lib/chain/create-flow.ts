@@ -1,16 +1,16 @@
 import { decodeFunctionData, encodeFunctionData, erc721Abi, type Hex } from "viem";
-import { SubmissionNotDispatchedError } from "./submission-errors";
+import { transactionIntent } from "./pending-journal";
 import { raffleAbi } from "./abi";
 import { hash, sameAddress } from "./validation";
-import { isWalletRequestRejected } from "./wallet-errors";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { DraftInput, RaffleSnapshot, WorkflowAction } from "./types";
+import type { CanonicalReceipt, DraftInput, RaffleSnapshot, SubmissionCheckpoint, SubmittedAction, WorkflowAction } from "./types";
 
 type Step = "createDraft" | "approvePrize" | "escrow";
-type Pending = { step: Step; hash: Hex | null };
+type Pending = { step: Step; hash: Hex | null; checkpoint?: SubmissionCheckpoint };
+type Failure = { step: Step; hash: Hex; nonce: number; blockNumber: string };
 export type CreateRecord =
   | { kind: "preparing"; data: Hex; requestIdentity: Hex | null }
-  | { kind: "draft"; data: Hex; creationHash: Hex | null; id: string | null; pending: Pending | null };
+  | { kind: "draft"; data: Hex; creationHash: Hex | null; id: string | null; pending: Pending | null; lastFailure?: Failure };
 export function createStorageKey(service: RaffleService, seller: string) {
   const m = service.manifest;
   return `labx:create:v1:${m.chainId}:${m.address.toLowerCase()}:${m.runtimeCodeHash.toLowerCase()}:${seller.toLowerCase()}`;
@@ -42,9 +42,48 @@ export function readCreateRecord(storage: Storage, key: string): CreateRecord | 
   if (v.pending !== null) {
     const p = v.pending;
     if (!p || typeof p !== "object" || !("step" in p) || !("hash" in p) || p.step !== "createDraft" && p.step !== "approvePrize" && p.step !== "escrow") throw new Error("Invalid saved creation step.");
-    pending = { step: p.step, hash: p.hash === null ? null : hash(p.hash) };
+    pending = { step: p.step, hash: p.hash === null ? null : hash(p.hash), ...("checkpoint" in p ? { checkpoint: parseCheckpoint(p.checkpoint) } : {}) };
   }
-  return { kind: "draft", data, id: v.id, creationHash: v.creationHash === null ? null : hash(v.creationHash), pending };
+  let lastFailure: Failure | undefined;
+  if ("lastFailure" in v) {
+    const f = v.lastFailure;
+    if (!f || typeof f !== "object" || !("step" in f) || f.step !== "createDraft" && f.step !== "approvePrize" && f.step !== "escrow" || !("hash" in f) || !("nonce" in f) || typeof f.nonce !== "number" || !Number.isSafeInteger(f.nonce) || f.nonce < 0 || !("blockNumber" in f) || typeof f.blockNumber !== "string" || !/^\d+$/.test(f.blockNumber)) throw new Error("Invalid creation failure receipt.");
+    lastFailure = { step: f.step, hash: hash(f.hash), nonce: f.nonce, blockNumber: f.blockNumber };
+  }
+  return { kind: "draft", data, id: v.id, creationHash: v.creationHash === null ? null : hash(v.creationHash), pending, ...(lastFailure ? { lastFailure } : {}) };
+}
+function parseCheckpoint(value: unknown): SubmissionCheckpoint {
+  if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "string" || !value.id || !("nonce" in value) || typeof value.nonce !== "number" || !Number.isSafeInteger(value.nonce) || value.nonce < 0 || !("intentHash" in value) || !("startedBlock" in value) || typeof value.startedBlock !== "string" || !/^\d+$/.test(value.startedBlock)) throw new Error("Invalid creation transaction checkpoint.");
+  return { id: value.id, nonce: value.nonce, intentHash: hash(value.intentHash), startedBlock: value.startedBlock };
+}
+export function captureCreateGeneration(storage: Storage, key: string) {
+  return { raw: storage.getItem(key), generation: storage.getItem(`${key}:generation`) };
+}
+export function assertCreateGeneration(storage: Storage, key: string, expected: ReturnType<typeof captureCreateGeneration>) {
+  const current = captureCreateGeneration(storage, key);
+  if (current.raw !== expected.raw || current.generation !== expected.generation) throw new Error("Creation changed in another tab. Review its saved state before clicking Create again.");
+}
+export function advanceCreateGeneration(storage: Storage, key: string) {
+  const generation = crypto.randomUUID();
+  storage.setItem(`${key}:generation`, generation);
+  if (storage.getItem(`${key}:generation`) !== generation) throw new Error("Creation recovery could not be saved.");
+}
+export async function retireUnsentCreate({ service, wallet, storage, key, expected, assertIntent }: {
+  service: RaffleService; wallet: WalletSessionPort; storage: Storage; key: string; expected: CreateRecord; assertIntent: () => void;
+}) {
+  assertIntent();
+  const raw = storage.getItem(key);
+  if (raw === null || JSON.stringify(readCreateRecord(storage, key)) !== JSON.stringify(expected)) throw new Error("The saved creation changed. Reload before editing.");
+  if (expected.kind === "draft" && (expected.id !== null || expected.creationHash !== null || expected.pending !== null)) throw new Error("Recover the on-chain creation before editing.");
+  if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before editing.");
+  assertIntent();
+  if (storage.getItem(key) !== raw) throw new Error("The saved creation changed. Reload before editing.");
+  const archive = `${key}:retired:${crypto.randomUUID()}`;
+  storage.setItem(archive, raw);
+  if (storage.getItem(archive) !== raw) throw new Error("Creation recovery could not be retained.");
+  advanceCreateGeneration(storage, key);
+  storage.removeItem(key);
+  if (storage.getItem(key) !== null) throw new Error("The saved creation could not be retired.");
 }
 export function writeCreateRecord(storage: Storage, key: string, record: CreateRecord) {
   const raw = JSON.stringify(record);
@@ -58,8 +97,76 @@ export function retireCompletedCreate(storage: Storage, key: string, expected: E
   const historyKey = `${key}:completed:${id}`;
   storage.setItem(historyKey, raw);
   if (storage.getItem(historyKey) !== raw) throw new Error("The completed creation receipt could not be retained.");
+  advanceCreateGeneration(storage, key);
   storage.removeItem(key);
   if (storage.getItem(key) !== null) throw new Error("The completed creation could not be retired.");
+}
+type DraftRecord = Extract<CreateRecord, { kind: "draft" }>;
+function stepTransaction(service: RaffleService, draft: DraftInput, step: Step, id: string | null) {
+  if (step === "createDraft") return { to: service.manifest.address, data: encodeDraft(draft), value: 0n };
+  if (!id) throw new Error("Recover the created raffle before its custody transaction.");
+  return step === "approvePrize"
+    ? { to: draft.nft, data: encodeFunctionData({ abi: erc721Abi, functionName: "approve", args: [service.manifest.address, draft.tokenId] }), value: 0n }
+    : { to: service.manifest.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "escrow", args: [BigInt(id)] }), value: 0n };
+}
+async function settleCreateStep({ service, wallet, record, save, assertIntent, transaction, recoveryHash }: {
+  service: RaffleService; wallet: WalletSessionPort; record: DraftRecord; save: (record: DraftRecord) => void;
+  assertIntent: () => void; transaction?: SubmittedAction; recoveryHash?: Hex;
+}): Promise<CanonicalReceipt> {
+  const session = wallet.getSnapshot();
+  if (session.kind !== "connected" || !record.pending) throw new Error("Recover the saved creation transaction first.");
+  let current = record;
+  let pending = record.pending;
+  const expected = stepTransaction(service, decodeDraft(record.data), pending.step, record.id);
+  const intentHash = transactionIntent(expected);
+  const journal = await service.pending({ wallet, expectedIntent: intentHash });
+  assertIntent();
+  if (pending.checkpoint && (pending.checkpoint.intentHash !== intentHash || journal && journal.id !== pending.checkpoint.id)) throw new Error("The unresolved wallet transaction differs from this creation checkpoint.");
+  if (!pending.checkpoint && journal) {
+    if (!journal.checkpoint) throw new Error("The pending wallet transaction has no verified creation checkpoint.");
+    pending = { ...pending, checkpoint: journal.checkpoint };
+    current = { ...current, pending }; save(current);
+  }
+  if (recoveryHash && !pending.checkpoint && pending.step !== "createDraft") throw new Error("This older saved custody send has no nonce checkpoint. Recover its original wallet transaction before continuing.");
+  const txHash = recoveryHash ?? pending.hash ?? journal?.hash;
+  if (!txHash) throw new Error("The wallet response is uncertain. Open Advanced recovery and enter its Ethereum transaction hash. An unknown send cannot be discarded.");
+  const persistHash = (receipt: CanonicalReceipt) => {
+    if (pending.checkpoint && (receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
+    pending = { ...pending, hash: receipt.hash };
+    current = { ...current, pending }; save(current);
+  };
+  let tx: SubmittedAction | null | undefined = transaction;
+  if (!tx && journal) tx = await service.resume({ hash: txHash, wallet, expectedJournal: journal });
+  const outcome = tx
+    ? await service.confirm({ transaction: tx, timeoutMs: 120_000, beforeJournalClear: ({ receipt }) => persistHash(receipt) })
+    : await service.inspectOutcome({ hash: txHash, account: session.account, timeoutMs: 120_000 });
+  if (outcome.kind === "pending" || outcome.kind === "unknown") throw new Error("Creation stopped. Wait for canonical confirmation, then click Create to resume.");
+  const receipt = outcome.receipt;
+  if (receipt.chainId !== service.manifest.chainId || !sameAddress(receipt.account, session.account)) throw new Error("The creation receipt belongs to another wallet or network.");
+  if (pending.checkpoint && (receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
+  const exact = receipt.to !== null && sameAddress(receipt.to, expected.to) && receipt.data.toLowerCase() === expected.data.toLowerCase() && receipt.value === expected.value;
+  if (receipt.status !== "success" || !exact) {
+    if (!pending.checkpoint) throw new Error("This older saved send has no nonce checkpoint. Recover its original transaction or matching creation receipt before continuing.");
+    await service.acknowledgeOutcome({ receipt, acknowledge: () => save({ ...current, pending: null, lastFailure: { step: pending.step, hash: receipt.hash, nonce: receipt.nonce, blockNumber: receipt.blockNumber.toString() } }) });
+    throw new Error("The creation transaction reverted or was cancelled. Nothing else was sent. Click Create to retry this stage.");
+  }
+  persistHash(receipt);
+  return receipt;
+}
+export async function recoverCreateTransaction({ service, wallet, record, save, assertIntent, hash: recoveryHash }: {
+  service: RaffleService; wallet: WalletSessionPort; record: DraftRecord; save: (record: DraftRecord) => void; assertIntent: () => void; hash: Hex;
+}) {
+  let current = record;
+  const persist = (next: DraftRecord) => { save(next); current = next; };
+  const step = record.pending?.step;
+  if (!step) throw new Error("There is no saved creation transaction to recover.");
+  const receipt = await settleCreateStep({ service, wallet, record, save: persist, assertIntent, recoveryHash });
+  assertIntent();
+  if (step === "createDraft") {
+    const snapshot = await service.resolveCreatedDraft({ receipt, draft: decodeDraft(record.data) });
+    assertIntent();
+    persist({ ...current, creationHash: receipt.hash, id: snapshot.id.toString(), pending: null });
+  } else persist({ ...current, pending: null });
 }
 export async function finishCreate({ service, wallet, draft, record, save, assertIntent, onStep }: {
   service: RaffleService; wallet: WalletSessionPort; draft: DraftInput;
@@ -73,15 +180,8 @@ export async function finishCreate({ service, wallet, draft, record, save, asser
   const check = async () => { assertIntent(); await wallet.assertCurrent(session); assertIntent(); };
   const canonical = async (txHash: Hex) => {
     const outcome = await service.inspectOutcome({ hash: txHash, account: session.account, timeoutMs: 120_000 });
-    if (outcome.kind !== "confirmed" || outcome.replacedHash !== null) throw new Error("Creation stopped. The exact transaction needs canonical confirmation before continuing.");
+    if (outcome.kind !== "confirmed") throw new Error("Creation stopped. The exact transaction needs canonical confirmation before continuing.");
     return outcome.receipt;
-  };
-  const exactReceipt = (receipt: Awaited<ReturnType<typeof canonical>>, action: WorkflowAction & { kind: Step }) => {
-    const expected = action.kind === "createDraft" ? { to: service.manifest.address, data: encodeDraft(action.draft) }
-      : action.kind === "approvePrize" ? { to: draft.nft, data: encodeFunctionData({ abi: erc721Abi, functionName: "approve", args: [service.manifest.address, draft.tokenId] }) }
-      : { to: service.manifest.address, data: encodeFunctionData({ abi: raffleAbi, functionName: "escrow", args: [action.id] }) };
-    if (!receipt.to || !sameAddress(receipt.to, expected.to) || receipt.data.toLowerCase() !== expected.data.toLowerCase() || receipt.value !== 0n) throw new Error("The recovered transaction differs from this creation step.");
-    return receipt;
   };
   const validateSnapshot = (snapshot: RaffleSnapshot) => {
     const r = snapshot.raffle;
@@ -89,35 +189,31 @@ export async function finishCreate({ service, wallet, draft, record, save, asser
   };
   const send = async (action: WorkflowAction & { kind: Step }) => {
     await check();
-    const journal = await service.pending({ wallet });
-    let tx;
-    if (current.pending) {
-      if (current.pending.step !== action.kind) throw new Error("Recover the earlier creation step first.");
-      const txHash = current.pending.hash ?? journal?.hash;
-      if (!txHash) throw new Error("The wallet response is uncertain. Recover its transaction hash before continuing.");
-      if (journal) tx = await service.resume({ hash: txHash, wallet, expectedJournal: journal });
-      if (!tx) {
-        const receipt = await canonical(txHash);
-        return exactReceipt(receipt, action);
-      }
-    } else {
-      if (journal) throw new Error("Recover the unresolved wallet transaction before creating.");
+    const journal = await service.pending({ wallet, expectedIntent: transactionIntent(stepTransaction(service, draft, action.kind, current.id)) });
+    await check();
+    let tx: SubmittedAction | undefined;
+    if (current.pending && current.pending.step !== action.kind) throw new Error("Recover the earlier creation step first.");
+    if (!current.pending && journal) {
+      if (!journal.checkpoint) throw new Error("The pending wallet transaction has no verified creation checkpoint.");
+      persist({ ...current, pending: { step: action.kind, hash: journal.hash, checkpoint: journal.checkpoint } });
+    }
+    if (!current.pending) {
       const prepared = await service.prepare({ action, wallet, ...(action.kind === "createDraft" ? {} : { expectedDraft: draft }) });
       await check();
-      persist({ ...current, pending: { step: action.kind, hash: null } });
-      try { tx = await service.submit({ prepared, wallet, assertIntent }); }
-      catch (error) {
-        if (error instanceof SubmissionNotDispatchedError || isWalletRequestRejected(error) && !await service.pending({ wallet })) persist({ ...current, pending: null });
-        throw error;
-      }
-      persist({ ...current, pending: { step: action.kind, hash: tx.hash } });
+      let requested: SubmissionCheckpoint | null = null;
+      tx = await service.submit({ prepared, wallet, assertIntent,
+        beforeRequest: checkpoint => {
+          assertIntent(); requested = checkpoint;
+          persist({ ...current, pending: { step: action.kind, hash: null, checkpoint } });
+        },
+        onNotDispatched: checkpoint => {
+          if (requested?.id !== checkpoint.id) return;
+          persist({ ...current, pending: null });
+        }
+      });
+      persist({ ...current, pending: { step: action.kind, hash: tx.hash, ...(requested ? { checkpoint: requested } : {}) } });
     }
-    if (!tx) throw new Error("The pending transaction could not be recovered.");
-    const outcome = await service.confirm({ transaction: tx, timeoutMs: 120_000, beforeJournalClear: ({ receipt }) => {
-      persist({ ...current, pending: { step: action.kind, hash: receipt.hash } });
-    } });
-    if (outcome.kind !== "confirmed" || outcome.replacedHash !== null) throw new Error("Creation stopped. Confirm or recover the exact wallet transaction before continuing.");
-    return exactReceipt(outcome.receipt, action);
+    return settleCreateStep({ service, wallet, record: current, save: persist, assertIntent, transaction: tx });
   };
   await check();
   if (encodeDraft(draft) !== current.data) throw new Error("The saved draft differs from this creation intent.");

@@ -40,7 +40,7 @@ export type ReviewAttestationState = Attestations & { attestedDigest: Hex | null
 type FlowState =
   | { kind: "idle" }
   | { kind: "preparing"; actionKind: OwnerAction["kind"] }
-  | { kind: "exported"; intent: OwnerExecutionIntent; copied: boolean; error?: string }
+  | { kind: "exported" | "requested"; intent: OwnerExecutionIntent; copied: boolean; error?: string }
   | { kind: "recovery"; intent: OwnerExecutionIntent; message?: string }
   | { kind: "confirming"; intent: OwnerExecutionIntent; hash: Hex; confirmationOnly: boolean }
   | { kind: "pending"; intent: OwnerExecutionIntent; hash: Hex; confirmationOnly: boolean }
@@ -458,6 +458,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
   const owner = review.snapshot.owner;
   const storageKey = intentStorageKey(service, owner, review.snapshot.id);
   const exposureKey = `${storageKey}:manual-exposure`;
+  const channelKey = `${storageKey}:handoff`;
   const lifetime = useRef({ mounted: false, generation: 0, nextOperation: 0, exclusiveOperation: null as number | null, reviewHash });
   const discoveryCursor = useRef<OwnerExecutionDiscoveryCursor | undefined>(undefined);
   const previousReviewHash = useRef(reviewHash);
@@ -539,7 +540,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         return;
       }
       setSelected(intent.action.kind);
-      setState({ kind: "exported", intent, copied: false });
+      setState(handoffState(intent));
     } catch {
       window.localStorage.removeItem(storageKey);
     }
@@ -554,7 +555,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     clearAttestations();
     setDiscoveryBusy(false);
     if (state.kind === "executed") return;
-    const intent = state.kind === "exported" || state.kind === "recovery" || state.kind === "confirming" || state.kind === "pending" ? state.intent : null;
+    const intent = (state.kind === "exported" || state.kind === "requested") || state.kind === "recovery" || state.kind === "confirming" || state.kind === "pending" ? state.intent : null;
     if (intent !== null && isRevokeConfirmationRecovery(intent, review)) {
       invalidateOperations();
       setSelected(null);
@@ -565,7 +566,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     }
     if (intent !== null && intent.action.expectedReviewHash !== reviewHash) {
       invalidateOperations();
-      setState({ kind: "exported", intent, copied: false });
+      setState(handoffState(intent));
       return;
     }
     invalidateOperations();
@@ -578,7 +579,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewHash, storageKey]);
 
-  const discoverableIntent = state.kind === "exported" || state.kind === "recovery" || state.kind === "confirming" || state.kind === "pending" ? state.intent : null;
+  const discoverableIntent = (state.kind === "exported" || state.kind === "requested") || state.kind === "recovery" || state.kind === "confirming" || state.kind === "pending" ? state.intent : null;
   useEffect(() => {
     if (discoverableIntent === null) return;
     const check = () => {
@@ -672,15 +673,18 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         await navigator.locks.request(storageKey, () => {
           if (!isCurrent(operation)) throw new Error("This review is no longer active.");
           if (dispatch && window.localStorage.getItem(storageKey) !== null) throw new Error("A saved owner execution is still pending. Wait for canonical recovery before another request.");
+          persistHandoff(intent, dispatch ? "wallet-request" : "file");
+          exported = intent;
           window.localStorage.setItem(storageKey, raw);
           if (window.localStorage.getItem(storageKey) !== raw) throw new Error("Owner execution recovery could not be saved.");
+          if (!dispatch) recordExposureLocked(intent);
         });
         exported = intent;
-        if (dispatch) {
+        if (dispatch && scopeCurrent()) {
           discoveryCursor.current = undefined;
           setDiscovery({ kind: "idle" });
           setDiscoveryBusy(false);
-          setState({ kind: "exported", intent, copied: false });
+          setState(handoffState(intent));
           finishOperation(operation);
         }
       };
@@ -689,21 +693,22 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       } else {
         const intent = await service.exportOwnerExecution({ prepared, wallet });
         await persist(intent);
+        if (!isCurrent(operation)) return;
         downloadSafeFile(intent, service);
       }
       if (!isCurrent(operation)) return;
       discoveryCursor.current = undefined;
       setDiscovery({ kind: "idle" });
       setDiscoveryBusy(false);
-      if (exported) setState({ kind: "exported", intent: exported, copied: false });
+      if (exported) setState(handoffState(exported));
     } catch (error) {
-      if (exported && dispatch && scopeCurrent() && (isWalletRequestRejected(error) || error instanceof SubmissionNotDispatchedError)) {
+      if (exported && dispatch && (isWalletRequestRejected(error) || error instanceof SubmissionNotDispatchedError)) {
         const rejected = exported;
         let retired = false;
         try {
           if (!navigator.locks) throw new Error("Safe recovery requires secure Web Locks.");
           await navigator.locks.request(storageKey, () => {
-            if (!scopeCurrent() || window.localStorage.getItem(storageKey) !== serializeOwnerExecutionIntent(rejected)) return;
+            if (window.localStorage.getItem(storageKey) !== serializeOwnerExecutionIntent(rejected)) return;
             const exposure = window.localStorage.getItem(exposureKey);
             if (exposure !== null && canonicalIntent(exposure) === canonicalIntent(serializeOwnerExecutionIntent(rejected))) return;
             window.localStorage.removeItem(storageKey);
@@ -718,11 +723,10 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
           setState({ kind: "error", message: "The wallet request was cancelled. Review and click Approve to try again." });
         }
       } else if (isCurrent(operation)) {
-        if (exported && !isWalletRequestRejected(error)) {
-          setState({ kind: "exported", intent: exported, copied: false });
+        if (exported) {
+          setState(handoffState(exported));
           setDiscovery({ kind: "error", message: "The wallet response is uncertain. Watching for canonical execution. Do not send another approval." });
         } else {
-          if (exported) window.localStorage.removeItem(storageKey);
           exported = null;
           setState({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Review and click Approve to try again." : error instanceof Error ? error.message : "The owner execution could not be prepared." });
         }
@@ -733,6 +737,20 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     if (exported !== null && scopeCurrent() && window.localStorage.getItem(storageKey) !== null) void discover(exported);
   }
 
+  function persistHandoff(intent: OwnerExecutionIntent, channel: "wallet-request" | "file") {
+    const raw = JSON.stringify({ intent: canonicalIntent(serializeOwnerExecutionIntent(intent)), channel });
+    window.localStorage.setItem(channelKey, raw);
+    if (window.localStorage.getItem(channelKey) !== raw) throw new Error("Safe handoff recovery could not be saved.");
+  }
+  function handoffState(intent: OwnerExecutionIntent, copied = false, error?: string): Extract<FlowState, { kind: "exported" | "requested" }> {
+    let kind: "exported" | "requested" = "exported";
+    try {
+      const raw = window.localStorage.getItem(channelKey);
+      const value: unknown = raw === null ? null : JSON.parse(raw);
+      if (value && typeof value === "object" && "intent" in value && value.intent === canonicalIntent(serializeOwnerExecutionIntent(intent)) && "channel" in value && value.channel === "wallet-request") kind = "requested";
+    } catch { /* Unknown handoffs use manual import instructions, never imply dispatch. */ }
+    return { kind, intent, copied, ...(error ? { error } : {}) };
+  }
   function canonicalIntent(raw: string) {
     return serializeOwnerExecutionIntent(parseOwnerExecutionIntent(raw, service.manifest, owner));
   }
@@ -758,7 +776,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       const marker = await recordExposure(intent, () => { if (!current()) throw new Error("This review is no longer active."); });
       if (current()) setVisiblePayload(marker);
     } catch (error) {
-      if (current()) setState(state => state.kind === "exported" ? { ...state, error: error instanceof Error ? error.message : "Manual Safe recovery could not be saved." } : state);
+      if (current()) setState(state => (state.kind === "exported" || state.kind === "requested") ? { ...state, error: error instanceof Error ? error.message : "Manual Safe recovery could not be saved." } : state);
     }
   }
 
@@ -769,9 +787,9 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       await recordExposure(intent, () => { if (!isCurrent(operation)) throw new Error("This review is no longer active."); });
       if (!isCurrent(operation)) return;
       await navigator.clipboard.writeText(formatOwnerPayload(intent));
-      if (isCurrent(operation)) setState({ kind: "exported", intent, copied: true });
+      if (isCurrent(operation)) setState(handoffState(intent, true));
     } catch {
-      if (isCurrent(operation)) setState({ kind: "exported", intent, copied: false, error: "The call could not be copied safely. Retry Advanced recovery." });
+      if (isCurrent(operation)) setState(handoffState(intent, false, "The call could not be copied safely. Retry Advanced recovery."));
     }
   }
 
@@ -847,6 +865,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         window.localStorage.setItem(archiveKey, originalRaw);
         if (window.localStorage.getItem(archiveKey) !== originalRaw) throw new Error("The previous owner review could not be preserved.");
         const freshRaw = serializeOwnerExecutionIntent(fresh);
+        persistHandoff(fresh, "file");
         recordExposureLocked(fresh);
         window.localStorage.setItem(storageKey, freshRaw);
         if (window.localStorage.getItem(storageKey) !== freshRaw) throw new Error("The current owner review could not be saved.");
@@ -856,10 +875,10 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       downloadSafeFile(fresh, service);
       discoveryCursor.current = undefined;
       setDiscovery({ kind: "idle" });
-      setState({ kind: "exported", intent: observed, copied: false });
+      setState(handoffState(observed));
     } catch (error) {
       if (isCurrent(operation)) {
-        setState({ kind: "exported", intent: observed, copied: false, error: error instanceof Error ? error.message : "The current Safe call could not be downloaded. The saved execution is still being watched." });
+        setState(handoffState(observed, false, error instanceof Error ? error.message : "The current Safe call could not be downloaded. The saved execution is still being watched."));
       }
     } finally {
       finishOperation(operation);
@@ -892,14 +911,14 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
 
   if (state.kind === "preparing") return <section className={styles.flow} role="status"><h2>Refreshing the owner review</h2><p>Simulating the {state.actionKind === "approveRaffle" ? "approval" : "revocation"} against current chain state before your wallet request.</p><button className="btn" type="button" disabled>Waiting for Safe…</button></section>;
 
-  if (state.kind === "exported" || state.kind === "confirming" && !state.confirmationOnly || state.kind === "pending" && !state.confirmationOnly) {
+  if ((state.kind === "exported" || state.kind === "requested") || state.kind === "confirming" && !state.confirmationOnly || state.kind === "pending" && !state.confirmationOnly) {
     const intent = state.intent;
     const safeHref = safeQueue(intent.chainId, intent.from);
     const verb = intent.action.kind === "approveRaffle" ? "approval" : "revocation";
     return <section className={styles.flow} aria-labelledby="owner-execution-title" aria-busy={discoveryBusy}>
       <div><p className="kicker">Safe handoff</p><h2 id="owner-execution-title">Finish the {verb} in Safe</h2></div>
-      <p>Complete the signatures and execution in your connected Safe. LABx watches automatically for the canonical transaction. A wallet acceptance or proposal alone is not approval.</p>
-      {state.kind === "exported" && state.error ? <p className="notice error" role="alert">{state.error}</p> : null}
+      {handoffState(intent).kind === "requested" ? <p>Complete the signatures and execution in your connected Safe. LABx watches automatically for the canonical transaction. A wallet acceptance or proposal alone is not approval.</p> : <p>This saved call has no recorded wallet request. Open your Safe, check existing proposals, then import the downloaded JSON file with Transaction Builder. Review, collect signatures and execute it. Downloading alone does not change the raffle. LABx watches for canonical execution.</p>}
+      {(state.kind === "exported" || state.kind === "requested") && state.error ? <p className="notice error" role="alert">{state.error}</p> : null}
       <details><summary>Advanced recovery</summary>
       <p>Manual execution tools are available if your Safe connection cannot finish this request.</p>
       {intent.action.kind === "approveRaffle" ? <p>By clicking Review and download call, I confirm that I checked the canonical collection provenance against an independent source, reviewed transfer restrictions and upgradability, and reviewed the draw funding shown above. Approval does not reserve the VRF subscription balance.</p> : <p>Review and download the revocation for the current draft revision shown above.</p>}
@@ -909,7 +928,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       {safeHref ? <a href={safeHref} target="_blank" rel="noreferrer">Open Safe</a> : null}
       </details>
       <DiscoveryStatus state={discovery} busy={discoveryBusy} onRetry={() => void discover(intent)} />
-      <details onToggle={event => { if (event.currentTarget.open) void showPayload(intent); }}><summary>Advanced call fields and technical details</summary><p>The downloaded file contains one zero-ETH call for this exact review. LABx has not submitted it. A Safe transaction proposal hash is not an executed Ethereum transaction hash.</p><p>Before every download LABx repeats the owner, draft, policy, custody, runtime, network and simulation checks.</p>{visiblePayload === canonicalIntent(serializeOwnerExecutionIntent(intent)) ? <><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button></div><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></> : <p>Checking saved recovery before showing the exact call fields.</p>}</details>
+      <details onToggle={event => { if (event.currentTarget.open) void showPayload(intent); }}><summary>Advanced call fields and technical details</summary><p>The manual file contains one zero-ETH call for this exact review. Downloading or copying it sends nothing. A Safe transaction proposal hash is not an executed Ethereum transaction hash.</p><p>Before every download LABx repeats the owner, draft, policy, custody, runtime, network and simulation checks.</p>{visiblePayload === canonicalIntent(serializeOwnerExecutionIntent(intent)) ? <><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={() => void copyPayload(intent)}>{(state.kind === "exported" || state.kind === "requested") && state.copied ? "Payload copied" : "Copy exact call fields"}</button></div><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></> : <p>Checking saved recovery before showing the exact call fields.</p>}</details>
       <details><summary>Advanced: executed Ethereum transaction hash</summary><label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached two canonical confirmations. A matching event has not been confirmed at that depth yet.</p> : null}<button className="btn" type="button" disabled={state.kind === "confirming" || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm canonical execution"}</button></details>
 
     </section>;

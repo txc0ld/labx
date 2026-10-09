@@ -1,7 +1,7 @@
 import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
-  DraftInput, ExternalExecutionReference, ActionTrustInput, AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, OutcomeLineage, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
+  SubmissionCheckpoint, DraftInput, ExternalExecutionReference, ActionTrustInput, AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, OutcomeLineage, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
@@ -48,13 +48,13 @@ export interface RaffleService {
   openingPolicy(input?: { block?: BlockRef }): Promise<{ policy: RafflePolicy; hash: Hex; block: BlockRef }>;
   quoteMembership(input: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote>;
   prepare(input: { action: WorkflowAction; wallet: WalletSessionPort; expectedDraft?: DraftInput }): Promise<PreparedAction>;
-  submit(input: { prepared: PreparedAction; wallet: WalletSessionPort; assertIntent?: () => void }): Promise<SubmittedAction>;
+  submit(input: { prepared: PreparedAction; wallet: WalletSessionPort; assertIntent?: () => void; beforeRequest?: (checkpoint: SubmissionCheckpoint) => void; onNotDispatched?: (checkpoint: SubmissionCheckpoint) => void }): Promise<SubmittedAction>;
   confirm(input: { transaction: SubmittedAction; timeoutMs?: number; beforeJournalWatch?: (input: { transaction: ObservedTransaction; pending: OutcomeJournal }) => void; beforeJournalClear?: (input: { receipt: CanonicalReceipt; pending: OutcomeJournal | null }) => void }): Promise<Confirmation>;
   inspectOutcome(input: { hash: Hex; account: Address; timeoutMs?: number }): Promise<OutcomeInspection>;
   captureOutcomeLineage(input: { account: Address; hash: Hex }): OutcomeLineage | null;
   retainOutcome(input: { receipt: CanonicalReceipt; lineage?: OutcomeLineage; retain: (input: { priorHash: Hex | null }) => void }): Promise<void>;
   acknowledgeOutcome(input: { receipt: CanonicalReceipt; acknowledge: () => void }): Promise<void>;
-  pending(input: { wallet: WalletSessionPort }): Promise<OutcomeJournal | null>;
+  pending(input: { wallet: WalletSessionPort; expectedIntent?: Hex }): Promise<OutcomeJournal | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort; expectedJournal?: OutcomeJournal; beforeJournalUpdate?: (input: { transaction: SubmittedAction; nonce: number; pending: OutcomeJournal }) => void }): Promise<SubmittedAction | null>;
 }
 

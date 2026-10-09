@@ -111,7 +111,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     try { return await submitDirect(input, () => { dispatched = true; }); }
     catch (error) { if (!dispatched) throw new SubmissionNotDispatchedError(error); throw error; }
   }
-  async function submitDirect({ prepared, wallet, assertIntent }: Parameters<RaffleService["submit"]>[0], onDispatch: () => void) {
+  async function submitDirect({ prepared, wallet, assertIntent, beforeRequest, onNotDispatched }: Parameters<RaffleService["submit"]>[0], onDispatch: () => void) {
     assertIntent?.();
     const entry = reviews.get(prepared);
     if (!entry || entry.used) throw new Error("This review is invalid or already submitted. Review again.");
@@ -140,6 +140,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
           if (journal.read(account)) throw new Error(unresolved);
           intent = { id: crypto.randomUUID(), intentHash: transactionIntent(entry.transaction), nonce, startedBlock: fresh.block.number.toString(), hash: null };
           journal.write(account, intent);
+          beforeRequest?.({ id: intent.id, intentHash: intent.intentHash, nonce: intent.nonce, startedBlock: intent.startedBlock });
         });
       }, () => { assertIntent?.(); walletRequested = true; onDispatch(); });
       broadcastHash = txHash;
@@ -156,7 +157,10 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         const current = journal.read(account);
         if (current && current.id === intent?.id) {
           if (current.hash !== null || broadcastHash !== null) refused = false;
-          else journal.remove(account);
+          else {
+            onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
+            journal.remove(account);
+          }
         }
       });
       if (walletRequested && !refused) throw new Error("The wallet response is uncertain. Check its activity and reconcile the transaction hash before retrying.");
@@ -319,9 +323,11 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       acknowledge();
     });
   }
-  async function pending({ wallet }: Parameters<RaffleService["pending"]>[0]) {
+  async function pending({ wallet, expectedIntent }: Parameters<RaffleService["pending"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
-    const current = journal.read(session.account); return current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null;
+    const current = journal.read(session.account);
+    if (current && expectedIntent && current.intentHash !== expectedIntent) throw new Error("Recover the unrelated wallet transaction before continuing this creation.");
+    return current ? { id: current.id, hash: current.hash, nonce: current.nonce, ...(expectedIntent ? { checkpoint: { id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock } } : {}) } : null;
   }
   return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, requestOwnerExecution, resolveCreatedDraft,
     discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
