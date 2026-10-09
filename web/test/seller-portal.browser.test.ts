@@ -518,6 +518,7 @@ run("rendered seller portal on isolated Anvil", () => {
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.page.getByRole("heading", { name: "Seller portfolio 2" }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.locator("summary").filter({ hasText: "Revenue and obligations" }).click();
     await fixture.page.getByRole("heading", { name: "Revenue and obligations" }).waitFor({ state: "visible" });
     await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-detail-mobile.png"), fullPage: true });
     await fixture.switchAccount(chain.stranger);

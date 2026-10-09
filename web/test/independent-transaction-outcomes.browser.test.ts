@@ -1,3 +1,4 @@
+import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -358,6 +359,7 @@ run("independent transaction outcome ownership", () => {
 
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     const oldOutcome = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: oldApproval.hash });
+    await openWalletActivity(fixture.page);
     await oldOutcome.waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.waitForTimeout(2_000);
     const rawAfterInspection = await fixture.page.evaluate((key: string) => localStorage.getItem(key), pendingKey);
@@ -544,6 +546,7 @@ run("independent transaction outcome ownership", () => {
 
       await fixture.page.reload({ waitUntil: "domcontentloaded" });
       const savedReplacement = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
+      await openWalletActivity(fixture.page);
       await savedReplacement.waitFor({ state: "visible", timeout: 10_000 });
       const confirmedReplacement = savedReplacement.getByText("Transaction confirmed", { exact: true });
       await confirmedReplacement.waitFor({ state: "visible", timeout: 10_000 });

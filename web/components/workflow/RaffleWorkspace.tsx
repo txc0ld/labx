@@ -9,7 +9,7 @@ import { formatEther, type Hex } from "viem";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { sellerAccounting } from "@/lib/chain/fees";
 import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
-import { SELLER_ACTION_KINDS, sellerOwnsRaffle, sellerPortalActions, type SellerActionAvailability } from "@/lib/chain/seller-actions";
+import { SELLER_ACTION_KINDS, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, type SellerActionAvailability } from "@/lib/chain/seller-actions";
 import type { ReserveRecord } from "@/lib/reserve";
 import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
@@ -236,15 +236,15 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
             <div className="purchase-eyebrow"><p className="kicker">Seller {shortAddress(snapshot.raffle.seller)}</p><span className="piece-status">{phaseLabel(phase)}</span></div>
             <h1 className="page-title">{snapshot.raffle.title}</h1>
             <p className="piece-deadline">Sales deadline {formatDate(snapshot.raffle.salesEnd)} UTC · {snapshot.lotCount.toString()} recorded lots</p>
-            <p className="notice" role="status"><strong>LABx review:</strong> {admissionCopy(snapshot)}. This records review of the exact prize and draw-funding use; it is not proof of authenticity or future transferability.</p>
+            {mode === "public" ? <p className="notice" role="status"><strong>LABx review:</strong> {admissionCopy(snapshot)}. This records review of the exact prize and draw-funding use; it is not proof of authenticity or future transferability.</p> : null}
             <Link className="guide-link" href="/fairness">Draw protections <span aria-hidden="true">↗</span></Link>
           </header>
-          {mode === "seller" ? <SellerFinancialSummary snapshot={snapshot} /> : null}
           {accountState === "loading" ? <p className="notice" role="status">Loading your account state…</p> : null}
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
             ? <SellerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />}
+          {mode === "seller" ? <details className="workflow-details"><summary>Revenue and obligations</summary><SellerFinancialSummary snapshot={snapshot} /></details> : null}
           {mode === "public" ? <RecoveryAlternatives browser={browser} snapshot={snapshot} availability={availability} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : null}
           {mode === "seller" && seller && phase === 0 && saveCommitment && writesEnabled ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
           <details className="workflow-details"><summary>Contract and review details</summary><dl className="review-list"><div><dt>Chain</dt><dd>{browser.service.manifest.chainId === 11155111 ? "Ethereum Sepolia" : "Isolated local chain"} ({browser.service.manifest.chainId})</dd></div><div><dt>Raffle contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ? <a href={explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ?? undefined} target="_blank" rel="noreferrer">{browser.service.manifest.address} ↗</a> : browser.service.manifest.address}</dd></div><div><dt>Collection contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ? <a href={explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ?? undefined} target="_blank" rel="noreferrer">{snapshot.raffle.nft} ↗</a> : snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ? <a href={explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ?? undefined} target="_blank" rel="noreferrer">#{snapshot.raffle.tokenId.toString()} on explorer ↗</a> : `#${snapshot.raffle.tokenId.toString()}`}</dd></div><div><dt>LABx review</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(snapshot.policy.minBuyerFeeUsdc)} USDC or {formatBps(snapshot.policy.buyerFeeBps)} per purchase call; nonrefundable after success</dd></div><div><dt>Seller commission</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
@@ -466,17 +466,19 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
     const item = sellerAvailability.find((candidate) => candidate.kind === kind && candidate.enabled);
     return item && item.kind !== "updateDraft" ? [item] : [];
   });
-  if (!ordered.length) return <p className="notice" role="status">No seller action is currently available. Refresh after the deadline or a pending transaction confirms.</p>;
-  const [primary, ...secondary] = ordered;
+  const next = sellerNextStep(snapshot, sellerAvailability);
+  const primary = next.kind === "action" ? next.action : null;
+  const secondary = ordered.filter(item => item.kind !== primary?.kind);
   return (
     <div className="stack">
-      <SellerActionControl browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
-      {secondary.length ? <details className="workflow-details"><summary>Other available seller actions ({secondary.length})</summary><div className="stack">{secondary.map((item) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />)}</div></details> : null}
+      {primary ? <SellerActionControl key={primary.kind} primary browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section> : null}
+      {secondary.length ? <details className="workflow-details"><summary>Advanced ({secondary.length})</summary><div className="stack">{secondary.map((item) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />)}</div></details> : null}
     </div>
   );
 }
 
-function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, writesEnabled, writeDisabledReason }: {
+function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, writesEnabled, writeDisabledReason, primary = false }: {
+  primary?: boolean;
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   availability: SellerActionAvailability;
@@ -485,21 +487,10 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   writesEnabled: boolean;
   writeDisabledReason?: string;
 }) {
-  const [policy, setPolicy] = useState<Awaited<ReturnType<typeof browser.service.openingPolicy>> | null>(null);
   const [recovered, setRecovered] = useState<ReserveRecord | null>(null);
   const [preflight, setPreflight] = useState<"idle" | "loading" | "error">("idle");
   const [preflightError, setPreflightError] = useState("");
   const preflightInFlight = useRef(false);
-
-  async function reviewOpeningPolicy() {
-    if (preflightInFlight.current) return;
-    preflightInFlight.current = true;
-    setPreflight("loading");
-    setPreflightError("");
-    try { setPolicy(await browser.service.openingPolicy()); setPreflight("idle"); }
-    catch (error) { setPreflightError(error instanceof Error ? error.message : "Opening policy could not be loaded."); setPreflight("error"); }
-    finally { preflightInFlight.current = false; }
-  }
 
   async function recoverSavedCommitment() {
     if (!recoverCommitment || preflightInFlight.current) return;
@@ -517,10 +508,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
     } finally { preflightInFlight.current = false; }
   }
 
-  if (availability.kind === "open") {
-    if (!policy) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Review opening policy</h2><p>Opening fixes the treasury, terms, minimum processing fee, percentage rates and randomness configuration for this raffle. The current draft also needs a matching LABx owner approval.</p></div><button className="btn" type="button" disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void reviewOpeningPolicy()}>{preflight === "loading" ? "Loading policy…" : "Review opening policy"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
-    return <section className="workflow-next stack"><div><p className="kicker">Opening policy</p><h2>Open memberships</h2><p>Review the pinned recipients, fee rates and terms. They cannot be edited after this transaction.</p></div><dl className="review-list"><div><dt>LABx approval</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(policy.policy.minBuyerFeeUsdc)} USDC or {formatBps(policy.policy.buyerFeeBps)} per purchase call; retained after a successful purchase</dd></div><div><dt>Seller commission</dt><dd>{formatBps(policy.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="Open memberships" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /><button className="text-link" type="button" onClick={() => setPolicy(null)}>Refresh policy review</button></section>;
-  }
+  if (availability.kind === "open") return <OpeningPolicyControl browser={browser} snapshot={snapshot} onConfirmed={onConfirmed} writesEnabled={writesEnabled && primary} writeDisabledReason={writeDisabledReason} />;
   if (availability.kind === "reveal") {
     if (!recoverCommitment) return <p className="notice warning" role="status">Commitment recovery is not configured. Reveal is unavailable.</p>;
     if (!recovered) return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>Recover commitment</h2><p>A wallet signature retrieves the private hashes for this raffle. Nothing is revealed until you separately review the transaction.</p></div><button className="btn" type="button" disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Opening wallet…" : "Sign to recover commitment"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
@@ -530,7 +518,48 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   const action: WorkflowAction = availability.kind === "snapshot"
     ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
     : { kind: availability.kind, id: snapshot.id };
-  return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{availability.label}</h2><p>{availability.reason || "Review the prepared transaction before opening your wallet."}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} label={availability.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+  return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{availability.label}</h2><p>{availability.reason || "Review the prepared transaction before opening your wallet."}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={availability.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+}
+
+function OpeningPolicyControl({ browser, snapshot, onConfirmed, writesEnabled, writeDisabledReason }: {
+  browser: Extract<BrowserService, { kind: "configured" }>;
+  snapshot: RaffleSnapshot;
+  onConfirmed: () => Promise<void>;
+  writesEnabled: boolean;
+  writeDisabledReason?: string;
+}) {
+  const wallet = useWalletSnapshot(browser.wallet);
+  const [retry, setRetry] = useState(0);
+  const identity = `${snapshot.id}:${snapshot.block.hash}:${snapshot.admission.reviewHash}:${wallet.revision}:${writesEnabled}:${retry}`;
+  const context = useRef({ service: browser.service, wallet: browser.wallet, identity, generation: 0 });
+  if (context.current.service !== browser.service || context.current.wallet !== browser.wallet || context.current.identity !== identity) {
+    context.current = { service: browser.service, wallet: browser.wallet, identity, generation: context.current.generation + 1 };
+  }
+  const scope = context.current.generation;
+  type PolicyState = { scope: number } & (
+    | { kind: "loading" }
+    | { kind: "ready"; policy: Awaited<ReturnType<RaffleService["openingPolicy"]>> }
+    | { kind: "error"; message: string }
+  );
+  const [state, setState] = useState<PolicyState>({ scope, kind: "loading" });
+  useEffect(() => {
+    const expected = context.current;
+    let active = true;
+    setState({ scope: expected.generation, kind: "loading" });
+    if (!writesEnabled || wallet.kind !== "connected" || wallet.chainId !== browser.service.manifest.chainId) return;
+    const isCurrent = () => active && context.current === expected && browser.wallet.getSnapshot().revision === wallet.revision;
+    void browser.service.openingPolicy().then(policy => {
+      if (isCurrent()) setState({ scope: expected.generation, kind: "ready", policy });
+    }).catch(error => {
+      if (isCurrent()) setState({ scope: expected.generation, kind: "error", message: error instanceof Error ? error.message : "Opening policy could not be loaded." });
+    });
+    return () => { active = false; };
+    // Scope includes the deployment service, raffle snapshot, session and explicit retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope]);
+  if (state.scope !== scope || state.kind !== "ready") return <section className="workflow-next stack"><h2>Open memberships</h2>{state.scope === scope && state.kind === "error" ? <><p className="notice error" role="alert">{state.message}</p><button className="btn" type="button" onClick={() => setRetry(value => value + 1)}>Retry opening policy</button></> : <p role="status">{writesEnabled ? "Loading opening policy…" : writeDisabledReason || "Waiting for verified seller state…"}</p>}</section>;
+  const { policy } = state;
+  return <section className="workflow-next stack"><div><p className="kicker">Opening policy</p><h2>Open memberships</h2><p>Review the pinned recipients, fee rates and terms. They cannot be edited after this transaction.</p></div><dl className="review-list"><div><dt>LABx approval</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(policy.policy.minBuyerFeeUsdc)} USDC or {formatBps(policy.policy.buyerFeeBps)} per purchase call; retained after a successful purchase</dd></div><div><dt>Seller commission</dt><dd>{formatBps(policy.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} prepareOnMount action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="Open memberships" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /><button className="text-link" type="button" onClick={() => setRetry(value => value + 1)}>Refresh policy review</button></section>;
 }
 
 function RecoveryAlternatives({ browser, snapshot, availability, onConfirmed, writesEnabled, writeDisabledReason }: {

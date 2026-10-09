@@ -39,9 +39,6 @@ run("owner review async lifetimes", () => {
     expect(response?.status()).toBe(200);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    const review = fixture.page.getByRole("button", { name: "Review approval checklist", exact: true });
-    await review.waitFor({ state: "visible", timeout: 10_000 });
-    await review.click();
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const checkboxes = fixture.page.locator("fieldset input[type=checkbox]");
     expect(await checkboxes.count()).toBe(3);
@@ -85,8 +82,7 @@ run("owner review async lifetimes", () => {
     await fixture.page.getByRole("button", { name: "Discard exported review", exact: true }).click();
     await fixture.page.evaluate(() => (window as unknown as Window & { __resolveOwnerCopy(): void }).__resolveOwnerCopy());
 
-    await fixture.page.getByRole("heading", { name: "Choose the current draft action", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
-    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
     expect(await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).count()).toBe(0);
   }, 30_000);

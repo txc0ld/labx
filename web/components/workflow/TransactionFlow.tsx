@@ -35,6 +35,7 @@ export type TransactionFlowProps = {
   onCancel?: () => void;
   disabled?: boolean;
   disabledReason?: string;
+  prepareOnMount?: boolean;
 };
 
 function walletSnapshot(wallet: WalletSessionPort) {
@@ -74,6 +75,7 @@ function actionKey(action: WorkflowAction) {
 
 type FlowContext = {
   generation: number;
+  mountRevision: number;
   service: RaffleService;
   wallet: WalletSessionPort;
   actionKey: string;
@@ -94,7 +96,7 @@ function actionReview(action: WorkflowAction) {
   );
 }
 
-export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason }: TransactionFlowProps) {
+export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
   const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
@@ -102,9 +104,9 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const getWalletSnapshot = useCallback(() => walletSnapshot(wallet), [wallet]);
   const currentWallet = useSyncExternalStore(subscribe, getWalletSnapshot, getWalletSnapshot);
   const semanticAction = actionKey(action);
-  const context = useRef<FlowContext>({ generation: 0, service, wallet, actionKey: semanticAction, walletRevision: currentWallet.revision, resumeHash });
+  const context = useRef<FlowContext>({ generation: 0, mountRevision: 0, service, wallet, actionKey: semanticAction, walletRevision: currentWallet.revision, resumeHash });
   if (context.current.service !== service || context.current.wallet !== wallet || context.current.actionKey !== semanticAction || context.current.walletRevision !== currentWallet.revision || context.current.resumeHash !== resumeHash) {
-    context.current = { generation: context.current.generation + 1, service, wallet, actionKey: semanticAction, walletRevision: currentWallet.revision, resumeHash };
+    context.current = { generation: context.current.generation + 1, mountRevision: context.current.mountRevision, service, wallet, actionKey: semanticAction, walletRevision: currentWallet.revision, resumeHash };
   }
   const scope = context.current.generation;
   const [scopedState, setScopedState] = useState<{ scope: number; value: TransactionState }>({ scope, value: { kind: "idle" } });
@@ -115,17 +117,24 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     : undefined;
   const operation = useRef<Operation | null>(null);
   const operationSequence = useRef(0);
+  const mounted = useRef(false);
+  const attemptedScope = useRef<number | null>(null);
+  const [clearJournalScope, setClearJournalScope] = useState<number | null>(null);
   const ownSubmission = useRef<{ scope: number; submitted: SubmittedAction } | null>(null);
   const callbacks = useRef({ onConfirmed, onCancel });
   callbacks.current = { onConfirmed, onCancel };
 
-  useEffect(() => () => {
-    context.current = { ...context.current, generation: context.current.generation + 1 };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      context.current = { ...context.current, mountRevision: context.current.mountRevision + 1 };
+    };
   }, []);
 
   function isCurrent(expected: FlowContext) {
     const live = context.current;
-    return expected.wallet.getSnapshot().revision === expected.walletRevision && live.generation === expected.generation && live.service === expected.service && live.wallet === expected.wallet
+    return mounted.current && live.mountRevision === expected.mountRevision && expected.wallet.getSnapshot().revision === expected.walletRevision && live.generation === expected.generation && live.service === expected.service && live.wallet === expected.wallet
       && live.actionKey === expected.actionKey && live.walletRevision === expected.walletRevision && live.resumeHash === expected.resumeHash;
   }
 
@@ -147,10 +156,12 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   useEffect(() => {
     const expected = context.current;
     setScopedState({ scope: expected.generation, value: { kind: "idle" } });
+    setClearJournalScope(null);
     if (currentWallet.kind !== "connected") return;
     let active = true;
     void expected.service.pending({ wallet: expected.wallet }).then(pending => {
       if (!active || !isCurrent(expected)) return;
+      if (!pending) setClearJournalScope(expected.generation);
       setScopedState(current => {
         if (!isCurrent(expected) || current.scope !== expected.generation) return current;
         if (pending) return operation.current?.scope === expected.generation ? current : { scope: expected.generation, value: { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce } };
@@ -170,6 +181,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     let active = true;
     void expected.service.pending({ wallet: expected.wallet }).then(pending => {
       if (!active || pending || !isCurrent(expected)) return;
+      setClearJournalScope(expected.generation);
       setScopedState(current => {
         if (!active || !isCurrent(expected) || current.scope !== expected.generation
           || current.value !== recovery || operation.current?.scope === expected.generation) return current;
@@ -193,10 +205,19 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   async function prepare() {
     if (disabled || activeOutcome) return;
     const expected = context.current;
+    const session = expected.wallet.getSnapshot();
+    if (session.kind !== "connected" || session.chainId !== expected.service.manifest.chainId) return;
     const activeOperation = begin(expected);
     if (!activeOperation) return;
+    attemptedScope.current = expected.generation;
     setCurrent(expected, { kind: "preparing" });
     try {
+      const pending = await expected.service.pending({ wallet: expected.wallet });
+      if (!isCurrent(expected)) return;
+      if (pending) {
+        setCurrent(expected, { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce });
+        return;
+      }
       const prepared = await expected.service.prepare({ action, wallet: expected.wallet });
       setCurrent(expected, { kind: "review", prepared });
     } catch (error) {
@@ -205,6 +226,14 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       end(activeOperation);
     }
   }
+
+  useEffect(() => {
+    if (!prepareOnMount || disabled || activeOutcome || state.kind !== "idle" || clearJournalScope !== scope
+      || attemptedScope.current === scope || currentWallet.kind !== "connected" || currentWallet.chainId !== service.manifest.chainId) return;
+    void prepare();
+    // prepare claims the semantic scope before its first await. Retries stay explicit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prepareOnMount, disabled, activeOutcome, state.kind, clearJournalScope, scope, currentWallet, service]);
 
   async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext) {
     if (!isCurrent(expected)) return;

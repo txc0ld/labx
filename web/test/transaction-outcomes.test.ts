@@ -1,3 +1,4 @@
+import { isTransactionHistory } from "../components/workflow/ResumeTransaction";
 import { fixtureTrust } from "./fixtures/deployment";
 import { describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, erc20Abi, type Hex } from "viem";
@@ -581,4 +582,31 @@ describe("operation ownership beyond transaction controls", () => {
     expect(await unowned.resume(replacementHash, f.wallet)).toMatchObject({ kind: "terminal", confirmation: { kind: "confirmed" } });
   });
 
+});
+
+
+describe("wallet Activity visibility", () => {
+  it("collapses verified terminal outcomes and definite rejections", () => {
+    for (const confirmation of [confirmed, { kind: "reverted", hash, receipt: { ...receipt, status: "reverted" }, reason: "Call reverted" }, { kind: "replaced", hash, receipt, reason: "Different action" }] satisfies Confirmation[]) {
+      expect(isTransactionHistory({ kind: "terminal", id: hash, account, submitted, confirmation }, false)).toBe(true);
+    }
+    expect(isTransactionHistory({ kind: "rejected", id: "rejected", account, message: "Rejected" }, false)).toBe(true);
+  });
+  it("keeps an ambiguous hashless error prominent until the journal is known clear", () => {
+    const failure = { kind: "error", id: "attempt", account, message: "Invalid provider response", submitted: null } as const;
+    expect(isTransactionHistory(failure, false)).toBe(false);
+    expect(isTransactionHistory(failure, true)).toBe(true);
+    expect(isTransactionHistory({ ...failure, id: "storage-error" }, true)).toBe(false);
+    expect(isTransactionHistory({ ...failure, submitted }, true)).toBe(false);
+  });
+  it("never hides unresolved outcomes with or without a hash", () => {
+    for (const outcome of [
+      { kind: "submitting", id: "attempt", account },
+      { kind: "overflow", id: "overflow", account, message: "Overflow" },
+      { kind: "recovery", id: hash, account, hash },
+      { kind: "unverified", id: hash, account, hash, message: "Unknown" },
+      { kind: "checking", id: hash, account, submitted },
+      { kind: "pending", id: hash, account, submitted }
+    ] satisfies import("../lib/chain/transaction-outcomes").TransactionOutcome[]) expect(isTransactionHistory(outcome, true)).toBe(false);
+  });
 });

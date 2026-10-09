@@ -84,8 +84,10 @@ run("independent five-tier rendered journey", () => {
 
   async function transact(label: string) {
     const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
-    await trigger.waitFor({ state: "visible", timeout: 15_000 });
-    await trigger.click();
+    if (label !== "Create raffle draft") {
+      await trigger.waitFor({ state: "visible", timeout: 15_000 });
+      await trigger.click();
+    }
     const review = fixture.page.locator(".transaction-review").first();
     await review.waitFor({ state: "visible", timeout: 10_000 });
     const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });

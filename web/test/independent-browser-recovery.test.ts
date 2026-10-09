@@ -1,3 +1,4 @@
+import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
@@ -105,6 +106,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await chain.mine();
     await chain.mine();
     await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
+    await openWalletActivity(fixture.page);
     await recovery.getByText(/^Confirmed in block \d+\.$/).waitFor({ state: "visible", timeout: 10_000 });
     expect(await recovery.locator(".transaction-outcome .hash", { hasText: transactionHash }).innerText()).toBe(transactionHash);
     await expect.poll(async () => recovery.locator("form").count(), { timeout: 10_000 }).toBe(0);
@@ -117,6 +119,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await expect.poll(async () => purchaseReceipt.getByRole("button", { name: "Acknowledge purchase receipt", exact: true }).isEnabled(), { timeout: 10_000 }).toBe(true);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     const reloadedReceipt = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: transactionHash });
+    await openWalletActivity(fixture.page);
     await reloadedReceipt.getByText(/^Confirmed in block \d+\.$/).waitFor({ state: "visible", timeout: 10_000 });
     expect(await reloadedReceipt.locator(".hash").innerText()).toBe(transactionHash);
     expect(await fixture.page.locator(".resume-transaction form").count()).toBe(0);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
-import { parseSellerRaffleId, sellerPortalActions, sellerOwnsRaffle } from "../lib/chain/seller-actions";
+import { parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle } from "../lib/chain/seller-actions";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";
 import { mergeSellerActivityPage, type SellerRaffleActivity } from "../lib/chain/seller-types";
 import type { ActionAvailability, ActionKind, RaffleSnapshot } from "../lib/chain/types";
@@ -223,5 +223,39 @@ describe("seller-only action and ownership boundaries", () => {
     const raffle = snapshot({ id: 1n });
     expect(sellerOwnsRaffle(SELLER, raffle)).toBe(true);
     expect(sellerOwnsRaffle(OTHER, raffle)).toBe(false);
+  });
+});
+
+
+describe("seller next step", () => {
+  const cancel = { kind: "cancel", enabled: true, label: "Cancel draft", reason: "" } as const;
+  const open = { kind: "open", enabled: true, label: "Open memberships", reason: "" } as const;
+  function draft(status: "pending" | "changed" | "approved") {
+    const value = snapshot({ id: 1n, phase: 0 });
+    return { ...value, admission: { ...value.admission, status, reviewHash: zeroHash } };
+  }
+  it.each(["pending", "changed"] as const)("keeps cancellation secondary for an escrowed %s draft", status => {
+    expect(sellerNextStep(draft(status), [cancel])).toMatchObject({ kind: "waiting", title: "Awaiting LABx review" });
+  });
+  it("uses eligible approval and escrow before opening", () => {
+    const value = draft("pending");
+    value.raffle.escrowed = false;
+    const approve = { kind: "approvePrize", enabled: true, label: "Approve NFT", reason: "" } as const;
+    const escrow = { kind: "escrow", enabled: true, label: "Escrow NFT", reason: "" } as const;
+    expect(sellerNextStep(value, [cancel, approve])).toEqual({ kind: "action", action: approve });
+    expect(sellerNextStep(value, [cancel, { ...approve, enabled: false }, escrow])).toEqual({ kind: "action", action: escrow });
+  });
+  it("requires current approval, eligibility, an unpaused state and a future deadline to open", () => {
+    const value = draft("approved");
+    expect(sellerNextStep(value, [cancel, open])).toEqual({ kind: "action", action: open });
+    expect(sellerNextStep(value, [cancel, { ...open, enabled: false, reason: "Owner trust changed" }])).toMatchObject({ kind: "waiting", message: "Owner trust changed" });
+    expect(sellerNextStep({ ...value, paused: true }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Opening paused" });
+    expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.raffle.salesEnd } }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Sales deadline passed" });
+  });
+  it("does not promote refund or reveal controls while waiting for the deadline or randomness", () => {
+    const actions = [cancel, { kind: "abortDrawing", enabled: true, label: "Enable refunds", reason: "" }, { kind: "reveal", enabled: true, label: "Reveal commitment", reason: "" }] as const;
+    expect(sellerNextStep(snapshot({ id: 1n, phase: 1 }), actions)).toMatchObject({ kind: "waiting", title: "Memberships are open" });
+    expect(sellerNextStep(snapshot({ id: 1n, phase: 3 }), actions)).toMatchObject({ kind: "waiting", title: "Waiting for the draw" });
+    expect(sellerNextStep(snapshot({ id: 1n, phase: 6 }), actions)).toMatchObject({ kind: "waiting", title: "Raffle cancelled" });
   });
 });

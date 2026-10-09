@@ -1,3 +1,4 @@
+import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Page } from "playwright";
 import type { Hex } from "viem";
@@ -52,8 +53,6 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     await fillStandardMembershipEconomics(page, () => ({ price: "1", bonusEntries: "1", supply: "10" }));
     await page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
     await page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await page.getByRole("button", { name: "Create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await page.getByRole("button", { name: "Create raffle draft", exact: true }).click();
     await page.locator(".transaction-review").getByRole("button", { name: "Confirm create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }
 
@@ -102,6 +101,7 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     await tabBRecovery.getByLabel("Transaction hash").fill(h2);
     await tabBRecovery.getByRole("button", { name: "Check transaction", exact: true }).click();
     const canonicalB = tabB.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
+    await openWalletActivity(tabB);
     await canonicalB.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
 
     await staleCheck.click();
@@ -116,6 +116,7 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
       };
       throw new Error(`Stale seller check did not resolve to H2: ${JSON.stringify(diagnostic)}`, { cause: error });
     }
+    await openWalletActivity(tabA);
     const canonicalA = tabA.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
     await expect.poll(() => canonicalA.innerText(), { timeout: 15_000 }).toMatch(/Transaction (?:replaced|confirmed)/);
     expect(await canonicalA.innerText()).not.toMatch(/Purchase confirmed|create raffle draft/i);
@@ -133,6 +134,7 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     expect(checkpoints[0]?.[1].toLowerCase()).toContain(h2.toLowerCase());
 
     await tabA.reload({ waitUntil: "domcontentloaded" });
+    await openWalletActivity(tabA);
     const reloaded = tabA.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
     await expect.poll(() => reloaded.innerText(), { timeout: 15_000 }).toMatch(/Transaction (?:replaced|confirmed)/);
     expect(await reloaded.innerText()).not.toMatch(/Purchase confirmed|create raffle draft/i);

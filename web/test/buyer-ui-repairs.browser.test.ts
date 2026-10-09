@@ -1,3 +1,4 @@
+import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { erc20Abi, keccak256, toBytes, type Address } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
@@ -164,6 +165,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await expect.poll(() => fixture.page.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
     expect(await quantity.inputValue()).toBe("1");
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    await openWalletActivity(fixture.page);
     for (const dismiss of await fixture.page.getByRole("button", { name: "Dismiss receipt", exact: true }).all()) await dismiss.click();
   }, 90_000);
 
@@ -350,7 +352,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
       const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
       if (await connect.isVisible().catch(() => false)) await connect.click();
-      const details = fixture.page.locator("details").filter({ has: fixture.page.locator("summary").filter({ hasText: "Other available seller actions" }) });
+      const details = fixture.page.locator("details").filter({ has: fixture.page.locator("summary").filter({ hasText: "Advanced (" }) });
       await details.locator("summary").click();
       expect(await details.getAttribute("open")).not.toBeNull();
       release();

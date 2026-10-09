@@ -80,16 +80,13 @@ run("Safe approval handoff", () => {
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.switchAccount(chain.operator);
-    await fixture.page.getByRole("heading", { name: "Choose the current draft action", exact: true }).waitFor({ timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ timeout: 10_000 });
 
     for (const width of [320, 390, 768, 1440]) {
       await fixture.page.setViewportSize({ width, height: 900 });
       expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }
 
-    const checklist = fixture.page.getByRole("button", { name: "Review approval checklist", exact: true });
-    await expect.poll(() => checklist.isEnabled(), { timeout: 10_000 }).toBe(true);
-    await checklist.press("Enter");
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ timeout: 5_000 });
     const approval = fixture.page.getByRole("button", { name: "Download approval file", exact: true });
     expect(await approval.isDisabled()).toBe(true);
@@ -147,7 +144,6 @@ run("Safe approval handoff", () => {
   it("keeps repeated background discovery errors polite and makes busy controls visibly unavailable", async () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const pollingCheckboxes = fixture.page.getByRole("checkbox");
     expect(await pollingCheckboxes.count()).toBe(3);
@@ -206,8 +202,6 @@ run("Safe approval handoff", () => {
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.switchAccount(chain.operator);
-    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const candidateCheckboxes = fixture.page.getByRole("checkbox");
     expect(await candidateCheckboxes.count()).toBe(3);

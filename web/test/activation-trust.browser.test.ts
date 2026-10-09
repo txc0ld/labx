@@ -1,3 +1,4 @@
+import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { encodeFunctionData, keccak256, toHex, type Address, type Hex } from "viem";
 import { browserChain } from "./fixtures/browser-chain";
@@ -47,13 +48,15 @@ run("activation drift beside browser recovery", () => {
     await viewport(1440);
     await visit("/review/3", c.operator);
     await fixture.page.getByText(/reviewed deployment has a pending ownership transfer/).waitFor({ state: "visible", timeout: 15_000 });
-    const approveDraft = fixture.page.getByRole("button", { name: "Review approval checklist", exact: true });
+    const approveDraft = fixture.page.getByRole("button", { name: "Download approval file", exact: true });
     expect(await approveDraft.isDisabled()).toBe(true);
     expect(await fixture.page.getByText(/Approval requires an escrowed NFT/).count()).toBe(0);
     await viewport(375);
     expect(await approveDraft.isDisabled()).toBe(true);
     await c.write(c.raffle, "transferOwnership", [c.operator]); await c.write(c.raffle, "acceptOwnership");
     await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
+    const checklist = fixture.page.getByRole("checkbox");
+    for (const checkbox of await checklist.all()) await checkbox.check();
     await expect.poll(() => approveDraft.isEnabled(), { timeout: 15_000 }).toBe(true);
     await c.admit(1n); await c.write(c.raffle, "transferOwnership", [c.stranger]);
     await visit("/review/1", c.operator);
@@ -84,7 +87,7 @@ run("activation drift beside browser recovery", () => {
     await visit("/seller/2", c.seller);
     await fixture.page.getByText(/Existing recovery and receipt controls remain available/).waitFor({ timeout: 15_000 });
     const recover = fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true });
-    const secondary = fixture.page.locator("summary").filter({ hasText: "Other available seller actions" });
+    const secondary = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
     if (!await recover.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
     await recover.click();
     await fixture.page.getByText("Commitment recovered", { exact: true }).waitFor({ timeout: 15_000 });
@@ -116,6 +119,7 @@ run("activation drift beside browser recovery", () => {
         window.dispatchEvent(new StorageEvent("storage", { key, newValue: txHash, storageArea: localStorage }));
       }, { key, txHash });
       const receipt = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: txHash });
+      await openWalletActivity(fixture.page);
       await receipt.getByText(/^(Transaction confirmed|Purchase confirmed for raffle #2)$/).waitFor({ timeout: 15_000 });
       await fixture.page.waitForLoadState("networkidle");
     }
@@ -178,6 +182,7 @@ run("activation drift beside browser recovery", () => {
     await expect.poll(async () => await identity.isVisible() || await connect.isVisible(), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible()) await connect.click();
     await identity.waitFor({ state: "visible", timeout: 15_000 });
+    await openWalletActivity(fixture.page);
     await fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: cancellationHash }).getByText("Transaction confirmed", { exact: true }).waitFor({ timeout: 15_000 });
     await fixture.page.waitForLoadState("networkidle");
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key, value: JSON.stringify(oldJournal) });
