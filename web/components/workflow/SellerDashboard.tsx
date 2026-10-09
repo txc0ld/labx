@@ -75,7 +75,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0 }: { browser:
             <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles for this wallet yet</strong><p>Start with Create a raffle above. You choose when to list after LABx approval.</p></div></div>
           ) : null}
           {raffles.length > 0 ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} />)}</ol> : null}
-          {state.kind === "incomplete" && raffles.length > 0 ? <p className={`${styles.inlineWarning} notice warning`}>Showing discovered raffles only. Revenue totals remain hidden until the full scan succeeds.</p> : null}
+          {state.kind === "incomplete" ? <div className={`${styles.inlineWarning} notice warning`} role="alert"><p>{raffles.length > 0 ? "Some raffles could not be loaded. Revenue totals remain hidden until the full scan succeeds." : "Your raffles could not be loaded. Try again to see their current status."}</p><button className="btn btn-dark" type="button" onClick={() => void load()}>Reload raffles</button></div> : null}
         </section>
         <details className={styles.revenueDisclosure}>
           <summary>Revenue and sales</summary>
