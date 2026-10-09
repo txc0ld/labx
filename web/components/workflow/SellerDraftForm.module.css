@@ -167,9 +167,9 @@
   background:#fff;
 }
 
-.packCard>legend { color:var(--charcoal); font-size:.76rem; }
+.packCard>legend { max-width:100%; color:var(--charcoal); font-size:.76rem; }
 .packCard>legend span { margin-inline-end:.45rem; }
-.packCard>legend strong { color:var(--ink); font-size:.9rem; }
+.packCard>legend strong { color:var(--ink); font-size:.9rem; overflow-wrap:anywhere; }
 
 .reviewAction {
   display:flex;

@@ -132,7 +132,7 @@ run("independent buyer state journeys", () => {
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
 
     const snapshot = await service.readRaffle({ id: 1n });
-    expect(snapshot.packs.map(pack => pack.sold)).toEqual([0, 0, 2]);
+    expect(snapshot.packs.map(pack => pack.sold)).toEqual([0, 0, 2, 0, 0]);
     expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 86_000_000n, fee: 2_500_000n });
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] })).toBe(0n);
 
