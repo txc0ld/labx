@@ -218,6 +218,8 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
     return <section className="section stack missing-state"><p className="kicker">Seller studio</p><h1 className="page-title">This raffle belongs to another wallet.</h1><p className="lede">Switch to the raffle’s seller wallet to view its management workspace. Operator, buyer and winner roles do not grant seller access.</p><Link className="btn btn-dark" href="/seller">Back to your raffles</Link></section>;
   }
 
+  const drawDetails = <><DrawProgress service={browser.service} snapshot={snapshot} />{mode === "seller" ? <SellerActivity service={browser.service} id={snapshot.id} /> : null}</>;
+
   return (
     <>
       <div className="detail-path"><Link href={mode === "seller" ? "/seller" : "/"} className="detail-back"><span aria-hidden="true">←</span> {mode === "seller" ? "Back to studio" : "Back to explore"}</Link><button className="text-link" type="button" disabled={refreshState.kind === "loading"} onClick={() => void refresh()}>{refreshState.kind === "loading" ? "Refreshing state…" : "Refresh state"}</button></div>
@@ -250,8 +252,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           <details className="workflow-details"><summary>Contract and review details</summary><dl className="review-list"><div><dt>Chain</dt><dd>{browser.service.manifest.chainId === 11155111 ? "Ethereum Sepolia" : "Isolated local chain"} ({browser.service.manifest.chainId})</dd></div><div><dt>Raffle contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ? <a href={explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ?? undefined} target="_blank" rel="noreferrer">{browser.service.manifest.address} ↗</a> : browser.service.manifest.address}</dd></div><div><dt>Collection contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ? <a href={explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ?? undefined} target="_blank" rel="noreferrer">{snapshot.raffle.nft} ↗</a> : snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ? <a href={explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ?? undefined} target="_blank" rel="noreferrer">#{snapshot.raffle.tokenId.toString()} on explorer ↗</a> : `#${snapshot.raffle.tokenId.toString()}`}</dd></div><div><dt>LABx review</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(snapshot.policy.minBuyerFeeUsdc)} USDC or {formatBps(snapshot.policy.buyerFeeBps)} per purchase call; nonrefundable after success</dd></div><div><dt>Seller commission</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
       </section>
-      <DrawProgress service={browser.service} snapshot={snapshot} />
-      {mode === "seller" ? <SellerActivity service={browser.service} id={snapshot.id} /> : null}
+      {mode === "seller" && phase === 0 ? <details className="workflow-details"><summary>Draw details and activity</summary>{drawDetails}</details> : drawDetails}
     </>
   );
 }
