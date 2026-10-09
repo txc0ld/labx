@@ -47,7 +47,7 @@ export interface RaffleService {
   history(input: { account: Address; fromBlock?: bigint; block?: BlockRef }): Promise<Page<HistoryItem>>;
   openingPolicy(input?: { block?: BlockRef }): Promise<{ policy: RafflePolicy; hash: Hex; block: BlockRef }>;
   quoteMembership(input: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote>;
-  prepare(input: { action: WorkflowAction; wallet: WalletSessionPort }): Promise<PreparedAction>;
+  prepare(input: { action: WorkflowAction; wallet: WalletSessionPort; expectedDraft?: DraftInput }): Promise<PreparedAction>;
   submit(input: { prepared: PreparedAction; wallet: WalletSessionPort; assertIntent?: () => void }): Promise<SubmittedAction>;
   confirm(input: { transaction: SubmittedAction; timeoutMs?: number; beforeJournalWatch?: (input: { transaction: ObservedTransaction; pending: OutcomeJournal }) => void; beforeJournalClear?: (input: { receipt: CanonicalReceipt; pending: OutcomeJournal | null }) => void }): Promise<Confirmation>;
   inspectOutcome(input: { hash: Hex; account: Address; timeoutMs?: number }): Promise<OutcomeInspection>;

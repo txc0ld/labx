@@ -1,5 +1,6 @@
 "use client";
 import { keccak256, toBytes, type Hex } from "viem";
+import { PreparationNotDispatchedError } from "./submission-errors";
 import { configuredBrowserService } from "./browser";
 import { address, hash, sameAddress } from "./validation";
 import { workflowMessage } from "./messages";
@@ -42,6 +43,8 @@ function publicReserve(body: Record<string, unknown>): PublicReserve {
   return { seller: address(body.seller), nft: address(body.nft), tokenId, chainId, labx: address(body.labx), publicSummary: text(body.publicSummary), publicHash: hash(body.publicHash), nonce: hash(body.nonce), commit: hash(body.commit) };
 }
 export async function createCommitment(wallet: WalletSessionPort, input: CommitmentInput, options?: { assertIntent: () => void; beforeRequest: (identity: Hex) => void }): Promise<PublicReserve> {
+  let dispatched = false;
+  try {
   const { context, expected, deadline } = await contextFor(wallet);
   const normalized = { nft: address(input.nft), tokenId: BigInt(input.tokenId).toString(), publicSummary: input.publicSummary.trim(), privateCommitment: input.privateCommitment.trim() };
   const identity = keccak256(toBytes(JSON.stringify([context.chainId, context.contract.toLowerCase(), expected.account.toLowerCase(), normalized])));
@@ -49,11 +52,13 @@ export async function createCommitment(wallet: WalletSessionPort, input: Commitm
   options?.beforeRequest(identity);
   const signature = await wallet.signMessage({ assertIntent: options?.assertIntent, message: workflowMessage("commitment", context, expected.account, normalized, deadline), expected });
   options?.assertIntent();
+  dispatched = true;
   const result = publicReserve(await request("/api/reserve", { address: expected.account, input: normalized, deadline, signature }));
   await wallet.assertCurrent(expected);
   if (!sameAddress(result.seller, expected.account) || !sameAddress(result.labx, context.contract) || result.chainId !== String(context.chainId) || !sameAddress(result.nft, normalized.nft) || result.tokenId !== normalized.tokenId || result.publicSummary !== normalized.publicSummary || result.publicHash !== keccak256(toBytes(normalized.publicSummary))) throw new Error("Stored commitment does not match the reviewed request.");
-  return result;
+  return result;  } catch (error) { if (!dispatched) throw new PreparationNotDispatchedError(error); throw error; }
 }
+
 export async function recoverCommitment(wallet: WalletSessionPort, input: { commit: Hex }): Promise<ReserveRecord> {
   const { context, expected, deadline } = await contextFor(wallet), normalized = { commit: hash(input.commit) };
   const signature = await wallet.signMessage({ message: workflowMessage("commitment recovery", context, expected.account, normalized, deadline), expected });

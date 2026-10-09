@@ -1,4 +1,5 @@
 import { decodeFunctionData, encodeFunctionData, erc721Abi, type Hex } from "viem";
+import { SubmissionNotDispatchedError } from "./submission-errors";
 import { raffleAbi } from "./abi";
 import { hash, sameAddress } from "./validation";
 import { isWalletRequestRejected } from "./wallet-errors";
@@ -91,12 +92,12 @@ export async function finishCreate({ service, wallet, draft, record, save, asser
       }
     } else {
       if (journal) throw new Error("Recover the unresolved wallet transaction before creating.");
-      const prepared = await service.prepare({ action, wallet });
+      const prepared = await service.prepare({ action, wallet, ...(action.kind === "createDraft" ? {} : { expectedDraft: draft }) });
       await check();
       persist({ ...current, pending: { step: action.kind, hash: null } });
       try { tx = await service.submit({ prepared, wallet, assertIntent }); }
       catch (error) {
-        if (isWalletRequestRejected(error) && !await service.pending({ wallet })) persist({ ...current, pending: null });
+        if (error instanceof SubmissionNotDispatchedError || isWalletRequestRejected(error) && !await service.pending({ wallet })) persist({ ...current, pending: null });
         throw error;
       }
       persist({ ...current, pending: { step: action.kind, hash: tx.hash } });

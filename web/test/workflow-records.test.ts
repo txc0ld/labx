@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { verifyMessage, type Hex } from "viem";
+import { verifyMessage, keccak256, toBytes, type Hex } from "viem";
 import { MemoryStore } from "../lib/store";
-import { saveAuthenticatedCommitment, recoverAuthenticatedCommitment } from "../lib/workflow-records";
+import { saveAuthenticatedCommitment, recoverAuthenticatedCommitment, recoverAuthenticatedPreparation } from "../lib/workflow-records";
 import { privateRecords } from "../lib/private-records";
 import { workflowMessage } from "../lib/chain/messages";
 import type { CommitmentInput, WorkflowContext } from "../lib/chain/api-types";
@@ -48,6 +48,21 @@ describe("authenticated durable workflow records", () => {
   it("keeps recovered secrets wallet-bound even with a valid attacker signature", async () => {
     const store = new MemoryStore(); const created = await saveAuthenticatedCommitment(store, await signed("commitment", input), context, verifyMessage);
     await expect(recoverAuthenticatedCommitment(store, await signed("commitment recovery", { commit: created.commit }, other), context, verifyMessage)).rejects.toThrow(/does not belong/);
+  });
+  it("recovers only public preparation data after a lost response and binds identity to seller, deployment and NFT", async () => {
+    const store = new MemoryStore();
+    const created = await saveAuthenticatedCommitment(store, await signed("commitment", input), context, verifyMessage);
+    const requestIdentity = keccak256(toBytes(JSON.stringify([context.chainId, context.contract.toLowerCase(), seller.address.toLowerCase(), input])));
+    const recovery = { requestIdentity, nft: input.nft, tokenId: input.tokenId };
+    const recovered = await recoverAuthenticatedPreparation(store, await signed("preparation recovery", recovery), context, verifyMessage);
+    expect(recovered).toEqual(created);
+    expect(recovered).not.toHaveProperty("salt");
+    expect(recovered).not.toHaveProperty("privateHash");
+    expect(JSON.stringify(recovered)).not.toContain(input.privateCommitment);
+    await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", recovery, other), context, verifyMessage)).rejects.toThrow(/does not belong/);
+    await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", { ...recovery, tokenId: "2" }), context, verifyMessage)).rejects.toThrow(/does not belong/);
+    await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", recovery), { ...context, origin: "https://other.example" }, verifyMessage)).rejects.toThrow(/authorization/);
+    await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", { ...recovery, requestIdentity: keccak256(toBytes("missing")) }), context, verifyMessage)).rejects.toThrow(/not yet available/);
   });
   it("retrieves only authenticated wallet agreements and rejects unpublished legal hashes", async () => {
     const store = new MemoryStore();

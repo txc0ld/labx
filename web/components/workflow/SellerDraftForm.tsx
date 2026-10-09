@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { PreparationNotDispatchedError } from "@/lib/chain/submission-errors";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { isAddress, zeroHash, type Hex, type Address } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
@@ -96,6 +98,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   existing?: RaffleSnapshot;
   onConfirmed?: () => void | Promise<void>;
 }) {
+  const router = useRouter();
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
   const [localDateFormatter, setLocalDateFormatter] = useState<Intl.DateTimeFormat | null>(null);
   const [state, setState] = useState<DraftState>({ kind: "editing" });
@@ -386,7 +389,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
             if (reserve.nft.toLowerCase() !== action.nft.toLowerCase() || reserve.tokenId !== action.tokenId.toString() || reserve.seller.toLowerCase() !== session.account.toLowerCase() || reserve.labx.toLowerCase() !== service.manifest.address.toLowerCase() || reserve.chainId !== String(service.manifest.chainId) || reserve.publicSummary !== input.publicSummary) throw new Error("Saved draw setup differs from this NFT or seller.");
             persist({ kind: "draft", data: encodeDraft({ ...action, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
           } catch (error) {
-            if (isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
+            if (error instanceof PreparationNotDispatchedError || isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
             throw error;
           }
         } else if (record.kind === "preparing") {
@@ -400,8 +403,19 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         if (saved?.kind !== "draft") throw new Error("Draw setup recovery is incomplete.");
         const result = await finishCreate({ service, wallet, draft: decodeDraft(saved.data), record: saved, save: persist, assertIntent, onStep: status });
         assertIntent();
+        const completed = readCreateRecord(localStorage, key);
+        if (completed?.kind !== "draft" || completed.id !== result.id.toString() || completed.pending !== null || completed.data !== saved.data) throw new Error("Creation recovery changed before completion.");
+        const receipt = JSON.stringify({ id: result.id.toString(), creationHash: completed.creationHash });
+        const historyKey = `${key}:completed:${result.id}`;
+        localStorage.setItem(historyKey, receipt);
+        if (localStorage.getItem(historyKey) !== receipt) throw new Error("The completed creation receipt could not be retained.");
+        assertIntent();
+        localStorage.removeItem(key);
+        setSavedCreation(null);
         setCreation({ kind: "done", id: result.id });
         await onConfirmed?.();
+        assertIntent();
+        router.push(`/seller/${result.id.toString()}`);
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Click Create to resume when ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });

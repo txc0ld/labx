@@ -1,4 +1,5 @@
 "use client";
+import { SubmissionNotDispatchedError } from "@/lib/chain/submission-errors";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 
 import { useActionTrust } from "../workflow/useActionTrust";
@@ -649,6 +650,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     setSelected(action.kind);
     setState({ kind: "preparing", actionKind: selected });
     let exported: OwnerExecutionIntent | null = null;
+    const scopeCurrent = () => lifetime.current.mounted && lifetime.current.generation === operation.generation && lifetime.current.reviewHash === operation.reviewHash;
     try {
       const prepared = await service.prepare({ action, wallet });
       if (!isCurrent(operation)) return;
@@ -664,9 +666,16 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
           if (window.localStorage.getItem(storageKey) !== raw) throw new Error("Owner execution recovery could not be saved.");
         });
         exported = intent;
+        if (dispatch) {
+          discoveryCursor.current = undefined;
+          setDiscovery({ kind: "idle" });
+          setDiscoveryBusy(false);
+          setState({ kind: "exported", intent, copied: false });
+          finishOperation(operation);
+        }
       };
       if (dispatch) {
-        await service.requestOwnerExecution({ prepared, wallet, beforeRequest: persist, assertIntent: () => { if (!isCurrent(operation)) throw new Error("This review is no longer active."); } });
+        await service.requestOwnerExecution({ prepared, wallet, beforeRequest: persist, assertIntent: () => { if (!scopeCurrent()) throw new Error("This review is no longer active."); } });
       } else {
         const intent = await service.exportOwnerExecution({ prepared, wallet });
         await persist(intent);
@@ -678,7 +687,13 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       setDiscoveryBusy(false);
       if (exported) setState({ kind: "exported", intent: exported, copied: false });
     } catch (error) {
-      if (isCurrent(operation)) {
+      if (exported && dispatch && scopeCurrent() && (isWalletRequestRejected(error) || error instanceof SubmissionNotDispatchedError) && window.localStorage.getItem(storageKey) === serializeOwnerExecutionIntent(exported)) {
+        invalidateOperations();
+        window.localStorage.removeItem(storageKey);
+        exported = null;
+        setDiscoveryBusy(false);
+        setState({ kind: "error", message: "The wallet request was cancelled. Review and click Approve to try again." });
+      } else if (isCurrent(operation)) {
         if (exported && !isWalletRequestRejected(error)) {
           setState({ kind: "exported", intent: exported, copied: false });
           setDiscovery({ kind: "error", message: "The wallet response is uncertain. Watching for canonical execution. Do not send another approval." });
@@ -691,7 +706,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     } finally {
       finishOperation(operation);
     }
-    if (exported !== null) void discover(exported);
+    if (exported !== null && scopeCurrent() && window.localStorage.getItem(storageKey) !== null) void discover(exported);
   }
 
   async function copyPayload(intent: OwnerExecutionIntent) {

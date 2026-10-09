@@ -1,5 +1,6 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
 import { decodeEventLog, encodeFunctionData, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
+import { SubmissionNotDispatchedError } from "./submission-errors";
 import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
@@ -10,7 +11,7 @@ import { isWalletRequestRejected } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { hash, sameAddress } from "./validation";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { CanonicalReceipt, OutcomeLineage, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
+import type { DraftInput, BlockRef, CanonicalReceipt, OutcomeLineage, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
 function connected(wallet: WalletSessionPort, chainId: number) {
   const session = wallet.getSnapshot();
   if (session.kind !== "connected" || session.chainId !== chainId) throw new Error("Connect the approved test network before continuing.");
@@ -22,16 +23,30 @@ function sameTransaction(a: { to: Address; data: Hex; value: bigint }, b: { to: 
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
   const sellerReader = createSellerReader(client, manifest, reader);
-  const reviews = new WeakMap<PreparedAction, { action: WorkflowAction; session: Extract<WalletSnapshot, { kind: "connected" }>; transaction: PreparedAction; used: boolean }>();
+  const reviews = new WeakMap<PreparedAction, { action: WorkflowAction; session: Extract<WalletSnapshot, { kind: "connected" }>; transaction: PreparedAction; used: boolean; expectedDraft: DraftInput | null }>();
   const submitting = new Set<string>();
   const canonicalReceipts = new WeakMap<CanonicalReceipt, { account: Address; nonce: number }>();
   const outcomeLineages = new WeakMap<OutcomeLineage, { account: Address; journal: Readonly<PendingIntent> }>();
   const unresolved = "This wallet has an unresolved transaction. Reconcile its hash before another action.";
-  async function prepare({ action, wallet }: Parameters<RaffleService["prepare"]>[0]) {
+  function draftData(draft: DraftInput) {
+    return encodeFunctionData({ abi: raffleAbi, functionName: "createRaffle", args: [draft.nft, draft.tokenId, draft.salesEnd, draft.reserveNonce, draft.reserveCommit, draft.title, draft.packs] });
+  }
+  async function assertDraft(action: WorkflowAction, draft: DraftInput | null, account: Address, block: BlockRef) {
+    if (!draft) return;
+    if (action.kind !== "approvePrize" && action.kind !== "escrow") throw new Error("A captured draft is only valid for creation custody steps.");
+    const snapshot = await reader.readRaffle({ id: action.id, block });
+    const r = snapshot.raffle;
+    if (r.phase !== 0 || !sameAddress(r.seller, account) || draftData({ nft: r.nft, tokenId: r.tokenId, reserveNonce: r.reserveNonce, reserveCommit: r.reserveCommit, salesEnd: r.salesEnd, title: r.title, packs: snapshot.packs }) !== draftData(draft)) throw new Error("The canonical draft changed. Review the NFT and draft again before creating.");
+    const canonical = await client.getBlock({ blockNumber: block.number });
+    if (canonical.hash !== block.hash) throw new Error("The draft block changed. Review again.");
+  }
+  async function prepare({ action, wallet, expectedDraft }: Parameters<RaffleService["prepare"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
-    const copy = structuredClone(action), result = await build(copy, session); await wallet.assertCurrent(session);
+    const copy = structuredClone(action), draft = expectedDraft ? structuredClone(expectedDraft) : null, result = await build(copy, session);
+    await assertDraft(copy, draft, session.account, result.block);
+    await wallet.assertCurrent(session);
     const prepared = { ...result, action: structuredClone(copy) };
-    reviews.set(prepared, { action: copy, session, transaction: result, used: false }); return prepared;
+    reviews.set(prepared, { action: copy, session, transaction: result, used: false, expectedDraft: draft }); return prepared;
   }
   async function exportOwnerExecution({ prepared, wallet }: Parameters<RaffleService["exportOwnerExecution"]>[0]): Promise<OwnerExecutionIntent> {
     const entry = reviews.get(prepared);
@@ -46,7 +61,12 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       value: 0n, data: fresh.data, reviewBlock: fresh.block, ownerGeneration: review.ownerGeneration,
       openingPolicyGeneration: review.openingPolicyGeneration, reviewRevision: review.snapshot.admission.record.reviewRevision };
   }
-  async function requestOwnerExecution({ prepared, wallet, beforeRequest, assertIntent }: Parameters<RaffleService["requestOwnerExecution"]>[0]) {
+  async function requestOwnerExecution(input: Parameters<RaffleService["requestOwnerExecution"]>[0]) {
+    let dispatched = false;
+    try { return await requestOwnerExecutionInternal(input, () => { dispatched = true; }); }
+    catch (error) { if (!dispatched) throw new SubmissionNotDispatchedError(error); throw error; }
+  }
+  async function requestOwnerExecutionInternal({ prepared, wallet, beforeRequest, assertIntent }: Parameters<RaffleService["requestOwnerExecution"]>[0], onDispatch: () => void) {
     const entry = reviews.get(prepared);
     if (!entry || entry.used || (entry.action.kind !== "approveRaffle" && entry.action.kind !== "revokeRaffleApproval")) throw new Error("Review an owner action first.");
     if (!wallet.requestExternalExecution) throw new Error("Reconnect the Safe through a supported wallet connection.");
@@ -61,16 +81,20 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       assertIntent();
       await beforeRequest(structuredClone(intent));
       assertIntent();
-    }, assertIntent);
+    }, () => { assertIntent(); onDispatch(); });
   }
   async function resolveCreatedDraft({ receipt, draft }: Parameters<RaffleService["resolveCreatedDraft"]>[0]) {
     if (!canonicalReceipts.has(receipt) || receipt.status !== "success" || !receipt.to || !sameAddress(receipt.to, manifest.address) || receipt.value !== 0n) throw new Error("Verify the exact canonical draft transaction first.");
     const data = encodeFunctionData({ abi: raffleAbi, functionName: "createRaffle", args: [draft.nft, draft.tokenId, draft.salesEnd, draft.reserveNonce, draft.reserveCommit, draft.title, draft.packs] });
     if (receipt.data.toLowerCase() !== data.toLowerCase()) throw new Error("Created draft calldata differs from this intent.");
     const raw = await client.getTransactionReceipt({ hash: receipt.hash });
-    await validateReceipt(raw, receipt.account);
+    if (raw.transactionHash.toLowerCase() !== receipt.hash.toLowerCase() || raw.blockNumber !== receipt.blockNumber || raw.status !== receipt.status) throw new Error("The creation receipt differs from the verified transaction.");
+    const rechecked = await validateReceipt(raw, receipt.account);
+    if (rechecked.to === null || !sameTransaction({ ...rechecked, to: rechecked.to }, { to: manifest.address, data: receipt.data, value: receipt.value }) || rechecked.nonce !== receipt.nonce) throw new Error("The creation transaction changed.");
     const matches = raw.logs.filter(log => sameAddress(log.address, manifest.address)).flatMap(log => {
-      try { const event = decodeEventLog({ abi: raffleAbi, eventName: "RaffleCreated", data: log.data, topics: log.topics, strict: true }); return [event.args]; } catch { return []; }
+      try {
+        if (log.removed || log.transactionHash?.toLowerCase() !== raw.transactionHash.toLowerCase() || log.blockHash !== raw.blockHash || log.blockNumber !== raw.blockNumber) throw new Error("Creation log is not canonical.");
+        const event = decodeEventLog({ abi: raffleAbi, eventName: "RaffleCreated", data: log.data, topics: log.topics, strict: true }); return [event.args]; } catch { return []; }
     });
     if (matches.length !== 1) throw new Error("Expected one canonical creation event.");
     const event = matches[0];
@@ -78,9 +102,16 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const snapshot = await reader.readRaffle({ id: event.id });
     const raffle = snapshot.raffle;
     if (!sameAddress(raffle.seller, receipt.account) || !sameAddress(raffle.nft, draft.nft) || raffle.tokenId !== draft.tokenId || raffle.reserveNonce !== draft.reserveNonce || raffle.reserveCommit !== draft.reserveCommit || raffle.title !== draft.title || raffle.salesEnd !== draft.salesEnd || snapshot.packs.length !== draft.packs.length || snapshot.packs.some((pack, index) => { const expected = draft.packs[index]; return pack.name !== expected.name || pack.priceUsdc !== expected.priceUsdc || pack.bonusEntries !== expected.bonusEntries || pack.maxSupply !== expected.maxSupply; })) throw new Error("Created raffle no longer matches the captured draft.");
+    const [creationBlock, stateBlock] = await Promise.all([client.getBlock({ blockNumber: raw.blockNumber }), client.getBlock({ blockNumber: snapshot.block.number })]);
+    if (creationBlock.hash !== raw.blockHash || stateBlock.hash !== snapshot.block.hash) throw new Error("The creation or draft block changed during verification.");
     return snapshot;
   }
-  async function submit({ prepared, wallet, assertIntent }: Parameters<RaffleService["submit"]>[0]) {
+  async function submit(input: Parameters<RaffleService["submit"]>[0]) {
+    let dispatched = false;
+    try { return await submitDirect(input, () => { dispatched = true; }); }
+    catch (error) { if (!dispatched) throw new SubmissionNotDispatchedError(error); throw error; }
+  }
+  async function submitDirect({ prepared, wallet, assertIntent }: Parameters<RaffleService["submit"]>[0], onDispatch: () => void) {
     assertIntent?.();
     const entry = reviews.get(prepared);
     if (!entry || entry.used) throw new Error("This review is invalid or already submitted. Review again.");
@@ -99,6 +130,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     try {
       await wallet.assertCurrent(entry.session);
       const fresh = await build(entry.action, entry.session);
+      await assertDraft(entry.action, entry.expectedDraft, account, fresh.block);
       if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
       const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
       await wallet.assertCurrent(entry.session);
@@ -109,7 +141,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
           intent = { id: crypto.randomUUID(), intentHash: transactionIntent(entry.transaction), nonce, startedBlock: fresh.block.number.toString(), hash: null };
           journal.write(account, intent);
         });
-      }, () => { assertIntent?.(); walletRequested = true; });
+      }, () => { assertIntent?.(); walletRequested = true; onDispatch(); });
       broadcastHash = txHash;
       if (!walletRequested) throw new Error("Wallet adapter did not establish transaction recovery protection.");
       await journal.exclusive(account, async () => {
