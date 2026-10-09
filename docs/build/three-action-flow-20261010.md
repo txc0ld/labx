@@ -41,3 +41,19 @@ Root is the only integration/shared-release owner. Independent verification uses
 - Aggregate web tests, TypeScript, production build, contract regressions/fuzz via existing CI, fresh independent Astra final review and Claude source review. Retain failed attempts and bind final results to exact revisions.
 
 Website main publication is already authorized after all gates pass. No contract deployment/funding/wallet signing/permission expansion is part of this implementation. Do not call live Safe prompts or the entire testnet lifecycle verified by headless fixtures alone.
+
+## Builder evidence
+
+Critical implementation candidates: 3520162, e73926a, and the follow-up commit containing this record. Root owns integration, independent verification/review and release; these checks are not approval.
+
+The preparation-recovery addendum uses the existing `reserve-request:v3` mapping. The browser persists only the public request hash and draft calldata. Authenticated `/api/reserve/preparation` validates seller, deployment and NFT and returns `PublicReserve` only. Proven pre-provider and pre-POST failures carry service-owned classification; ambiguous sends retain recovery. Custody preparation and fresh submission bind the original full draft. Completed creations retain a public receipt pointer before retiring the matching active record.
+
+Observed checks in `../artifacts/three-action-flow-20261010/builder/`:
+- `forge-build.log`: PASS, fixture contracts compiled locally.
+- `focused-second.log`: PASS, 30 service/coordinator, EIP-7702, wallet and authenticated-record tests.
+- `safe-browser-third.log`: PASS, four headless Safe handoff/discovery tests, including responsive widths 320/390/768/1440.
+- `seller-browser-first.log`: PASS, 11 headless seller/five-tier tests, including 320/390/768/1440, keyboard and 200% zoom fixtures.
+- `types-final-stage.log`: PASS, TypeScript.
+- `unit-aggregate-second.log`: PASS, ordinary aggregate with opt-in suites skipped as reported in the log.
+
+Retained failures: initial chain tests ran before fixture compilation finished; first Safe browser run used obsolete selectors; second Safe browser run exposed unstable Advanced button bounds and a dependent follow-on timeout, repaired before the third run; first aggregate expected the removed download label and obsolete View link. No live wallet signing, deployment or release was performed. Native device and RTL evidence are not claimed.

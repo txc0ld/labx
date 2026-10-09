@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { createStorageKey, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord } from "@/lib/chain/create-flow";
+import { createStorageKey, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord, retireCompletedCreate } from "@/lib/chain/create-flow";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import { useWalletSnapshot } from "./WalletGate";
@@ -20,16 +20,21 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
     const assertIntent = () => { if (!lifetime.current.mounted || lifetime.current.generation !== generation || wallet.getSnapshot().revision !== session.revision) throw new Error("Creation scope changed. Review and click Create again."); };
     try {
       if (!navigator.locks) throw new Error("Creation recovery requires secure Web Locks.");
-      const key = `${createStorageKey(service, session.account)}:raffle:${snapshot.id}`;
-      await navigator.locks.request(key, async () => {
+      const baseKey = createStorageKey(service, session.account);
+      await navigator.locks.request(baseKey, async () => {
         assertIntent();
         const r = snapshot.raffle;
         const draft = { nft: r.nft, tokenId: r.tokenId, salesEnd: r.salesEnd, reserveNonce: r.reserveNonce, reserveCommit: r.reserveCommit, title: r.title, packs: snapshot.packs };
+        const active = readCreateRecord(localStorage, baseKey);
+        const key = active?.kind === "draft" && active.data === encodeDraft(draft) && (active.id === null || active.id === snapshot.id.toString()) ? baseKey : `${baseKey}:raffle:${snapshot.id}`;
         const record = readCreateRecord(localStorage, key) ?? { kind: "draft", data: encodeDraft(draft), id: snapshot.id.toString(), creationHash: null, pending: null };
         if (record.kind !== "draft") throw new Error("Recover the saved draw setup first.");
         writeCreateRecord(localStorage, key, record);
-        await finishCreate({ service, wallet, draft, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, onStep: message => { assertIntent(); setState({ kind: "busy", message }); } });
+        const result = await finishCreate({ service, wallet, draft, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, onStep: message => { assertIntent(); setState({ kind: "busy", message }); } });
         assertIntent();
+        const completed = readCreateRecord(localStorage, key);
+        if (completed?.kind !== "draft") throw new Error("Creation recovery changed.");
+        retireCompletedCreate(localStorage, key, completed, result.id);
         await onConfirmed();
       });
     } catch (error) {

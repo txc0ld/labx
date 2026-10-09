@@ -808,7 +808,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       <p>Complete the signatures and execution in your connected Safe. LABx watches automatically for the canonical transaction. A wallet acceptance or proposal alone is not approval.</p>
       <details><summary>Advanced recovery</summary>
       <p>Manual execution tools are available if your Safe connection cannot finish this request.</p>
-      <button className="btn btn-dark" type="button" disabled={discoveryBusy || !allAttested} onClick={() => void prepare()}>Download fresh Safe call</button>
+      <button className="text-link" type="button" disabled={discoveryBusy || !allAttested} onClick={() => void prepare()}>Download fresh Safe call</button>
       {safeHref ? <a href={safeHref} target="_blank" rel="noreferrer">Open Safe</a> : null}
       </details>
       <DiscoveryStatus state={discovery} busy={discoveryBusy} onRetry={() => void discover(intent)} />

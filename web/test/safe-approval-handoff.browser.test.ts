@@ -58,7 +58,15 @@ run("Safe approval handoff", () => {
     chain?.close();
   });
 
-  it("guides the wrong account before the owner gate and completes a keyboard-accessible fresh download", async () => {
+  async function proposalOnly() {
+    await fixture.page.evaluate(() => {
+      const w = window as unknown as { ethereum: { request(input: { method: string; params?: readonly unknown[] }): Promise<unknown> } };
+      const original = w.ethereum.request.bind(w.ethereum);
+      w.ethereum.request = async input => input.method === "eth_sendTransaction" ? `0x${"ab".repeat(32)}` : original(input);
+    });
+  }
+
+  it("guides the wrong account, sends from one keyboard activation and keeps manual download advanced", async () => {
     await fixture.page.setViewportSize({ width: 320, height: 800 });
     const queueResponse = await fixture.page.goto(`${fixture.baseUrl}/review`, { waitUntil: "domcontentloaded" });
     expect(queueResponse?.status()).toBe(200);
@@ -75,32 +83,31 @@ run("Safe approval handoff", () => {
     expect(await fixture.page.getByText(chain.operator, { exact: true }).isVisible()).toBe(true);
     expect(await fixture.page.getByText(/Beneath the QR code choose Copy link/).isVisible()).toBe(true);
     expect(await fixture.page.getByText(/Safe header choose WalletConnect/).isVisible()).toBe(true);
-    expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(0);
 
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.switchAccount(chain.operator);
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ timeout: 10_000 });
 
     for (const width of [320, 390, 768, 1440]) {
       await fixture.page.setViewportSize({ width, height: 900 });
       expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }
 
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ timeout: 5_000 });
-    const approval = fixture.page.getByRole("button", { name: "Download approval file", exact: true });
-    expect(await approval.isDisabled()).toBe(true);
-    const approvalCheckboxes = fixture.page.getByRole("checkbox");
-    expect(await approvalCheckboxes.count()).toBe(3);
-    for (const checkbox of await approvalCheckboxes.all()) {
-      await checkbox.focus();
-      await fixture.page.keyboard.press("Space");
-    }
+    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ timeout: 5_000 });
+    const approval = fixture.page.getByRole("button", { name: "Approve", exact: true });
+    expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
     await expect.poll(() => approval.isEnabled(), { timeout: 10_000 }).toBe(true);
-
-    const downloadPromise = fixture.page.waitForEvent("download");
+    await proposalOnly();
     await approval.focus();
     await fixture.page.keyboard.press("Enter");
+    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ timeout: 10_000 });
+    await fixture.page.getByText("Advanced recovery", { exact: true }).click();
+    const advancedDownload = fixture.page.getByRole("button", { name: "Download fresh Safe call", exact: true });
+    await expect.poll(() => advancedDownload.isEnabled()).toBe(true);
+    const downloadPromise = fixture.page.waitForEvent("download");
+    await advancedDownload.click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^labx-approve-raffle-1-[a-f0-9]{12}\.json$/);
     const path = await download.path();
@@ -116,15 +123,8 @@ run("Safe approval handoff", () => {
     expect(batch.transactions[0]).toMatchObject({ to: chain.raffle.address, value: "0" });
 
     await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ timeout: 10_000 });
-    expect(await fixture.page.getByText("0 ETH", { exact: true }).isVisible()).toBe(true);
-    expect(await fixture.page.getByText(/New transaction/).isVisible()).toBe(true);
-    expect(await fixture.page.getByText(/Transaction Builder/).isVisible()).toBe(true);
-    const discard = fixture.page.getByRole("button", { name: "Discard exported review", exact: true });
-    await expect.poll(() => discard.isEnabled(), { timeout: 10_000 }).toBe(true);
-    expect(await discard.evaluate(element => {
-      const style = getComputedStyle(element);
-      return { background: style.backgroundColor, borderWidth: style.borderWidth, borderStyle: style.borderStyle };
-    })).toEqual({ background: "rgb(244, 243, 245)", borderWidth: "1px", borderStyle: "solid" });
+    expect(await fixture.page.getByRole("button", { name: "Discard exported review", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByText(/A wallet acceptance or proposal alone is not approval/).isVisible()).toBe(true);
     for (const width of [320, 390, 768, 1440]) {
       await fixture.page.setViewportSize({ width, height: 900 });
       expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -144,10 +144,9 @@ run("Safe approval handoff", () => {
   it("keeps repeated background discovery errors polite and makes busy controls visibly unavailable", async () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const pollingCheckboxes = fixture.page.getByRole("checkbox");
-    expect(await pollingCheckboxes.count()).toBe(3);
-    for (const checkbox of await pollingCheckboxes.all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
+    await proposalOnly();
 
     let logCalls = 0;
     let releaseFirst: (() => void) | undefined;
@@ -163,25 +162,26 @@ run("Safe approval handoff", () => {
       });
     });
 
-    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Approve", exact: true }).click();
     const heading = fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true });
     await heading.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(() => logCalls, { timeout: 10_000 }).toBe(1);
     const flow = heading.locator("../..");
     expect(await flow.getAttribute("aria-busy")).toBe("true");
-    const download = fixture.page.getByRole("button", { name: "Download approval file", exact: true });
+    await fixture.page.getByText("Advanced recovery", { exact: true }).click();
+    const download = fixture.page.getByRole("button", { name: "Download fresh Safe call", exact: true });
     expect(await download.isDisabled()).toBe(true);
-    const disabledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
+    const disabledBox = await download.boundingBox();
     releaseFirst?.();
 
     const politeError = flow.getByRole("status").filter({ hasText: /poll unavailable/i });
     await politeError.waitFor({ state: "visible", timeout: 10_000 });
     expect(await flow.getByRole("alert").filter({ hasText: /poll unavailable/i }).count()).toBe(0);
     expect(await download.isEnabled()).toBe(true);
-    const enabledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
+    const enabledBox = await download.boundingBox();
     expect({ width: disabledBox?.width, height: disabledBox?.height }).toEqual({ width: enabledBox?.width, height: enabledBox?.height });
     const originalStatus = await politeError.elementHandle();
-    const settledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
+    const settledBox = await download.boundingBox();
 
     for (let expected = 2; expected <= 3; expected += 1) {
       await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
@@ -191,7 +191,7 @@ run("Safe approval handoff", () => {
     expect(await politeError.count()).toBe(1);
     expect(await originalStatus?.evaluate(node => node.isConnected)).toBe(true);
     expect(await flow.getByRole("alert").filter({ hasText: /poll unavailable/i }).count()).toBe(0);
-    const repolledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
+    const repolledBox = await download.boundingBox();
     expect({ x: repolledBox?.x, y: repolledBox?.y }).toEqual({ x: settledBox?.x, y: settledBox?.y });
     await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
@@ -202,11 +202,10 @@ run("Safe approval handoff", () => {
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.switchAccount(chain.operator);
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const candidateCheckboxes = fixture.page.getByRole("checkbox");
-    expect(await candidateCheckboxes.count()).toBe(3);
-    for (const checkbox of await candidateCheckboxes.all()) await checkbox.check();
-    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
+    await proposalOnly();
+    await fixture.page.getByRole("button", { name: "Approve", exact: true }).click();
     const heading = fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true });
     await heading.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(() => heading.locator("../..").getAttribute("aria-busy"), { timeout: 10_000 }).toBe("false");
@@ -215,7 +214,7 @@ run("Safe approval handoff", () => {
     if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     const receipt = await chain.write(chain.raffle, "approveRaffle", [3n, review.snapshot.admission.reviewHash]);
     await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
+    await fixture.page.getByText("Advanced: executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByText(/has not reached two canonical confirmations/i).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
     await fixture.page.getByText("Approved for current draft", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });

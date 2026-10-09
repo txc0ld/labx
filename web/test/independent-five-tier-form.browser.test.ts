@@ -150,28 +150,11 @@ run("independent five-tier rendered journey", () => {
       await group.getByLabel("Bonus entries", { exact: true }).fill(String(index + 2));
       await group.getByLabel("Supply", { exact: true }).fill(String((index + 1) * 11));
     }
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    for (const [index, name] of STANDARD_MEMBERSHIP_TIERS.entries()) {
-      const row = fixture.page.locator(".review-list > div").filter({ has: fixture.page.locator("dt", { hasText: name }) });
-      expect(await row.locator("dd").innerText()).toContain(`${index + 1} USDC`);
-      expect(await row.locator("dd").innerText()).toContain(`${index + 2} bonus entries`);
-      expect(await row.locator("dd").innerText()).toContain(`${(index + 1) * 11} supply`);
-    }
-    await fixture.page.setViewportSize({ width: 1440, height: 900 });
-    await fixture.page.screenshot({ path: resolve(evidenceDir, "new-five-tier-review-1440.png"), fullPage: true });
-    await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
-    for (const [index, group] of groups.entries()) {
-      expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual([
-        String(index + 1),
-        String(index + 2),
-        String((index + 1) * 11)
-      ]);
-    }
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
     const newId = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
-    await transact("Create raffle draft");
+    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+    await fixture.page.waitForURL(`**/seller/${newId}`, { timeout: 30_000 });
     const created = await chain.service.readRaffle({ id: newId });
+    expect(created.raffle.escrowed).toBe(true);
     expect(created.packs.map((pack, index) => ({ name: pack.name, priceUsdc: pack.priceUsdc, bonusEntries: pack.bonusEntries, maxSupply: pack.maxSupply, index }))).toEqual(
       STANDARD_MEMBERSHIP_TIERS.map((name, index) => ({ name, priceUsdc: BigInt(index + 1) * 1_000_000n, bonusEntries: index + 2, maxSupply: (index + 1) * 11, index }))
     );

@@ -233,47 +233,9 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(futureDeadline * 1000).toISOString().slice(0, 16));
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    const reviewHeading = fixture.page.getByRole("heading", { name: "Prepare raffle draft", exact: true });
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).waitFor({ state: "visible" });
-    await expect.poll(async () => reviewHeading.evaluate((heading) => {
-      const bounds = heading.getBoundingClientRect();
-      const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
-      return document.activeElement === heading && bounds.top >= headerBottom && bounds.bottom <= window.innerHeight;
-    })).toBe(true);
-    await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-review-1440.png"), fullPage: false });
-    await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
-
-    async function expectEditStageVisible(width: number) {
-      await fixture.page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
-      await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-title");
-      const editPosition = await fixture.page.locator("#draft-title").evaluate(async (input) => {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-        const label = document.querySelector('label[for="draft-title"]');
-        if (!(label instanceof HTMLLabelElement)) return null;
-        const bounds = input.getBoundingClientRect();
-        const labelBounds = label.getBoundingClientRect();
-        const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
-        const labelHit = document.elementFromPoint(labelBounds.x + Math.min(20, labelBounds.width / 2), (labelBounds.top + bounds.top) / 2);
-        return {
-          labelBelowHeader: labelBounds.top >= headerBottom,
-          labelInViewport: labelBounds.top >= 0 && labelBounds.top < window.innerHeight,
-          labelHit: labelHit === label || label.contains(labelHit),
-          inputBelowHeader: bounds.top >= headerBottom,
-          inputInViewport: bounds.bottom <= window.innerHeight,
-          inputHit: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === input
-        };
-      });
-      expect(editPosition).toEqual({ labelBelowHeader: true, labelInViewport: true, labelHit: true, inputBelowHeader: true, inputInViewport: true, inputHit: true });
-    }
-
-    await expectEditStageVisible(1440);
-    await fixture.page.setViewportSize({ width: 390, height: 844 });
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Prepare raffle draft", exact: true }).waitFor({ state: "visible" });
-    await fixture.page.getByRole("button", { name: "Edit draft", exact: true }).click();
-    await expectEditStageVisible(390);
-
+    expect(await fixture.page.getByRole("button", { name: "Create", exact: true }).isEnabled()).toBe(true);
+    expect(await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).count()).toBe(0);
+    await fixture.page.getByLabel("Raffle title").focus();
     expect(await fixture.page.locator("form").filter({ has: fixture.page.getByLabel("Raffle title") }).locator("input, textarea").evaluateAll((controls) => controls.map((control) => control.id).filter(Boolean).slice(0, 4))).toEqual(["draft-title", "draft-close", "draft-nft", "draft-token"]);
     await fixture.page.keyboard.press("Tab");
     expect(await fixture.page.evaluate(() => document.activeElement?.id)).toBe("draft-close");
@@ -322,79 +284,41 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(consoleErrors).toEqual([]);
   }, 60_000);
 
-  it("generates hidden commitment inputs once, reuses them on retry, and rotates them for a changed NFT", async () => {
+  it("keeps private setup out of errors and persistence, and recovers an ambiguous preparation without a second POST", async () => {
     await fixture.switchAccount(chain.seller);
-    const response = await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
-    expect(response?.status()).toBe(200);
+    await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await fixture.page.locator("summary").filter({ hasText: "Prepare a draft" }).click();
-
     const block = await chain.client.getBlock();
-    await fixture.page.getByLabel("Raffle title").fill("Automatic commitment retry");
+    await fixture.page.getByLabel("Raffle title").fill("Private preparation failure");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
-    await fillStandardMembershipEconomics(fixture.page, () => ({ price: "25", bonusEntries: "2", supply: "100" }));
-
-    type CapturedCommitment = { nft: string; tokenId: string; publicSummary: string; privateCommitment: string };
-    const attempts: CapturedCommitment[] = [];
+    await fillStandardMembershipEconomics(fixture.page, () => ({ price: "1", bonusEntries: "1", supply: "10" }));
+    let posts = 0, secret = "";
     await fixture.page.route("**/api/reserve", async route => {
-      const body: unknown = route.request().postDataJSON();
-      if (!body || typeof body !== "object" || !("input" in body) || !body.input || typeof body.input !== "object") throw new Error("Commitment request input missing.");
-      const input = body.input;
-      if (!("nft" in input) || typeof input.nft !== "string" || !("tokenId" in input) || typeof input.tokenId !== "string" || !("publicSummary" in input) || typeof input.publicSummary !== "string" || !("privateCommitment" in input) || typeof input.privateCommitment !== "string") throw new Error("Commitment request input invalid.");
-      const captured = { nft: input.nft, tokenId: input.tokenId, publicSummary: input.publicSummary, privateCommitment: input.privateCommitment };
-      attempts.push(captured);
-      if (attempts.length === 2) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ ok: true, seller: chain.seller, nft: chain.nft.address, tokenId: "998", chainId: "31337", labx: chain.raffle.address, publicSummary: captured.publicSummary, publicHash: keccak256(toBytes(captured.publicSummary)), nonce: keccak256(toBytes("mismatched nonce")), commit: keccak256(toBytes("mismatched commit")) })
-        });
-        return;
-      }
-      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ ok: false, error: `Untrusted failure exposed ${captured.privateCommitment}` }) });
+      posts++;
+      secret = route.request().postDataJSON().input.privateCommitment;
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ ok: false, error: `Untrusted failure ${secret}` }) });
     });
-
-    const blockBeforePreparation = await chain.client.getBlockNumber({ cacheTime: 0 });
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.evaluate(() => (window as unknown as { __labxRejectNextSignature(code: number, message: string): void }).__labxRejectNextSignature(4001, "Rejected payload contains a private commitment"));
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("The wallet request was cancelled. No draft transaction was submitted. You can try again.", { exact: true }).waitFor({ state: "visible" });
-    expect(attempts).toHaveLength(0);
-    await fixture.page.getByLabel("Token ID").fill("0999");
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("The draw setup could not be prepared or saved. No draft transaction was submitted. Try again.", { exact: true }).waitFor({ state: "visible" });
-    expect(await fixture.page.locator("body").innerText()).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
-    expect(await fixture.page.locator("body").innerText()).not.toContain("Rejected payload contains");
-    expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
-    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
-
-    await fixture.page.getByLabel("Token ID").fill("0999");
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("The draw setup could not be prepared or saved. No draft transaction was submitted. Try again.", { exact: true }).waitFor({ state: "visible" });
-    expect(attempts).toHaveLength(2);
-    expect(attempts[0]).toEqual(attempts[1]);
-    expect(attempts[0]?.privateCommitment).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(attempts[0]?.publicSummary).toBe(`LABx draw setup for NFT ${chain.nft.address.toLowerCase()} token 999`);
-    expect(await fixture.page.locator("body").innerText()).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
-    expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
-
-    await fixture.page.getByLabel("Token ID").fill("998");
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await fixture.page.getByText("The draw setup could not be prepared or saved. No draft transaction was submitted. Try again.", { exact: true }).waitFor({ state: "visible" });
-    expect(attempts).toHaveLength(3);
-    expect(attempts[2]?.tokenId).toBe("998");
-    expect(attempts[2]?.publicSummary).toBe(`LABx draw setup for NFT ${chain.nft.address.toLowerCase()} token 998`);
-    expect(attempts[2]?.privateCommitment).not.toBe(attempts[0]?.privateCommitment);
-    expect(await chain.client.getBlockNumber({ cacheTime: 0 })).toBe(blockBeforePreparation);
-    expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
-    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
+    await fixture.page.evaluate(() => (window as unknown as { __labxRejectNextSignature(code: number, message: string): void }).__labxRejectNextSignature(4001, "Rejected private input"));
+    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+    await fixture.page.getByText("The wallet request was cancelled. Click Create to resume when ready.", { exact: true }).waitFor();
+    expect(posts).toBe(0);
+    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+    await fixture.page.getByText("The draw setup could not be prepared or saved. Click Create to recover the saved preparation.", { exact: true }).waitFor();
+    expect(posts).toBe(1);
+    expect(secret).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(await fixture.page.locator("body").innerText()).not.toContain(secret);
+    expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(secret);
+    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+    await fixture.page.getByText(/Preparation recovery is unavailable/).waitFor();
+    expect(posts).toBe(1);
+    expect(await chain.client.getBlockNumber()).toBe(block.number);
     await fixture.page.unroute("**/api/reserve");
+    // Isolated fixture cleanup: its intercepted request never reached storage or chain.
+    await fixture.page.evaluate(() => { for (const key of Object.keys(localStorage)) if (key.startsWith("labx:create:")) localStorage.removeItem(key); });
   }, 45_000);
 
   it("fails closed before storage or transaction review when browser entropy fails", async () => {
@@ -415,7 +339,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.evaluate(() => {
       Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for test"); } });
     });
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
     await fixture.page.getByText("Secure random generation failed. This raffle cannot be prepared safely.", { exact: true }).waitFor({ state: "visible" });
     expect(reserveRequests).toBe(0);
     expect(await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).count()).toBe(0);

@@ -51,6 +51,16 @@ export function writeCreateRecord(storage: Storage, key: string, record: CreateR
   storage.setItem(key, raw);
   if (storage.getItem(key) !== raw) throw new Error("Creation recovery could not be saved. No new wallet request is allowed.");
 }
+export function retireCompletedCreate(storage: Storage, key: string, expected: Extract<CreateRecord, { kind: "draft" }>, id: bigint) {
+  const saved = readCreateRecord(storage, key);
+  if (saved?.kind !== "draft" || saved.id !== id.toString() || saved.pending !== null || JSON.stringify(saved) !== JSON.stringify(expected)) throw new Error("Creation recovery changed before completion.");
+  const raw = JSON.stringify({ id: id.toString(), creationHash: saved.creationHash });
+  const historyKey = `${key}:completed:${id}`;
+  storage.setItem(historyKey, raw);
+  if (storage.getItem(historyKey) !== raw) throw new Error("The completed creation receipt could not be retained.");
+  storage.removeItem(key);
+  if (storage.getItem(key) !== null) throw new Error("The completed creation could not be retired.");
+}
 export async function finishCreate({ service, wallet, draft, record, save, assertIntent, onStep }: {
   service: RaffleService; wallet: WalletSessionPort; draft: DraftInput;
   record: Extract<CreateRecord, { kind: "draft" }>; save: (record: Extract<CreateRecord, { kind: "draft" }>) => void;
