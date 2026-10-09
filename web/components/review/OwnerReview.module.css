@@ -21,6 +21,31 @@
   border-bottom: 1px solid var(--line-dark);
 }
 
+.shell :global(button.text-link) {
+  appearance: none;
+  justify-content: center;
+  justify-self: start;
+  max-width: 100%;
+  padding: .75rem 1rem;
+  border: 0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: var(--control-bevel);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.shell :global(button.text-link:disabled) {
+  cursor: not-allowed;
+  border: 1px dashed currentColor;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .12);
+}
+
+.shell :global(button.text-link:not(:disabled):active) {
+  box-shadow: inset 0 3px 6px rgba(0, 0, 0, .16), inset 0 -2px 4px rgba(255, 255, 255, .28);
+}
+
 .queue {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
