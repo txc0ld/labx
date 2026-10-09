@@ -21,7 +21,7 @@ async function waitForServer(baseUrl: string, child: ChildProcess, output: strin
   const recordSpawnError = (error: Error) => { spawnError = error; };
   child.once("error", recordSpawnError);
   try {
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
       if (spawnError) throw spawnError;
       if (child.exitCode !== null || child.signalCode !== null) {

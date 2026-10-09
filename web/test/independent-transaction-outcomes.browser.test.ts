@@ -523,6 +523,7 @@ run("independent transaction outcome ownership", () => {
       await recovery.waitFor({ state: "visible", timeout: 10_000 });
       await recovery.getByLabel("Transaction hash").fill(h2);
       await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
+      await openWalletActivity(fixture.page);
       const replacementReceipt = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
       await expect.poll(() => replacementReceipt.innerText(), { timeout: 15_000 }).toMatch(/transaction (?:confirmed|replaced)/i);
       await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.operator)), { timeout: 10_000 }).toBeNull();
