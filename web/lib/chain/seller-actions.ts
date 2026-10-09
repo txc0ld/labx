@@ -61,16 +61,22 @@ export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly Selle
     case 1:
       if (block.timestamp < raffle.salesEnd) return waiting(snapshot.paused ? "Membership sales paused" : "Memberships are open", "Sales can close at the published deadline. Refresh the raffle then to continue the draw.");
       return next(["close"], "Sales deadline reached", "Refresh the raffle to close sales.");
-    case 2:
+    case 2: {
+      const blocker = raffle.snapshotted && raffle.snapshotTotal === 0n
+        ? "No entries were frozen."
+        : block.timestamp >= raffle.salesEnd + snapshot.drawStartGrace ? "The draw-start deadline has passed." : null;
+      if (blocker) return waiting("Draw cannot start", `${blocker}${actions.some(item => item.kind === "cancel" && item.enabled) ? " Use Enable refunds under Advanced." : ""}`);
       return next(raffle.snapshotted ? ["requestRandomness"] : ["snapshot"], "Draw not ready", "Review the draw status. Available recovery actions are under Advanced.");
+    }
     case 3:
       return waiting("Waiting for the draw", "The randomness request is pending. Refresh after fulfillment. Available recovery actions are under Advanced.");
     case 4:
       return next(["settle", "reveal"], "Waiting for settlement", "Settlement becomes available after reveal or the published grace period.");
     case 5:
+      if (raffle.principalEscrow === 0n) return waiting("Raffle settled", "There are no seller proceeds left to claim.");
       return next(["claimProceeds"], "Raffle settled", "There are no seller proceeds left to claim.");
     case 6:
-      return waiting("Raffle cancelled", "Available NFT recovery is under Advanced. Buyers can claim their refundable principal.");
+      return waiting("Raffle cancelled", `${raffle.escrowed && actions.some(item => item.kind === "reclaimPrize" && item.enabled) ? "Reclaim the NFT under Advanced. " : ""}Buyers can claim their refundable principal.`);
     default:
       return waiting("Raffle state unavailable", "Refresh the verified contract state before continuing.");
   }

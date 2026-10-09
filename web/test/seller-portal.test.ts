@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
 import { parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle } from "../lib/chain/seller-actions";
+import { availableActions } from "../lib/chain/workflow";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";
 import { mergeSellerActivityPage, type SellerRaffleActivity } from "../lib/chain/seller-types";
 import type { ActionAvailability, ActionKind, RaffleSnapshot } from "../lib/chain/types";
@@ -234,6 +235,60 @@ describe("seller next step", () => {
     const value = snapshot({ id: 1n, phase: 0 });
     return { ...value, admission: { ...value.admission, status, reviewHash: zeroHash } };
   }
+  function currentSellerActions(value: RaffleSnapshot) {
+    return sellerPortalActions(availableActions(value, {
+      account: SELLER, snapshot: value, principal: 0n, fee: 0n,
+      usdcBalance: 0n, usdcAllowance: 0n, nftOwner: null, nftApproved: false
+    }));
+  }
+  it("shows that settled proceeds are exhausted instead of a generic seller-role restriction", () => {
+    const value = snapshot({ id: 1n, phase: 5, principalEscrow: 0n });
+    const actions = currentSellerActions(value);
+    expect(actions.find(item => item.kind === "claimProceeds")).toMatchObject({ enabled: false, reason: "Only the seller can claim remaining membership proceeds." });
+    expect(sellerNextStep(value, actions)).toEqual({ kind: "waiting", title: "Raffle settled", message: "There are no seller proceeds left to claim." });
+    const funded = snapshot({ id: 1n, phase: 5, principalEscrow: 1n });
+    expect(sellerNextStep(funded, currentSellerActions(funded))).toMatchObject({ kind: "action", action: { kind: "claimProceeds", enabled: true } });
+  });
+  it("explains an empty completed snapshot and points to enabled refunds", () => {
+    const value = snapshot({ id: 1n, phase: 2 });
+    value.raffle.snapshotted = true;
+    value.block.timestamp = value.raffle.salesEnd;
+    const actions = currentSellerActions(value);
+    expect(actions.find(item => item.kind === "cancel")).toMatchObject({ enabled: true, label: "Enable refunds" });
+    expect(sellerNextStep(value, actions)).toEqual({ kind: "waiting", title: "Draw cannot start", message: "No entries were frozen. Use Enable refunds under Advanced." });
+    expect(sellerNextStep(value, actions.filter(item => item.kind !== "cancel"))).toEqual({ kind: "waiting", title: "Draw cannot start", message: "No entries were frozen." });
+  });
+  it.each([true, false])("uses the real draw-start cutoff when snapshot completion is %s", snapshotted => {
+    const value = snapshot({ id: 1n, phase: 2 });
+    value.raffle.snapshotted = snapshotted;
+    value.raffle.snapshotTotal = 3n;
+    value.lotCount = 1n;
+    value.block.timestamp = value.raffle.salesEnd + value.drawStartGrace - 1n;
+    expect(sellerNextStep(value, currentSellerActions(value))).toMatchObject({ kind: "action", action: { kind: snapshotted ? "requestRandomness" : "snapshot", enabled: true } });
+    value.block.timestamp += 1n;
+    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Draw cannot start", message: "The draw-start deadline has passed. Use Enable refunds under Advanced." });
+  });
+  it.each([
+    { paused: false, reason: "Owner trust changed." },
+    { paused: true, reason: "Draw requests are paused." }
+  ])("preserves a disabled draw reason without inventing an elapsed cutoff: $reason", ({ paused, reason }) => {
+    const value = snapshot({ id: 1n, phase: 2 });
+    value.raffle.snapshotted = true;
+    value.raffle.snapshotTotal = 3n;
+    value.paused = paused;
+    value.block.timestamp = value.raffle.salesEnd;
+    expect(sellerNextStep(value, currentSellerActions(value))).toMatchObject({ kind: "action", action: { kind: "requestRandomness", enabled: true } });
+    const actions = currentSellerActions(value).map(item => item.kind === "requestRandomness" ? { ...item, enabled: false, reason } : item);
+    expect(sellerNextStep(value, actions)).toEqual({ kind: "waiting", title: "Draw not ready", message: reason });
+  });
+  it("only points cancelled raffles to NFT recovery when that control exists", () => {
+    const value = snapshot({ id: 1n, phase: 6 });
+    const actions = currentSellerActions(value);
+    expect(sellerNextStep(value, actions)).toMatchObject({ message: "Reclaim the NFT under Advanced. Buyers can claim their refundable principal." });
+    expect(sellerNextStep(value, actions.map(item => ({ ...item, enabled: false })))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim their refundable principal." });
+    value.raffle.escrowed = false;
+    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim their refundable principal." });
+  });
   it.each(["pending", "changed"] as const)("keeps cancellation secondary for an escrowed %s draft", status => {
     expect(sellerNextStep(draft(status), [cancel])).toMatchObject({ kind: "waiting", title: "Awaiting LABx review" });
   });
