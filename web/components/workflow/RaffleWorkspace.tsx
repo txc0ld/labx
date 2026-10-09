@@ -466,6 +466,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
           </section>
         </>
       ) : !salesOpen ? <p className="notice" role="status">Membership sales are not open{snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.</p> : null}
+      {!salesOpen && buyerWallet.kind === "disconnected" ? <WalletGate wallet={browser.wallet}><span /></WalletGate> : null}
       {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable principal</span><strong>{formatUsdc(account.principal)} USDC</strong><small>{formatUsdc(account.fee)} USDC processing fee paid to date remains historical and nonrefundable. Cancellation refunds principal only.</small></div> : null}
       {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || (nextRecovery.kind === "claimFee" ? "Anyone can send protocol fees to the pinned treasury; they are never paid to the caller." : "The contract currently permits this action.")}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section> : null}
     </div>
