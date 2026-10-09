@@ -344,7 +344,7 @@ function parseObject(raw: string, message: string): object {
 }
 
 function parseOptionalHint(raw: string | null): bigint | null {
-  return raw === null ? null : parseHintValue(raw);
+  return raw !== null && isBlockString(raw) ? BigInt(raw) : null;
 }
 
 async function verifiedProgressHint(
@@ -355,29 +355,26 @@ async function verifiedProgressHint(
   kind: "ingestion" | "retry"
 ): Promise<bigint> {
   if (raw === null) return fallback;
-  const hint = parseHintValue(raw);
+  if (!isBlockString(raw)) return fallback;
+  const hint = BigInt(raw);
   if (hint === fallback) return hint;
   if (hint < fallback) return fallback;
   const proof = await store.get(`${prefix}:${kind}-proof:${hint}`);
-  if (proof === null || !isBlockString(proof)) return fallback;
+  if (proof === null) return fallback;
+  if (!isBlockString(proof)) throw new Error("Notification progress proof is invalid.");
   const pageRaw = await store.get(pageKey(prefix, BigInt(proof)));
-  if (pageRaw === null) return fallback;
+  if (pageRaw === null) throw new Error("Notification progress proof has no durable page.");
   const page = parsePage(pageRaw, prefix.slice("raffle-notifications:v1:".length), BigInt(proof));
-  if (page.nextBlock !== hint.toString()) return fallback;
+  if (page.nextBlock !== hint.toString()) throw new Error("Notification progress proof does not match its durable page.");
   return hint;
-}
-
-function parseHintValue(raw: string): bigint {
-  if (!isBlockString(raw)) throw new Error("Notification progress hint is invalid.");
-  return BigInt(raw);
 }
 
 function parseResume(raw: string | null, length: number): number {
   if (length === 0) return 0;
   if (raw === null) return 0;
-  if (!/^\d{1,3}$/.test(raw)) throw new Error("Notification retry position is invalid.");
+  if (!/^\d{1,3}$/.test(raw)) return 0;
   const index = Number(raw);
-  if (!Number.isSafeInteger(index) || index < 0 || index >= length) throw new Error("Notification retry position is invalid.");
+  if (!Number.isSafeInteger(index) || index < 0 || index >= length) return 0;
   return index;
 }
 

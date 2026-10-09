@@ -86,4 +86,32 @@ describe("notification processor", () => {
     expect(report.accepted).toBe(1);
     expect(sender).toHaveBeenCalledTimes(2);
   });
+
+  it("replays safely when every mutable progress position is malformed", async () => {
+    const store = new MemoryStore();
+    const input = source([event(1)]);
+    await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
+    await processNotifications({ store, source: input, sender: async () => false, ...config, now: 2_000 });
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    await store.set(`${prefix}:ingestion-hint`, "not-a-block");
+    await store.set(`${prefix}:retry-hint`, "not-a-block");
+    await store.set(`${prefix}:last-ingested-page`, "not-a-block");
+    await store.set(`${prefix}:page:101:resume`, "not-an-index");
+    const sender = vi.fn(async () => true);
+    const report = await processNotifications({ store, source: input, sender, ...config, now: 3_000 });
+    expect(report.accepted).toBe(1);
+    expect(report.retryNextBlock).toBe("102");
+    expect(sender).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when an immutable progress proof is malformed", async () => {
+    const store = new MemoryStore();
+    const input = source([event(1)]);
+    await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
+    await processNotifications({ store, source: input, sender: async () => false, ...config, now: 2_000 });
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    await store.set(`${prefix}:ingestion-proof:102`, "not-a-block");
+    await expect(processNotifications({ store, source: input, sender: async () => true, ...config, now: 3_000 }))
+      .rejects.toThrow(/progress proof is invalid/);
+  });
 });

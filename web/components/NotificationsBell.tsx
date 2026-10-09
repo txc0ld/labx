@@ -1,39 +1,53 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type LatestActivity = { deployment: string; identity: string };
 const POLL_MS = 60_000;
 
 export function NotificationsBell() {
-  const [latest, setLatest] = useState<LatestActivity | null>(null);
   const [unread, setUnread] = useState(false);
+  const latestRef = useRef<LatestActivity | null>(null);
+  const lastStartedAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const inFlightRef = useRef<Promise<void> | null>(null);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    if (document.visibilityState === "hidden") return;
-    try {
-      const response = await fetch("/api/notifications?limit=1", { signal, headers: { Accept: "application/json" } });
-      const body: unknown = await response.json();
-      if (!response.ok || !body || typeof body !== "object") return;
-      const deployment = Reflect.get(body, "deployment");
-      const items = Reflect.get(body, "items");
-      if (typeof deployment !== "string" || !Array.isArray(items) || items.length === 0) {
-        setUnread(false);
-        return;
+  const refresh = useCallback((signal?: AbortSignal): Promise<void> => {
+    if (document.visibilityState === "hidden") return Promise.resolve();
+    if (inFlightRef.current) return inFlightRef.current;
+    const now = Date.now();
+    if (now - lastStartedAtRef.current < POLL_MS) return Promise.resolve();
+    lastStartedAtRef.current = now;
+    const request = (async () => {
+      try {
+        const response = await fetch("/api/notifications?limit=1", { signal, headers: { Accept: "application/json" } });
+        const body: unknown = await response.json();
+        if (!response.ok || !body || typeof body !== "object") return;
+        const deployment = Reflect.get(body, "deployment");
+        const items = Reflect.get(body, "items");
+        if (typeof deployment !== "string" || !Array.isArray(items) || items.length === 0) {
+          latestRef.current = null;
+          setUnread(false);
+          return;
+        }
+        const item = items[0];
+        if (!item || typeof item !== "object") return;
+        const blockHash = Reflect.get(item, "blockHash");
+        const transactionHash = Reflect.get(item, "transactionHash");
+        const logIndex = Reflect.get(item, "logIndex");
+        if (typeof blockHash !== "string" || typeof transactionHash !== "string" || !Number.isSafeInteger(logIndex)) return;
+        const activity = { deployment, identity: `${blockHash}:${transactionHash}:${logIndex}` };
+        latestRef.current = activity;
+        setUnread(readLastSeen(deployment) !== activity.identity);
+      } catch {
+        // The bell remains usable as a link when the public feed is unavailable.
       }
-      const item = items[0];
-      if (!item || typeof item !== "object") return;
-      const blockHash = Reflect.get(item, "blockHash");
-      const transactionHash = Reflect.get(item, "transactionHash");
-      const logIndex = Reflect.get(item, "logIndex");
-      if (typeof blockHash !== "string" || typeof transactionHash !== "string" || !Number.isSafeInteger(logIndex)) return;
-      const activity = { deployment, identity: `${blockHash}:${transactionHash}:${logIndex}` };
-      setLatest(activity);
-      setUnread(readLastSeen(deployment) !== activity.identity);
-    } catch {
-      // The bell remains usable as a link when the public feed is unavailable.
-    }
+    })();
+    inFlightRef.current = request;
+    void request.finally(() => {
+      if (inFlightRef.current === request) inFlightRef.current = null;
+    });
+    return request;
   }, []);
 
   useEffect(() => {
@@ -41,7 +55,10 @@ export function NotificationsBell() {
     void refresh(controller.signal);
     const interval = window.setInterval(() => void refresh(controller.signal), POLL_MS);
     const onVisibility = () => void refresh(controller.signal);
-    const onRead = () => void refresh(controller.signal);
+    const onRead = () => {
+      const latest = latestRef.current;
+      if (latest) setUnread(readLastSeen(latest.deployment) !== latest.identity);
+    };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("labx-notifications-read", onRead);
     return () => {
@@ -53,6 +70,7 @@ export function NotificationsBell() {
   }, [refresh]);
 
   function markVisibleActivityRead() {
+    const latest = latestRef.current;
     if (!latest) return;
     try {
       localStorage.setItem(storageKey(latest.deployment), latest.identity);

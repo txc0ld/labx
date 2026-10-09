@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { markNotificationRead } from "./NotificationsBell";
 
 type FeedItem = {
@@ -25,27 +25,65 @@ export function NotificationFeed() {
   const [refreshing, setRefreshing] = useState(false);
   const [moreError, setMoreError] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
+  const flowRef = useRef({ generation: 0, initial: false, refreshing: false, moreToken: 0 });
+  const requestIdRef = useRef(0);
+  const moreControllerRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (cursor?: string, background = false) => {
-    if (cursor) { setLoadingMore(true); setMoreError(false); }
-    else if (background) { setRefreshing(true); setRefreshError(false); }
-    else setState("loading");
+    const flow = flowRef.current;
+    let generation = flow.generation;
+    let token = 0;
+    let controller: AbortController | null = null;
+    if (cursor) {
+      if (flow.initial || flow.refreshing || flow.moreToken !== 0) return;
+      token = ++requestIdRef.current;
+      flow.moreToken = token;
+      controller = new AbortController();
+      moreControllerRef.current = controller;
+      setLoadingMore(true);
+      setMoreError(false);
+    } else if (background) {
+      if (flow.initial || flow.refreshing) return;
+      generation = ++flow.generation;
+      flow.refreshing = true;
+      flow.moreToken = 0;
+      moreControllerRef.current?.abort();
+      moreControllerRef.current = null;
+      setLoadingMore(false);
+      setMoreError(false);
+      setRefreshing(true);
+      setRefreshError(false);
+    } else {
+      if (flow.initial || flow.refreshing) return;
+      flow.initial = true;
+      setState("loading");
+    }
     try {
       const query = cursor ? `?limit=20&cursor=${encodeURIComponent(cursor)}` : "?limit=20";
-      const response = await fetch(`/api/notifications${query}`, { headers: { Accept: "application/json" } });
+      const response = await fetch(`/api/notifications${query}`, { signal: controller?.signal, headers: { Accept: "application/json" } });
       const page = parseFeedPage(await response.json());
       if (!response.ok) throw new Error();
+      if (generation !== flow.generation || cursor && token !== flow.moreToken) return;
       setItems(current => cursor ? mergeItems(current, page.items) : page.items);
       setDeployment(page.deployment);
       setNextCursor(page.nextCursor);
       setState("ready");
     } catch {
+      if (generation !== flow.generation || cursor && token !== flow.moreToken) return;
       if (cursor) setMoreError(true);
       else if (background) setRefreshError(true);
       else setState("error");
     } finally {
-      setLoadingMore(false);
-      setRefreshing(false);
+      if (cursor && token === flow.moreToken) {
+        flow.moreToken = 0;
+        moreControllerRef.current = null;
+        setLoadingMore(false);
+      } else if (background && generation === flow.generation) {
+        flow.refreshing = false;
+        setRefreshing(false);
+      } else if (!cursor && !background && generation === flow.generation) {
+        flow.initial = false;
+      }
     }
   }, []);
 
@@ -69,11 +107,12 @@ export function NotificationFeed() {
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           {nextCursor ? (
-            <button className="btn btn-dark" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>
-              {loadingMore ? "Loading..." : "Check older activity"}
+            <button className="btn btn-dark" type="button" disabled={loadingMore || refreshing} onClick={() => void load(nextCursor)}>
+              {loadingMore ? "Loading..." : moreError ? "Retry older activity" : "Check older activity"}
             </button>
           ) : null}
         </div>
+        {moreError ? <p role="alert">Older activity could not be loaded. Your current list is unchanged.</p> : null}
         {refreshError ? <p role="alert">Current activity could not be refreshed. Retry when the connection recovers.</p> : null}
       </div>
     );
@@ -111,7 +150,7 @@ export function NotificationFeed() {
       {nextCursor ? (
         <div className="notification-pagination">
           {moreError ? <p role="alert">Older activity could not be loaded. Your current list is unchanged.</p> : null}
-          <button className="btn btn-dark notification-more" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>
+          <button className="btn btn-dark notification-more" type="button" disabled={loadingMore || refreshing} onClick={() => void load(nextCursor)}>
             {loadingMore ? "Loading..." : moreError ? "Retry older activity" : "Load older activity"}
           </button>
         </div>
