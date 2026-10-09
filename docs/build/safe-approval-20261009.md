@@ -21,13 +21,13 @@ Pinned source evidence is in `artifacts/safe-approval-20261009/reference/`. The 
 Passing checks observed before the first candidate freeze:
 
 - `npx tsc --noEmit`: PASS.
-- Focused unit/UI suite: 3 files, 20 tests PASS (`31-green-malformed-boundary.log`, `32-typecheck-candidate.log`).
+- Focused unit/UI suite: 3 files, 22 tests PASS (`39-green-discovery-block-topic-identity.log`, `40-typecheck-second-candidate.log`).
 - Admission integration: 13 tests PASS (`13-admission-integration.log`).
 - Safe handoff browser: 2 tests PASS, including `/review` wrong-wallet help, responsive widths 320/390/768/1440, keyboard checklist/download, downloaded JSON, and discovery on return (`26-safe-approval-browser-queue.log`).
 - Owner review race browser: 4 tests PASS (`27-owner-review-race.log`).
 - Independent owner review race browser: 5 tests PASS (`28-independent-owner-review-race.log`).
+- Independent end-to-end browser journeys: 2 tests PASS after the isolated fixture supplied the global notification bell with a realistic empty finalized feed (`37-independent-browser-journeys-fixture.log`).
+- Activation-trust browser: 4 tests PASS with `RUN_BROWSER_ACCEPTANCE=1` (`35-activation-trust-browser-enabled.log`).
 - Contract fixture build: PASS (`12-contract-fixture-build.log`).
 
-Red-to-green evidence includes checksum compatibility, discovery paging, reorg during log query, malformed log data/topics/identity, and malformed RPC items that precede a valid candidate. Full logs are under `artifacts/safe-approval-20261009/builder/`.
-
-Pending at first freeze: activation-trust rerun and diagnosis of the independent browser journey's repeated resource 503 console errors. The journey behavior completed, but its strict console assertion failed; this is not recorded as a passing check.
+Red-to-green evidence includes checksum compatibility, discovery paging, reorg during log query, malformed log data/topics/identity, malformed RPC items that precede a valid candidate, exact explicit block-number identity, and byte-for-byte indexed topic encoding. Full logs are under `artifacts/safe-approval-20261009/builder/`.

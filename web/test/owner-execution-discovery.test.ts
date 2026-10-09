@@ -74,6 +74,7 @@ function fixture(logs: readonly unknown[]) {
   return {
     discover: ownerExecutionDiscoverer(client, manifest, reader),
     request,
+    getBlock,
     setCheckpointHash(hash: Hex) { checkpointOverride = hash; }
   };
 }
@@ -150,5 +151,37 @@ describe("owner execution discovery", () => {
     const missingTopics = { ...rpcLog({ hash: HASH_A, blockNumber: 110n, logIndex: 1 }), topics: undefined };
     const f = fixture([null, missingTopics, rpcLog({ hash: HASH_B, blockNumber: 111n, logIndex: 2 })]);
     await expect(f.discover({ intent: intent(), timeoutMs: 1_000 })).resolves.toMatchObject({ candidates: [HASH_B] });
+  });
+
+  it("requires exact explicit block identities before advancing a cursor", async () => {
+    const wrongPinned = fixture([]);
+    wrongPinned.getBlock.mockResolvedValueOnce({ number: 2_199n, hash: NEXT_BLOCK_HASH, timestamp: head.timestamp });
+    await expect(wrongPinned.discover({ intent: intent(), timeoutMs: 1_000 })).rejects.toThrow(/checkpoint/i);
+    expect(wrongPinned.request).not.toHaveBeenCalled();
+
+    const wrongReread = fixture([]);
+    wrongReread.getBlock
+      .mockResolvedValueOnce({ number: 2_099n, hash: NEXT_BLOCK_HASH, timestamp: head.timestamp })
+      .mockResolvedValueOnce({ number: 2_199n, hash: NEXT_BLOCK_HASH, timestamp: head.timestamp });
+    await expect(wrongReread.discover({ intent: intent(), timeoutMs: 1_000 })).rejects.toThrow(/block changed/i);
+
+    const wrongCursor = fixture([]);
+    const first = await wrongCursor.discover({ intent: intent(), timeoutMs: 1_000 });
+    wrongCursor.getBlock.mockResolvedValueOnce({
+      number: first.cursor.checkpoint.number + 1n,
+      hash: first.cursor.checkpoint.hash,
+      timestamp: first.cursor.checkpoint.timestamp
+    });
+    const reset = await wrongCursor.discover({ intent: intent(), cursor: first.cursor, timeoutMs: 1_000 });
+    expect(reset.reset).toBe(true);
+    expect(reset.scanned.fromBlock).toBe(reviewBlock.number);
+  });
+
+  it("requires every indexed topic to match the canonical event encoding", async () => {
+    const malformed = rpcLog({ hash: HASH_A, blockNumber: 110n, logIndex: 1 });
+    const topics = [...malformed.topics] as typeof malformed.topics;
+    topics[2] = `0x${"ff".repeat(12)}${SAFE.slice(2)}`;
+    const f = fixture([{ ...malformed, topics }, rpcLog({ hash: HASH_B, blockNumber: 111n, logIndex: 2 })]);
+    expect((await f.discover({ intent: intent(), timeoutMs: 1_000 })).candidates).toEqual([HASH_B]);
   });
 });

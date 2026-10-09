@@ -148,6 +148,31 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
     args: ["--no-sandbox"]
   }).catch(error => cleanupFailure(server, error));
   const context = await browser.newContext().catch(error => cleanupBrowserFailure(browser, server, error));
+  const notificationBlock = await chain.client.getBlock({ blockTag: "latest" }).catch(error => cleanupBrowserFailure(browser, server, error));
+  if (notificationBlock.number === null || notificationBlock.hash === null) {
+    return cleanupBrowserFailure(browser, server, new Error("Browser fixture notification checkpoint is unavailable."));
+  }
+  await context.route(`${baseUrl}/api/notifications?limit=1`, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify({
+        ok: true,
+        kind: "available",
+        deployment: `${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}`,
+        items: [],
+        nextCursor: null,
+        range: { fromBlock: chain.manifest.deploymentBlock.toString(), toBlock: notificationBlock.number.toString() },
+        finalized: {
+          blockNumber: notificationBlock.number.toString(),
+          blockHash: notificationBlock.hash,
+          occurredAt: new Date(Number(notificationBlock.timestamp) * 1_000).toISOString()
+        },
+        fresh: true
+      })
+    });
+  }).catch(error => cleanupBrowserFailure(browser, server, error));
   let selectedAccount: string = initialAccount;
   await context.exposeFunction("__labxRpc", async (input: { method: string; params?: readonly unknown[] }) => {
     const result = await chain.rpc(input.method, input.params ?? []);

@@ -40,9 +40,10 @@ function isRpcQuantity(value: unknown): value is Hex {
   return typeof value === "string" && /^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/.test(value);
 }
 
-function hasCanonicalLogShape(value: unknown, expectedData: Hex) {
+function hasCanonicalLogShape(value: unknown, expectedData: Hex, expectedTopics: readonly Hex[]) {
   if (typeof value !== "object" || value === null) return false;
   const log = value as Record<string, unknown>;
+  const returnedTopics = log.topics;
   return isAddressHex(log.address)
     && isBytes32(log.blockHash)
     && isRpcQuantity(log.blockNumber)
@@ -50,9 +51,9 @@ function hasCanonicalLogShape(value: unknown, expectedData: Hex) {
     && isBytes32(log.transactionHash)
     && isRpcQuantity(log.transactionIndex)
     && typeof log.removed === "boolean"
-    && Array.isArray(log.topics)
-    && log.topics.length === 4
-    && log.topics.every(isBytes32)
+    && Array.isArray(returnedTopics)
+    && returnedTopics.length === expectedTopics.length
+    && returnedTopics.every((topic, index) => isBytes32(topic) && sameHash(topic, expectedTopics[index]!))
     && typeof log.data === "string"
     && sameHash(log.data, expectedData);
 }
@@ -98,7 +99,7 @@ export function ownerExecutionDiscoverer(client: PublicClient, manifest: Deploym
       if (cursor !== undefined) {
         if (cursor.nextBlock !== cursor.checkpoint.number + 1n || cursor.checkpoint.number < intent.reviewBlock.number) throw new Error("Owner execution discovery cursor is invalid.");
         const checkpoint = await client.getBlock({ blockNumber: cursor.checkpoint.number });
-        if (checkpoint.hash === null || !sameHash(checkpoint.hash, cursor.checkpoint.hash)) reset = true;
+        if (checkpoint.number !== cursor.checkpoint.number || checkpoint.hash === null || !sameHash(checkpoint.hash, cursor.checkpoint.hash)) reset = true;
         else fromBlock = cursor.nextBlock;
       }
 
@@ -121,14 +122,15 @@ export function ownerExecutionDiscoverer(client: PublicClient, manifest: Deploym
         eventName,
         args: { id: intent.action.id, approver: intent.from, reviewHash: intent.action.expectedReviewHash }
       });
+      const canonicalTopics = topics as readonly Hex[];
       const checkpointBlock = await client.getBlock({ blockNumber: toBlock });
-      if (checkpointBlock.hash === null || checkpointBlock.number === null) throw new Error("Owner execution discovery checkpoint is unavailable.");
+      if (checkpointBlock.hash === null || checkpointBlock.number !== toBlock) throw new Error("Owner execution discovery checkpoint is unavailable.");
       const rawLogs = await client.request({
         method: "eth_getLogs",
         params: [{ address: manifest.address, fromBlock: numberToHex(fromBlock), toBlock: numberToHex(toBlock), topics }]
       });
       const canonical = await client.getBlock({ blockNumber: toBlock });
-      if (canonical.hash === null || !sameHash(canonical.hash, checkpointBlock.hash)) throw new Error("Owner execution discovery block changed. Retry the scan.");
+      if (canonical.number !== toBlock || canonical.hash === null || !sameHash(canonical.hash, checkpointBlock.hash)) throw new Error("Owner execution discovery block changed. Retry the scan.");
       if (!Array.isArray(rawLogs)) throw new Error("Owner execution discovery returned an invalid log page.");
       if (rawLogs.length > MAX_CANDIDATES) throw new Error("Too many matching owner events in one bounded block page.");
 
@@ -136,8 +138,8 @@ export function ownerExecutionDiscoverer(client: PublicClient, manifest: Deploym
         ? "0x"
         : encodeAbiParameters([{ type: "uint256" }], [intent.reviewRevision + 1n]);
       const logs = (rawLogs as readonly unknown[]).flatMap(rawLog => {
-        if (!hasCanonicalLogShape(rawLog, expectedData)) return [];
-        try { return [formatLog(rawLog as (typeof rawLogs)[number])]; }
+        if (!hasCanonicalLogShape(rawLog, expectedData, canonicalTopics)) return [];
+        try { return [formatLog(rawLog as Parameters<typeof formatLog>[0])]; }
         catch { return []; }
       }).sort((a, b) => {
         const blockOrder = (a.blockNumber ?? 0n) < (b.blockNumber ?? 0n) ? -1 : (a.blockNumber ?? 0n) > (b.blockNumber ?? 0n) ? 1 : 0;
@@ -154,7 +156,7 @@ export function ownerExecutionDiscoverer(client: PublicClient, manifest: Deploym
           || !sameHash(decoded.args.reviewHash, intent.action.expectedReviewHash)) continue;
         if (decoded.eventName === "RaffleApprovalRevoked" && decoded.args.nextRevision !== intent.reviewRevision + 1n) continue;
         const eventBlock = await client.getBlock({ blockNumber: log.blockNumber });
-        if (eventBlock.hash === null || !sameHash(eventBlock.hash, log.blockHash)) continue;
+        if (eventBlock.number !== log.blockNumber || eventBlock.hash === null || !sameHash(eventBlock.hash, log.blockHash)) continue;
         const key = log.transactionHash.toLowerCase();
         if (!seen.has(key)) {
           seen.add(key);
