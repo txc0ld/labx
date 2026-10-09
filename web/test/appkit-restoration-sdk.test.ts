@@ -38,10 +38,15 @@ vi.mock("@reown/appkit", async importOriginal => {
 vi.mock("../lib/chain/walletconnect-accessibility", () => ({ observeWalletConnectModal: () => () => {}, refreshWalletConnectConnectorLists: () => {} }));
 const account = "0x1111111111111111111111111111111111111111";
 const project = "a".repeat(32), scope = "sdk-restore";
-async function setup(selected = "fixture-injected", liveAccount = account) {
+async function setup(selected = "fixture-injected", liveAccount = account, usageGate: Promise<void> = Promise.resolve()) {
   const records = new Map<string, string>();
   const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); }, removeItem: (key: string) => { records.delete(key); } };
-  vi.stubGlobal("window", { location: { origin: "https://labx.test" }, localStorage: storage });
+  vi.stubGlobal("window", {
+    location: { origin: "https://labx.test" },
+    localStorage: storage,
+    addEventListener: () => {},
+    removeEventListener: () => {}
+  });
   vi.stubGlobal("localStorage", storage);
   sdk.selected = selected;
   const requests: string[] = [];
@@ -73,7 +78,7 @@ async function setup(selected = "fixture-injected", liveAccount = account) {
   }
   sdk.provider = provider;
   const { ApiController, CoreHelperUtil } = await import("@reown/appkit-controllers");
-  vi.spyOn(ApiController, "fetchUsage").mockResolvedValue(undefined);
+  vi.spyOn(ApiController, "fetchUsage").mockImplementation(() => usageGate);
   vi.spyOn(CoreHelperUtil, "isMobile").mockReturnValue(false);
   const consent = saveWalletConsent(consentKey(project, scope), { connectorId: selected, account, chainId: 11155111 });
   return { requests, consent };
@@ -140,6 +145,68 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
 
     expect(provider.disconnect).toHaveBeenCalledOnce();
     expect(provider.session).toBeUndefined();
+  });
+  it("deletes a WalletConnect session adopted before SDK readiness when browser disconnect wins", async () => {
+    let finishUsage = () => {};
+    const usageGate = new Promise<void>(resolve => { finishUsage = resolve; });
+    await setup("walletConnect", account, usageGate);
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string }; disconnect: ReturnType<typeof vi.fn> };
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+
+    const restoration = wallet.restore();
+    await vi.waitFor(() => {
+      expect(sdk.instance?.getProvider("eip155")).toBe(provider);
+      expect(sdk.instance?.getAccount("eip155")).toMatchObject({ isConnected: true, address: account });
+    });
+    wallet.disconnect();
+    finishUsage();
+    await restoration;
+
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(provider.disconnect).toHaveBeenCalledOnce());
+    expect(sdk.instance?.getProvider("eip155")).toBeUndefined();
+  });
+  it("releases an early adopted session locally when browser disposal wins SDK readiness", async () => {
+    let finishUsage = () => {};
+    const usageGate = new Promise<void>(resolve => { finishUsage = resolve; });
+    await setup("walletConnect", account, usageGate);
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string }; disconnect: ReturnType<typeof vi.fn> };
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+
+    const restoration = wallet.restore();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(provider));
+    wallet.dispose();
+    finishUsage();
+    await restoration;
+
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBeUndefined());
+    expect(provider.disconnect).not.toHaveBeenCalled();
+    expect(provider.session?.topic).toBe("restored-walletconnect-topic");
+  });
+  it("retains cleanup ownership when SDK readiness rejects after adoption", async () => {
+    let failUsage = (_error: Error) => {};
+    const usageGate = new Promise<void>((_resolve, reject) => { failUsage = reject; });
+    await setup("walletConnect", account, usageGate);
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string }; disconnect: ReturnType<typeof vi.fn> };
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+
+    const loading = createAppKitProvider(project, scope);
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(provider));
+    failUsage(new Error("controlled usage failure"));
+    const chooser = await loading;
+    await chooser.disconnect();
+
+    expect(provider.disconnect).toHaveBeenCalledOnce();
+    expect(provider.session).toBeUndefined();
+    await expect(chooser.connect(new AbortController().signal)).rejects.toBeInstanceOf((await import("../lib/chain/wallet-connectors")).WalletChooserReloadError);
   });
   it("rejects expired or mismatched WalletConnect authorization", async () => {
     const { consent } = await setup();

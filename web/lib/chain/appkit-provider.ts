@@ -386,6 +386,9 @@ type AppKitRuntime = {
   appKit: AppKit;
   adapter: LabxEthersAdapter;
   generation: object;
+  startupPending: boolean;
+  startupSettled: Promise<void>;
+  initializationFailed?: boolean;
   active?: OwnedConnection;
   adoption?: OwnedConnection;
 };
@@ -483,6 +486,10 @@ export function hasAuthorizedRestoreSession(provider: unknown, consent: WalletCo
 }
 
 async function initialize(projectId: string, key?: string): Promise<AppKitRuntime> {
+  const generation = {};
+  let settleStartup = () => {};
+  const startupSettled = new Promise<void>(resolve => { settleStartup = resolve; });
+  let current: AppKitRuntime | undefined;
   // Lexical capture is initialized before AppKit's constructor invokes virtual hooks.
   class RestoringAdapter extends LabxEthersAdapter {
     override async syncConnection(params: Parameters<EthersAdapter["syncConnection"]>[0]): ReturnType<EthersAdapter["syncConnection"]> {
@@ -499,12 +506,36 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
     override async syncConnections() { /* Never select a fallback wallet during SDK initialization. */ }
   }
   const adapter = new RestoringAdapter();
+  const runtimeFor = (appKit: AppKit): AppKitRuntime => current ??= {
+    appKit,
+    adapter,
+    generation,
+    startupPending: true,
+    startupSettled
+  };
   class RestoringAppKit extends LabxAppKit {
     override async syncExistingConnection() {
       const consent = savedConsent(key);
       if (!consent || consent.chainId !== 11155111 || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return;
-      if (consent.connectorId === "walletConnect" && !hasAuthorizedRestoreSession(adapter.getWalletConnectProvider(), consent)) return;
+      const connector = adapter.connectors.find(candidate => candidate.id === consent.connectorId);
+      const selectedProvider = consent.connectorId === "walletConnect" ? adapter.getWalletConnectProvider() : connector?.provider;
+      const selectedTopic = consent.connectorId === "walletConnect" && selectedProvider && typeof selectedProvider === "object"
+        ? sessionTopic(selectedProvider as { session?: unknown })
+        : undefined;
+      if (!isWalletProvider(selectedProvider)) return;
+      if (consent.connectorId === "walletConnect" && (!selectedTopic || !hasAuthorizedRestoreSession(selectedProvider, consent))) return;
       await super.syncExistingConnection();
+      const account = this.getAccount("eip155");
+      if (ConnectorController.getConnectorId("eip155") !== consent.connectorId || this.getProvider("eip155") !== selectedProvider || !account?.isConnected || account.address?.toLowerCase() !== consent.account.toLowerCase()) return;
+      if (consent.connectorId === "walletConnect" && (adapter.getWalletConnectProvider() !== selectedProvider || sessionTopic(selectedProvider as { session?: unknown }) !== selectedTopic || !hasAuthorizedRestoreSession(selectedProvider, consent))) return;
+      const target = runtimeFor(this);
+      if (target.active) {
+        if (!matchesConnection(target, target.active)) throw new Error("The restored wallet connection changed during initialization.");
+        return;
+      }
+      const adoption = captureConnection(target, selectedProvider, consent.connectorId, consent);
+      target.active = adoption;
+      target.adoption = adoption;
     }
     override async syncAdapterConnections() { /* Restoration is limited to the previously selected connector. */ }
   }
@@ -538,15 +569,20 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
     ...options,
     sdkVersion: CoreHelperUtil.generateSdkVersion([adapter], "html", PACKAGE_VERSION)
   }, adapter);
-  await bounded(appKit.ready(), 20_000);
-  const current: AppKitRuntime = { appKit, adapter, generation: {} };
-  const consent = savedConsent(key);
-  const connectorId = consent ? ConnectorController.getConnectorId("eip155") : undefined;
-  const provider = consent ? appKit.getProvider<unknown>("eip155") : undefined;
-  if (consent && connectorId === consent.connectorId && isWalletProvider(provider) && appKit.getAccount("eip155")?.isConnected) {
-    const adoption = captureConnection(current, provider, connectorId, consent);
-    current.active = adoption;
-    current.adoption = adoption;
+  current = runtimeFor(appKit);
+  const ready = appKit.ready();
+  void ready.then(() => {
+    current!.startupPending = false;
+    settleStartup();
+  }, () => {
+    current!.startupPending = false;
+    settleStartup();
+  });
+  try {
+    await bounded(ready, 20_000);
+  } catch {
+    current.initializationFailed = true;
+    if (!current.startupPending && !current.adoption) throw new WalletChooserReloadError();
   }
   return current;
 }
@@ -560,12 +596,25 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
   let ownedAttempt: Attempt | undefined;
   let disconnecting: Promise<void> | undefined;
 
+  const claimAdoption = () => {
+    const adoption = current.adoption;
+    if (!ownedConnection && adoption && !adoption.claimedBy) {
+      adoption.claimedBy = owner;
+      ownedConnection = adoption;
+    }
+  };
+
   const cleanupOwned = (mode: "disconnect" | "release") => {
     if (disconnecting) return disconnecting;
     if (cleanupLease && cleanupLease.owner !== owner) return cleanupLease.promise;
-    if (!ownedConnection && !ownedAttempt) return Promise.resolve();
+    claimAdoption();
+    if (!ownedConnection && !ownedAttempt && !current.startupPending) return Promise.resolve();
     disconnecting = (async () => {
       let failure: unknown;
+      if (!ownedConnection && !ownedAttempt && current.startupPending) {
+        await current.startupSettled;
+        claimAdoption();
+      }
       if (mode === "disconnect") {
         try { await appKit.close(); }
         catch (error) { failure = error; }
@@ -629,6 +678,7 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
       saveWalletConsent(key, { connectorId: captured.connectorId, account: snapshot.account, chainId: snapshot.chainId });
     },
     async restore(signal) {
+      if (current.initializationFailed) return null;
       const consent = savedConsent(key);
       const captured = ownedConnection;
       if (signal.aborted || !consent || !captured || !sameConsent(captured.restoreConsent ?? null, consent) || cleanupFailed || cleanupLease || pendingAttempt || !matchesConnection(current, captured) || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return null;
@@ -646,7 +696,7 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
       return provider;
     },
     async connect(signal) {
-      if (cleanupFailed) throw new WalletChooserReloadError();
+      if (cleanupFailed || current.initializationFailed) throw new WalletChooserReloadError();
       if (ownedConnection) {
         await cleanupOwned("release");
         disconnecting = undefined;
