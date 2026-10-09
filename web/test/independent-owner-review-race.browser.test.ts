@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { keccak256, toBytes } from "viem";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_INDEPENDENT_OWNER_REVIEW_RACE_BROWSER === "1" ? describe : describe.skip;
 type RpcRequest = { method: string; params?: readonly unknown[] };
@@ -31,9 +32,7 @@ run("independent owner review race verification", () => {
     expect(response?.status()).toBe(200);
     await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:")).forEach(key => localStorage.removeItem(key)));
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }));
     expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
   }
   async function ownerStorageKeys() {

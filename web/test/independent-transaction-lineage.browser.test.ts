@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Page } from "playwright";
+import { connectWallet } from "./fixtures/connect-wallet";
 import { hash } from "../lib/chain/validation";
 import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
@@ -36,9 +37,7 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
   async function openSeller(page: Page) {
     const response = await page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ }).waitFor({ state: "visible", timeout: 15_000 });
+    await connectWallet(page, page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ }));
   }
 
   async function fillDraft(page: Page) {

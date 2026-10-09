@@ -3,6 +3,7 @@ import { keccak256, toBytes, type Address } from "viem";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_PRIVATE_RECORDS_BROWSER === "1" ? describe : describe.skip;
 
@@ -126,8 +127,7 @@ run("wallet-scoped private-record feedback", () => {
   async function openRecords(account: Address) {
     const response = await fixture.page.goto(`${fixture.baseUrl}/profile/receipts`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: short(account) }));
     await waitForAccount(account);
     const load = fixture.page.getByRole("button", { name: "Sign to load records", exact: true });
     await load.waitFor({ state: "visible", timeout: 10_000 });
@@ -230,7 +230,7 @@ run("wallet-scoped private-record feedback", () => {
     await fixture.page.getByText("Wrong network", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByRole("button", { name: "Disconnect wallet", exact: true }).click();
     await setFixtureSession({ chainId: 31337, account: chain.buyer });
-    await fixture.page.getByRole("button", { name: "Connect wallet", exact: true }).click();
+    await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: short(chain.buyer) }));
     await reloadRecords(chain.buyer);
     await disconnected.respond({ delivered: true });
     await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);

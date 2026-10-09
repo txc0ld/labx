@@ -8,6 +8,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import type { DraftInput } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_FIVE_TIER_VERIFICATION === "1" || process.env.RUN_SELLER_PORTAL_BROWSER === "1" ? describe : describe.skip;
 
@@ -78,8 +79,10 @@ run("independent five-tier rendered journey", () => {
   async function goto(path: string) {
     const response = await fixture.page.goto(`${fixture.baseUrl}${path}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
+    const ready = path === "/seller"
+      ? fixture.page.locator("summary").filter({ hasText: "Create a raffle" })
+      : fixture.page.locator("summary").filter({ hasText: "Edit draft" });
+    await connectWallet(fixture.page, ready);
   }
 
   async function transact(label: string) {

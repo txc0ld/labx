@@ -3,6 +3,7 @@ import { decodeFunctionData, keccak256, toBytes, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_OWNER_REVIEW_RACE_BROWSER === "1" ? describe : describe.skip;
 type RpcRequest = { method: string; params?: readonly unknown[] };
@@ -27,9 +28,7 @@ run("owner review async lifetimes", () => {
   async function openApproval() {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }));
     expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
     await fixture.page.getByText(/By clicking Approve, I confirm that I checked the canonical collection provenance/).waitFor({ state: "visible" });
   }

@@ -7,6 +7,7 @@ import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { standardMembershipPacks } from "./fixtures/membership-tiers";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_INDEPENDENT_BUYER_STATE_BROWSER === "1" ? describe : describe.skip;
 
@@ -50,10 +51,7 @@ run("independent buyer state journeys", () => {
     await fixture.switchAccount(account);
     const response = await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await expect.poll(() => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
-      .toContain(`${account.slice(0, 6)}…${account.slice(-4)}`);
+    await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: `${account.slice(0, 6)}…${account.slice(-4)}` }));
   }
 
   beforeAll(async () => {

@@ -5,6 +5,7 @@ import { encodeFunctionData, keccak256, toBytes, zeroHash, type Address, type He
 import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_INDEPENDENT_SELLER_SIMPLIFICATION_BROWSER === "1" ? describe : describe.skip;
 type RpcTrace = { method: string; params?: readonly unknown[] };
@@ -58,9 +59,7 @@ run("independent seller simplification boundaries", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/${id.toString()}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await instrumentProvider();
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: `Independent seller simplification ${id.toString()}`, exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: `Independent seller simplification ${id.toString()}`, exact: true }));
   }
   function pendingKey(account: Address) {
     return `labx:pending:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${account.toLowerCase()}`;
@@ -77,10 +76,8 @@ run("independent seller simplification boundaries", () => {
     expect(response?.status()).toBe(200);
     await fixture.page.evaluate(({ key, intentHash }) => localStorage.setItem(key, JSON.stringify({ id: "held-before-create", intentHash, nonce: 77, startedBlock: "1", hash: null })), { key: pendingKey(chain.seller), intentHash: zeroHash });
     await instrumentProvider();
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
     const advanced = fixture.page.locator("details.workflow-details > summary").filter({ hasText: /^Advanced \(/ });
-    await advanced.waitFor({ state: "visible", timeout: 15_000 });
+    await connectWallet(fixture.page, advanced);
     await advanced.click();
     await fixture.page.getByText("Reconcile pending wallet activity", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction" || method === "personal_sign" || method === "eth_sign")).toEqual([]);
@@ -94,9 +91,7 @@ run("independent seller simplification boundaries", () => {
       Storage.prototype.getItem = function (key: string) { if (key.startsWith("labx:pending:v1:")) throw new Error("independent pending storage read failure"); return original.call(this, key); };
     });
     try {
-      const reconnect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-      if (await reconnect.isVisible().catch(() => false)) await reconnect.click();
-      await fixture.page.getByRole("alert").filter({ hasText: "independent pending storage read failure" }).first().waitFor({ state: "visible", timeout: 15_000 });
+      await connectWallet(fixture.page, fixture.page.getByRole("alert").filter({ hasText: "independent pending storage read failure" }).first());
       expect((await providerCalls()).filter(method => method === "eth_sendTransaction" || method === "personal_sign" || method === "eth_sign")).toEqual([]);
     } finally {
       await fixture.page.evaluate(() => (window as unknown as Window & { __restorePendingRead(): void }).__restorePendingRead());

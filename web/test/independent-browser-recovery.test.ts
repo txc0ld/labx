@@ -8,6 +8,7 @@ import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_BROWSER_ACCEPTANCE === "1" ? describe : describe.skip;
 
@@ -72,10 +73,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
 
     const response = await fixture.page.goto(`${fixture.baseUrl}/piece/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible()) await connect.click();
-    await expect.poll(async () => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
-      .toContain(`${chain.buyer.slice(0, 6)}…${chain.buyer.slice(-4)}`);
+    await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: `${chain.buyer.slice(0, 6)}…${chain.buyer.slice(-4)}` }));
 
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await expect.poll(async () => {

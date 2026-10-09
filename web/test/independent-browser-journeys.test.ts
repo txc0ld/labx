@@ -4,6 +4,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
+import { connectWallet } from "./fixtures/connect-wallet";
 
 const run = process.env.RUN_BROWSER_ACCEPTANCE === "1" ? describe : describe.skip;
 
@@ -59,12 +60,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}${path}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await fixture.page.locator("#content").waitFor({ state: "visible" });
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await expect.poll(async () => fixture.page.evaluate(async () => {
-      const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
-      return provider.request({ method: "eth_accounts" });
-    }), { timeout: 5_000 }).toEqual([account]);
+    await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: short(account) }));
   }
 
   async function refreshState() {
