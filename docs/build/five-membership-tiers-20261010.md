@@ -8,9 +8,13 @@ Existing raffles retain their actual membership names, order and count. Sellers 
 
 ## Verification
 
-The repaired production source at `4498d3ad92d26f7e783fca0e5de46bc2038d8f51` passed the production build and the chain-enabled aggregate, with 646 passing tests and 62 browser tests skipped in that command. Astra independently reviewed that source. Separate independent tests passed five policy cases and a browser journey covering creation, expired legacy repair, exact raw names, keyboard navigation, reduced motion, zoom and 320, 390, 768 and 1440 CSS-pixel widths.
+The final production source matches `2b6c1683d305c5475dd1bfe1dccc42bbc53744d6`. Its production build passed, and its chain-enabled aggregate passed 651 tests with 63 browser tests skipped in that command. Astra approved integrated source candidate `0553d8e5a193e88c40d3709e46e062778f8e019b`; the subsequent `1c366572168af2a63d345d5ab20476717110c821` changes only two test-fixture values.
 
-Independent review found and repaired legacy-name trimming, a stale Gold fixture index and indistinguishable fixture economics. A later focused browser check reproduced a long legacy name clipping at 320 pixels. Its repair and the final browser/release checks are tracked in the task evidence; this document does not claim those checks or deployment succeeded before their recorded results.
+The full browser run on the earlier repaired candidate passed 60 tests and exposed two stale test assumptions: a three-pack sold-count array and a fixed 64-Tab traversal budget. Both were corrected. A separate integrated run at `0553d8e` then passed all five tests across the affected buyer, NFT picker and independent five-tier suites. The final distinct-price/bonus fixture passed its complete browser journey independently. These are separate runs, not an invented single aggregate.
+
+Independent policy tests cover invalid direct creates, fresh-state canonical update enforcement, expired legacy one/two/eight-pack repair, raw whitespace names and original buyer indices. Browser checks cover creation, saved-draft repair, exact raw names, keyboard navigation, reduced motion, zoom and 320, 390, 768 and 1440 CSS-pixel widths. The reproduced 32-byte legacy-name clipping now passes a specific legend-bounds check at 320 pixels.
+
+Review findings included legacy-name trimming, stale fixture indices, indistinguishable fixture economics, long-name wrapping and fragile keyboard traversal. Each accepted finding has a repair and verification record. Claude's final scoped verdicts, hosted CI, deployment identity and live smoke results are recorded in the release evidence after completion.
 
 Physical-device testing was unavailable: iOS requires macOS/Xcode and the Android emulator failed to boot. Browser emulation is recorded separately from physical-device evidence.
 
