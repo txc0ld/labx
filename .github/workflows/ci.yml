@@ -95,6 +95,7 @@ jobs:
             test/independent-browser-recovery.test.ts \
             test/independent-browser-catalog.test.ts \
             test/seller-portal.browser.test.ts \
+            test/independent-seller-simplification.browser.test.ts \
             test/independent-five-tier-form.browser.test.ts \
             test/wallet-nft-picker.verification.browser.test.ts \
             test/private-record-feedback.browser.test.ts \
@@ -110,6 +111,7 @@ jobs:
         env:
           RUN_BROWSER_ACCEPTANCE: "1"
           RUN_SELLER_PORTAL_BROWSER: "1"
+          RUN_INDEPENDENT_SELLER_SIMPLIFICATION_BROWSER: "1"
           RUN_WALLET_NFT_VERIFICATION: "1"
           RUN_PRIVATE_RECORDS_BROWSER: "1"
           RUN_BUYER_UI_REPAIRS_BROWSER: "1"
@@ -121,3 +123,4 @@ jobs:
           RUN_INDEPENDENT_TRANSACTION_OUTCOMES_BROWSER: "1"
           RUN_INDEPENDENT_TRANSACTION_LINEAGE_BROWSER: "1"
           LABX_WALLET_NFT_EVIDENCE_DIR: "../artifacts/wallet-nft-picker"
+          LABX_SELLER_SIMPLIFICATION_EVIDENCE_DIR: "../artifacts/seller-simplification"
