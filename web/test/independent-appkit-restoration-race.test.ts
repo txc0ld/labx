@@ -12,6 +12,9 @@ const sdk = vi.hoisted(() => ({
   connectorType: "INJECTED",
   selected: "independent-injected",
   accountReads: 0,
+  walletConnectDisconnects: 0,
+  walletConnectEmitEvents: true,
+  walletConnectReplacement: undefined as object | undefined,
   changeSelectorOnAccountRead: 0,
   changeSelector: (_connector: string) => {}
 }));
@@ -73,12 +76,16 @@ async function setupActualSdk(changeSelectorOnAccountRead: number, connector: "i
   vi.stubGlobal("window", { location: { origin: "https://labx.test" }, localStorage });
   vi.stubGlobal("localStorage", localStorage);
   sdk.accountReads = 0;
+  sdk.walletConnectDisconnects = 0;
+  sdk.walletConnectEmitEvents = true;
+  sdk.walletConnectReplacement = undefined;
   sdk.changeSelectorOnAccountRead = changeSelectorOnAccountRead;
   sdk.connectorId = connector === "walletConnect" ? "walletConnect" : "independent-injected";
   sdk.connectorType = connector === "walletConnect" ? "WALLET_CONNECT" : "INJECTED";
   sdk.selected = sdk.connectorId;
   const methods: string[] = [];
-  sdk.provider = Object.assign(new EventEmitter(), connector === "walletConnect" ? {
+  const provider = new EventEmitter();
+  sdk.provider = Object.assign(provider, connector === "walletConnect" ? {
     session: {
       topic: "independent-existing-session",
       expiry: Math.floor(Date.now() / 1000) + 600,
@@ -89,6 +96,18 @@ async function setupActualSdk(changeSelectorOnAccountRead: number, connector: "i
           methods: ["personal_sign", "eth_sendTransaction"],
           events: ["accountsChanged", "chainChanged"]
         }
+      }
+    },
+    disconnect: async () => {
+      sdk.walletConnectDisconnects++;
+      Object.assign(provider, { session: undefined });
+      if (sdk.walletConnectReplacement) {
+        sdk.provider = sdk.walletConnectReplacement;
+        return;
+      }
+      if (sdk.walletConnectEmitEvents) {
+        provider.emit("session_delete", { topic: "independent-existing-session" });
+        provider.emit("disconnect", { data: "independent-existing-session" });
       }
     }
   } : {}, {
@@ -122,6 +141,9 @@ afterEach(() => {
   sdk.connectorType = "INJECTED";
   sdk.selected = "independent-injected";
   sdk.accountReads = 0;
+  sdk.walletConnectDisconnects = 0;
+  sdk.walletConnectEmitEvents = true;
+  sdk.walletConnectReplacement = undefined;
   sdk.changeSelectorOnAccountRead = 0;
   sdk.changeSelector = () => {};
 });
@@ -142,6 +164,25 @@ describe("independent installed AppKit restoration race", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it("locally releases an adopted injected SDK connection without requesting wallet permission revocation", async () => {
+    const methods = await setupActualSdk(0);
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const disconnect = vi.spyOn(appKit, "disconnect");
+
+    await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
+    const restorationMethods = [...methods];
+    await expect(chooser.release?.()).resolves.toBeUndefined();
+
+    expect(methods).toEqual(restorationMethods);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+    expect(methods).not.toContain("wallet_getPermissions");
+    expect(methods).not.toContain("wallet_revokePermissions");
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
   it("restores an existing authorized WalletConnect session through actual SDK startup using reads only", async () => {
     const methods = await setupActualSdk(0, "walletConnect");
     const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
@@ -158,5 +199,55 @@ describe("independent installed AppKit restoration race", () => {
     expect(methods).toEqual(["eth_chainId", "eth_accounts", "eth_chainId", "eth_accounts"]);
     expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("locally releases an adopted WalletConnect SDK connection without deleting the wallet session", async () => {
+    const methods = await setupActualSdk(0, "walletConnect");
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const disconnect = vi.spyOn(appKit, "disconnect");
+
+    await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
+    const restorationMethods = [...methods];
+    await expect(chooser.release?.()).resolves.toBeUndefined();
+
+    expect(methods).toEqual(restorationMethods);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it("fully disconnects the exact adopted WalletConnect session when its provider emits both deletion events", async () => {
+    const methods = await setupActualSdk(0, "walletConnect");
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+
+    await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
+    const restorationMethods = [...methods];
+    await expect(chooser.disconnect()).resolves.toBeUndefined();
+
+    expect(sdk.walletConnectDisconnects).toBe(1);
+    expect(methods).toEqual(restorationMethods);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+  });
+
+  it("fails closed without touching a replacement WalletConnect session that appears during disconnect", async () => {
+    await setupActualSdk(0, "walletConnect");
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+    await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
+    const replacementDisconnect = vi.fn(async () => {});
+    sdk.walletConnectReplacement = {
+      session: { topic: "replacement-session" },
+      request: vi.fn(),
+      disconnect: replacementDisconnect
+    };
+
+    await expect(chooser.disconnect()).rejects.toThrow(/reload/i);
+
+    expect(sdk.walletConnectDisconnects).toBe(1);
+    expect(replacementDisconnect).not.toHaveBeenCalled();
   });
 });
