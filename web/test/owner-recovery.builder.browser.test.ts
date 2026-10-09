@@ -10,7 +10,7 @@ run("explicit Advanced owner recovery", () => {
     chain = await localChain();
     const block = await chain.client.getBlock();
     const hash = keccak256(toBytes("owner recovery"));
-    for (const id of [1n, 2n]) {
+    for (const id of [1n, 2n, 3n, 4n]) {
       await chain.write(chain.nft, "mint", [chain.seller, 940n + id]);
       await chain.write(chain.raffle, "createRaffle", [chain.nft.address, 940n + id, block.timestamp + 86_400n, hash, hash, `Recovery ${id}`, [{ name: "Membership", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]], chain.seller);
       await chain.write(chain.nft, "approve", [chain.raffle.address, 940n + id], chain.seller);
@@ -139,4 +139,55 @@ run("explicit Advanced owner recovery", () => {
     release(); await expect.poll(() => handled).toBe(true); await fixture.page.unroute(`${chain.url}/`);
     expect(await recorded.isVisible()).toBe(true); expect(await saved(2)).toBeNull();
   }, 45_000);
+  it("preserves a second tab's manual export after the original wallet rejects late", async () => {
+    const page = fixture.page;
+    await page.goto(`${fixture.baseUrl}/review/3`);
+    await connect();
+    await page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor();
+    await page.evaluate(() => {
+      const w = window as unknown as { ethereum: { request(input: { method: string }): Promise<unknown> }; rejectOwnerRequest?: () => void };
+      const request = w.ethereum.request.bind(w.ethereum);
+      w.ethereum.request = input => input.method === "eth_sendTransaction" ? new Promise((_resolve, reject) => { w.rejectOwnerRequest = () => reject(Object.assign(new Error("Late wallet rejection"), { code: 4001 })); }) : request(input);
+    });
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor();
+    await page.waitForFunction(() => typeof (window as unknown as { rejectOwnerRequest?: unknown }).rejectOwnerRequest === "function");
+    const original = await saved(3);
+    const other = await page.context().newPage();
+    try {
+      await other.goto(`${fixture.baseUrl}/review/3`);
+      await other.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor();
+      await other.getByText("Advanced recovery", { exact: true }).click();
+      const button = other.getByRole("button", { name: "Review and download call", exact: true });
+      await expect.poll(() => button.isEnabled()).toBe(true);
+      const downloaded = other.waitForEvent("download");
+      await button.click(); await downloaded;
+      expect(await saved(3)).toBe(original);
+      expect(await other.evaluate(key => localStorage.getItem(`${key}:manual-exposure`), storageKey(3))).not.toBeNull();
+      await page.evaluate(() => (window as unknown as { rejectOwnerRequest(): void }).rejectOwnerRequest());
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      expect(await saved(3)).toBe(original);
+      expect(await page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).isVisible()).toBe(true);
+      await other.reload();
+      await other.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor();
+      expect(await saved(3)).toBe(original);
+    } finally { await other.close(); }
+  }, 45_000);
+
+  it("retires a definite rejection with no manual exposure so explicit retry remains available", async () => {
+    const page = fixture.page;
+    await page.goto(`${fixture.baseUrl}/review/4`); await connect();
+    await page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor();
+    await page.evaluate(() => {
+      const w = window as unknown as { ethereum: { request(input: { method: string }): Promise<unknown> } };
+      const request = w.ethereum.request.bind(w.ethereum);
+      w.ethereum.request = async input => { if (input.method === "eth_sendTransaction") throw Object.assign(new Error("Rejected"), { code: 4001 }); return request(input); };
+    });
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByRole("heading", { name: "Owner action unavailable", exact: true }).waitFor();
+    expect(await saved(4)).toBeNull();
+    await page.getByRole("button", { name: "Return to owner actions", exact: true }).click();
+    expect(await page.getByRole("button", { name: "Approve", exact: true }).isEnabled()).toBe(true);
+  }, 30_000);
+
 });

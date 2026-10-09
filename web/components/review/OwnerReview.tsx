@@ -450,12 +450,14 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
   const selected = selection ?? (admission.status !== "approved" ? "approveRaffle" : null);
   const [attestations, setAttestations] = useState<ReviewAttestationState>(EMPTY_REVIEW_ATTESTATIONS);
   const [hashInput, setHashInput] = useState("");
+  const [visiblePayload, setVisiblePayload] = useState<string | null>(null);
   const [state, setState] = useState<FlowState>({ kind: "idle" });
   const [discovery, setDiscovery] = useState<DiscoveryState>({ kind: "idle" });
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const reviewHash = admission.reviewHash;
   const owner = review.snapshot.owner;
   const storageKey = intentStorageKey(service, owner, review.snapshot.id);
+  const exposureKey = `${storageKey}:manual-exposure`;
   const lifetime = useRef({ mounted: false, generation: 0, nextOperation: 0, exclusiveOperation: null as number | null, reviewHash });
   const discoveryCursor = useRef<OwnerExecutionDiscoveryCursor | undefined>(undefined);
   const previousReviewHash = useRef(reviewHash);
@@ -695,12 +697,26 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       setDiscoveryBusy(false);
       if (exported) setState({ kind: "exported", intent: exported, copied: false });
     } catch (error) {
-      if (exported && dispatch && scopeCurrent() && (isWalletRequestRejected(error) || error instanceof SubmissionNotDispatchedError) && window.localStorage.getItem(storageKey) === serializeOwnerExecutionIntent(exported)) {
-        invalidateOperations();
-        window.localStorage.removeItem(storageKey);
-        exported = null;
-        setDiscoveryBusy(false);
-        setState({ kind: "error", message: "The wallet request was cancelled. Review and click Approve to try again." });
+      if (exported && dispatch && scopeCurrent() && (isWalletRequestRejected(error) || error instanceof SubmissionNotDispatchedError)) {
+        const rejected = exported;
+        let retired = false;
+        try {
+          if (!navigator.locks) throw new Error("Safe recovery requires secure Web Locks.");
+          await navigator.locks.request(storageKey, () => {
+            if (!scopeCurrent() || window.localStorage.getItem(storageKey) !== serializeOwnerExecutionIntent(rejected)) return;
+            const exposure = window.localStorage.getItem(exposureKey);
+            if (exposure !== null && canonicalIntent(exposure) === canonicalIntent(serializeOwnerExecutionIntent(rejected))) return;
+            window.localStorage.removeItem(storageKey);
+            if (window.localStorage.getItem(storageKey) !== null) throw new Error("Cancelled owner review could not be retired.");
+            retired = true;
+          });
+        } catch { /* Unknown persistence or exposure must retain canonical observation. */ }
+        if (retired && scopeCurrent()) {
+          invalidateOperations();
+          exported = null;
+          setDiscoveryBusy(false);
+          setState({ kind: "error", message: "The wallet request was cancelled. Review and click Approve to try again." });
+        }
       } else if (isCurrent(operation)) {
         if (exported && !isWalletRequestRejected(error)) {
           setState({ kind: "exported", intent: exported, copied: false });
@@ -717,14 +733,45 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     if (exported !== null && scopeCurrent() && window.localStorage.getItem(storageKey) !== null) void discover(exported);
   }
 
+  function canonicalIntent(raw: string) {
+    return serializeOwnerExecutionIntent(parseOwnerExecutionIntent(raw, service.manifest, owner));
+  }
+  function recordExposureLocked(intent: OwnerExecutionIntent) {
+    const marker = canonicalIntent(serializeOwnerExecutionIntent(intent));
+    window.localStorage.setItem(exposureKey, marker);
+    if (window.localStorage.getItem(exposureKey) !== marker) throw new Error("Manual Safe recovery could not be saved. Try again before copying or downloading.");
+    return marker;
+  }
+  async function recordExposure(intent: OwnerExecutionIntent, assertCurrent: () => void) {
+    if (!navigator.locks) throw new Error("Safe recovery requires a browser with secure Web Locks.");
+    return navigator.locks.request(storageKey, () => {
+      assertCurrent();
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw === null || canonicalIntent(raw) !== canonicalIntent(serializeOwnerExecutionIntent(intent))) throw new Error("The saved owner review changed. Reload before copying this call.");
+      return recordExposureLocked(intent);
+    });
+  }
+  async function showPayload(intent: OwnerExecutionIntent) {
+    const generation = lifetime.current.generation, hash = lifetime.current.reviewHash;
+    const current = () => lifetime.current.mounted && lifetime.current.generation === generation && lifetime.current.reviewHash === hash;
+    try {
+      const marker = await recordExposure(intent, () => { if (!current()) throw new Error("This review is no longer active."); });
+      if (current()) setVisiblePayload(marker);
+    } catch (error) {
+      if (current()) setState(state => state.kind === "exported" ? { ...state, error: error instanceof Error ? error.message : "Manual Safe recovery could not be saved." } : state);
+    }
+  }
+
   async function copyPayload(intent: OwnerExecutionIntent) {
     const operation = beginOperation(false);
     if (operation === null) return;
     try {
+      await recordExposure(intent, () => { if (!isCurrent(operation)) throw new Error("This review is no longer active."); });
+      if (!isCurrent(operation)) return;
       await navigator.clipboard.writeText(formatOwnerPayload(intent));
       if (isCurrent(operation)) setState({ kind: "exported", intent, copied: true });
     } catch {
-      if (isCurrent(operation)) setState({ kind: "error", message: "Clipboard access was unavailable. Copy the visible payload fields manually." });
+      if (isCurrent(operation)) setState({ kind: "exported", intent, copied: false, error: "The call could not be copied safely. Retry Advanced recovery." });
     }
   }
 
@@ -793,12 +840,14 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         if (window.localStorage.getItem(storageKey) !== originalRaw) throw new Error("The saved owner review changed in another tab. Reload to recover it.");
         if (fresh.action.expectedReviewHash === original.action.expectedReviewHash) {
           if (fresh.data !== original.data || fresh.from !== original.from || fresh.to !== original.to || fresh.value !== original.value || fresh.ownerGeneration !== original.ownerGeneration || fresh.openingPolicyGeneration !== original.openingPolicyGeneration || fresh.reviewRevision !== original.reviewRevision) throw new Error("The exact owner call changed. Refresh and review again.");
+          recordExposureLocked(original);
           return;
         }
         const archiveKey = `${storageKey}:history:${original.action.expectedReviewHash}:${original.reviewBlock.hash}`;
         window.localStorage.setItem(archiveKey, originalRaw);
         if (window.localStorage.getItem(archiveKey) !== originalRaw) throw new Error("The previous owner review could not be preserved.");
         const freshRaw = serializeOwnerExecutionIntent(fresh);
+        recordExposureLocked(fresh);
         window.localStorage.setItem(storageKey, freshRaw);
         if (window.localStorage.getItem(storageKey) !== freshRaw) throw new Error("The current owner review could not be saved.");
         observed = fresh;
@@ -860,7 +909,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       {safeHref ? <a href={safeHref} target="_blank" rel="noreferrer">Open Safe</a> : null}
       </details>
       <DiscoveryStatus state={discovery} busy={discoveryBusy} onRetry={() => void discover(intent)} />
-      <details><summary>Advanced call fields and technical details</summary><p>The downloaded file contains one zero-ETH call for this exact review. LABx has not submitted it. A Safe transaction proposal hash is not an executed Ethereum transaction hash.</p><p>Before every download LABx repeats the owner, draft, policy, custody, runtime, network and simulation checks.</p><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button></div><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></details>
+      <details onToggle={event => { if (event.currentTarget.open) void showPayload(intent); }}><summary>Advanced call fields and technical details</summary><p>The downloaded file contains one zero-ETH call for this exact review. LABx has not submitted it. A Safe transaction proposal hash is not an executed Ethereum transaction hash.</p><p>Before every download LABx repeats the owner, draft, policy, custody, runtime, network and simulation checks.</p>{visiblePayload === canonicalIntent(serializeOwnerExecutionIntent(intent)) ? <><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button></div><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></> : <p>Checking saved recovery before showing the exact call fields.</p>}</details>
       <details><summary>Advanced: executed Ethereum transaction hash</summary><label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached two canonical confirmations. A matching event has not been confirmed at that depth yet.</p> : null}<button className="btn" type="button" disabled={state.kind === "confirming" || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm canonical execution"}</button></details>
 
     </section>;

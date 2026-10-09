@@ -10,13 +10,14 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
 }) {
   const session = useWalletSnapshot(wallet);
   const [state, setState] = useState<{ kind: "idle" } | { kind: "busy" | "error"; message: string }>({ kind: "idle" });
-  const lifetime = useRef({ mounted: false, busy: false, generation: 0, revision: session.revision, service, wallet, snapshot, disabled });
+  const lifetime = useRef({ mounted: false, busy: false, operation: 0, generation: 0, revision: session.revision, service, wallet, snapshot, disabled });
   if (lifetime.current.revision !== session.revision || lifetime.current.service !== service || lifetime.current.wallet !== wallet || lifetime.current.snapshot !== snapshot || lifetime.current.disabled !== disabled) Object.assign(lifetime.current, { generation: lifetime.current.generation + 1, revision: session.revision, service, wallet, snapshot, disabled });
   useEffect(() => { lifetime.current.mounted = true; return () => { lifetime.current.mounted = false; lifetime.current.generation++; }; }, []);
   async function create() {
     if (disabled || lifetime.current.busy || session.kind !== "connected") return;
     const generation = lifetime.current.generation;
     lifetime.current.busy = true;
+    const operation = ++lifetime.current.operation;
     const assertIntent = () => { if (!lifetime.current.mounted || lifetime.current.generation !== generation || wallet.getSnapshot().revision !== session.revision) throw new Error("Creation scope changed. Review and click Create again."); };
     try {
       if (!navigator.locks) throw new Error("Creation recovery requires secure Web Locks.");
@@ -39,7 +40,12 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
       });
     } catch (error) {
       if (lifetime.current.mounted && generation === lifetime.current.generation) setState({ kind: "error", message: error instanceof Error ? error.message : "Creation stopped. Recover this stage before continuing." });
-    } finally { lifetime.current.busy = false; }
+    } finally {
+      if (lifetime.current.operation === operation) {
+        lifetime.current.busy = false;
+        if (lifetime.current.mounted && lifetime.current.generation !== generation) setState(current => current.kind === "busy" ? { kind: "error", message: "The creation details changed. Click Create to resume the saved stage." } : current);
+      }
+    }
   }
   return <section className="workflow-next stack"><h2>Create your raffle</h2><p>Create completes this saved draft and locks the NFT in raffle custody. Confirm each requested transaction in your wallet.</p>{state.kind !== "idle" ? <p role={state.kind === "error" ? "alert" : "status"}>{state.message}</p> : null}<button className="btn" type="button" disabled={disabled || state.kind === "busy"} onClick={() => void create()}>{state.kind === "busy" ? "Creating…" : "Create"}</button></section>;
 }

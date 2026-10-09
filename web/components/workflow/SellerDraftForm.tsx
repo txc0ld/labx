@@ -111,7 +111,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const walletSnapshot = useWalletSnapshot(wallet);
   const [creation, setCreation] = useState<{ kind: "idle" } | { kind: "busy"; message: string } | { kind: "error"; message: string } | { kind: "done"; id: bigint }>({ kind: "idle" });
   const [savedCreation, setSavedCreation] = useState<CreateRecord | null>(null);
-  const createLifetime = useRef({ mounted: false, generation: 0, busy: false, service, wallet, revision: walletSnapshot.revision });
+  const createLifetime = useRef({ mounted: false, generation: 0, busy: false, operation: 0, service, wallet, revision: walletSnapshot.revision });
   if (createLifetime.current.service !== service || createLifetime.current.wallet !== wallet || createLifetime.current.revision !== walletSnapshot.revision) {
     Object.assign(createLifetime.current, { service, wallet, revision: walletSnapshot.revision, generation: createLifetime.current.generation + 1 });
   }
@@ -359,6 +359,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     const lifetime = createLifetime.current;
     if (lifetime.busy) return;
     lifetime.busy = true;
+    const operation = ++lifetime.operation;
     const generation = lifetime.generation;
     const session = wallet.getSnapshot();
     const assertIntent = () => {
@@ -416,7 +417,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Click Create to resume when ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });
-    } finally { lifetime.busy = false; }
+    } finally {
+      if (lifetime.operation === operation) {
+        lifetime.busy = false;
+        if (lifetime.mounted && lifetime.generation !== generation) setCreation(current => current.kind === "busy" ? { kind: "error", message: "The creation details changed. Click Create to resume the saved stage." } : current);
+      }
+    }
   }
 
   function review(event: FormEvent) {
