@@ -54,8 +54,13 @@ run("activation drift beside browser recovery", () => {
     await viewport(375);
     expect(await approveDraft.isDisabled()).toBe(true);
     await c.write(c.raffle, "transferOwnership", [c.operator]); await c.write(c.raffle, "acceptOwnership");
+    const refreshedReview = await c.service.readAdmission({ id: 3n });
+    if (!refreshedReview.snapshot.admission.reviewHash) throw new Error("Missing refreshed approval digest.");
     await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
+    const displayedDigest = fixture.page.locator("dt", { hasText: /^Draft digest$/ }).locator("..").locator("dd");
+    await expect.poll(() => displayedDigest.textContent(), { timeout: 15_000 }).toBe(refreshedReview.snapshot.admission.reviewHash);
     const checklist = fixture.page.getByRole("checkbox");
+    expect(await checklist.count()).toBe(3);
     for (const checkbox of await checklist.all()) await checkbox.check();
     await expect.poll(() => approveDraft.isEnabled(), { timeout: 15_000 }).toBe(true);
     await c.admit(1n); await c.write(c.raffle, "transferOwnership", [c.stranger]);
@@ -148,15 +153,15 @@ run("activation drift beside browser recovery", () => {
       const now = (await c.client.getBlock()).timestamp, digest = keccak256("0x5678");
       await c.write(c.raffle, "createRaffle", [c.nft.address, 4n, now + 86400n, digest, digest, "Cold NFT approval", [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]], c.seller);
       await visit("/seller/4", c.seller);
-      await fixture.page.getByRole("button", { name: "Approve NFT", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.getByRole("button", { name: "Confirm approve nft", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.waitForLoadState("networkidle");
       const nftApproval = await c.write(c.nft, "approve", [c.raffle.address, 4n], c.seller); await c.mine();
       raffleReads = 0;
       await recoverReceipt(c.seller, nftApproval.transactionHash);
       expect(raffleReads).toBe(0);
       await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
-      await fixture.page.getByRole("button", { name: "Escrow NFT", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.getByRole("button", { name: "Confirm escrow nft", exact: true }).waitFor({ timeout: 15_000 });
       expect(raffleReads).toBeGreaterThan(0);
-      await fixture.page.getByRole("button", { name: "Escrow NFT", exact: true }).click();
       await fixture.page.locator(".transaction-review").waitFor({ timeout: 15_000 });
     } finally { await fixture.page.unroute(`${c.url}/`); }
   }, 70_000);

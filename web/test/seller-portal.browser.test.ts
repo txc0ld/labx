@@ -370,6 +370,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.locator("body").innerText()).not.toContain(attempts[0]?.privateCommitment ?? "missing-private-value");
     expect(await fixture.page.locator("body").innerText()).not.toContain("Rejected payload contains");
     expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
+    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
 
     await fixture.page.getByLabel("Token ID").fill("0999");
     await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
@@ -392,6 +393,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(attempts[2]?.privateCommitment).not.toBe(attempts[0]?.privateCommitment);
     expect(await chain.client.getBlockNumber({ cacheTime: 0 })).toBe(blockBeforePreparation);
     expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
+    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
     await fixture.page.unroute("**/api/reserve");
   }, 45_000);
 
@@ -418,6 +420,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(reserveRequests).toBe(0);
     expect(await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).count()).toBe(0);
     expect(await fixture.page.getByRole("button", { name: "Create raffle draft", exact: true }).count()).toBe(0);
+    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
     await fixture.page.unroute("**/api/reserve");
   }, 30_000);
 

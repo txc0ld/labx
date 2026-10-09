@@ -165,7 +165,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await approveDraftAsOwner(id);
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
-    await fixture.page.getByRole("heading", { name: "Open memberships", exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("heading", { name: "Open memberships", exact: true, level: 2 }).waitFor({ state: "visible" });
     expect(await transact("Open memberships")).toContain(chain.raffle.address);
   }
 

@@ -356,6 +356,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await details.locator("summary").click();
       expect(await details.getAttribute("open")).not.toBeNull();
       release();
+      await openWalletActivity(fixture.page);
       const outcome = fixture.page.locator(".transaction-outcome").filter({ hasText: hint });
       await expect.poll(() => outcome.innerText(), { timeout: 10_000 }).toContain("Transaction confirmed");
       await fixture.page.waitForTimeout(300);
