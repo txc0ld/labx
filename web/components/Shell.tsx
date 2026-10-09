@@ -9,6 +9,7 @@ import { isCurrentPath, PRIMARY_LINKS } from "@/lib/nav";
 import { MotionOrchestrator } from "./MotionOrchestrator";
 import { CursorTrail } from "./CursorTrail";
 import { Footer } from "./ui/footer-section";
+import { NotificationsBell } from "./NotificationsBell";
 
 const FOOTER_LINKS = [
   { href: "/about", label: "About" },
@@ -32,13 +33,16 @@ export function Shell({ children }: { children: ReactNode }) {
           <Link className="brand" href="/" aria-label="LABx home">
             <Image className="brand-logo" src="/brand/labx-logo.png" alt="LABx" width={1500} height={500} unoptimized priority />
           </Link>
-          <Link className="wallet-link" href="/profile" aria-label="Wallet" title="Wallet">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M20 8V5a2 2 0 0 0-2-2H6a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h14a1 1 0 0 0 1-1V8H6a2 2 0 0 1 0-4" />
-              <path d="M21 12h-4a2 2 0 0 0 0 4h4" />
-              <path d="M17 14h.01" />
-            </svg>
-          </Link>
+          <div className="header-actions">
+            <NotificationsBell />
+            <Link className="wallet-link" href="/profile" aria-label="Wallet" title="Wallet">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M20 8V5a2 2 0 0 0-2-2H6a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h14a1 1 0 0 0 1-1V8H6a2 2 0 0 1 0-4" />
+                <path d="M21 12h-4a2 2 0 0 0 0 4h4" />
+                <path d="M17 14h.01" />
+              </svg>
+            </Link>
+          </div>
           <div className="nav-cluster">
             <nav aria-label="Primary">
               <ul className="nav" style={{ listStyle: "none", padding: 0, margin: 0 }}>
