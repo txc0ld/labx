@@ -83,7 +83,6 @@ run("owner review async lifetimes", () => {
     await fixture.page.evaluate(() => (window as unknown as Window & { __resolveOwnerCopy(): void }).__resolveOwnerCopy());
 
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 5_000 });
     expect(await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).count()).toBe(0);
   }, 30_000);
 

@@ -36,14 +36,14 @@ run("independent owner review race verification", () => {
     chain?.close();
   });
 
-  async function openReview(id: bigint) {
+  async function openReview(id: bigint, heading = "Approval checklist") {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/${id.toString()}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await fixture.page.evaluate(() => localStorage.clear());
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: heading, exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }
 
   async function openChecklist(id: bigint) {
@@ -244,7 +244,7 @@ run("independent owner review race verification", () => {
     const approved = await chain.service.readAdmission({ id: 3n });
     if (approved.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     await chain.write(chain.raffle, "approveRaffle", [3n, approved.snapshot.admission.reviewHash]);
-    await openReview(3n);
+    await openReview(3n, "Choose the current draft action");
     await fixture.page.getByRole("button", { name: "Prepare revocation", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
@@ -280,7 +280,7 @@ run("independent owner review race verification", () => {
     const approved = await chain.service.readAdmission({ id: 7n });
     if (approved.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
     await chain.write(chain.raffle, "approveRaffle", [7n, approved.snapshot.admission.reviewHash]);
-    await openReview(7n);
+    await openReview(7n, "Choose the current draft action");
     await fixture.page.getByRole("button", { name: "Prepare revocation", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
     const handoffHeading = fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true });

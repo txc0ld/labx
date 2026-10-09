@@ -142,8 +142,26 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
   }
 
   async function escrowAndOpen(id: bigint) {
+    const approvalReview = fixture.page.locator(".transaction-review");
+    await approvalReview.getByRole("button", { name: "Confirm approve nft", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    const nonceBeforeCancel = await chain.client.getTransactionCount({ address: chain.seller });
+    await approvalReview.getByRole("button", { name: "Cancel", exact: true }).click();
+    const prepareAgain = fixture.page.getByRole("button", { name: "Approve NFT", exact: true });
+    await prepareAgain.waitFor({ state: "visible", timeout: 5_000 });
+    await fixture.page.waitForTimeout(250);
+    expect(await approvalReview.count()).toBe(0);
+    expect(await chain.client.getTransactionCount({ address: chain.seller })).toBe(nonceBeforeCancel);
+    await prepareAgain.click();
     expect(await transact("Approve NFT")).toContain(chain.raffle.address);
     expect(await transact("Escrow NFT")).toContain(chain.raffle.address);
+    await fixture.page.getByRole("heading", { name: "Awaiting LABx review", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    const cancel = fixture.page.getByRole("button", { name: "Cancel draft", exact: true });
+    expect(await cancel.isVisible()).toBe(false);
+    const advanced = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
+    await advanced.click();
+    expect(await cancel.isVisible()).toBe(true);
+    await advanced.click();
+    expect(await fixture.page.getByRole("button", { name: "Confirm open memberships", exact: true }).count()).toBe(0);
     await approveDraftAsOwner(id);
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
