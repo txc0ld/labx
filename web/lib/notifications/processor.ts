@@ -10,6 +10,7 @@ const PAGE_BLOCKS = 250n;
 const MAX_INGESTION_PAGES = 2;
 const MAX_RETRY_PAGES = 4;
 const MAX_EVENT_CHECKS = 400;
+const TERMINAL_CHECKPOINT_EVENTS = 32;
 const MAX_SENDS = 3;
 const DELIVERY_RUNTIME_MS = 31_000;
 // Includes progress-proof reads and page persistence as well as source calls.
@@ -487,22 +488,23 @@ async function advanceTerminalPrefix(
   if (Date.now() >= deadline) return 0;
   const hintKey = `${pageKey(prefix, start)}:terminal-prefix`;
   let prefixLength = await verifiedTerminalPrefix(store, prefix, start, length, await store.get(hintKey));
-  const durablePrefix = prefixLength;
+  let durablePrefix = prefixLength;
+  const checkpoint = async () => {
+    const proofKey = `${pageKey(prefix, start)}:terminal-proof:${prefixLength}`;
+    await store.setIfAbsent({ [proofKey]: "proved" });
+    if (await store.get(proofKey) !== "proved") throw new Error("Notification terminal progress proof was not persisted.");
+    await store.set(hintKey, prefixLength.toString());
+    durablePrefix = prefixLength;
+  };
   let checked = 0;
   while (prefixLength < length && checked < MAX_EVENT_CHECKS && Date.now() < deadline) {
     if (await store.get(terminalMarkerKey(prefix, start, prefixLength)) !== "terminal") break;
     prefixLength += 1;
     checked += 1;
+    if (checked % TERMINAL_CHECKPOINT_EVENTS === 0) await checkpoint();
   }
-  if (prefixLength > durablePrefix && Date.now() < deadline) {
-    const proofKey = `${pageKey(prefix, start)}:terminal-proof:${prefixLength}`;
-    await store.setIfAbsent({ [proofKey]: "proved" });
-    if (Date.now() >= deadline) return durablePrefix;
-    if (await store.get(proofKey) !== "proved") throw new Error("Notification terminal progress proof was not persisted.");
-    if (Date.now() >= deadline) return durablePrefix;
-    await store.set(hintKey, prefixLength.toString());
-  }
-  return prefixLength;
+  if (prefixLength > durablePrefix && Date.now() < deadline) await checkpoint();
+  return durablePrefix;
 }
 
 async function verifiedTerminalPrefix(

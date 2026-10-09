@@ -237,6 +237,74 @@ describe("notification processor", () => {
     }
   });
 
+  it.each([{ latency: 30, gap: null }, { latency: 100, gap: null }, { latency: 100, gap: 45 }])("checkpoints terminal prefixes with $latency ms storage and marker gap $gap, then reaches pending pages", async ({ latency, gap }) => {
+    const backing = new MemoryStore();
+    const input = source();
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    const pageKey = `${prefix}:page:101`;
+    const events = Array.from({ length: 400 }, (_, index) => event(index + 1));
+    const later = { ...event(401), blockNumber: "102" };
+    await backing.setIfAbsent({
+      [`${prefix}:activation`]: JSON.stringify({ version: 1, deployment: input.deployment, blockNumber: "100", blockHash: activationHash }),
+      [`${prefix}:activation-verified`]: JSON.stringify({ version: 1, blockNumber: "100", blockHash: activationHash }),
+      [pageKey]: JSON.stringify({
+        version: 2, kind: "single-block", deployment: input.deployment,
+        startBlock: "101", actualEnd: "101", nextBlock: "102",
+        blockNumber: "101", blockHash: finalizedHash, gasLimit: "30000000", events
+      }),
+      [`${prefix}:page:102`]: JSON.stringify({ version: 1, deployment: input.deployment, startBlock: "102", actualEnd: "102", nextBlock: "103", events: [later] }),
+      [`${prefix}:ingestion-proof:103`]: "102"
+    });
+    await backing.set(`${prefix}:ingestion-hint`, "103");
+    await backing.set(`${prefix}:last-ingested-page`, "102");
+    for (const [index, item] of events.entries()) {
+      await deliverNotification({ store: backing, event: item, deployment: input.deployment, origin: input.origin, sender: async () => true, ...config, now: 1_000 });
+      if (index !== gap) await backing.set(`${pageKey}:terminal:${index}`, "terminal");
+    }
+    let fakeNow = 0;
+    const store: Store = {
+      async get(key) { fakeNow += latency; return backing.get(key); },
+      async set(key, value) { fakeNow += latency; return backing.set(key, value); },
+      async setIfAbsent(entries) { fakeNow += latency; return backing.setIfAbsent(entries); }
+    };
+    let finalized = 103n;
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    const eventReads = vi.fn(async (fromBlock: bigint, toBlock: bigint) => ({
+      events: [], range: { fromBlock, toBlock },
+      finalized: { number: finalized, hash: finalizedHash, timestamp: 2n },
+      singleBlock: { number: fromBlock, hash: finalizedHash, gasLimit: 30_000_000n }
+    }));
+    input.events = eventReads;
+    const sender = vi.fn(async () => true);
+    const time = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+    try {
+      let previousPrefix = 0;
+      for (let run = 0; run < 16 && sender.mock.calls.length === 0; run += 1) {
+        const readsBefore = eventReads.mock.calls.length;
+        await processNotifications({ store, source: input, sender, ...config, deadline: fakeNow + 56_000 });
+        const currentPrefix = Number(await backing.get(`${pageKey}:terminal-prefix`));
+        if (previousPrefix < events.length) expect(currentPrefix).toBeGreaterThan(previousPrefix);
+        expect(currentPrefix).toBeLessThanOrEqual(events.length);
+        if (run === 0 && gap !== null) {
+          expect(currentPrefix).toBe(gap);
+          expect(await backing.get(`${pageKey}:terminal-proof:64`)).toBeNull();
+          expect(await backing.get(`${prefix}:retry-proof:102`)).toBeNull();
+        }
+        expect(await backing.get(`${pageKey}:terminal-proof:${currentPrefix}`)).toBe("proved");
+        expect(eventReads.mock.calls.length).toBeGreaterThan(readsBefore);
+        previousPrefix = currentPrefix;
+        finalized += 1n;
+      }
+      expect(previousPrefix).toBe(events.length);
+      expect(await backing.get(`${prefix}:retry-proof:102`)).toBe("101");
+      expect(BigInt((await backing.get(`${prefix}:retry-hint`)) ?? "0")).toBeGreaterThanOrEqual(102n);
+      expect(sender).toHaveBeenCalledTimes(1);
+      expect(await backing.get(`${reservationKey(later, input.deployment)}:accepted`)).toBe("accepted");
+    } finally {
+      time.mockRestore();
+    }
+  });
+
   it("preserves ingestion persistence and resumes safely after slow successful retry writes", async () => {
     const backing = new MemoryStore();
     const input = source([]);
