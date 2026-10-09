@@ -102,6 +102,7 @@ jobs:
             test/buyer-ui-repairs.browser.test.ts \
             test/owner-review-race.browser.test.ts \
             test/safe-approval-handoff.browser.test.ts \
+            test/owner-recovery.builder.browser.test.ts \
             test/independent-owner-review-race.browser.test.ts \
             test/independent-buyer-state.browser.test.ts \
             test/browser-chain-lifecycle.browser.test.ts \
@@ -119,6 +120,7 @@ jobs:
           RUN_BUYER_UI_REPAIRS_BROWSER: "1"
           RUN_OWNER_REVIEW_RACE_BROWSER: "1"
           RUN_SAFE_APPROVAL_BROWSER: "1"
+          RUN_OWNER_RECOVERY_BROWSER: "1"
           RUN_INDEPENDENT_OWNER_REVIEW_RACE_BROWSER: "1"
           RUN_INDEPENDENT_BUYER_STATE_BROWSER: "1"
           RUN_BROWSER_FIXTURE_LIFECYCLE: "1"
