@@ -4,7 +4,7 @@ import { raffleAbi } from "@/lib/chain/abi";
 import { APPROVED_DEPLOYMENTS } from "@/lib/chain/deployment";
 import { createNotificationConnectionTestHandler, createNotificationCronHandler, createNotificationsHandler } from "@/lib/notifications/http";
 import { readRecentNotifications } from "@/lib/notifications/public-feed";
-import type { NotificationChainReader, NotificationEvent, NotificationWorkflow } from "@/lib/notifications/events";
+import { NotificationReadBudgetError, NotificationRpcTimeoutError, type NotificationChainReader, type NotificationEvent, type NotificationWorkflow } from "@/lib/notifications/events";
 import type { NotificationProcessorSource } from "@/lib/notifications/processor";
 import type { Store } from "@/lib/points";
 import { MemoryStore } from "@/lib/store";
@@ -61,6 +61,46 @@ function publicWorkflow(finalized: bigint, logIndexes: number[]): () => Promise<
   });
 }
 
+function rangedPublicWorkflow(args: {
+  finalized: bigint;
+  events: readonly { id: number; block: bigint }[];
+  failLogCall?: number;
+  failure?: Error;
+  corruptBlock?: bigint;
+}): () => Promise<NotificationWorkflow> {
+  let logCalls = 0;
+  const logs = args.events.map(({ id, block }) => ({
+    address: manifest.address,
+    blockNumber: block,
+    blockHash,
+    transactionHash: `0x${id.toString(16).padStart(64, "0")}` as Hex,
+    transactionIndex: 0,
+    logIndex: 0,
+    removed: false as const,
+    topics: encodeEventTopics({ abi: raffleAbi, eventName: "Opened", args: { id: BigInt(id) } }),
+    data: "0x" as Hex
+  }));
+  const reader: NotificationChainReader = {
+    async getChainId() { return manifest.chainId; },
+    async getLogs(range) {
+      logCalls += 1;
+      if (args.failLogCall === logCalls) throw args.failure ?? new NotificationRpcTimeoutError();
+      return logs.filter(log => log.blockNumber >= range.fromBlock && log.blockNumber <= range.toBlock);
+    },
+    async getBlock(input) {
+      const number = "blockTag" in input ? args.finalized : input.blockNumber;
+      const hash = args.corruptBlock === number ? `0x${"99".repeat(32)}` as Hex : blockHash;
+      return { number, hash, timestamp: 1_760_000_000n + number - manifest.deploymentBlock, gasLimit: 30_000_000n };
+    }
+  };
+  return async () => ({
+    context: { chainId: manifest.chainId, contract: manifest.address, origin: "https://labx.example" },
+    manifest,
+    client: reader,
+    block: { number: args.finalized + 1n, hash: `0x${"55".repeat(32)}`, timestamp: 1_760_000_100n }
+  });
+}
+
 describe("public notification feed", () => {
   it("paginates all events in one block without skipping the same-block tail", async () => {
     const workflow = publicWorkflow(manifest.deploymentBlock + 1n, [0, 1, 2]);
@@ -84,6 +124,81 @@ describe("public notification feed", () => {
     const third = await readRecentNotifications({ workflow, limit: 50, cursor: second.nextCursor!, now: 1_760_000_000_000 });
     expect([first.items.length, second.items.length, third.items.length]).toEqual([50, 50, 1]);
     expect(new Set([...first.items, ...second.items, ...third.items].map(item => item.transactionHash)).size).toBe(101);
+  });
+
+  it("returns two verified 25-block ranges when the next range exhausts the shared budget", async () => {
+    const deployment = manifest.deploymentBlock;
+    const recent = Array.from({ length: 25 }, (_, index) => ({ id: index + 1, block: deployment + 1_475n - BigInt(index) }));
+    const middle = Array.from({ length: 25 }, (_, index) => ({ id: index + 26, block: deployment + 524n - BigInt(index) }));
+    const older = Array.from({ length: 10 }, (_, index) => ({ id: index + 51, block: deployment + 499n - BigInt(index) }));
+    const workflow = rangedPublicWorkflow({ finalized: deployment + 1_499n, events: [...recent, ...middle, ...older] });
+
+    const first = await readRecentNotifications({ workflow, limit: 50, now: 1_760_000_000_000 });
+    const second = await readRecentNotifications({ workflow, limit: 50, cursor: first.nextCursor!, now: 1_760_000_000_000 });
+    const ids = [...first.items, ...second.items].map(item => item.raffleId);
+
+    expect(first.items).toHaveLength(50);
+    expect(second.items).toHaveLength(10);
+    expect(new Set(ids).size).toBe(60);
+    expect(ids).toEqual([...recent, ...middle, ...older].map(item => String(item.id)));
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("returns a shorter verified page when a later range times out", async () => {
+    const deployment = manifest.deploymentBlock;
+    const events = [1, 2, 3].map((id, index) => ({ id, block: deployment + 999n - BigInt(index) }));
+    const workflow = rangedPublicWorkflow({
+      finalized: deployment + 999n,
+      events,
+      failLogCall: 2,
+      failure: new NotificationRpcTimeoutError()
+    });
+    const page = await readRecentNotifications({ workflow, limit: 50, now: 1_760_000_000_000 });
+    expect(page.items.map(item => item.raffleId)).toEqual(["1", "2", "3"]);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  it("keeps an older-range cursor when a later timeout follows a verified empty range", async () => {
+    const deployment = manifest.deploymentBlock;
+    const workflow = rangedPublicWorkflow({
+      finalized: deployment + 999n,
+      events: [],
+      failLogCall: 2,
+      failure: new NotificationRpcTimeoutError()
+    });
+    const page = await readRecentNotifications({ workflow, limit: 50, now: 1_760_000_000_000 });
+    expect(page.items).toEqual([]);
+    expect(page.nextCursor).toBe(`before.${deployment + 499n}`);
+    expect(page.range.fromBlock).toBe((deployment + 500n).toString());
+  });
+
+  it("fails closed when the first range exhausts its budget", async () => {
+    const workflow = rangedPublicWorkflow({
+      finalized: manifest.deploymentBlock + 999n,
+      events: [],
+      failLogCall: 1,
+      failure: new NotificationReadBudgetError()
+    });
+    await expect(readRecentNotifications({ workflow, limit: 50 })).rejects.toBeInstanceOf(NotificationReadBudgetError);
+  });
+
+  it("fails closed on a canonical mismatch after one completed range", async () => {
+    const deployment = manifest.deploymentBlock;
+    const corruptBlock = deployment + 499n;
+    const workflow = rangedPublicWorkflow({
+      finalized: deployment + 999n,
+      events: [{ id: 1, block: deployment + 999n }, { id: 2, block: corruptBlock }],
+      corruptBlock
+    });
+    await expect(readRecentNotifications({ workflow, limit: 50 })).rejects.toThrow(/not canonical/);
+  });
+
+  it("rejects a forged event cursor instead of treating later exhaustion as a partial page", async () => {
+    const deployment = manifest.deploymentBlock;
+    const finalized = deployment + 10n;
+    const workflow = rangedPublicWorkflow({ finalized, events: [{ id: 1, block: finalized }] });
+    const forged = `${finalized}.${blockHash.slice(2)}.${"77".repeat(32)}.0.0`;
+    await expect(readRecentNotifications({ workflow, limit: 50, cursor: forged })).rejects.toThrow(/cursor no longer matches/);
   });
 
   it("rejects invalid public pagination before invoking the reader", async () => {

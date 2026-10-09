@@ -1,5 +1,5 @@
 import type { Hex } from "viem";
-import { createNotificationReadBudget, notificationWorkflow, NotificationRangeTooDenseError, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow } from "./events";
+import { createNotificationReadBudget, notificationWorkflow, NotificationRangeTooDenseError, NotificationReadBudgetError, NotificationRpcTimeoutError, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow } from "./events";
 
 const RANGE_SIZE = 500n;
 const MAX_RANGES = 4;
@@ -46,7 +46,7 @@ export async function readRecentNotifications(args: {
   let completedRanges = 0;
   let attempts = 0;
   const readBudget = createNotificationReadBudget(64, 8_000);
-  while (completedRanges < MAX_RANGES && attempts < MAX_RANGES * 4 && end >= workflow.manifest.deploymentBlock && collected.length <= limit) {
+  scan: while (completedRanges < MAX_RANGES && attempts < MAX_RANGES * 4 && end >= workflow.manifest.deploymentBlock && collected.length <= limit) {
     const possibleStart = end - RANGE_SIZE + 1n;
     let start = possibleStart > workflow.manifest.deploymentBlock ? possibleStart : workflow.manifest.deploymentBlock;
     let page: Awaited<ReturnType<typeof readFinalizedEvents>> | null = null;
@@ -55,6 +55,11 @@ export async function readRecentNotifications(args: {
       try {
         page = await readFinalizedEvents({ fromBlock: start, toBlock: end, workflow: async () => workflow, budget: readBudget });
       } catch (error) {
+        if (
+          completedRanges > 0
+          && cursorFound
+          && (error instanceof NotificationReadBudgetError || error instanceof NotificationRpcTimeoutError)
+        ) break scan;
         if (!(error instanceof NotificationRangeTooDenseError) || start === end) throw error;
         start = start + (end - start + 1n) / 2n;
       }
