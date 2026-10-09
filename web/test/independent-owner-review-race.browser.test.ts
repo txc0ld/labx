@@ -13,7 +13,7 @@ run("independent owner review race verification", () => {
     chain = await localChain();
     const block = await chain.client.getBlock();
     const commitment = keccak256(toBytes("independent-owner-review-race"));
-    for (const id of [1n, 2n, 3n, 4n, 5n]) {
+    for (const id of [1n, 2n, 3n, 4n, 5n, 6n]) {
       const tokenId = 880n + id;
       await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
       await chain.write(chain.raffle, "createRaffle", [
@@ -132,6 +132,14 @@ run("independent owner review race verification", () => {
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await ownerStorageKeys()).toHaveLength(1);
+    expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
+    expect(await fixture.page.getByLabel("Executed Ethereum transaction hash").isVisible()).toBe(true);
+    const reviewAgain = fixture.page.getByRole("button", { name: "Review checklist for a new file", exact: true });
+    await expect.poll(() => reviewAgain.isEnabled(), { timeout: 10_000 }).toBe(true);
+    await reviewAgain.click();
+    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
   }, 30_000);
 
   it("does not let an old clipboard completion overwrite a newly exported review", async () => {
@@ -151,6 +159,7 @@ run("independent owner review race verification", () => {
     await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Discard exported review", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
+    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
     for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
     await prepareApproval();
     await fixture.page.evaluate(() =>
@@ -290,5 +299,38 @@ run("independent owner review race verification", () => {
     expect(await fixture.page.getByText(/current draft remains approved and can be opened/i).count()).toBe(0);
     expect(await receiptPanel.getByText(receipt.transactionHash, { exact: true }).count()).toBe(1);
     expect(await receiptPanel.getByText(receipt.blockNumber.toString(), { exact: true }).count()).toBe(1);
+    await fixture.page.getByRole("button", { name: "Review current state", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
+    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
+  }, 30_000);
+
+  it("requires a fresh checklist after an executed approval is stale against a new digest", async () => {
+    await openChecklist(6n);
+    await prepareApproval();
+    await hideAutomaticDiscovery();
+    const before = await chain.service.readAdmission({ id: 6n });
+    if (before.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
+    const receipt = await chain.write(chain.raffle, "approveRaffle", [6n, before.snapshot.admission.reviewHash]);
+    await chain.write(chain.raffle, "updateDraft", [
+      6n,
+      chain.nft.address,
+      886n,
+      before.snapshot.raffle.salesEnd,
+      before.snapshot.raffle.reserveNonce,
+      before.snapshot.raffle.reserveCommit,
+      "Edited before approval confirmation",
+      [{ name: "Membership", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]
+    ], chain.seller);
+    await chain.mine();
+    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
+    await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
+    await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Stale at confirmation", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: "Review current state", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
+    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
+    await restoreAutomaticDiscovery();
   }, 30_000);
 });

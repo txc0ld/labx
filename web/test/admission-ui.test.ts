@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { zeroAddress, zeroHash, type Address, type Hex } from "viem";
-import { admissionLabel, formatOwnerPayload, loadOwnerQueuePage } from "../components/review/OwnerReview";
+import { admissionLabel, changeReviewAttestation, formatOwnerPayload, loadOwnerQueuePage, type ReviewAttestationState } from "../components/review/OwnerReview";
 import type { AdmissionStatus, OwnerExecutionIntent, RaffleSnapshot } from "../lib/chain/types";
 
 const OWNER: Address = "0x1111111111111111111111111111111111111111";
@@ -93,6 +93,17 @@ describe("owner admission UI", () => {
     };
     expect(formatOwnerPayload(intent)).toBe(`{\n  "chainId": 11155111,\n  "from": "${OWNER}",\n  "to": "${RAFFLE}",\n  "value": 0,\n  "data": "0x1234"\n}`);
     expect(formatOwnerPayload(intent)).not.toMatch(/proposal|signature|private/i);
+  });
+
+  it("binds a checklist to one digest and starts empty when the digest changes", () => {
+    const empty: ReviewAttestationState = { canonicalProvenance: false, transferRestrictions: false, drawFunding: false, attestedDigest: null };
+    const first = changeReviewAttestation(empty, DIGEST, "canonicalProvenance", true);
+    const second = changeReviewAttestation(first, DIGEST, "transferRestrictions", true);
+    expect(second).toMatchObject({ canonicalProvenance: true, transferRestrictions: true, attestedDigest: DIGEST });
+
+    const nextDigest = `0x${"bb".repeat(32)}` as Hex;
+    const changed = changeReviewAttestation(second, nextDigest, "drawFunding", true);
+    expect(changed).toEqual({ canonicalProvenance: false, transferRestrictions: false, drawFunding: true, attestedDigest: nextDigest });
   });
 
   it("checks the pinned current owner before accepting an empty queue page", async () => {
