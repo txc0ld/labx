@@ -544,11 +544,10 @@ run("independent transaction outcome ownership", () => {
       await fixture.page.reload({ waitUntil: "domcontentloaded" });
       const savedReplacement = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
       await savedReplacement.waitFor({ state: "visible", timeout: 10_000 });
-      const checkReplacement = savedReplacement.getByRole("button", { name: "Check confirmation", exact: true });
-      if (await checkReplacement.isVisible().catch(() => false)) await checkReplacement.click();
-      await fixture.page.waitForTimeout(1_000);
+      const confirmedReplacement = savedReplacement.getByText("Transaction confirmed", { exact: true });
+      await confirmedReplacement.waitFor({ state: "visible", timeout: 10_000 });
       const postReloadText = await fixture.page.locator("#content").innerText();
-      const replacementRecovered = /transaction confirmed/i.test(await savedReplacement.innerText());
+      const replacementRecovered = await confirmedReplacement.isVisible();
       const postReloadAlerts = await fixture.page.locator("#content [role=alert]").allInnerTexts();
       const unsupportedAfterReload = postReloadAlerts.length > 0 || /not a labx|not supported labx|could not be found|transaction.*not found/i.test(postReloadText);
 
