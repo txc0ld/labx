@@ -70,8 +70,10 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
   it("rejects expired or mismatched WalletConnect authorization", async () => {
     const { consent } = await setup();
     const { hasAuthorizedRestoreSession } = await import("../lib/chain/appkit-provider");
-    const session = { expiry: Math.floor(Date.now() / 1000) + 3600, namespaces: { eip155: { accounts: [`eip155:11155111:${account}`], methods: ["personal_sign", "eth_sendTransaction"] } } };
+    const session = { expiry: Math.floor(Date.now() / 1000) + 3600, namespaces: { eip155: { accounts: [`eip155:11155111:${account}`], methods: ["personal_sign", "eth_sendTransaction"], events: ["accountsChanged", "chainChanged"] } } };
     expect(hasAuthorizedRestoreSession({ session }, consent)).toBe(true);
+    expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, events: undefined } } } }, consent)).toBe(false);
+    expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, events: ["accountsChanged"] } } } }, consent)).toBe(false);
     expect(hasAuthorizedRestoreSession({ session: { ...session, expiry: 1 } }, consent)).toBe(false);
     expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, accounts: [`eip155:1:${account}`] } } } }, consent)).toBe(false);
     expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, methods: ["personal_sign"] } } } }, consent)).toBe(false);

@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_RAFFLE_ADDRESS", undefined);
   vi.stubEnv("NEXT_PUBLIC_RPC_URL", "http://127.0.0.1:1");
   vi.stubEnv("NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST", undefined);
-  vi.stubGlobal("window", { location: { hostname: "labx.example" } });
+  vi.stubGlobal("window", { location: { hostname: "labx.example", origin: "https://labx.example" }, addEventListener: vi.fn(), removeEventListener: vi.fn(), localStorage: { getItem: () => null } });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 

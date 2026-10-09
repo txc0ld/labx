@@ -374,9 +374,10 @@ export function hasAuthorizedRestoreSession(provider: unknown, consent: WalletCo
   const session = provider.session;
   if (!session || typeof session !== "object" || !("expiry" in session) || typeof session.expiry !== "number" || !Number.isSafeInteger(session.expiry) || session.expiry <= Date.now() / 1000 || !("namespaces" in session) || !session.namespaces || typeof session.namespaces !== "object" || !("eip155" in session.namespaces)) return false;
   const namespace = session.namespaces.eip155;
-  if (!namespace || typeof namespace !== "object" || !("accounts" in namespace) || !Array.isArray(namespace.accounts) || !("methods" in namespace) || !Array.isArray(namespace.methods)) return false;
+  if (!namespace || typeof namespace !== "object" || !("accounts" in namespace) || !Array.isArray(namespace.accounts) || !("methods" in namespace) || !Array.isArray(namespace.methods) || !("events" in namespace) || !Array.isArray(namespace.events)) return false;
   return namespace.accounts.some(account => typeof account === "string" && account.toLowerCase() === `eip155:${consent.chainId}:${consent.account.toLowerCase()}`)
-    && namespace.methods.includes("personal_sign") && namespace.methods.includes("eth_sendTransaction");
+    && namespace.methods.includes("personal_sign") && namespace.methods.includes("eth_sendTransaction")
+    && namespace.events.includes("accountsChanged") && namespace.events.includes("chainChanged");
 }
 
 async function initialize(projectId: string, key?: string): Promise<AppKitRuntime> {

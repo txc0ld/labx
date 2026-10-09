@@ -73,6 +73,8 @@ run("Safe approval handoff", () => {
     await fixture.page.getByRole("heading", { name: "Connect the Safe to LABx", level: 2, exact: true }).waitFor({ timeout: 10_000 });
     expect(await fixture.page.getByRole("heading", { level: 1 }).count()).toBe(1);
     expect(await fixture.page.getByText(chain.operator, { exact: true }).isVisible()).toBe(true);
+    await fixture.page.getByRole("button", { name: "Connect wallet", exact: true }).click();
+    await fixture.page.getByText(/LABx currently sees/).waitFor();
     expect(await fixture.page.getByText(/LABx currently sees/).isVisible()).toBe(true);
     expect(await fixture.page.getByText(/drafts loaded/).count()).toBe(0);
 
@@ -104,7 +106,7 @@ run("Safe approval handoff", () => {
     await fixture.page.keyboard.press("Enter");
     await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ timeout: 10_000 });
     await fixture.page.getByText("Advanced recovery", { exact: true }).click();
-    const advancedDownload = fixture.page.getByRole("button", { name: "Download fresh Safe call", exact: true });
+    const advancedDownload = fixture.page.getByRole("button", { name: "Review and download call", exact: true });
     await expect.poll(() => advancedDownload.isEnabled()).toBe(true);
     const downloadPromise = fixture.page.waitForEvent("download");
     await advancedDownload.click();
@@ -169,7 +171,7 @@ run("Safe approval handoff", () => {
     const flow = heading.locator("../..");
     expect(await flow.getAttribute("aria-busy")).toBe("true");
     await fixture.page.getByText("Advanced recovery", { exact: true }).click();
-    const download = fixture.page.getByRole("button", { name: "Download fresh Safe call", exact: true });
+    const download = fixture.page.getByRole("button", { name: "Review and download call", exact: true });
     expect(await download.isDisabled()).toBe(true);
     const disabledBox = await download.boundingBox();
     releaseFirst?.();
