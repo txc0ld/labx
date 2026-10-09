@@ -119,12 +119,14 @@ run("explicit Advanced owner recovery", () => {
     await chain.mine(); await chain.mine();
     let release = () => {};
     let held = false;
+    let handled = false;
     await fixture.page.route(`${chain.url}/`, async route => {
       const body = route.request().postDataJSON() as { method?: string; id: number };
-      if (body.method !== "eth_getLogs") return route.continue();
+      if (body.method !== "eth_getLogs" || held) return route.continue();
       held = true;
       await new Promise<void>(resolve => { release = resolve; });
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ jsonrpc: "2.0", id: body.id, result: [] }) });
+      handled = true;
     });
     await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await expect.poll(() => held).toBe(true);
@@ -134,7 +136,7 @@ run("explicit Advanced owner recovery", () => {
     await confirm.click();
     const recorded = fixture.page.getByRole("heading", { name: "Approval recorded", exact: true });
     await recorded.waitFor({ timeout: 15_000 });
-    release(); await fixture.page.unroute(`${chain.url}/`);
+    release(); await expect.poll(() => handled).toBe(true); await fixture.page.unroute(`${chain.url}/`);
     expect(await recorded.isVisible()).toBe(true); expect(await saved(2)).toBeNull();
   }, 45_000);
 });

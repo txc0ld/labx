@@ -773,10 +773,12 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     if (reviewHash === null || (original.action.kind === "approveRaffle" ? !canApprove : !canRevoke)) return;
     const operation = beginUserOperation();
     if (operation === null) return;
-    const originalRaw = serializeOwnerExecutionIntent(original);
     let observed = original;
     setState({ kind: "preparing", actionKind: original.action.kind });
     try {
+      const originalRaw = window.localStorage.getItem(storageKey);
+      const displayed = parseOwnerExecutionIntent(serializeOwnerExecutionIntent(original), service.manifest, owner);
+      if (originalRaw === null || serializeOwnerExecutionIntent(parseOwnerExecutionIntent(originalRaw, service.manifest, owner)) !== serializeOwnerExecutionIntent(displayed)) throw new Error("The saved owner review changed in another tab. Reload to recover it.");
       const action: OwnerAction = original.action.kind === "approveRaffle"
         ? { kind: "approveRaffle", id: review.snapshot.id, expectedReviewHash: reviewHash, attestations: { canonicalProvenance: true, transferRestrictions: true, drawFunding: true } }
         : { kind: "revokeRaffleApproval", id: review.snapshot.id, expectedReviewHash: reviewHash };

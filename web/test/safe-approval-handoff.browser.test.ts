@@ -58,6 +58,12 @@ run("Safe approval handoff", () => {
     chain?.close();
   });
 
+  async function connectCurrentOwner() {
+    const button = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    await expect.poll(async () => await button.isVisible() || await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).isVisible(), { timeout: 15_000 }).toBe(true);
+    if (await button.isVisible()) await button.click();
+  }
+
   async function proposalOnly() {
     await fixture.page.evaluate(() => {
       const w = window as unknown as { ethereum: { request(input: { method: string; params?: readonly unknown[] }): Promise<unknown> } };
@@ -146,6 +152,7 @@ run("Safe approval handoff", () => {
   it("keeps repeated background discovery errors polite and makes busy controls visibly unavailable", async () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
+    await connectCurrentOwner();
     await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
     await proposalOnly();
@@ -201,8 +208,7 @@ run("Safe approval handoff", () => {
   it("keeps one error status while repeated discovered-candidate confirmation fails", async () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/3`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await connectCurrentOwner();
     await fixture.switchAccount(chain.operator);
     await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
