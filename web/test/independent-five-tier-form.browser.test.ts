@@ -30,7 +30,7 @@ run("independent five-tier rendered journey", () => {
     const legacyNames = [
       ["Only"],
       ["eNTRY", "BASIC"],
-      ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"],
+      ["ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"],
       [" Entry "]
     ] as const;
     for (const [fixtureIndex, names] of legacyNames.entries()) {
@@ -191,6 +191,28 @@ run("independent five-tier rendered journey", () => {
       if (item.draft.packs.length === 2) {
         await fixture.page.setViewportSize({ width: 390, height: 844 });
         await fixture.page.locator("form").screenshot({ path: resolve(evidenceDir, "legacy-two-pack-edit-390.png") });
+      }
+      if (item.draft.packs[0]?.name === "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456") {
+        await fixture.page.setViewportSize({ width: 320, height: 844 });
+        const longNameGroup = fixture.page.getByRole("group", { name: "Membership 1: ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", exact: true });
+        const overflow = await longNameGroup.evaluate((group) => {
+          const legend = group.querySelector("legend strong");
+          if (!(legend instanceof HTMLElement)) return null;
+          const groupBounds = group.getBoundingClientRect();
+          const legendBounds = legend.getBoundingClientRect();
+          return {
+            document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            group: group.scrollWidth - group.clientWidth,
+            legendRight: legendBounds.right - groupBounds.right,
+            legendLeft: groupBounds.left - legendBounds.left
+          };
+        });
+        await fixture.page.locator("form").screenshot({ path: resolve(evidenceDir, "legacy-32-byte-name-edit-320.png") });
+        expect(overflow).not.toBeNull();
+        expect(overflow?.document).toBeLessThanOrEqual(0);
+        expect(overflow?.group).toBeLessThanOrEqual(0);
+        expect(overflow?.legendRight).toBeLessThanOrEqual(1);
+        expect(overflow?.legendLeft).toBeLessThanOrEqual(1);
       }
       const repairBlock = await chain.client.getBlock();
       const salesEnd = repairBlock.timestamp + 86_400n + BigInt(fixtureIndex);
