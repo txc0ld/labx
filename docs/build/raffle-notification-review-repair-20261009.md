@@ -19,7 +19,9 @@ Delivery reservations keep their original payload, event binding, provider ident
 
 ## Runtime behavior
 
-After activation verification, retry and ingestion run with separate bounded time budgets. Existing pages are retried before new RPC ingestion. Ingestion failures preserve the cursor, persist a sanitized blocked-range incident, and return `status: "degraded"`; they do not suppress existing delivery retries. Provider and per-event storage failures remain pending and later events continue when incident persistence succeeds.
+The cron establishes one 56-second deadline before source initialization, leaving response margin within the 60-second route limit. Source initialization, activation verification, retry work, ingestion, and fresh-page work share that deadline. Retry processing reserves the ten-second ingestion window, and no provider send starts without the adapter's ten-second allowance. Terminal-prefix reads stop at the delivery deadline; unproved markers remain replayable and cannot advance retry progress.
+
+After activation verification, retry and ingestion retain separate work allowances inside the shared deadline. Existing pages are retried before new RPC ingestion. Ingestion failures preserve the cursor, persist a sanitized blocked-range incident, and return `status: "degraded"`; they do not suppress existing delivery retries. Provider-pending results remain ordinary pending work. A caught delivery or storage processing failure increments `processingFailures`, persists a sanitized incident when time remains, and makes only that run degraded while later events continue. A healthy retry can report healthy again.
 
 The event reader makes bounded calls. It distinguishes request exhaustion and timeouts, never recursively splits a transient timeout, and lets callers halve actual dense/range-limited multi-block reads through a final singleton attempt. It pins the original finalized block by number and hash, rejects regression or a changed pinned hash, and accepts normal finalized-height advancement.
 

@@ -4,12 +4,30 @@ import { raffleAbi } from "@/lib/chain/abi";
 import { APPROVED_DEPLOYMENTS } from "@/lib/chain/deployment";
 import { createNotificationConnectionTestHandler, createNotificationCronHandler, createNotificationsHandler } from "@/lib/notifications/http";
 import { readRecentNotifications } from "@/lib/notifications/public-feed";
-import type { NotificationChainReader, NotificationWorkflow } from "@/lib/notifications/events";
+import type { NotificationChainReader, NotificationEvent, NotificationWorkflow } from "@/lib/notifications/events";
+import type { NotificationProcessorSource } from "@/lib/notifications/processor";
+import type { Store } from "@/lib/points";
 import { MemoryStore } from "@/lib/store";
 
 const manifest = APPROVED_DEPLOYMENTS[0]!;
 const blockHash = `0x${"44".repeat(32)}` as Hex;
 const originalEnv = { ...process.env };
+
+function notificationEvent(id: number): NotificationEvent {
+  return {
+    kind: "draft-created",
+    eventName: "RaffleCreated",
+    label: "Draft awaiting review",
+    raffleId: String(id),
+    blockNumber: "101",
+    blockHash,
+    transactionHash: `0x${id.toString(16).padStart(64, "0")}` as Hex,
+    transactionIndex: id,
+    logIndex: id,
+    occurredAt: "2026-10-09T01:00:00.000Z",
+    href: `/review/${id}`
+  };
+}
 
 afterEach(() => {
   process.env = { ...originalEnv };
@@ -155,6 +173,94 @@ describe("notification cron boundary", () => {
     expect(JSON.stringify(body)).not.toContain("private provider detail");
     expect(logged).toHaveBeenCalledWith("notification-cron", expect.objectContaining({ status: "degraded" }));
     logged.mockRestore();
+  });
+
+  it("shares one route deadline across source, activation verification, retry sends, and ingestion", async () => {
+    process.env.CRON_SECRET = "1234567890abcdef";
+    process.env.RESEND_API_KEY = "resend-test";
+    process.env.RESEND_FROM = "LABx <alerts@example.com>";
+    process.env.LABX_ADMIN_EMAIL = "team@fantomlabs.io";
+    const store = new MemoryStore();
+    const deployment = `${manifest.chainId}:${manifest.address.toLowerCase()}`;
+    const prefix = `raffle-notifications:v1:${deployment}`;
+    const events = [notificationEvent(1), notificationEvent(2), notificationEvent(3)];
+    await store.setIfAbsent({
+      [`${prefix}:activation`]: JSON.stringify({ version: 1, deployment, blockNumber: "100", blockHash: `0x${"11".repeat(32)}` }),
+      [`${prefix}:page:101`]: JSON.stringify({ version: 1, deployment, startBlock: "101", actualEnd: "101", nextBlock: "102", events }),
+      [`${prefix}:ingestion-proof:102`]: "101"
+    });
+    await store.set(`${prefix}:ingestion-hint`, "102");
+    await store.set(`${prefix}:last-ingested-page`, "101");
+
+    let fakeNow = 0;
+    let eventReads = 0;
+    const source: NotificationProcessorSource = {
+      deployment,
+      origin: "https://labx.example",
+      latest: { number: 100n, hash: `0x${"11".repeat(32)}` as Hex, timestamp: 1n },
+      async finalized() { fakeNow += 6_000; return { number: 102n, hash: blockHash, timestamp: 2n }; },
+      async block(number) { fakeNow += 6_000; return { number, hash: number === 100n ? `0x${"11".repeat(32)}` as Hex : blockHash, timestamp: 1n, gasLimit: 30_000_000n }; },
+      async events(fromBlock, toBlock) {
+        fakeNow += 6_000;
+        eventReads += 1;
+        return { events: [], range: { fromBlock, toBlock }, finalized: { number: 102n, hash: blockHash, timestamp: 2n }, singleBlock: { number: 102n, hash: blockHash, gasLimit: 30_000_000n } };
+      }
+    };
+    const originalNow = Date.now;
+    Date.now = () => fakeNow;
+    try {
+      const sender = vi.fn(async () => { fakeNow += 10_000; return true; });
+      const response = await createNotificationCronHandler({
+        store: () => store,
+        source: async () => { fakeNow += 12_000; return source; },
+        sender: () => sender
+      })(new Request("https://labx.example/api/cron/notifications", { headers: { Authorization: "Bearer 1234567890abcdef" } }));
+      expect(response.status).toBe(200);
+      expect(fakeNow).toBeLessThan(60_000);
+      expect(sender).toHaveBeenCalledTimes(2);
+      expect(eventReads).toBe(1);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it("returns ok false after an isolated delivery storage failure while later work succeeds", async () => {
+    process.env.CRON_SECRET = "1234567890abcdef";
+    process.env.RESEND_API_KEY = "resend-test";
+    process.env.RESEND_FROM = "LABx <alerts@example.com>";
+    process.env.LABX_ADMIN_EMAIL = "team@fantomlabs.io";
+    const backing = new MemoryStore();
+    let failed = false;
+    const store: Store = {
+      get: key => backing.get(key),
+      set: (key, value) => backing.set(key, value),
+      async setIfAbsent(entries) {
+        if (!failed && Object.keys(entries).some(key => /^raffle-notification:[^:]+$/.test(key))) {
+          failed = true;
+          throw new Error("temporary reservation failure");
+        }
+        return backing.setIfAbsent(entries);
+      }
+    };
+    const deployment = `${manifest.chainId}:${manifest.address.toLowerCase()}`;
+    const events = [notificationEvent(1), notificationEvent(2)];
+    const source: NotificationProcessorSource = {
+      deployment,
+      origin: "https://labx.example",
+      latest: { number: 100n, hash: `0x${"11".repeat(32)}` as Hex, timestamp: 1n },
+      async finalized() { return { number: 101n, hash: blockHash, timestamp: 2n }; },
+      async block(number) { return { number, hash: number === 100n ? `0x${"11".repeat(32)}` as Hex : blockHash, timestamp: 1n, gasLimit: 30_000_000n }; },
+      async events(fromBlock, toBlock) {
+        return { events, range: { fromBlock, toBlock }, finalized: { number: 101n, hash: blockHash, timestamp: 2n }, singleBlock: { number: 101n, hash: blockHash, gasLimit: 30_000_000n } };
+      }
+    };
+    const dependencies = { store: () => store, source: async () => source, sender: () => async () => true };
+    const request = () => new Request("https://labx.example/api/cron/notifications", { headers: { Authorization: "Bearer 1234567890abcdef" } });
+    await createNotificationCronHandler(dependencies)(request());
+    const response = await createNotificationCronHandler(dependencies)(request());
+    const body = await response.json();
+    expect(body).toMatchObject({ ok: false, status: "degraded", accepted: 1, pending: 1, processingFailures: 1 });
+    expect(body.lastIncident).toMatchObject({ kind: "delivery", reason: "processing-failed" });
   });
 
   it("rejects an unauthorized connection test before all dependencies", async () => {

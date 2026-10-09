@@ -181,9 +181,60 @@ describe("notification processor", () => {
     const sender = vi.fn(async () => true);
     const report = await processNotifications({ store, source: input, sender, ...config, now: 2_000 });
     expect(failed).toBe(true);
-    expect(report).toMatchObject({ accepted: 1, pending: 1 });
+    expect(report).toMatchObject({ status: "degraded", accepted: 1, pending: 1, processingFailures: 1 });
     expect(sender).toHaveBeenCalledTimes(1);
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    expect(await backing.get(`${prefix}:page:101:event-incident:0`)).not.toBeNull();
+    expect(await backing.get(`${prefix}:retry-proof:102`)).toBeNull();
     expect(await backing.get(`${reservationKey(events[1]!, input.deployment)}:accepted`)).toBe("accepted");
+
+    const recovered = await processNotifications({ store, source: input, sender: async () => true, ...config, now: 3_000 });
+    expect(recovered).toMatchObject({ status: "ok", processingFailures: 0, retryNextBlock: "102" });
+  });
+
+  it("stops a slow terminal-prefix scan at its phase deadline without advancing retry progress", async () => {
+    const backing = new MemoryStore();
+    const input = source([]);
+    const events = Array.from({ length: 500 }, (_, index) => event(index + 1));
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    const pageKey = `${prefix}:page:101`;
+    await backing.setIfAbsent({
+      [`${prefix}:activation`]: JSON.stringify({ version: 1, deployment: input.deployment, blockNumber: "100", blockHash: activationHash }),
+      [`${prefix}:activation-verified`]: JSON.stringify({ version: 1, blockNumber: "100", blockHash: activationHash }),
+      [pageKey]: JSON.stringify({
+        version: 2, kind: "single-block", deployment: input.deployment,
+        startBlock: "101", actualEnd: "101", nextBlock: "102",
+        blockNumber: "101", blockHash: finalizedHash, gasLimit: "30000000", events
+      }),
+      [`${prefix}:ingestion-proof:102`]: "101"
+    });
+    await backing.set(`${prefix}:ingestion-hint`, "102");
+    await backing.set(`${prefix}:last-ingested-page`, "101");
+    await backing.set(`${pageKey}:resume`, "497");
+    for (let index = 0; index < 497; index += 1) await backing.set(`${pageKey}:terminal:${index}`, "terminal");
+
+    let fakeNow = 0;
+    const store: Store = {
+      async get(key) {
+        if (/page:101:terminal:\d+$/.test(key)) fakeNow += 100;
+        return backing.get(key);
+      },
+      set: (key, value) => backing.set(key, value),
+      setIfAbsent: entries => backing.setIfAbsent(entries)
+    };
+    const originalNow = Date.now;
+    Date.now = () => fakeNow;
+    try {
+      const report = await processNotifications({
+        store, source: input, sender: async () => true, ...config, now: 2_000, deadline: 22_000
+      });
+      expect(report).toMatchObject({ retryNextBlock: "101", sends: 3 });
+      expect(fakeNow).toBeLessThanOrEqual(12_000);
+      expect(await backing.get(`${prefix}:retry-proof:102`)).toBeNull();
+      expect(await backing.get(`${pageKey}:terminal-proof:500`)).toBeNull();
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   it("resumes above index 999 and completes a dense page across bounded passes", async () => {

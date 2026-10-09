@@ -5,6 +5,9 @@ import { ADMIN_NOTIFICATION_RECIPIENT, deliverAdminConnectionTest } from "./deli
 import { processNotifications, type NotificationProcessorSource } from "./processor";
 import { parsePublicCursor, type PublicNotificationPage } from "./public-feed";
 
+const CRON_RUNTIME_MS = 56_000;
+const SOURCE_RUNTIME_MS = 12_000;
+
 export function createNotificationsHandler(dependencies: {
   read: (args: { cursor?: string; limit?: number }) => Promise<PublicNotificationPage>;
 }) {
@@ -47,17 +50,23 @@ export function createNotificationCronHandler(dependencies: CronDependencies) {
   return async function GET(request: Request): Promise<Response> {
     const configuration = cronConfiguration(request);
     if (configuration instanceof Response) return configuration;
+    const deadline = Date.now() + CRON_RUNTIME_MS;
 
     try {
-      const source = await within(dependencies.source(), 12_000);
+      const source = await within(() => dependencies.source(), SOURCE_RUNTIME_MS, deadline);
       const transportIdentity = createHash("sha256").update(configuration.apiKey).digest("hex");
-      const report = await processNotifications({
-        store: dependencies.store(),
-        source,
-        sender: dependencies.sender(configuration.apiKey),
-        from: configuration.from,
-        transportIdentity
-      });
+      const report = await within(
+        () => processNotifications({
+          store: dependencies.store(),
+          source,
+          sender: dependencies.sender(configuration.apiKey),
+          from: configuration.from,
+          transportIdentity,
+          deadline
+        }),
+        deadline - Date.now(),
+        deadline
+      );
       const ok = report.status !== "degraded" && report.status !== "reconciliation-required";
       console.info("notification-cron", {
         status: report.status,
@@ -67,6 +76,7 @@ export function createNotificationCronHandler(dependencies: CronDependencies) {
         sends: report.sends,
         accepted: report.accepted,
         pending: report.pending,
+        processingFailures: report.processingFailures,
         reconciliationRequired: report.reconciliationRequired,
         ingestion: report.ingestion,
         ingestionNextBlock: report.ingestionNextBlock,
@@ -84,18 +94,23 @@ export function createNotificationConnectionTestHandler(dependencies: CronDepend
   return async function POST(request: Request): Promise<Response> {
     const configuration = cronConfiguration(request);
     if (configuration instanceof Response) return configuration;
+    const deadline = Date.now() + CRON_RUNTIME_MS;
     let body: string;
     try { body = await request.text(); } catch { return cronError("Connection test request is invalid.", 400); }
     if (body.length !== 0) return cronError("Connection test does not accept a request body.", 400);
     try {
-      const source = await within(dependencies.source(), 12_000);
-      const result = await deliverAdminConnectionTest({
-        store: dependencies.store(),
-        deployment: source.deployment,
-        sender: dependencies.sender(configuration.apiKey),
-        from: configuration.from,
-        transportIdentity: createHash("sha256").update(configuration.apiKey).digest("hex")
-      });
+      const source = await within(() => dependencies.source(), SOURCE_RUNTIME_MS, deadline);
+      const result = await within(
+        () => deliverAdminConnectionTest({
+          store: dependencies.store(),
+          deployment: source.deployment,
+          sender: dependencies.sender(configuration.apiKey),
+          from: configuration.from,
+          transportIdentity: createHash("sha256").update(configuration.apiKey).digest("hex")
+        }),
+        deadline - Date.now(),
+        deadline
+      );
       return Response.json(
         { ok: result.status !== "reconciliation-required", status: result.status, providerAccepted: result.status === "accepted", repeated: result.status === "accepted" ? result.repeated : false },
         { headers: { "Cache-Control": "no-store" } }
@@ -130,13 +145,19 @@ function cronError(error: string, status: number): Response {
   return Response.json({ ok: false, error }, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-async function within<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
+async function within<T>(operation: () => Promise<T>, milliseconds: number, deadline: number): Promise<T> {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0 || Date.now() >= deadline) {
+    throw new Error("Notification request timed out.");
+  }
+  const started = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
-      operation,
+    const result = await Promise.race([
+      operation(),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Notification source timed out.")), milliseconds); })
     ]);
+    if (Date.now() - started > milliseconds || Date.now() > deadline) throw new Error("Notification request timed out.");
+    return result;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
