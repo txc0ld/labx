@@ -47,7 +47,7 @@ run("independent five-tier rendered journey", () => {
         packs: names.map((name, index) => ({
           name,
           priceUsdc: BigInt(index + 1) * 1_000_000n,
-          bonusEntries: index + 1,
+          bonusEntries: index + 2,
           maxSupply: (index + 1) * 10
         }))
       };
@@ -183,7 +183,7 @@ run("independent five-tier rendered journey", () => {
         const group = fixture.page.getByRole("group", { name: `Membership ${packIndex + 1}: ${pack.name.trim()}`, exact: true });
         expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual([
           String(packIndex + 1),
-          String(packIndex + 1),
+          String(packIndex + 2),
           String((packIndex + 1) * 10)
         ]);
       }
