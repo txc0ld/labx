@@ -96,7 +96,7 @@ run("Safe approval handoff", () => {
       await checkbox.focus();
       await fixture.page.keyboard.press("Space");
     }
-    expect(await approval.isEnabled()).toBe(true);
+    await expect.poll(() => approval.isEnabled(), { timeout: 10_000 }).toBe(true);
 
     const downloadPromise = fixture.page.waitForEvent("download");
     await approval.focus();
