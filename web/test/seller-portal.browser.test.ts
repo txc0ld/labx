@@ -279,7 +279,7 @@ run("rendered seller portal on isolated Anvil", () => {
     const longPackResponse = await fixture.page.goto(`${fixture.baseUrl}/piece/26`, { waitUntil: "domcontentloaded" });
     expect(longPackResponse?.status()).toBe(200);
     await fixture.page.getByText(longPackName, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    await fixture.page.getByText("1,000,000 USDC", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).getByText("1,000,000 USDC", { exact: true }).waitFor({ state: "visible" });
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
