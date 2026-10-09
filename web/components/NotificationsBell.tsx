@@ -9,6 +9,9 @@ export type NotificationActivity = {
   blockNumber: string;
   logIndex: number;
 };
+export type NotificationReadWatermark =
+  | { kind: "legacy"; identity: string }
+  | { kind: "ordered"; activity: NotificationActivity };
 const POLL_MS = 60_000;
 const READ_EVENT = "labx-notifications-read";
 
@@ -46,7 +49,7 @@ export function NotificationsBell() {
         const activity = { deployment, identity: `${blockHash}:${transactionHash}:${logIndex}`, blockNumber, logIndex };
         const latest = selectLatestActivity(latestRef.current, activity);
         latestRef.current = latest;
-        setUnread(readLastSeen(latest.deployment) !== latest.identity);
+        setUnread(isNotificationUnread(latest, readWatermark(latest.deployment)));
       } catch {
         // The bell remains usable as a link when the public feed is unavailable.
       }
@@ -67,9 +70,10 @@ export function NotificationsBell() {
       const read = parseReadActivity(event);
       if (!read) return;
       const latest = latestRef.current;
-      const reconciled = reconcileNotificationRead(latest, read);
+      const reconciled = reconcileNotificationRead(latest, readWatermark(read.deployment), read);
       if (!reconciled) return;
       latestRef.current = reconciled.latest;
+      writeWatermark(reconciled.watermark);
       setUnread(reconciled.unread);
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -86,8 +90,9 @@ export function NotificationsBell() {
     const latest = latestRef.current;
     if (!latest) return;
     try {
-      localStorage.setItem(storageKey(latest.deployment), latest.identity);
-      setUnread(false);
+      const watermark = advanceWatermark(readWatermark(latest.deployment), latest, true);
+      writeWatermark(watermark);
+      setUnread(isNotificationUnread(latest, watermark));
     } catch {
       // Storage is optional; navigation still succeeds.
     }
@@ -112,7 +117,7 @@ export function NotificationsBell() {
 
 export function markNotificationRead(activity: NotificationActivity): void {
   try {
-    localStorage.setItem(storageKey(activity.deployment), activity.identity);
+    writeWatermark(advanceWatermark(readWatermark(activity.deployment), activity, false));
     window.dispatchEvent(new CustomEvent(READ_EVENT, { detail: activity }));
   } catch {
     // Device-local unread state is optional.
@@ -129,13 +134,48 @@ export function selectLatestActivity(
 
 export function reconcileNotificationRead(
   latest: NotificationActivity | null,
+  stored: NotificationReadWatermark | null,
   read: NotificationActivity
-): { latest: NotificationActivity; unread: boolean } | null {
-  if (!latest) return { latest: read, unread: false };
+): { latest: NotificationActivity; watermark: NotificationReadWatermark; unread: boolean } | null {
+  if (!latest) {
+    const watermark = advanceWatermark(stored, read, true);
+    return { latest: read, watermark, unread: isNotificationUnread(read, watermark) };
+  }
   if (latest.deployment !== read.deployment) return null;
-  return compareActivity(read, latest) >= 0
-    ? { latest: read, unread: false }
-    : { latest, unread: true };
+  const nextLatest = selectLatestActivity(latest, read);
+  let watermark = advanceWatermark(stored, read, compareActivity(read, latest) >= 0);
+  if (watermark.kind === "legacy" && watermark.identity === nextLatest.identity) {
+    watermark = { kind: "ordered", activity: nextLatest };
+  }
+  return { latest: nextLatest, watermark, unread: isNotificationUnread(nextLatest, watermark) };
+}
+
+export function advanceWatermark(
+  current: NotificationReadWatermark | null,
+  candidate: NotificationActivity,
+  replaceUnknownLegacy: boolean
+): NotificationReadWatermark {
+  if (!current) return { kind: "ordered", activity: candidate };
+  if (current.kind === "legacy") {
+    return current.identity === candidate.identity || replaceUnknownLegacy
+      ? { kind: "ordered", activity: candidate }
+      : current;
+  }
+  if (current.activity.deployment !== candidate.deployment) return current;
+  return compareActivity(candidate, current.activity) >= 0
+    ? { kind: "ordered", activity: candidate }
+    : current;
+}
+
+export function isNotificationUnread(
+  latest: NotificationActivity,
+  watermark: NotificationReadWatermark | null
+): boolean {
+  if (!watermark) return true;
+  if (watermark.kind === "legacy") return watermark.identity !== latest.identity;
+  if (watermark.activity.deployment !== latest.deployment) return true;
+  const order = compareActivity(latest, watermark.activity);
+  return order > 0 || order === 0 && latest.identity !== watermark.activity.identity;
 }
 
 function compareActivity(left: NotificationActivity, right: NotificationActivity): number {
@@ -169,6 +209,34 @@ function storageKey(deployment: string): string {
   return `labx:notifications:read:${deployment}`;
 }
 
-function readLastSeen(deployment: string): string | null {
-  try { return localStorage.getItem(storageKey(deployment)); } catch { return null; }
+function readWatermark(deployment: string): NotificationReadWatermark | null {
+  let raw: string | null;
+  try { raw = localStorage.getItem(storageKey(deployment)); } catch { return null; }
+  if (raw === null) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value) || Reflect.get(value, "version") !== 1) {
+      return { kind: "legacy", identity: raw };
+    }
+    const activity = parseActivity(value);
+    return activity?.deployment === deployment ? { kind: "ordered", activity } : null;
+  } catch {
+    return { kind: "legacy", identity: raw };
+  }
+}
+
+function writeWatermark(watermark: NotificationReadWatermark): void {
+  if (watermark.kind === "legacy") return;
+  const { deployment, identity, blockNumber, logIndex } = watermark.activity;
+  localStorage.setItem(storageKey(deployment), JSON.stringify({ version: 1, deployment, identity, blockNumber, logIndex }));
+}
+
+function parseActivity(value: object): NotificationActivity | null {
+  const deployment = Reflect.get(value, "deployment");
+  const identity = Reflect.get(value, "identity");
+  const blockNumber = Reflect.get(value, "blockNumber");
+  const logIndex = Reflect.get(value, "logIndex");
+  return typeof deployment === "string" && typeof identity === "string" && isBlockNumber(blockNumber) && isLogIndex(logIndex)
+    ? { deployment, identity, blockNumber, logIndex }
+    : null;
 }
