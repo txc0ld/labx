@@ -80,4 +80,96 @@ run("manual Safe export versus deferred provider rejection", () => {
     expect(await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).isVisible()).toBe(true);
     expect(await fixture.page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(0);
   }, 45_000);
+
+  it("retires an exact persisted intent when the session changes before the provider is reached", async () => {
+    await fixture.page.goto(`${fixture.baseUrl}/review/1`, { waitUntil: "domcontentloaded" });
+    await fixture.switchAccount(chain.operator);
+    await fixture.page.evaluate(() => {
+      for (const key of Object.keys(localStorage)) if (key.startsWith("labx:owner-review:")) localStorage.removeItem(key);
+    });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    const approvalHeading = fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true });
+    await expect.poll(async () => await connect.isVisible().catch(() => false) || await approvalHeading.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await approvalHeading.waitFor({ timeout: 15_000 });
+    const storageKey = `labx:owner-review:v1:31337:${chain.raffle.address.toLowerCase()}:${chain.manifest.runtimeCodeHash}:${chain.operator.toLowerCase()}:1`;
+    await fixture.page.evaluate(({ buyer, storageKey }) => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Scope = Window & {
+        ethereum: { request: Request };
+        __labxSetAccount(next: string): Promise<void>;
+        __independentOwnerPredispatchSends: number;
+      };
+      const scope = window as unknown as Scope;
+      const original = scope.ethereum.request.bind(scope.ethereum);
+      let invalidated = false;
+      scope.__independentOwnerPredispatchSends = 0;
+      scope.ethereum.request = async input => {
+        if (input.method === "eth_sendTransaction") {
+          scope.__independentOwnerPredispatchSends += 1;
+          return original(input);
+        }
+        if (input.method === "eth_accounts" && !invalidated && localStorage.getItem(storageKey) !== null) {
+          invalidated = true;
+          await scope.__labxSetAccount(buyer);
+          return [buyer];
+        }
+        return original(input);
+      };
+    }, { buyer: chain.buyer, storageKey });
+
+    await fixture.page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __independentOwnerPredispatchSends: number }).__independentOwnerPredispatchSends), { timeout: 10_000 }).toBe(0);
+    await fixture.page.waitForTimeout(500);
+
+    expect(await fixture.page.evaluate(key => localStorage.getItem(key), storageKey)).toBeNull();
+    expect(await fixture.page.evaluate(() => (window as unknown as Window & { __independentOwnerPredispatchSends: number }).__independentOwnerPredispatchSends)).toBe(0);
+  }, 45_000);
+
+  it("recovers its controls when the handoff marker succeeds but primary intent storage fails before dispatch", async () => {
+    await fixture.page.goto(`${fixture.baseUrl}/review/1`, { waitUntil: "domcontentloaded" });
+    await fixture.switchAccount(chain.operator);
+    await fixture.page.evaluate(() => {
+      for (const key of Object.keys(localStorage)) if (key.startsWith("labx:owner-review:")) localStorage.removeItem(key);
+    });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    const approvalHeading = fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true });
+    await expect.poll(async () => await connect.isVisible().catch(() => false) || await approvalHeading.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
+    if (await connect.isVisible().catch(() => false)) await connect.click();
+    await approvalHeading.waitFor({ timeout: 15_000 });
+    const storageKey = `labx:owner-review:v1:31337:${chain.raffle.address.toLowerCase()}:${chain.manifest.runtimeCodeHash}:${chain.operator.toLowerCase()}:1`;
+    await fixture.page.evaluate(storageKey => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Scope = Window & {
+        ethereum: { request: Request };
+        __independentOwnerStorageFailureSends: number;
+        __restoreOwnerStorage(): void;
+      };
+      const scope = window as unknown as Scope;
+      const request = scope.ethereum.request.bind(scope.ethereum);
+      scope.__independentOwnerStorageFailureSends = 0;
+      scope.ethereum.request = input => {
+        if (input.method === "eth_sendTransaction") scope.__independentOwnerStorageFailureSends += 1;
+        return request(input);
+      };
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === storageKey) throw new DOMException("primary owner intent storage unavailable", "QuotaExceededError");
+        return setItem.call(this, key, value);
+      };
+      scope.__restoreOwnerStorage = () => { Storage.prototype.setItem = setItem; };
+    }, storageKey);
+
+    await fixture.page.getByRole("button", { name: "Approve", exact: true }).click();
+    await fixture.page.waitForTimeout(750);
+    await fixture.page.evaluate(() => (window as unknown as Window & { __restoreOwnerStorage(): void }).__restoreOwnerStorage());
+
+    expect(await fixture.page.evaluate(() => (window as unknown as Window & { __independentOwnerStorageFailureSends: number }).__independentOwnerStorageFailureSends)).toBe(0);
+    expect(await fixture.page.evaluate(key => localStorage.getItem(key), storageKey)).toBeNull();
+    const directRetry = fixture.page.getByRole("button", { name: "Approve", exact: true });
+    const returnToActions = fixture.page.getByRole("button", { name: "Return to owner actions", exact: true });
+    await expect.poll(async () => await directRetry.isEnabled().catch(() => false) || await returnToActions.isEnabled().catch(() => false), { timeout: 5_000 }).toBe(true);
+  }, 45_000);
 });

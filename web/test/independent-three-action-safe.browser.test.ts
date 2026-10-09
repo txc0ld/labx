@@ -64,6 +64,16 @@ run("independent one-click Safe approval", () => {
     return fixture.page.evaluate(() => (window as unknown as Window & { __independentSellerRpc: string[] }).__independentSellerRpc);
   }
 
+  async function settleAtPageTop() {
+    await fixture.page.evaluate(async () => {
+      window.scrollTo(0, 0);
+      await document.fonts.ready;
+      await Promise.all([...document.images].map(image => image.complete ? Promise.resolve() : image.decode().catch(() => undefined)));
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    await fixture.page.waitForTimeout(250);
+  }
+
   async function fillCreate(tokenId: bigint, title: string) {
     await fixture.page.getByLabel("Raffle title", { exact: true }).fill(title);
     await fixture.page.getByLabel("Sales deadline in UTC", { exact: true }).fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
@@ -181,19 +191,28 @@ run("independent one-click Safe approval", () => {
       const box = await list.boundingBox();
       expect(box).not.toBeNull();
       expect((box?.x ?? -1) >= 0 && (box?.x ?? width) + (box?.width ?? width) <= width).toBe(true);
+      await settleAtPageTop();
       await fixture.page.screenshot({ path: resolve(evidence, `list-${width}.png`), fullPage: true });
     }
+
+
+    const focusedList = fixture.page.getByRole("button", { name: "List", exact: true });
+    await focusedList.scrollIntoViewIfNeeded();
+    await fixture.page.waitForTimeout(250);
+    await fixture.page.screenshot({ path: resolve(evidence, "list-1440-action-viewport.png") });
 
     await fixture.page.setViewportSize({ width: 390, height: 844 });
     const cdp = await fixture.context.newCDPSession(fixture.page);
     await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
     expect(await fixture.page.getByRole("button", { name: "List", exact: true }).isVisible()).toBe(true);
+    await settleAtPageTop();
     await fixture.page.screenshot({ path: resolve(evidence, "list-390-zoom-200.png"), fullPage: true });
     await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
 
     await fixture.page.evaluate(() => { document.documentElement.dir = "rtl"; });
     expect(await fixture.page.getByRole("button", { name: "List", exact: true }).isVisible()).toBe(true);
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await settleAtPageTop();
     await fixture.page.screenshot({ path: resolve(evidence, "list-390-rtl.png"), fullPage: true });
     await fixture.page.evaluate(() => { document.documentElement.dir = "ltr"; });
 

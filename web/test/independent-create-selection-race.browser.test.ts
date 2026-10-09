@@ -95,8 +95,12 @@ run("Create versus pending NFT selection", () => {
 
     await form.getByRole("button", { name: "Choose from wallet" }).click();
     await form.getByRole("button", { name: /Select Pending NFT/ }).click();
+    expect(await form.locator("form").evaluate(element => ({
+      valid: (element as HTMLFormElement).checkValidity(),
+      invalid: [...element.querySelectorAll(":invalid")].map(input => (input as HTMLInputElement).ariaLabel || (input as HTMLInputElement).id || (input as HTMLInputElement).name)
+    }))).toEqual({ valid: true, invalid: [] });
     await form.getByRole("button", { name: "Create", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__independentPreparationStarted)).toBe(true);
+    await expect.poll(async () => await page.evaluate(() => window.__independentPreparationStarted) ? "started" : await form.innerText()).toBe("started");
     await page.evaluate(() => window.__independentResolveOwner?.());
     await page.evaluate(() => window.__independentReleasePreparation?.());
 
@@ -104,5 +108,42 @@ run("Create versus pending NFT selection", () => {
     await expect.poll(() => create.textContent()).toBe("Create");
     expect(await create.isEnabled()).toBe(true);
     await form.getByRole("alert").filter({ hasText: /no longer active|resume/i }).waitFor();
+  }, 30_000);
+
+  it("releases Start over when a pending NFT selection changes generation during the journal check", async () => {
+    await page.evaluate(() => localStorage.clear());
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect.poll(() => page.evaluate(() => typeof window.__independentReleasePreparation)).toBe("function");
+    const form = page.getByRole("region", { name: "Create selection race" });
+    await form.getByLabel("Raffle title").fill("Reset race fixture");
+    await form.getByLabel("Sales deadline in UTC").fill("2099-01-01T00:00");
+    await form.getByLabel("NFT contract").fill("0x4444444444444444444444444444444444444444");
+    await form.getByLabel("Token ID").fill("1");
+    for (const input of await form.getByLabel("Price in USDC").all()) await input.fill("1");
+    for (const input of await form.getByLabel("Bonus entries").all()) await input.fill("1");
+    for (const input of await form.getByLabel("Supply").all()) await input.fill("10");
+    await page.evaluate(() => { window.__independentFailPreparation = true; });
+
+    await form.getByRole("button", { name: "Choose from wallet" }).click();
+    await form.getByRole("button", { name: /Select Pending NFT/ }).click();
+    expect(await form.locator("form").evaluate(element => ({
+      valid: (element as HTMLFormElement).checkValidity(),
+      invalid: [...element.querySelectorAll(":invalid")].map(input => (input as HTMLInputElement).ariaLabel || (input as HTMLInputElement).id || (input as HTMLInputElement).name)
+    }))).toEqual({ valid: true, invalid: [] });
+    await form.getByRole("button", { name: "Create", exact: true }).click();
+    await expect.poll(async () => await page.evaluate(() => window.__independentPreparationStarted) ? "started" : await form.innerText()).toBe("started");
+    await page.evaluate(() => window.__independentReleasePreparation?.());
+    await form.getByText(/saved creation is ready to resume|could not be prepared or saved/i).waitFor();
+
+    await page.evaluate(() => { window.__independentDeferPending = true; });
+    await form.getByText("Advanced recovery", { exact: true }).click();
+    const restart = form.getByRole("button", { name: "Start over and edit details", exact: true });
+    await restart.click();
+    await expect.poll(() => page.evaluate(() => window.__independentPendingCheckStarted)).toBe(true);
+    await page.evaluate(() => window.__independentResolveOwner?.());
+    await page.evaluate(() => window.__independentReleasePending?.());
+
+    await expect.poll(() => restart.isEnabled(), { timeout: 5_000 }).toBe(true);
+    await form.getByRole("alert").filter({ hasText: /changed|no longer active|resume/i }).waitFor();
   }, 30_000);
 });

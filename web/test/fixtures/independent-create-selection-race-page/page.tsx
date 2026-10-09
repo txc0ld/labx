@@ -13,6 +13,10 @@ declare global {
     __independentResolveOwner?: () => void;
     __independentReleasePreparation?: () => void;
     __independentPreparationStarted?: boolean;
+    __independentFailPreparation?: boolean;
+    __independentDeferPending?: boolean;
+    __independentPendingCheckStarted?: boolean;
+    __independentReleasePending?: () => void;
   }
 }
 
@@ -36,21 +40,30 @@ export default function IndependentCreateSelectionRacePage() {
   const wallet = useMemo(walletFixture, []);
   const ownerRelease = useRef<(() => void) | null>(null);
   const preparationRelease = useRef<(() => void) | null>(null);
+  const pendingRelease = useRef<(() => void) | null>(null);
   const service = useMemo(() => ({
     manifest: {
       chainId: 11155111,
       address: "0x2222222222222222222222222222222222222222",
       runtimeCodeHash: `0x${"a".repeat(64)}`
     },
-    pending: async () => false,
+    pending: async () => {
+      if (window.__independentDeferPending) {
+        window.__independentPendingCheckStarted = true;
+        await new Promise<void>(resolve => { pendingRelease.current = resolve; });
+      }
+      return null;
+    },
     readNftOwner: async () => {
       await new Promise<void>(resolve => { ownerRelease.current = resolve; });
       return { owner: SELLER, block: { number: 1n, hash: `0x${"b".repeat(64)}`, timestamp: 1n } };
     }
   }) as unknown as RaffleService, []);
   const saveCommitment: SaveCommitment = async (input, options) => {
+    options?.beforeRequest?.(`0x${"e".repeat(64)}`);
     window.__independentPreparationStarted = true;
     await new Promise<void>(resolve => { preparationRelease.current = resolve; });
+    if (window.__independentFailPreparation) throw new Error("independent preparation response lost");
     options?.assertIntent();
     return {
       nft: input.nft,
@@ -66,10 +79,15 @@ export default function IndependentCreateSelectionRacePage() {
   useEffect(() => {
     window.__independentResolveOwner = () => ownerRelease.current?.();
     window.__independentReleasePreparation = () => preparationRelease.current?.();
+    window.__independentReleasePending = () => pendingRelease.current?.();
     return () => {
       delete window.__independentResolveOwner;
       delete window.__independentReleasePreparation;
       delete window.__independentPreparationStarted;
+      delete window.__independentFailPreparation;
+      delete window.__independentDeferPending;
+      delete window.__independentPendingCheckStarted;
+      delete window.__independentReleasePending;
     };
   }, []);
   return <main className="section"><section aria-label="Create selection race"><SellerDraftForm service={service} wallet={wallet} saveCommitment={saveCommitment} /></section></main>;
