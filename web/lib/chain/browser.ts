@@ -37,10 +37,12 @@ export function configuredBrowserService(): BrowserService {
     }
     manifest ??= APPROVED_DEPLOYMENTS.find(item => selected && item.chainId === 11155111 && sameAddress(item.address, selected));
     const wallet = new BrowserWalletSession(window.ethereum, manifest?.chainId ?? 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser, manifest ? `${manifest.version}:${manifest.chainId}:${manifest.address.toLowerCase()}:${manifest.runtimeCodeHash.toLowerCase()}` : undefined);
-    if (manifest) void wallet.restore();
     if (!manifest) {
       configured = { kind: "unavailable", wallet, reason: selected && sameAddress(selected, LEGACY_RAFFLE) ? "The configured contract is historical. It does not support the current buyer protections." : "A reviewed raffle deployment has not been configured yet." };
-    } else configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: http(rpc, { timeout: 15_000, retryCount: 1 }) }), manifest) };
+    } else {
+      configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: http(rpc, { timeout: 15_000, retryCount: 1 }) }), manifest) };
+      void wallet.restore();
+    }
   } catch { configured = { kind: "unavailable", reason: "Deployment configuration is invalid.", wallet: new BrowserWalletSession(window.ethereum, 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser) }; }
   return configured;
 }

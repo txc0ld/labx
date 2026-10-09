@@ -1,12 +1,13 @@
 import { getAddress } from "viem";
 import { consentKey, readWalletConsent, sameConsent, saveWalletConsent, type WalletConsent } from "./wallet-consent";
 import { AppKit, CoreHelperUtil, type CreateAppKit } from "@reown/appkit";
+import type { ParsedCaipAddress } from "@reown/appkit-common";
 import { PACKAGE_VERSION } from "@reown/appkit/constants";
 import { sepolia } from "@reown/appkit/networks";
 import { EthersAdapter } from "@reown/appkit-adapter-ethers";
 import { ConnectorController } from "@reown/appkit-controllers";
 import { observeWalletConnectModal, refreshWalletConnectConnectorLists } from "./walletconnect-accessibility";
-import { bounded, type WalletChooser, WalletChooserBusyError, WalletChooserReloadError } from "./wallet-connectors";
+import { bounded, type WalletChooser, WalletChooserBusyError, WalletChooserReloadError, WalletSelectionChangedError } from "./wallet-connectors";
 import type { WalletProvider } from "./types";
 
 type Attempt = {
@@ -31,9 +32,12 @@ type WalletConnectCleanup = {
   complete: () => void;
 };
 
+type AdapterAccount = string | ParsedCaipAddress;
+
 class LabxEthersAdapter extends EthersAdapter {
   private attempt: Attempt | undefined;
   private walletConnectCleanup: WalletConnectCleanup | undefined;
+  private releasedWalletConnectProvider: object | undefined;
 
   beginAttempt() {
     if (this.attempt) throw new WalletChooserBusyError();
@@ -128,6 +132,7 @@ class LabxEthersAdapter extends EthersAdapter {
   }
 
   override async connectWalletConnect(chainId?: number | string) {
+    this.releasedWalletConnectProvider = undefined;
     return this.track("walletConnect", async () => {
       const result = await super.connectWalletConnect(chainId);
       this.observeWalletConnectSession(this.getWalletConnectProvider());
@@ -156,6 +161,41 @@ class LabxEthersAdapter extends EthersAdapter {
       : undefined;
     if (!connector || connector.type !== "INJECTED") return super.disconnect(params);
     return this.disconnectInjected(connector.id, connector.provider);
+  }
+
+  releaseConnection(connectorId: string, provider: unknown) {
+    const connector = this.connectors.find(candidate => candidate.id === connectorId);
+    if (!connector || connector.provider !== provider) throw new Error("The restored wallet connection changed before cleanup.");
+    if (connector.type === "WALLET_CONNECT" && provider && typeof provider === "object") {
+      this.releasedWalletConnectProvider = provider;
+    }
+    this.removeProviderListeners(connectorId);
+    this.deleteConnection(connectorId);
+    this.emit("disconnect");
+  }
+
+  protected override onConnect(accounts: AdapterAccount[], connectorId: string) {
+    if (this.isReleasedWalletConnect(connectorId)) return;
+    super.onConnect(accounts, connectorId);
+  }
+
+  protected override onAccountsChanged(accounts: AdapterAccount[], connectorId: string, disconnectIfNoAccounts?: boolean) {
+    if (this.isReleasedWalletConnect(connectorId)) return;
+    super.onAccountsChanged(accounts, connectorId, disconnectIfNoAccounts);
+  }
+
+  protected override onDisconnect(connectorId: string) {
+    if (this.isReleasedWalletConnect(connectorId)) return;
+    super.onDisconnect(connectorId);
+  }
+
+  protected override onChainChanged(chainId: string | number, connectorId: string) {
+    if (this.isReleasedWalletConnect(connectorId)) return;
+    super.onChainChanged(chainId, connectorId);
+  }
+
+  private isReleasedWalletConnect(connectorId: string) {
+    return connectorId === "walletConnect" && this.getWalletConnectProvider() === this.releasedWalletConnectProvider;
   }
 
   private async disconnectInjected(connectorId: string, provider: unknown) {
@@ -211,12 +251,14 @@ class LabxEthersAdapter extends EthersAdapter {
     await this.disconnect({ id: connectorId });
   }
 
-  async disconnectWalletConnectSession() {
-    const candidate: unknown = this.getWalletConnectProvider();
+  async disconnectWalletConnectSession(expectedProvider?: object, expectedTopic?: string) {
+    const candidate: unknown = expectedProvider ?? this.getWalletConnectProvider();
     if (!isWalletConnectEventProvider(candidate)) {
       throw new Error("WalletConnect session could not be identified.");
     }
     const activeTopic = sessionTopic(candidate);
+    if (expectedProvider && this.getWalletConnectProvider() !== expectedProvider) throw new Error("The WalletConnect provider changed before cleanup.");
+    if (expectedTopic && activeTopic !== expectedTopic) throw new Error("The WalletConnect session changed before cleanup.");
     const cleanup = activeTopic
       ? this.observeWalletConnectSession(candidate)
       : this.walletConnectCleanup;
@@ -330,7 +372,23 @@ function isEthAccountsPermission(value: unknown) {
   return Boolean(value && typeof value === "object" && "parentCapability" in value && value.parentCapability === "eth_accounts");
 }
 
-type AppKitRuntime = { appKit: AppKit; adapter: LabxEthersAdapter };
+type OwnedConnection = {
+  runtimeGeneration: object;
+  provider: object;
+  connectorId?: string;
+  walletConnectProvider?: object;
+  walletConnectTopic?: string;
+  restoreConsent?: WalletConsent;
+  claimedBy?: object;
+};
+
+type AppKitRuntime = {
+  appKit: AppKit;
+  adapter: LabxEthersAdapter;
+  generation: object;
+  active?: OwnedConnection;
+  adoption?: OwnedConnection;
+};
 
 class LabxAppKit extends AppKit {
   constructor(options: ConstructorParameters<typeof AppKit>[0], private readonly labxAdapter: LabxEthersAdapter) {
@@ -367,6 +425,44 @@ export async function createAppKitProvider(projectId: string, scope?: string): P
 function savedConsent(key: string | undefined) {
   if (!key) return null;
   try { return readWalletConsent(key); } catch { return null; }
+}
+
+function captureConnection(current: AppKitRuntime, provider: object, connectorId?: string, restoreConsent?: WalletConsent): OwnedConnection {
+  const candidate = current.adapter.getWalletConnectProvider();
+  const candidateTopic = candidate && typeof candidate === "object"
+    ? sessionTopic(candidate as { session?: unknown })
+    : undefined;
+  const walletConnect = connectorId === "walletConnect" || current.appKit.getWalletProviderType() === "WALLET_CONNECT" && Boolean(candidateTopic);
+  const walletConnectProvider = walletConnect ? candidate : undefined;
+  if (walletConnect && (!walletConnectProvider || typeof walletConnectProvider !== "object")) {
+    throw new WalletChooserReloadError();
+  }
+  const walletConnectTopic = walletConnectProvider ? candidateTopic : undefined;
+  if (walletConnect && !walletConnectTopic) throw new WalletChooserReloadError();
+  return {
+    runtimeGeneration: current.generation,
+    provider,
+    connectorId,
+    walletConnectProvider: walletConnectProvider && typeof walletConnectProvider === "object" ? walletConnectProvider : undefined,
+    walletConnectTopic,
+    restoreConsent
+  };
+}
+
+function matchesConnection(current: AppKitRuntime, connection: OwnedConnection, requireWalletConnectTopic = true) {
+  if (connection.runtimeGeneration !== current.generation || current.active !== connection) return false;
+  if (current.appKit.getProvider("eip155") !== connection.provider) return false;
+  if (connection.connectorId && ConnectorController.getConnectorId("eip155") !== connection.connectorId) return false;
+  if (connection.walletConnectProvider) {
+    if (current.adapter.getWalletConnectProvider() !== connection.walletConnectProvider) return false;
+    if (requireWalletConnectTopic && sessionTopic(connection.walletConnectProvider) !== connection.walletConnectTopic) return false;
+  }
+  return true;
+}
+
+function clearConnection(current: AppKitRuntime, connection: OwnedConnection) {
+  if (current.active === connection) current.active = undefined;
+  if (current.adoption === connection) current.adoption = undefined;
 }
 
 export function hasAuthorizedRestoreSession(provider: unknown, consent: WalletConsent): boolean {
@@ -437,27 +533,87 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
     sdkVersion: CoreHelperUtil.generateSdkVersion([adapter], "html", PACKAGE_VERSION)
   }, adapter);
   await bounded(appKit.ready(), 20_000);
-  return { appKit, adapter };
+  const current: AppKitRuntime = { appKit, adapter, generation: {} };
+  const consent = savedConsent(key);
+  const connectorId = consent ? ConnectorController.getConnectorId("eip155") : undefined;
+  const provider = consent ? appKit.getProvider<unknown>("eip155") : undefined;
+  if (consent && connectorId === consent.connectorId && isWalletProvider(provider) && appKit.getAccount("eip155")?.isConnected) {
+    const adoption = captureConnection(current, provider, connectorId, consent);
+    current.active = adoption;
+    current.adoption = adoption;
+  }
+  return current;
 }
 
-function createChooser({ appKit, adapter }: AppKitRuntime, key?: string): WalletChooser {
+function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
+  const { appKit, adapter } = current;
   const owner = {};
+  let ownedConnection = current.adoption && !current.adoption.claimedBy ? current.adoption : undefined;
+  if (ownedConnection) ownedConnection.claimedBy = owner;
   let connected = false;
-  let connectedConnector: string | undefined;
-  let connectedProvider: unknown;
   let ownedAttempt: Attempt | undefined;
   let disconnecting: Promise<void> | undefined;
+
+  const cleanupOwned = (mode: "disconnect" | "release") => {
+    if (disconnecting) return disconnecting;
+    if (cleanupLease && cleanupLease.owner !== owner) return cleanupLease.promise;
+    if (!ownedConnection && !ownedAttempt) return Promise.resolve();
+    disconnecting = (async () => {
+      let failure: unknown;
+      if (mode === "disconnect") {
+        try { await appKit.close(); }
+        catch (error) { failure = error; }
+      }
+      const captured = ownedConnection;
+      if (captured) {
+        try {
+          if (!matchesConnection(current, captured)) {
+            if (current.active === captured) throw new Error("The captured wallet connection changed before cleanup.");
+          } else if (mode === "release") {
+            if (!captured.connectorId) throw new Error("The restored wallet connector could not be identified.");
+            adapter.releaseConnection(captured.connectorId, captured.provider);
+            clearConnection(current, captured);
+          } else {
+            if (captured.walletConnectProvider) {
+              if (!captured.walletConnectTopic) throw new Error("The WalletConnect session could not be identified.");
+              await adapter.disconnectWalletConnectSession(captured.walletConnectProvider, captured.walletConnectTopic);
+              if (!matchesConnection(current, captured, false)) throw new Error("The captured wallet connection changed during cleanup.");
+            }
+            await appKit.disconnect("eip155");
+            clearConnection(current, captured);
+          }
+          if (current.active !== captured) ownedConnection = undefined;
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+      if (ownedAttempt) await ownedAttempt.settled;
+      if (cleanupFailed) failure ??= new WalletChooserReloadError();
+      connected = false;
+      ownedAttempt = undefined;
+      if (failure) throw new WalletChooserReloadError();
+    })();
+    const lease = { owner, promise: disconnecting };
+    cleanupLease = lease;
+    void disconnecting.then(() => {
+      if (cleanupLease === lease) cleanupLease = undefined;
+    }, () => { cleanupFailed = true; });
+    return disconnecting;
+  };
+
   return {
     remember(snapshot) {
       if (!key) return;
-      if (!connected || !connectedConnector || ConnectorController.getConnectorId("eip155") !== connectedConnector || appKit.getProvider("eip155") !== connectedProvider || appKit.getAccount("eip155")?.address?.toLowerCase() !== snapshot.account.toLowerCase() || snapshot.chainId !== 11155111) throw new Error("The selected wallet changed before it could be saved.");
-      saveWalletConsent(key, { connectorId: connectedConnector, account: snapshot.account, chainId: snapshot.chainId });
+      const captured = ownedConnection;
+      if (!connected || !captured?.connectorId || !matchesConnection(current, captured) || appKit.getAccount("eip155")?.address?.toLowerCase() !== snapshot.account.toLowerCase() || snapshot.chainId !== 11155111) throw new WalletSelectionChangedError();
+      saveWalletConsent(key, { connectorId: captured.connectorId, account: snapshot.account, chainId: snapshot.chainId });
     },
     async restore(signal) {
       const consent = savedConsent(key);
-      if (signal.aborted || !consent || cleanupFailed || cleanupLease || pendingAttempt || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return null;
+      const captured = ownedConnection;
+      if (signal.aborted || !consent || !captured || !sameConsent(captured.restoreConsent ?? null, consent) || cleanupFailed || cleanupLease || pendingAttempt || !matchesConnection(current, captured) || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return null;
       const raw = appKit.getProvider<unknown>("eip155");
-      if (!isWalletProvider(raw)) return null;
+      if (!isWalletProvider(raw) || raw !== captured.provider) return null;
       if (consent.connectorId === "walletConnect" && (raw !== adapter.getWalletConnectProvider() || !hasAuthorizedRestoreSession(raw, consent))) return null;
       const provider = bridgeProvider(raw);
       for (let read = 0; read < 2; read++) {
@@ -471,7 +627,12 @@ function createChooser({ appKit, adapter }: AppKitRuntime, key?: string): Wallet
     },
     async connect(signal) {
       if (cleanupFailed) throw new WalletChooserReloadError();
+      if (ownedConnection) {
+        await cleanupOwned("release");
+        disconnecting = undefined;
+      }
       if (cleanupLease) throw new WalletChooserBusyError();
+      if (current.active) throw new WalletChooserReloadError();
       if (pendingAttempt) throw new WalletChooserBusyError();
       const attempt = adapter.beginAttempt();
       ownedAttempt = attempt;
@@ -523,8 +684,12 @@ function createChooser({ appKit, adapter }: AppKitRuntime, key?: string): Wallet
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }
-            connectedConnector = key ? ConnectorController.getConnectorId("eip155") : undefined;
-            connectedProvider = rawProvider;
+            const connectorId = key ? ConnectorController.getConnectorId("eip155") : undefined;
+            if (key && !connectorId) throw new WalletSelectionChangedError();
+            const captured = captureConnection(current, rawProvider, connectorId);
+            current.active = captured;
+            current.adoption = undefined;
+            ownedConnection = captured;
             settled = true;
             connected = true;
             adapter.finishAttempt(attempt);
@@ -601,42 +766,8 @@ function createChooser({ appKit, adapter }: AppKitRuntime, key?: string): Wallet
         }
       }
     },
-    async disconnect() {
-      if (disconnecting) return disconnecting;
-      if (cleanupLease && cleanupLease.owner !== owner) return cleanupLease.promise;
-      if (!connected && !ownedAttempt) return;
-      disconnecting = (async () => {
-        let failure: unknown;
-        try { await appKit.close(); }
-        catch (error) { failure = error; }
-        if (connected) {
-          const walletConnect = appKit.getWalletProviderType() === "WALLET_CONNECT";
-          let walletConnectCleanupFailed = false;
-          if (walletConnect) {
-            try { await adapter.disconnectWalletConnectSession(); }
-            catch (error) {
-              walletConnectCleanupFailed = true;
-              failure ??= error;
-            }
-          }
-          if (!walletConnectCleanupFailed) {
-            try { await appKit.disconnect("eip155"); }
-            catch (error) { failure ??= error; }
-          }
-        }
-        if (ownedAttempt) await ownedAttempt.settled;
-        if (cleanupFailed) failure ??= new WalletChooserReloadError();
-        connected = false;
-        ownedAttempt = undefined;
-        if (failure) throw new WalletChooserReloadError();
-      })();
-      const lease = { owner, promise: disconnecting };
-      cleanupLease = lease;
-      void disconnecting.then(() => {
-        if (cleanupLease === lease) cleanupLease = undefined;
-      }, () => { cleanupFailed = true; });
-      return disconnecting;
-    }
+    release: () => cleanupOwned("release"),
+    disconnect: () => cleanupOwned("disconnect")
   };
 }
 

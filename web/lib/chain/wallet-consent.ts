@@ -22,7 +22,9 @@ export function sameConsent(left: WalletConsent | null, right: WalletConsent | n
   return left !== null && right !== null && left.id === right.id && left.connectorId === right.connectorId && left.chainId === right.chainId && left.account.toLowerCase() === right.account.toLowerCase();
 }
 
-export function revokeWalletConsent(key: string) {
+export type WalletConsentRevocation = "global" | "tab-only";
+
+export function revokeWalletConsent(key: string): WalletConsentRevocation {
   let recorded = false;
   try {
     const raw = window.localStorage.getItem(key);
@@ -33,11 +35,12 @@ export function revokeWalletConsent(key: string) {
   } catch { /* Local deletion can still persist revocation. */ }
   try {
     window.localStorage.removeItem(key);
-    if (window.localStorage.getItem(key) === null) return;
+    if (window.localStorage.getItem(key) === null) return "global";
   } catch { /* Some browsers permit replacement but reject deletion. */ }
   try {
     window.localStorage.setItem(key, "null");
-    if (window.localStorage.getItem(key) === "null") return;
+    if (window.localStorage.getItem(key) === "null") return "global";
   } catch { /* The per-generation tab record remains authoritative when available. */ }
-  if (!recorded) throw new Error("Disconnected. Browser storage could not save this change. Close this tab before returning.");
+  if (recorded) return "tab-only";
+  throw new Error("Disconnected, but LABx may reconnect on your next visit. Disconnect LABx in your wallet or clear site data.");
 }

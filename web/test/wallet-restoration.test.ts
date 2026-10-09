@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserWalletSession, type WalletChooser } from "../lib/chain/wallet-connectors";
+import { BrowserWalletSession, type WalletChooser, WalletSelectionChangedError } from "../lib/chain/wallet-connectors";
 import { consentKey, readWalletConsent, saveWalletConsent } from "../lib/chain/wallet-consent";
 import type { WalletProvider } from "../lib/chain/types";
 
 const account = "0x1111111111111111111111111111111111111111";
 const other = "0x2222222222222222222222222222222222222222";
 const project = "a".repeat(32), scope = "3:11155111:raffle:runtime";
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 function environment() {
   const records = new Map<string, string>();
   const listeners = new Set<(event: { key: string }) => void>();
@@ -38,7 +44,7 @@ describe("authorized read-only wallet restoration", () => {
     const env = environment();
     saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
     const p = provider();
-    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(async () => p.result), disconnect: vi.fn(async () => {}) };
+    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(async () => p.result), release: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
     const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
     expect(await wallet.restore()).toMatchObject({ kind: "connected", account, chainId: 11155111 });
     expect(p.calls).toEqual(["eth_accounts", "eth_chainId", "eth_chainId", "eth_accounts"]);
@@ -52,10 +58,11 @@ describe("authorized read-only wallet restoration", () => {
     const env = environment();
     saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
     const p = provider(other);
-    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(async () => p.result), disconnect: vi.fn(async () => {}) };
+    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(async () => p.result), release: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
     const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
     expect(await wallet.restore()).toMatchObject({ kind: "disconnected" });
     expect(chooser.disconnect).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(chooser.release).toHaveBeenCalledOnce());
   });
   it.each(["no accounts", "wrong network", "account changed during second read"])("does not restore %s", async failure => {
     const env = environment();
@@ -80,14 +87,15 @@ describe("authorized read-only wallet restoration", () => {
     const p = provider();
     let release = (_provider: WalletProvider) => {};
     const wait = new Promise<WalletProvider>(resolve => { release = resolve; });
-    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(() => wait), disconnect: vi.fn(async () => {}) };
+    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(() => wait), release: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
     const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
     const pending = wallet.restore();
     await vi.waitFor(() => expect(chooser.restore).toHaveBeenCalled());
     wallet.disconnect(); release(p.result);
     expect(await pending).toMatchObject({ kind: "disconnected" });
     expect(readWalletConsent(env.key)).toBeNull(); expect(p.calls).toEqual([]);
-    expect(chooser.disconnect).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(chooser.disconnect).toHaveBeenCalledOnce());
+    expect(chooser.release).not.toHaveBeenCalled();
   });
   it("retires cross-tab restoration without deleting the newer tab's consent", async () => {
     const env = environment();
@@ -95,7 +103,7 @@ describe("authorized read-only wallet restoration", () => {
     const p = provider();
     let release = (_provider: WalletProvider) => {};
     const wait = new Promise<WalletProvider>(resolve => { release = resolve; });
-    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(() => wait), disconnect: vi.fn(async () => {}) };
+    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(() => wait), release: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
     const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
     const pending = wallet.restore();
     await vi.waitFor(() => expect(chooser.restore).toHaveBeenCalled());
@@ -105,6 +113,8 @@ describe("authorized read-only wallet restoration", () => {
     expect(await pending).toMatchObject({ kind: "disconnected" });
     expect(readWalletConsent(env.key)).toEqual(newer);
     expect(p.calls).toEqual([]);
+    await vi.waitFor(() => expect(chooser.release).toHaveBeenCalledOnce());
+    expect(chooser.disconnect).not.toHaveBeenCalled();
   });
   it("keeps disconnect across reload when localStorage mutation fails", async () => {
     const env = environment();
@@ -119,6 +129,7 @@ describe("authorized read-only wallet restoration", () => {
     const reloaded = new BrowserWalletSession(undefined, 11155111, project, load, scope);
     expect(await reloaded.restore()).toMatchObject({ kind: "disconnected" });
     expect(load).not.toHaveBeenCalled();
+    expect(wallet.getConnectionStatus()).toMatchObject({ kind: "error", message: expect.stringContaining("Other tabs may still reconnect") });
     vi.restoreAllMocks();
     saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
     expect(readWalletConsent(env.key)).not.toBeNull();
@@ -132,8 +143,93 @@ describe("authorized read-only wallet restoration", () => {
     const wallet = new BrowserWalletSession(undefined, 11155111, project, vi.fn(), scope);
     wallet.disconnect();
     expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
-    expect(wallet.getConnectionStatus()).toMatchObject({ kind: "error", message: expect.stringContaining("could not save") });
+    expect(wallet.getConnectionStatus()).toMatchObject({ kind: "error", message: expect.stringContaining("clear site data") });
     vi.restoreAllMocks();
+  });
+  it("connects when old consent cannot be removed", async () => {
+    const env = environment();
+    saveWalletConsent(env.key, { connectorId: "metamask", account: other, chainId: 11155111 });
+    vi.spyOn(env.storage, "removeItem").mockImplementation(() => { throw new Error("storage deletion refused"); });
+    const p = provider();
+    const chooser: WalletChooser = { connect: vi.fn(async () => p.result), disconnect: vi.fn(async () => {}) };
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
+
+    await expect(wallet.connect()).resolves.toMatchObject({ kind: "connected", account });
+    expect(chooser.disconnect).not.toHaveBeenCalled();
+  });
+  it("keeps an approved connection when consent storage fails", async () => {
+    const env = environment();
+    const p = provider();
+    const chooser: WalletChooser = {
+      connect: vi.fn(async () => p.result),
+      remember: () => saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 }),
+      disconnect: vi.fn(async () => {})
+    };
+    vi.spyOn(env.storage, "setItem").mockImplementation(() => { throw new Error("storage write refused"); });
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
+
+    await expect(wallet.connect()).resolves.toMatchObject({ kind: "connected", account });
+    expect(wallet.getConnectionStatus()).toMatchObject({ kind: "error", message: expect.stringContaining("not be remembered") });
+    expect(chooser.disconnect).not.toHaveBeenCalled();
+  });
+  it("keeps selected-wallet mismatch fail-closed", async () => {
+    const env = environment();
+    const p = provider();
+    const chooser: WalletChooser = {
+      connect: vi.fn(async () => p.result),
+      remember: () => { throw new WalletSelectionChangedError(); },
+      disconnect: vi.fn(async () => {})
+    };
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => chooser, scope);
+
+    await expect(wallet.connect()).rejects.toThrow(/selected wallet changed/);
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(chooser.disconnect).toHaveBeenCalledOnce());
+    expect(readWalletConsent(env.key)).toBeNull();
+  });
+  it("fully tears down a chooser that loads after explicit disconnect", async () => {
+    const env = environment();
+    saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
+    const loading = deferred<WalletChooser>();
+    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(), release: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
+    const load = vi.fn(() => loading.promise);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, load, scope);
+
+    const pending = wallet.restore();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    wallet.disconnect();
+    loading.resolve(chooser);
+
+    await expect(pending).resolves.toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(chooser.disconnect).toHaveBeenCalledOnce());
+    expect(chooser.release).not.toHaveBeenCalled();
+  });
+  it("waits for local restore release before starting a new chooser", async () => {
+    const env = environment();
+    saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
+    const restoreProvider = deferred<WalletProvider>();
+    const released = deferred<void>();
+    const restoredChooser: WalletChooser = {
+      connect: vi.fn(),
+      restore: vi.fn(() => restoreProvider.promise),
+      release: vi.fn(() => released.promise),
+      disconnect: vi.fn(async () => {})
+    };
+    const p = provider();
+    const nextChooser: WalletChooser = { connect: vi.fn(async () => p.result), disconnect: vi.fn(async () => {}) };
+    const load = vi.fn().mockResolvedValueOnce(restoredChooser).mockResolvedValueOnce(nextChooser);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, load, scope);
+    const restoring = wallet.restore();
+    await vi.waitFor(() => expect(restoredChooser.restore).toHaveBeenCalledOnce());
+
+    const connecting = wallet.connect();
+    await vi.waitFor(() => expect(restoredChooser.release).toHaveBeenCalledOnce());
+    expect(nextChooser.connect).not.toHaveBeenCalled();
+    released.resolve();
+    restoreProvider.resolve(p.result);
+
+    await expect(restoring).resolves.toMatchObject({ kind: "disconnected" });
+    await expect(connecting).resolves.toMatchObject({ kind: "connected", account });
   });
   it("retires pending restoration on disposal and never restores a disposed session", async () => {
     const env = environment();
@@ -141,7 +237,7 @@ describe("authorized read-only wallet restoration", () => {
     const p = provider();
     let release = (_provider: WalletProvider) => {};
     const wait = new Promise<WalletProvider>(resolve => { release = resolve; });
-    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(() => wait), disconnect: vi.fn(async () => {}) };
+    const chooser: WalletChooser = { connect: vi.fn(), restore: vi.fn(() => wait), release: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
     const load = vi.fn(async () => chooser);
     const wallet = new BrowserWalletSession(undefined, 11155111, project, load, scope);
     const pending = wallet.restore();
@@ -150,6 +246,8 @@ describe("authorized read-only wallet restoration", () => {
     expect(await pending).toMatchObject({ kind: "disconnected" });
     expect(await wallet.restore()).toMatchObject({ kind: "disconnected" });
     expect(load).toHaveBeenCalledTimes(1); expect(p.calls).toEqual([]);
+    await vi.waitFor(() => expect(chooser.release).toHaveBeenCalledOnce());
+    expect(chooser.disconnect).not.toHaveBeenCalled();
   });
 
 });

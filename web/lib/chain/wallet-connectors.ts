@@ -14,6 +14,7 @@ export interface WalletChooser {
   connect(signal: AbortSignal): Promise<WalletProvider>;
   restore?(signal: AbortSignal): Promise<WalletProvider | null>;
   remember?(snapshot: Extract<WalletSnapshot, { kind: "connected" }>): void;
+  release?(): Promise<void>;
   disconnect(): Promise<void>;
 }
 
@@ -26,6 +27,12 @@ export class WalletChooserBusyError extends Error {
 export class WalletChooserReloadError extends Error {
   constructor() {
     super("The wallet chooser could not initialize safely. Reload this page before retrying.");
+  }
+}
+
+export class WalletSelectionChangedError extends Error {
+  constructor() {
+    super("The selected wallet changed before it could be saved. Connect it again.");
   }
 }
 
@@ -48,10 +55,12 @@ export class BrowserWalletSession extends WalletSession {
   private abort: AbortController | undefined;
   private chooser: WalletChooser | undefined;
   private cleanup: Promise<void> = Promise.resolve();
+  private cleanupFailed = false;
   private inFlight: Promise<WalletSnapshot> | undefined;
   private activeOwner: object | undefined;
   private restoring = false;
   private restorationDisposed = false;
+  private disposing = false;
   private retireStorageListener = () => {};
   readonly connectionOptions: readonly ConnectionOption[];
 
@@ -67,13 +76,13 @@ export class BrowserWalletSession extends WalletSession {
       const onStorage = (event: StorageEvent) => {
         if (event.key === null || event.key === consentKey(this.projectId, restoreScope)) {
           ++this.attempt;
-          this.abort?.abort();
+          this.abort?.abort("release");
           this.restoring = false;
           this.inFlight = undefined;
           this.activeOwner = undefined;
           super.disconnect();
           this.replaceProvider(undefined);
-          this.chooser = undefined;
+          this.retire("release");
           this.status({ kind: "idle" });
         }
       };
@@ -96,14 +105,23 @@ export class BrowserWalletSession extends WalletSession {
     this.notify();
   }
 
-  private retire() {
-    this.abort?.abort();
+  private retire(mode: "disconnect" | "release") {
+    this.abort?.abort(mode);
     this.abort = undefined;
     const chooser = this.chooser;
     this.chooser = undefined;
     if (!chooser) return;
-    const attempt = this.attempt;
-    this.cleanup = this.cleanup.catch(() => {}).then(() => bounded(chooser.disconnect(), 8_000)).catch(error => {
+    this.queueCleanup(chooser, mode, this.attempt);
+  }
+
+  private queueCleanup(chooser: WalletChooser, mode: "disconnect" | "release", attempt: number) {
+    const cleanup = mode === "disconnect"
+      ? () => chooser.disconnect()
+      : chooser.release
+        ? () => chooser.release!()
+        : () => Promise.reject(new WalletChooserReloadError());
+    this.cleanup = this.cleanup.catch(() => {}).then(() => bounded(cleanup(), 8_000)).catch(error => {
+      this.cleanupFailed = true;
       if (attempt === this.attempt && this.connection.kind === "idle") {
         this.status({
           kind: "error",
@@ -115,7 +133,18 @@ export class BrowserWalletSession extends WalletSession {
     });
   }
 
-  override dispose() { this.restorationDisposed = true; this.retireStorageListener(); super.dispose(); }
+  private async waitForCleanup() {
+    await this.cleanup;
+    if (this.cleanupFailed) throw new WalletChooserReloadError();
+  }
+
+  override dispose() {
+    this.restorationDisposed = true;
+    this.retireStorageListener();
+    this.disposing = true;
+    try { super.dispose(); }
+    finally { this.disposing = false; }
+  }
 
   restore(): Promise<WalletSnapshot> {
     if (this.restorationDisposed) return Promise.resolve(this.getSnapshot());
@@ -132,12 +161,21 @@ export class BrowserWalletSession extends WalletSession {
     this.restoring = true;
     const promise = (async () => {
       try {
-        await this.cleanup;
+        await this.waitForCleanup();
         this.active(attempt, abort);
         const project = this.projectId;
         if (this.chainId !== 31337 && !project) return this.getSnapshot();
-        const chooser = this.chainId === 31337 || !project ? undefined : await bounded(this.loadChooser(project, this.restoreScope), 20_000);
+        const loading = this.chainId === 31337 || !project ? undefined : this.loadChooser(project, this.restoreScope);
+        if (loading) {
+          void loading.then(chooser => {
+            if (attempt !== this.attempt || abort.signal.aborted) {
+              this.queueCleanup(chooser, abort.signal.reason === "disconnect" ? "disconnect" : "release", attempt);
+            }
+          }, () => {});
+        }
+        const chooser = loading ? await bounded(loading, 20_000) : undefined;
         this.active(attempt, abort);
+        this.chooser = chooser;
         const provider = this.chainId === 31337 ? this.localInjected : await chooser?.restore?.(abort.signal);
         this.active(attempt, abort);
         if (!provider || !sameConsent(readWalletConsent(key), expectedConsent)) return this.getSnapshot();
@@ -151,13 +189,16 @@ export class BrowserWalletSession extends WalletSession {
           this.replaceProvider(undefined);
           return this.getSnapshot();
         }
-        this.chooser = chooser;
         return snapshot;
       } catch {
         if (attempt === this.attempt) this.replaceProvider(undefined);
         return this.getSnapshot();
       } finally {
-        if (attempt === this.attempt) { this.inFlight = undefined; this.restoring = false; }
+        if (attempt === this.attempt) {
+          if (this.getSnapshot().kind !== "connected") this.retire("release");
+          this.inFlight = undefined;
+          this.restoring = false;
+        }
       }
     })();
     this.inFlight = promise;
@@ -165,14 +206,30 @@ export class BrowserWalletSession extends WalletSession {
   }
 
   override disconnect() {
+    if (this.disposing) {
+      this.restoring = false;
+      ++this.attempt;
+      super.disconnect();
+      this.retire("release");
+      this.inFlight = undefined;
+      this.activeOwner = undefined;
+      this.status({ kind: "idle" });
+      return;
+    }
     let persistenceError: string | undefined;
     if (this.restoreScope && typeof window !== "undefined") {
-      try { revokeWalletConsent(consentKey(this.projectId, this.restoreScope)); } catch { persistenceError = "Disconnected. Browser storage could not save this change. Close this tab before returning."; }
+      try {
+        if (revokeWalletConsent(consentKey(this.projectId, this.restoreScope)) === "tab-only") {
+          persistenceError = "Disconnected in this tab. Other tabs may still reconnect this wallet. Disconnect LABx in your wallet or clear site data to prevent that.";
+        }
+      } catch (error) {
+        persistenceError = error instanceof Error ? error.message : "Disconnected, but LABx may reconnect on your next visit. Disconnect LABx in your wallet or clear site data.";
+      }
     }
     this.restoring = false;
     ++this.attempt;
     super.disconnect();
-    this.retire();
+    this.retire("disconnect");
     this.inFlight = undefined;
     this.activeOwner = undefined;
     this.status(persistenceError ? { kind: "error", message: persistenceError } : { kind: "idle" });
@@ -180,7 +237,15 @@ export class BrowserWalletSession extends WalletSession {
 
   override connect(options: WalletConnectOptions = {}): Promise<WalletSnapshot> {
     const connector = options.connector ?? "appkit";
-    if (this.restoring) { ++this.attempt; this.abort?.abort(); this.inFlight = undefined; this.restoring = false; this.replaceProvider(undefined); }
+    const retiringRestore = this.restoring;
+    if (retiringRestore) {
+      ++this.attempt;
+      this.abort?.abort("release");
+      this.inFlight = undefined;
+      this.restoring = false;
+      this.replaceProvider(undefined);
+      this.retire("release");
+    }
     if (this.inFlight) {
       if (this.activeOwner === options.owner) return this.inFlight;
       return Promise.reject(new WalletChooserBusyError());
@@ -190,9 +255,12 @@ export class BrowserWalletSession extends WalletSession {
       this.status({ kind: "error", message: unavailable });
       return Promise.reject(new Error(unavailable));
     }
-    if (this.restoreScope && typeof window !== "undefined") window.localStorage.removeItem(consentKey(this.projectId, this.restoreScope));
+    if (this.restoreScope && typeof window !== "undefined") {
+      try { revokeWalletConsent(consentKey(this.projectId, this.restoreScope)); }
+      catch { /* A storage failure must not block an explicit wallet connection. */ }
+    }
     const attempt = ++this.attempt;
-    this.retire();
+    if (!retiringRestore) this.retire("disconnect");
     this.replaceProvider(undefined);
     const abort = new AbortController();
     this.abort = abort;
@@ -213,7 +281,7 @@ export class BrowserWalletSession extends WalletSession {
     if (this.getSnapshot().kind === "connected") return;
     ++this.attempt;
     super.disconnect();
-    this.retire();
+    this.retire("disconnect");
     this.inFlight = undefined;
     this.activeOwner = undefined;
     this.status({ kind: "idle" });
@@ -225,14 +293,20 @@ export class BrowserWalletSession extends WalletSession {
 
   private async establish(attempt: number, abort: AbortController): Promise<WalletSnapshot> {
     try {
-      await this.cleanup;
+      await this.waitForCleanup();
       this.active(attempt, abort);
       if (this.chainId === 31337) {
         this.replaceProvider(this.localInjected);
         const snapshot = await super.connect();
         this.active(attempt, abort);
-        if (this.restoreScope && snapshot.kind === "connected") saveWalletConsent(consentKey(this.projectId, this.restoreScope), { connectorId: "local-injected", account: snapshot.account, chainId: snapshot.chainId });
-        this.status({ kind: "idle" });
+        let persistenceFailed = false;
+        if (this.restoreScope && snapshot.kind === "connected") {
+          try { saveWalletConsent(consentKey(this.projectId, this.restoreScope), { connectorId: "local-injected", account: snapshot.account, chainId: snapshot.chainId }); }
+          catch { persistenceFailed = true; }
+        }
+        this.status(persistenceFailed
+          ? { kind: "error", message: "Connected for this tab, but this wallet will not be remembered after reload because browser storage is unavailable." }
+          : { kind: "idle" });
         return snapshot;
       }
       if (!this.projectId) throw new Error("Wallet connection is not configured.");
@@ -251,8 +325,15 @@ export class BrowserWalletSession extends WalletSession {
       if (snapshot.kind !== "connected" || snapshot.chainId !== 11155111) {
         throw new Error("Connect Ethereum Sepolia to continue.");
       }
-      chooser.remember?.(snapshot);
-      this.status({ kind: "idle" });
+      let persistenceFailed = false;
+      try { chooser.remember?.(snapshot); }
+      catch (error) {
+        if (error instanceof WalletSelectionChangedError) throw error;
+        persistenceFailed = true;
+      }
+      this.status(persistenceFailed
+        ? { kind: "error", message: "Connected for this tab, but this wallet will not be remembered after reload because browser storage is unavailable." }
+        : { kind: "idle" });
       return snapshot;
     } catch (error) {
       if (attempt === this.attempt) {
@@ -260,7 +341,7 @@ export class BrowserWalletSession extends WalletSession {
           try { window.localStorage.removeItem(consentKey(this.projectId, this.restoreScope)); } catch {}
         }
         super.disconnect();
-        this.retire();
+        this.retire("disconnect");
         const message = error instanceof WalletChooserBusyError || error instanceof WalletChooserReloadError
           ? error.message
           : error instanceof Error && /still pending|finish or reject/i.test(error.message)

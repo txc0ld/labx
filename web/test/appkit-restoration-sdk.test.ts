@@ -20,10 +20,17 @@ vi.mock("@reown/appkit", async importOriginal => {
       const { ConnectorController } = await import("@reown/appkit-controllers");
       const adapter = this.chainAdapters?.eip155 as EthersAdapter;
       sdk.adapter = adapter;
-      const connector = { id: "fixture-injected", name: "Fixture", type: "INJECTED", chain: "eip155", provider: sdk.provider } as EthersAdapter["connectors"][number];
-      Object.defineProperty(adapter, "connectors", { configurable: true, get: () => [connector] });
-      ConnectorController.setConnectors([connector]);
+      if (sdk.selected === "walletConnect") {
+        await adapter.setUniversalProvider(sdk.provider as Parameters<EthersAdapter["setUniversalProvider"]>[0]);
+        (this as unknown as { universalProvider: unknown }).universalProvider = sdk.provider;
+        ConnectorController.setConnectors(adapter.connectors);
+      } else {
+        const connector = { id: "fixture-injected", name: "Fixture", type: "INJECTED", chain: "eip155", provider: sdk.provider } as EthersAdapter["connectors"][number];
+        Object.defineProperty(adapter, "connectors", { configurable: true, get: () => [connector] });
+        ConnectorController.setConnectors([connector]);
+      }
       ConnectorController.setConnectorId(sdk.selected, "eip155");
+      this.listenAdapter("eip155");
       this.initAdapterController();
     }
   } };
@@ -38,16 +45,36 @@ async function setup(selected = "fixture-injected", liveAccount = account) {
   vi.stubGlobal("localStorage", storage);
   sdk.selected = selected;
   const requests: string[] = [];
-  sdk.provider = Object.assign(new EventEmitter(), { request: async ({ method }: { method: string }) => {
+  const provider = Object.assign(new EventEmitter(), { request: async ({ method }: { method: string }) => {
     requests.push(method);
     if (method === "eth_accounts") return [liveAccount];
     if (method === "eth_chainId") return "0xaa36a7";
     throw new Error(`Forbidden restoration request ${method}`);
-  } });
+  } }) as EventEmitter & {
+    request(input: { method: string }): Promise<unknown>;
+    session?: { topic: string; expiry: number; peer: { metadata: { name: string; description: string; url: string; icons: string[] } }; namespaces: { eip155: { accounts: string[]; methods: string[]; events: string[] } } };
+    disconnect?: ReturnType<typeof vi.fn>;
+  };
+  if (selected === "walletConnect") {
+    Object.assign(provider, {
+      session: {
+        topic: "restored-walletconnect-topic",
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        peer: { metadata: { name: "Fixture wallet", description: "Fixture", url: "https://wallet.test", icons: [] } },
+        namespaces: { eip155: { accounts: [`eip155:11155111:${liveAccount}`], methods: ["personal_sign", "eth_sendTransaction"], events: ["accountsChanged", "chainChanged"] } }
+      },
+      disconnect: vi.fn(async () => {
+        const topic = provider.session?.topic;
+        provider.session = undefined;
+        provider.emit("session_delete", { topic });
+      })
+    });
+  }
+  sdk.provider = provider;
   const { ApiController, CoreHelperUtil } = await import("@reown/appkit-controllers");
   vi.spyOn(ApiController, "fetchUsage").mockResolvedValue(undefined);
   vi.spyOn(CoreHelperUtil, "isMobile").mockReturnValue(false);
-  const consent = saveWalletConsent(consentKey(project, scope), { connectorId: "fixture-injected", account, chainId: 11155111 });
+  const consent = saveWalletConsent(consentKey(project, scope), { connectorId: selected, account, chainId: 11155111 });
   return { requests, consent };
 }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); sdk.provider = undefined; sdk.adapter = undefined; sdk.instance = undefined; });
@@ -66,6 +93,52 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
     const chooser = await createAppKitProvider(project, scope);
     expect(await chooser.restore?.(new AbortController().signal)).toBeNull();
     expect(requests).toEqual([]);
+  });
+  it("releases an adopted injected provider without revoking wallet permissions", async () => {
+    const { requests } = await setup();
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+
+    await chooser.release?.();
+
+    expect(sdk.instance?.getAccount("eip155")?.isConnected).toBe(false);
+    expect(requests).toEqual(["eth_accounts", "eth_chainId"]);
+    expect(requests).not.toContain("wallet_getPermissions");
+    expect(requests).not.toContain("wallet_revokePermissions");
+  });
+  it("restores the exact WalletConnect session through the installed SDK without prompt methods", async () => {
+    const { requests } = await setup("walletConnect");
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+
+    expect(sdk.instance?.getAccount("eip155")).toMatchObject({ isConnected: true, address: account });
+    expect(await chooser.restore?.(new AbortController().signal)).not.toBeNull();
+    expect(requests).toEqual(["eth_chainId", "eth_accounts", "eth_chainId", "eth_accounts"]);
+    expect(requests).not.toContain("eth_requestAccounts");
+  });
+  it("releases an adopted WalletConnect session locally without deleting it", async () => {
+    const { requests } = await setup("walletConnect");
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string }; disconnect: ReturnType<typeof vi.fn> };
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+
+    await chooser.release?.();
+
+    expect(provider.disconnect).not.toHaveBeenCalled();
+    expect(provider.session?.topic).toBe("restored-walletconnect-topic");
+    expect(sdk.instance?.getAccount("eip155")?.isConnected).toBe(false);
+    expect(requests).toEqual([]);
+  });
+  it("deletes the captured WalletConnect session on explicit disconnect", async () => {
+    await setup("walletConnect");
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string }; disconnect: ReturnType<typeof vi.fn> };
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+
+    await chooser.disconnect();
+
+    expect(provider.disconnect).toHaveBeenCalledOnce();
+    expect(provider.session).toBeUndefined();
   });
   it("rejects expired or mismatched WalletConnect authorization", async () => {
     const { consent } = await setup();
