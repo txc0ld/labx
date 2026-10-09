@@ -7,6 +7,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { MemoryStore } from "../lib/store";
 import { createReserve, readReserveRecord } from "../lib/reserve";
+import { STANDARD_MEMBERSHIP_TIERS } from "../lib/membership-tiers";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import type { WalletSessionPort } from "../lib/chain/ports";
 
@@ -27,13 +28,16 @@ run("isolated Anvil seller and membership journeys", () => {
     expect((await chain.service.confirm({ transaction, timeoutMs: 3000 })).kind).toBe("confirmed");
     return { prepared, transaction };
   }
+  function standardPacks(priceUsdc = 25_000_000n, bonusEntries = 3, maxSupply = 20): DraftInput["packs"] {
+    return STANDARD_MEMBERSHIP_TIERS.map((name) => ({ name, priceUsdc, bonusEntries, maxSupply }));
+  }
   async function draft(tokenId: bigint) {
     await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
     const store = new MemoryStore();
     const commitment = await createReserve(store, { nft: chain.nft.address, tokenId: String(tokenId), seller: chain.seller, publicSummary: "The escrowed token is the prize.", privateCommitment: `Local fixture ${tokenId}`, chainId: 31337n, labx: chain.raffle.address });
     const reveal = await readReserveRecord(store, commitment.commit);
     const latest = await chain.client.getBlock();
-    const input: DraftInput = { nft: chain.nft.address, tokenId, title: `Fixture ${tokenId}`, salesEnd: latest.timestamp + 1000n, reserveNonce: commitment.nonce, reserveCommit: commitment.commit, packs: [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 3, maxSupply: 20 }] };
+    const input: DraftInput = { nft: chain.nft.address, tokenId, title: `Fixture ${tokenId}`, salesEnd: latest.timestamp + 1000n, reserveNonce: commitment.nonce, reserveCommit: commitment.commit, packs: standardPacks() };
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
     await act({ kind: "createDraft", draft: input });
     return { id, input, reveal };
@@ -51,6 +55,75 @@ run("isolated Anvil seller and membership journeys", () => {
     expect(decodeFunctionData({ abi: erc20Abi, data: approval.prepared.data })).toMatchObject({ functionName: "approve", args: [chain.raffle.address, 52_500_000n] });
     return act({ kind: "buyMembership", id, packId: 0, quantity: 2, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } }, buyer);
   }
+  it("rejects nonstandard tier sequences before preparing a new draft", async () => {
+    await chain.write(chain.nft, "mint", [chain.seller, 7_001n]);
+    const block = await chain.client.getBlock();
+    const commitment = keccak256(toBytes("canonical-tier-boundary"));
+    const standardPacks: DraftInput["packs"] = [
+      { name: "Entry", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 },
+      { name: "Bronze", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 },
+      { name: "Silver", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 },
+      { name: "Gold", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 },
+      { name: "Platinum", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }
+    ];
+    const draft: DraftInput = {
+      nft: chain.nft.address,
+      tokenId: 7_001n,
+      salesEnd: block.timestamp + 3_600n,
+      reserveNonce: commitment,
+      reserveCommit: commitment,
+      title: "Canonical tier boundary",
+      packs: standardPacks
+    };
+    const invalidPacks: readonly DraftInput["packs"][] = [
+      standardPacks.slice(0, 4),
+      [standardPacks[1], standardPacks[0], ...standardPacks.slice(2)],
+      standardPacks.map((pack, index) => index === 2 ? { ...pack, name: "Custom" } : pack),
+      standardPacks.map((pack, index) => index === 4 ? { ...pack, name: "Gold" } : pack)
+    ];
+
+    for (const packs of invalidPacks) {
+      await expect(chain.service.prepare({ action: { kind: "createDraft", draft: { ...draft, packs } }, wallet: seller }))
+        .rejects.toThrow("Standard raffles require Entry, Bronze, Silver, Gold and Platinum in that order.");
+    }
+
+    const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
+    await act({ kind: "createDraft", draft });
+    await expect(chain.service.prepare({
+      action: { kind: "updateDraft", id, draft: { ...draft, packs: draft.packs.map((pack, index) => ({ ...pack, name: index === 0 ? "Bronze" : index === 1 ? "Entry" : pack.name })) } },
+      wallet: seller
+    })).rejects.toThrow("Standard raffles require Entry, Bronze, Silver, Gold and Platinum in that order.");
+  });
+
+  it("prepares expired legacy drafts with one, two or eight unchanged memberships", async () => {
+    const block = await chain.client.getBlock();
+    const expiredDeadline = block.timestamp + 60n;
+    const legacyCases: readonly { tokenId: bigint; title: string; packs: DraftInput["packs"] }[] = [
+      { tokenId: 7_011n, title: "Legacy one", packs: [{ name: "Founding", priceUsdc: 2_000_000n, bonusEntries: 1, maxSupply: 5 }] },
+      { tokenId: 7_012n, title: "Legacy two", packs: [
+        { name: "eNTRY", priceUsdc: 3_000_000n, bonusEntries: 2, maxSupply: 6 },
+        { name: "BASIC", priceUsdc: 7_000_000n, bonusEntries: 5, maxSupply: 9 }
+      ] },
+      { tokenId: 7_018n, title: "Legacy eight", packs: Array.from({ length: 8 }, (_, index) => ({ name: `Legacy ${index + 1}`, priceUsdc: BigInt(index + 1) * 1_000_000n, bonusEntries: index + 1, maxSupply: index + 2 })) }
+    ];
+    const drafts: { id: bigint; draft: DraftInput }[] = [];
+
+    for (const legacy of legacyCases) {
+      await chain.write(chain.nft, "mint", [chain.seller, legacy.tokenId]);
+      const commitment = keccak256(toBytes(`legacy-tier-${legacy.tokenId.toString()}`));
+      const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
+      await chain.write(chain.raffle, "createRaffle", [chain.nft.address, legacy.tokenId, expiredDeadline, commitment, commitment, legacy.title, legacy.packs], chain.seller);
+      drafts.push({ id, draft: { nft: chain.nft.address, tokenId: legacy.tokenId, salesEnd: expiredDeadline, reserveNonce: commitment, reserveCommit: commitment, title: legacy.title, packs: legacy.packs } });
+    }
+
+    await chain.warp(expiredDeadline);
+    const recoveryDeadline = (await chain.client.getBlock()).timestamp + 3_600n;
+    for (const { id, draft: legacyDraft } of drafts) {
+      const recovered = { ...legacyDraft, salesEnd: recoveryDeadline };
+      const prepared = await chain.service.prepare({ action: { kind: "updateDraft", id, draft: recovered }, wallet: seller });
+      expect(prepared.action).toEqual({ kind: "updateDraft", id, draft: recovered });
+    }
+  });
   it("runs draft edit, exact approvals, purchase, draw, reveal, settlement and separate claims", async () => {
     const { id, input, reveal } = await draft(1n);
     await act({ kind: "updateDraft", id, draft: { ...input, title: "Updated local fixture" } });

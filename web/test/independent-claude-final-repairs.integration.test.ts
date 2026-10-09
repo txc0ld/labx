@@ -8,6 +8,7 @@ import { createRaffleService } from "../lib/chain/service";
 import { createTransactionOutcomes, type OutcomeStorage } from "../lib/chain/transaction-outcomes";
 import type { CanonicalReceipt, OutcomeInspection, OutcomeLineage, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "../lib/chain/types";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_INDEPENDENT_TRANSACTION_LINEAGE === "1" ? describe : describe.skip;
 
@@ -56,7 +57,7 @@ run("independent final transaction outcome repairs", () => {
         reserveNonce: commitment,
         reserveCommit: commitment,
         title: label,
-        packs: [{ name: "Membership", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 4 }]
+        packs: standardMembershipPacks(() => ({ priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 4 }))
       }
     };
   }

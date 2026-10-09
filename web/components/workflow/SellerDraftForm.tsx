@@ -7,6 +7,7 @@ import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
 import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automatic-commitment";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
+import { STANDARD_MEMBERSHIP_TIERS } from "@/lib/membership-tiers";
 import { canApplyWalletNftSelection, fetchWalletNfts, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
@@ -14,6 +15,7 @@ import { useWalletSnapshot } from "./WalletGate";
 import formStyles from "./SellerDraftForm.module.css";
 
 type PackDraft = { id: string; name: string; price: string; bonusEntries: string; maxSupply: string };
+type PackEconomicsKey = "price" | "bonusEntries" | "maxSupply";
 type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
 type CommitmentPreparation = { key: string; input: { publicSummary: string; privateCommitment: string } };
 type InventoryState =
@@ -29,8 +31,13 @@ type DraftState =
   | { kind: "retained"; action: DraftInput }
   | { kind: "error"; message: string };
 
-const EMPTY_PACK = { name: "", price: "", bonusEntries: "", maxSupply: "" };
-const INITIAL: FormDraft = { nft: "", tokenId: "", title: "", closing: "", packs: [{ id: "initial-pack", ...EMPTY_PACK }] };
+const INITIAL: FormDraft = {
+  nft: "",
+  tokenId: "",
+  title: "",
+  closing: "",
+  packs: STANDARD_MEMBERSHIP_TIERS.map((name) => ({ id: `standard-${name.toLowerCase()}`, name, price: "", bonusEntries: "", maxSupply: "" }))
+};
 
 function NftPreview({ item }: { item: WalletNft }) {
   const [broken, setBroken] = useState(false);
@@ -106,14 +113,11 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const commitmentPreparation = useRef<CommitmentPreparation | null>(null);
   const commitmentInFlight = useRef(false);
   const focusAfterRender = useRef<"edit" | "review" | null>(null);
-  const focusAddAfterPackChange = useRef(false);
   const editFocus = useRef<HTMLInputElement>(null);
   const editStage = useRef<HTMLFieldSetElement>(null);
   const reviewFocus = useRef<HTMLHeadingElement>(null);
-  const addPackFocus = useRef<HTMLButtonElement>(null);
   const refreshFocus = useRef<HTMLButtonElement>(null);
   const loadMoreFocus = useRef<HTMLButtonElement>(null);
-  const nextPackId = useRef(form.packs.length);
   const inventoryGeneration = useRef(0);
   const inventoryAbort = useRef<AbortController | null>(null);
   const selectionGeneration = useRef(0);
@@ -166,12 +170,6 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }, [state.kind]);
 
   useEffect(() => {
-    if (!focusAddAfterPackChange.current) return;
-    focusAddAfterPackChange.current = false;
-    addPackFocus.current?.focus();
-  }, [form.packs.length]);
-
-  useEffect(() => {
     serviceRef.current = service;
     invalidateInventory();
     invalidateSelection();
@@ -219,21 +217,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     setState({ kind: "editing" });
   }
 
-  function updatePack(id: string, key: keyof Omit<PackDraft, "id">, value: string) {
+  function updatePack(id: string, key: PackEconomicsKey, value: string) {
     replaceForm((current) => ({ ...current, packs: current.packs.map((pack) => pack.id === id ? { ...pack, [key]: value } : pack) }));
-    setState({ kind: "editing" });
-  }
-
-  function removePack(id: string) {
-    focusAddAfterPackChange.current = true;
-    replaceForm((current) => ({ ...current, packs: current.packs.filter((pack) => pack.id !== id) }));
-    setState({ kind: "editing" });
-  }
-
-  function addPack() {
-    nextPackId.current += 1;
-    const id = `added-pack-${nextPackId.current}`;
-    replaceForm((current) => ({ ...current, packs: [...current.packs, { id, ...EMPTY_PACK }] }));
     setState({ kind: "editing" });
   }
 
@@ -474,9 +459,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
       <fieldset className={`${formStyles.formSection} ${formStyles.packSection}`}>
         <legend><span>03</span> Membership packs</legend>
-        <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>Configure 1–8 options. Price is charged in USDC; bonus entries and supply must be whole numbers.</p><span role="status" aria-live="polite" aria-atomic="true">{form.packs.length} of 8 configured</span></div>
-        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id}><legend>Membership {index + 1}</legend><div className={formStyles.packFields}><label>Name<input value={pack.name} onChange={(event) => updatePack(pack.id, "name", event.target.value)} required /></label><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div>{form.packs.length > 1 ? <button className={`${formStyles.removePack} text-link`} type="button" onClick={() => removePack(pack.id)}>Remove membership {index + 1}</button> : null}</fieldset>)}</div>
-        <button ref={addPackFocus} className="btn btn-dark" type="button" disabled={form.packs.length >= 8} onClick={addPack}>Add membership</button>
+        <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>{existing ? "This raffle keeps its existing membership names and order. Edit the price, bonus entries and supply for each pack; no pack is added or removed." : "Every new raffle uses the five standard tiers. Set the price, bonus entries and supply for each tier."}</p><span>{existing ? `${form.packs.length} existing membership${form.packs.length === 1 ? "" : "s"}` : "5 standard tiers"}</span></div>
+        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id}><legend><span>Membership {index + 1}</span><strong>{pack.name}</strong></legend><div className={formStyles.packFields}><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div></fieldset>)}</div>
       </fieldset>
 
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}

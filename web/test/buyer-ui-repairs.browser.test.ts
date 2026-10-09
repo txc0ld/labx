@@ -6,6 +6,7 @@ import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_BUYER_UI_REPAIRS_BROWSER === "1" ? describe : describe.skip;
 
@@ -65,17 +66,17 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await chain.write(chain.nft, "mint", [chain.seller, 903n]);
     await chain.write(chain.usdc, "mint", [chain.buyer, 2_000_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.stranger, 2_000_000_000n]);
-    expect(await createOpenRaffle(901n, "Exact selection raffle", [
-      { name: "Entry", priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 20 },
-      { name: "Gold", priceUsdc: 50_000_000n, bonusEntries: 7, maxSupply: 20 }
-    ])).toBe(1n);
-    expect(await createOpenRaffle(902n, "Recovery account raffle", [
-      { name: "Entry", priceUsdc: 15_000_000n, bonusEntries: 1, maxSupply: 20 }
-    ])).toBe(2n);
-    expect(await createOpenRaffle(903n, "Refreshing selection raffle", [
-      { name: "Limited", priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 1 },
-      { name: "Available", priceUsdc: 20_000_000n, bonusEntries: 2, maxSupply: 20 }
-    ])).toBe(3n);
+    expect(await createOpenRaffle(901n, "Exact selection raffle", standardMembershipPacks((tier) => ({
+      priceUsdc: tier === "Entry" ? 10_000_000n : tier === "Gold" ? 50_000_000n : 20_000_000n,
+      bonusEntries: tier === "Gold" ? 7 : 1,
+      maxSupply: 20
+    })))).toBe(1n);
+    expect(await createOpenRaffle(902n, "Recovery account raffle", standardMembershipPacks(() => ({ priceUsdc: 15_000_000n, bonusEntries: 1, maxSupply: 20 })))).toBe(2n);
+    expect(await createOpenRaffle(903n, "Refreshing selection raffle", standardMembershipPacks((tier) => ({
+      priceUsdc: tier === "Entry" ? 10_000_000n : 20_000_000n,
+      bonusEntries: tier === "Entry" ? 1 : 2,
+      maxSupply: tier === "Entry" ? 1 : 20
+    })))).toBe(3n);
     fixture = await browserChain(chain, chain.buyer);
   }, 60_000);
 
@@ -176,10 +177,10 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await act({ kind: "buyMembership", id: 3n, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } }, stranger);
     await chain.write(chain.feed, "setAnswer", [0n]);
     await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
-    await fixture.page.getByText(/The selected pack is no longer available. Available is now selected/).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByText(/The selected pack is no longer available. Bronze is now selected/).waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.getByRole("button", { name: "Use USDC", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    expect(await fixture.page.getByRole("radio", { name: /Available/ }).isChecked()).toBe(true);
+    expect(await fixture.page.getByRole("radio", { name: /Bronze/ }).isChecked()).toBe(true);
     expect(await fixture.page.locator(".order-total").innerText()).toContain("22.5");
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
     await chain.write(chain.feed, "setAnswer", [2000_00000000n]);

@@ -6,6 +6,7 @@ import { createReserve } from "../lib/reserve";
 import { MemoryStore } from "../lib/store";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
 const run = process.env.RUN_CHAIN_INTEGRATION === "1" ? describe : describe.skip;
@@ -52,7 +53,7 @@ run("independent pending journal boundaries on isolated Anvil", () => {
       reserveNonce: commitment.nonce,
       reserveCommit: commitment.commit,
       title: `Journal ${tokenId}`,
-      packs: [{ name: "Membership", priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 2 }]
+      packs: standardMembershipPacks(() => ({ priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 2 }))
     };
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
     await confirmed(base, { kind: "createDraft", draft: input });

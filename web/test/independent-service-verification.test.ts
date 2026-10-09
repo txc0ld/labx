@@ -18,6 +18,7 @@ import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { MemoryStore } from "../lib/store";
 import { createReserve, readReserveRecord } from "../lib/reserve";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 
@@ -71,10 +72,11 @@ run("independent service verification on isolated Anvil", () => {
       reserveNonce: commitment.nonce,
       reserveCommit: commitment.commit,
       title: `Independent ${tokenId}`,
-      packs: [
-        { name: "Membership", priceUsdc: packPrice, bonusEntries: 3, maxSupply: 20 },
-        { name: "Patron membership", priceUsdc: 40_000_000n, bonusEntries: 7, maxSupply: 10 }
-      ]
+      packs: standardMembershipPacks((tier) => ({
+        priceUsdc: tier === "Entry" ? packPrice : 40_000_000n,
+        bonusEntries: tier === "Entry" ? 3 : 7,
+        maxSupply: tier === "Entry" ? 20 : 10
+      }))
     };
     const id = await chain.client.readContract({
       address: chain.raffle.address,

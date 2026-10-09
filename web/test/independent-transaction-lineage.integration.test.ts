@@ -7,6 +7,7 @@ import { createTransactionOutcomes, transactionMeaning, type OutcomeStorage, typ
 import { hash } from "../lib/chain/validation";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
 const run = process.env.RUN_INDEPENDENT_TRANSACTION_LINEAGE === "1" ? describe : describe.skip;
@@ -93,7 +94,7 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
           reserveNonce: digest,
           reserveCommit: digest,
           title: "Independent lineage draft",
-          packs: [{ name: "Entry", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }]
+          packs: standardMembershipPacks(() => ({ priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }))
         }
       },
       wallet

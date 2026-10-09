@@ -4,6 +4,7 @@ import type { Hex } from "viem";
 import { hash } from "../lib/chain/validation";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_INDEPENDENT_TRANSACTION_LINEAGE_BROWSER === "1" ? describe : describe.skip;
 
@@ -48,10 +49,7 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     await page.getByLabel("NFT contract").fill(chain.nft.address);
     await page.getByLabel("Token ID").fill("9101");
     await page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 3600n) * 1000).toISOString().slice(0, 16));
-    await page.getByLabel("Name", { exact: true }).fill("Entry");
-    await page.getByLabel("Price in USDC", { exact: true }).fill("1");
-    await page.getByLabel("Bonus entries", { exact: true }).fill("1");
-    await page.getByLabel("Supply", { exact: true }).fill("10");
+    await fillStandardMembershipEconomics(page, () => ({ price: "1", bonusEntries: "1", supply: "10" }));
     await page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
     await page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
     await page.getByRole("button", { name: "Create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });

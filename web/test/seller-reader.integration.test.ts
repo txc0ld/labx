@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes } from "viem";
 import { createRaffleService } from "../lib/chain/service";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
 const run = process.env.RUN_CHAIN_INTEGRATION === "1" ? describe : describe.skip;
@@ -44,7 +45,7 @@ run("seller discovery and financial activity", () => {
       reserveNonce: keccak256(toBytes(`nonce-${tokenId}`)),
       reserveCommit: keccak256(toBytes(`commit-${tokenId}`)),
       title: `Seller fixture ${tokenId}`,
-      packs: [{ name: "Member", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 20 }]
+      packs: standardMembershipPacks(() => ({ priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 20 }))
     };
     await act({ kind: "createDraft", draft: input }, seller);
   }

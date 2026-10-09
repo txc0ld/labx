@@ -7,6 +7,7 @@ import type { WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_BROWSER_ACCEPTANCE === "1" ? describe : describe.skip;
 
@@ -57,7 +58,7 @@ run("independent rendered catalog states on isolated Anvil", () => {
       reserveNonce: commitment.nonce,
       reserveCommit: commitment.commit,
       title,
-      packs: [{ name: "Membership", priceUsdc: 10_000_000n, bonusEntries: 2, maxSupply }]
+      packs: standardMembershipPacks(() => ({ priceUsdc: 10_000_000n, bonusEntries: 2, maxSupply }))
     };
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
     await act({ kind: "createDraft", draft }, seller);
@@ -89,16 +90,18 @@ run("independent rendered catalog states on isolated Anvil", () => {
     const later = initial.timestamp + 1_800n;
     const exhausted = await createOpen(602n, "Exhausted raffle", later, 1);
     const available = await createOpen(603n, "Available raffle", later, 3);
-    await act({ kind: "approveUsdc", id: exhausted, packId: 0, quantity: 1 }, buyer);
-    await act({
-      kind: "buyMembership",
-      id: exhausted,
-      packId: 0,
-      quantity: 1,
-      acceptedTerms: PUBLISHED_TERMS_HASH,
-      agreements: { terms: true, rules: true, age: true },
-      payment: { kind: "usdc" }
-    }, buyer);
+    for (let packId = 0; packId < 5; packId += 1) {
+      await act({ kind: "approveUsdc", id: exhausted, packId, quantity: 1 }, buyer);
+      await act({
+        kind: "buyMembership",
+        id: exhausted,
+        packId,
+        quantity: 1,
+        acceptedTerms: PUBLISHED_TERMS_HASH,
+        agreements: { terms: true, rules: true, age: true },
+        payment: { kind: "usdc" }
+      }, buyer);
+    }
     await chain.warp(initial.timestamp + 300n);
 
     await loadCatalog();

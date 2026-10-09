@@ -6,6 +6,7 @@ import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_INDEPENDENT_BUYER_STATE_BROWSER === "1" ? describe : describe.skip;
 
@@ -65,14 +66,12 @@ run("independent buyer state journeys", () => {
     await chain.write(chain.usdc, "mint", [chain.buyer, 2_000_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.stranger, 2_000_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.treasury, 2_000_000_000n]);
-    expect(await createOpenRaffle(951n, "Independent selection raffle", [
-      { name: "Entry", priceUsdc: 11_000_000n, bonusEntries: 1, maxSupply: 20 },
-      { name: "Aurora", priceUsdc: 27_000_000n, bonusEntries: 4, maxSupply: 20 },
-      { name: "Zenith", priceUsdc: 43_000_000n, bonusEntries: 9, maxSupply: 20 }
-    ])).toBe(1n);
-    expect(await createOpenRaffle(952n, "Independent delayed confirmation", [
-      { name: "Entry", priceUsdc: 12_000_000n, bonusEntries: 1, maxSupply: 20 }
-    ])).toBe(2n);
+    expect(await createOpenRaffle(951n, "Independent selection raffle", standardMembershipPacks((tier, index) => ({
+      priceUsdc: [11_000_000n, 27_000_000n, 43_000_000n, 55_000_000n, 70_000_000n][index] ?? 11_000_000n,
+      bonusEntries: [1, 4, 9, 12, 15][index] ?? 1,
+      maxSupply: 20
+    })))).toBe(1n);
+    expect(await createOpenRaffle(952n, "Independent delayed confirmation", standardMembershipPacks(() => ({ priceUsdc: 12_000_000n, bonusEntries: 1, maxSupply: 20 })))).toBe(2n);
     fixture = await browserChain(chain, chain.buyer);
   }, 60_000);
 
@@ -83,8 +82,8 @@ run("independent buyer state journeys", () => {
 
   it("purchases the third pack at quantity two after approval and keeps success through refresh", async () => {
     await openPiece(1n, chain.buyer);
-    const zenith = fixture.page.getByRole("radio", { name: /Zenith/ });
-    await fixture.page.locator("label.squishy-pack-card").filter({ hasText: "Zenith" }).click();
+    const silver = fixture.page.getByRole("radio", { name: /Silver/ });
+    await fixture.page.locator("label.squishy-pack-card").filter({ hasText: "Silver" }).click();
     const quantity = fixture.page.getByRole("spinbutton", { name: "Quantity", exact: true });
     await quantity.fill("2");
 
@@ -99,7 +98,7 @@ run("independent buyer state journeys", () => {
 
     await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBe(88_500_000n);
     await fixture.page.waitForTimeout(500);
-    expect(await zenith.isChecked()).toBe(true);
+    expect(await silver.isChecked()).toBe(true);
     expect(await quantity.inputValue()).toBe("2");
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await agreements.first().waitFor({ state: "visible", timeout: 10_000 });

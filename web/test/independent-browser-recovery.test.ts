@@ -4,7 +4,7 @@ import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { createReserve } from "../lib/reserve";
 import { MemoryStore } from "../lib/store";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
-import type { DraftInput, WorkflowAction } from "../lib/chain/types";
+import type { WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
@@ -36,15 +36,6 @@ run("independent rendered pending recovery on isolated Anvil", () => {
       labx: chain.raffle.address
     });
     const latest = await chain.client.getBlock();
-    const draft: DraftInput = {
-      nft: chain.nft.address,
-      tokenId: 401n,
-      salesEnd: latest.timestamp + 900n,
-      reserveNonce: commitment.nonce,
-      reserveCommit: commitment.commit,
-      title: "Sold-out pending recovery",
-      packs: [{ name: "Last membership", priceUsdc: 20_000_000n, bonusEntries: 3, maxSupply: 1 }]
-    };
     const act = async (action: WorkflowAction, wallet: WalletSessionPort) => {
       const prepared = await service.prepare({ action, wallet });
       const transaction = await service.submit({ prepared, wallet });
@@ -52,7 +43,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
       await chain.mine();
       expect(await service.confirm({ transaction, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
     };
-    await act({ kind: "createDraft", draft }, seller);
+    await chain.write(chain.raffle, "createRaffle", [chain.nft.address, 401n, latest.timestamp + 900n, commitment.nonce, commitment.commit, "Sold-out pending recovery", [{ name: "Last membership", priceUsdc: 20_000_000n, bonusEntries: 3, maxSupply: 1 }]], chain.seller);
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" }) - 1n;
     expect(id).toBe(1n);
     await act({ kind: "approvePrize", id }, seller);

@@ -5,6 +5,7 @@ import { createReader } from "./reader";
 import { availableActions } from "./workflow";
 import { address, boundedNumber, hash, positiveId, sameAddress } from "./validation";
 import { requirePublishedTerms } from "../published-terms";
+import { hasStandardMembershipTiers, requireStandardMembershipTiers } from "../membership-tiers";
 import type { DeploymentManifest, DraftInput, PreparedAction, WalletSnapshot, WorkflowAction } from "./types";
 
 function validateDraft(draft: DraftInput, now: bigint) {
@@ -27,6 +28,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
     let title = action.kind.replace(/([A-Z])/g, " $1");
     if (action.kind === "createDraft" || action.kind === "updateDraft") {
       const draft = action.draft; validateDraft(draft, at.timestamp);
+      if (action.kind === "createDraft") requireStandardMembershipTiers(draft.packs);
       const owner = await client.readContract({ address: draft.nft, abi: erc721Abi, functionName: "ownerOf", args: [draft.tokenId], blockNumber: at.number });
       if (action.kind === "createDraft") {
         if (!sameAddress(owner, session.account)) throw new Error("The connected seller must own the NFT.");
@@ -34,6 +36,7 @@ export function actionBuilder(client: PublicClient, manifest: DeploymentManifest
       } else {
         positiveId(action.id); const state = await reader.readRaffle({ id: action.id, block: at });
         if (!sameAddress(state.raffle.seller, session.account) || state.raffle.phase !== 0) throw new Error("Only the seller can edit an unopened draft.");
+        if (hasStandardMembershipTiers(state.packs)) requireStandardMembershipTiers(draft.packs);
         if (!sameAddress(owner, session.account) && !(state.raffle.escrowed && sameAddress(owner, manifest.address) && sameAddress(draft.nft, state.raffle.nft) && draft.tokenId === state.raffle.tokenId)) throw new Error("This NFT is not owned or escrowed by the seller.");
         data = encodeFunctionData({ abi: raffleAbi, functionName: "updateDraft", args: [action.id, draft.nft, draft.tokenId, draft.salesEnd, draft.reserveNonce, draft.reserveCommit, draft.title, draft.packs] });
       }

@@ -1,4 +1,6 @@
-export type PackName = "Entry" | "Bronze" | "Silver" | "Gold" | "Platinum";
+import type { MembershipTierName } from "./membership-tiers";
+
+export type PackName = MembershipTierName;
 
 export type Pack = {
   name: PackName;

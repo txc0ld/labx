@@ -6,6 +6,7 @@ import { memoryPendingJournal } from "../lib/chain/pending-journal";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { WorkflowAction } from "../lib/chain/types";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 const run = process.env.RUN_CHAIN_INTEGRATION === "1" ? describe : describe.skip;
 run("pending purchase repair on isolated Anvil", () => {
   let c: LocalChain, service: RaffleService, seller: WalletSessionPort, buyer: WalletSessionPort;
@@ -15,7 +16,7 @@ run("pending purchase repair on isolated Anvil", () => {
     seller = c.wallet(c.seller).session; buyer = c.wallet(c.buyer).session; await seller.connect(); await buyer.connect();
     await c.write(c.usdc, "mint", [c.buyer, 10000000000n]); await c.write(c.nft, "mint", [c.seller, 1n]);
     const h = keccak256(toBytes("fixture"));
-    await execute({ kind: "createDraft", draft: { nft: c.nft.address, tokenId: 1n, title: "Pending protections", salesEnd: (await c.client.getBlock()).timestamp + 86400n, reserveCommit: h, reserveNonce: h, packs: [{ name: "Entry", priceUsdc: 25000000n, bonusEntries: 1, maxSupply: 100 }] } }, seller);
+    await execute({ kind: "createDraft", draft: { nft: c.nft.address, tokenId: 1n, title: "Pending protections", salesEnd: (await c.client.getBlock()).timestamp + 86400n, reserveCommit: h, reserveNonce: h, packs: standardMembershipPacks(() => ({ priceUsdc: 25000000n, bonusEntries: 1, maxSupply: 100 })) } }, seller);
     await execute({ kind: "approvePrize", id: 1n }, seller); await execute({ kind: "escrow", id: 1n }, seller);
     await c.admit(1n);
     await execute({ kind: "open", id: 1n, expectedPolicyHash: (await service.openingPolicy()).hash }, seller);

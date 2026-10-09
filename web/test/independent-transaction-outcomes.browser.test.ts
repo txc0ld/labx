@@ -9,6 +9,7 @@ import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { standardMembershipPacks } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_INDEPENDENT_TRANSACTION_OUTCOMES_BROWSER === "1" ? describe : describe.skip;
 
@@ -44,7 +45,7 @@ run("independent transaction outcome ownership", () => {
       reserveNonce: commitment,
       reserveCommit: commitment,
       title,
-      packs: [{ name: "Entry", priceUsdc, bonusEntries: 2, maxSupply: 20 }]
+      packs: standardMembershipPacks(() => ({ priceUsdc, bonusEntries: 2, maxSupply: 20 }))
     };
     await act({ kind: "createDraft", draft }, seller);
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" }) - 1n;

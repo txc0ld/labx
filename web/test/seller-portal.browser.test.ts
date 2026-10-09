@@ -9,6 +9,8 @@ import type { WalletSessionPort } from "../lib/chain/ports";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
+import { STANDARD_MEMBERSHIP_TIERS } from "../lib/membership-tiers";
+import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_SELLER_PORTAL_BROWSER === "1" ? describe : describe.skip;
 
@@ -188,93 +190,24 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.keyboard.press("Enter");
     await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible" });
 
-    for (const name of ["Raffle details", "Prize NFT", "Membership packs", "Membership 1"]) {
+    for (const name of ["Raffle details", "Prize NFT", "Membership packs"]) {
       await fixture.page.getByRole("group", { name }).waitFor({ state: "visible" });
+    }
+    for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
+      await fixture.page.getByRole("group", { name: `Membership ${index + 1} ${tier}`, exact: true }).waitFor({ state: "visible" });
     }
     expect(await fixture.page.getByRole("button", { name: "Choose from wallet", exact: true }).isDisabled()).toBe(true);
     await fixture.page.getByText("Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.", { exact: true }).waitFor({ state: "visible" });
     expect(await fixture.page.getByLabel("NFT contract").isEnabled()).toBe(true);
     expect(await fixture.page.getByLabel("Token ID").isEnabled()).toBe(true);
-
-    const addMembership = fixture.page.getByRole("button", { name: "Add membership", exact: true });
-    const packStatus = fixture.page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]').filter({ hasText: "configured" });
-    const firstPack = fixture.page.getByRole("group", { name: "Membership 1" });
-    await firstPack.getByLabel("Name", { exact: true }).fill("Keep first");
-    await firstPack.getByLabel("Price in USDC", { exact: true }).fill("10");
-    await firstPack.getByLabel("Bonus entries", { exact: true }).fill("1");
-    await firstPack.getByLabel("Supply", { exact: true }).fill("10");
-
-    await addMembership.focus();
-    await fixture.page.keyboard.press("Enter");
-    let secondPack = fixture.page.getByRole("group", { name: "Membership 2" });
-    await secondPack.waitFor({ state: "visible" });
-    await secondPack.getByLabel("Name", { exact: true }).fill("Remove last");
-    await secondPack.getByLabel("Price in USDC", { exact: true }).fill("20");
-    await secondPack.getByLabel("Bonus entries", { exact: true }).fill("2");
-    await secondPack.getByLabel("Supply", { exact: true }).fill("20");
-    await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
-    await fixture.page.keyboard.press("Enter");
-    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
-    expect(await packStatus.textContent()).toBe("1 of 8 configured");
-    expect(await firstPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep first");
-
-    await fixture.page.keyboard.press("Enter");
-    secondPack = fixture.page.getByRole("group", { name: "Membership 2" });
-    await secondPack.waitFor({ state: "visible" });
-    await secondPack.getByLabel("Name", { exact: true }).fill("Remove middle");
-    await secondPack.getByLabel("Price in USDC", { exact: true }).fill("20");
-    await secondPack.getByLabel("Bonus entries", { exact: true }).fill("2");
-    await secondPack.getByLabel("Supply", { exact: true }).fill("20");
-    await addMembership.focus();
-    await fixture.page.keyboard.press("Enter");
-    const thirdPack = fixture.page.getByRole("group", { name: "Membership 3" });
-    await thirdPack.waitFor({ state: "visible" });
-    await thirdPack.getByLabel("Name", { exact: true }).fill("Keep last");
-    await thirdPack.getByLabel("Price in USDC", { exact: true }).fill("30");
-    await thirdPack.getByLabel("Bonus entries", { exact: true }).fill("3");
-    await thirdPack.getByLabel("Supply", { exact: true }).fill("30");
-    await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
-    await fixture.page.keyboard.press("Enter");
-    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
-    expect(await packStatus.textContent()).toBe("2 of 8 configured");
-    expect(await firstPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep first");
-    secondPack = fixture.page.getByRole("group", { name: "Membership 2" });
-    expect(await secondPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep last");
-    expect(await secondPack.getByLabel("Price in USDC", { exact: true }).inputValue()).toBe("30");
-    await secondPack.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
-    await fixture.page.keyboard.press("Enter");
-    await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
-
-    for (let count = 2; count <= 8; count += 1) {
-      await addMembership.focus();
-      await fixture.page.keyboard.press("Enter");
-      expect(await packStatus.textContent()).toBe(`${count} of 8 configured`);
+    expect(await fixture.page.getByText("5 standard tiers", { exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByLabel("Name", { exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
+    for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
+      const group = fixture.page.getByRole("group", { name: `Membership ${index + 1} ${tier}`, exact: true });
+      expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["", "", ""]);
     }
-    for (const width of [390, 1440]) {
-      await fixture.page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
-      expect(await addMembership.isDisabled()).toBe(true);
-      await fixture.page.getByRole("button", { name: "Remove membership 2", exact: true }).focus();
-      await fixture.page.keyboard.press("Enter");
-      await expect.poll(async () => fixture.page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Add membership");
-      expect(await addMembership.isEnabled()).toBe(true);
-      expect(await packStatus.textContent()).toBe("7 of 8 configured");
-      const focusPosition = await addMembership.evaluate(async (button) => {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-        const bounds = button.getBoundingClientRect();
-        const headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
-        return {
-          visible: bounds.top >= Math.max(0, headerBottom) && bounds.bottom <= window.innerHeight,
-          unobscured: document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === button
-        };
-      });
-      expect(focusPosition).toEqual({ visible: true, unobscured: true });
-      if (width === 390) await fixture.page.keyboard.press("Enter");
-    }
-    for (let count = 7; count >= 2; count -= 1) {
-      await fixture.page.getByRole("button", { name: `Remove membership ${count}`, exact: true }).click();
-    }
-    expect(await packStatus.textContent()).toBe("1 of 8 configured");
-    expect(await firstPack.getByLabel("Name", { exact: true }).inputValue()).toBe("Keep first");
+    await fillStandardMembershipEconomics(fixture.page, (_tier, index) => ({ price: String((index + 1) * 10), bonusEntries: String(index + 1), supply: String((index + 1) * 10) }));
 
     async function computedAccessibility(selector: string) {
       const session = await fixture.page.context().newCDPSession(fixture.page);
@@ -300,10 +233,6 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(futureDeadline * 1000).toISOString().slice(0, 16));
-    await fixture.page.getByLabel("Name", { exact: true }).fill("Standard membership");
-    await fixture.page.getByLabel("Price in USDC").fill("25");
-    await fixture.page.getByLabel("Bonus entries").fill("2");
-    await fixture.page.getByLabel("Supply").fill("100");
     await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
     const reviewHeading = fixture.page.getByRole("heading", { name: "Prepare raffle draft", exact: true });
     await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).waitFor({ state: "visible" });
@@ -406,10 +335,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
-    await fixture.page.getByLabel("Name", { exact: true }).fill("Standard membership");
-    await fixture.page.getByLabel("Price in USDC").fill("25");
-    await fixture.page.getByLabel("Bonus entries").fill("2");
-    await fixture.page.getByLabel("Supply").fill("100");
+    await fillStandardMembershipEconomics(fixture.page, () => ({ price: "25", bonusEntries: "2", supply: "100" }));
 
     type CapturedCommitment = { nft: string; tokenId: string; publicSummary: string; privateCommitment: string };
     const attempts: CapturedCommitment[] = [];
@@ -481,10 +407,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("997");
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
-    await fixture.page.getByLabel("Name", { exact: true }).fill("Membership");
-    await fixture.page.getByLabel("Price in USDC").fill("1");
-    await fixture.page.getByLabel("Bonus entries").fill("1");
-    await fixture.page.getByLabel("Supply").fill("1");
+    await fillStandardMembershipEconomics(fixture.page, () => ({ price: "1", bonusEntries: "1", supply: "1" }));
     let reserveRequests = 0;
     await fixture.page.route("**/api/reserve", async route => { reserveRequests += 1; await route.abort("failed"); });
     await fixture.page.evaluate(() => {
@@ -509,6 +432,11 @@ run("rendered seller portal on isolated Anvil", () => {
     if (await connect.isVisible().catch(() => false)) await connect.click();
     const beforeUnescrowed = await chain.service.readRaffle({ id: 3n });
     await fixture.page.locator("summary").filter({ hasText: "Edit draft" }).click();
+    await fixture.page.getByText("1 existing membership", { exact: true }).waitFor({ state: "visible" });
+    const existingPack = fixture.page.getByRole("group", { name: "Membership 1 Membership", exact: true });
+    expect(await existingPack.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["25", "2", "100"]);
+    expect(await fixture.page.getByLabel("Name", { exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
     const block = await chain.client.getBlock();
     await fixture.page.getByLabel("Raffle title").fill("Canonical NFT retention");
     await fixture.page.getByLabel("Token ID").fill("0803");
@@ -525,19 +453,24 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(afterUnescrowed.raffle.reserveCommit).toBe(beforeUnescrowed.raffle.reserveCommit);
 
     const escrowBlock = await chain.client.getBlock();
+    const legacyDeadline = escrowBlock.timestamp + 60n;
     const legacyCommitment = keccak256(toBytes("legacy escrowed automatic retention"));
     await chain.write(chain.nft, "mint", [chain.seller, 931n]);
     await chain.write(chain.raffle, "createRaffle", [
       chain.nft.address,
       931n,
-      escrowBlock.timestamp + 86_400n,
+      legacyDeadline,
       legacyCommitment,
       legacyCommitment,
       "Legacy escrowed draft",
-      [{ name: "Membership", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 }]
+      [
+        { name: "eNTRY", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 },
+        { name: "BASIC", priceUsdc: 7_000_000n, bonusEntries: 5, maxSupply: 11 }
+      ]
     ], chain.seller);
     await chain.write(chain.nft, "approve", [chain.raffle.address, 931n], chain.seller);
     await chain.write(chain.raffle, "escrow", [31n], chain.seller);
+    await chain.warp(legacyDeadline);
     const beforeEscrowed = await chain.service.readRaffle({ id: 31n });
 
     response = await fixture.page.goto(`${fixture.baseUrl}/seller/31`, { waitUntil: "domcontentloaded" });
@@ -547,7 +480,18 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.locator("summary").filter({ hasText: "Edit draft" }).click();
     expect(await fixture.page.getByLabel("NFT contract").isDisabled()).toBe(true);
     expect(await fixture.page.getByLabel("Token ID").isDisabled()).toBe(true);
+    await fixture.page.getByText("2 existing memberships", { exact: true }).waitFor({ state: "visible" });
+    const entryPack = fixture.page.getByRole("group", { name: "Membership 1 eNTRY", exact: true });
+    const basicPack = fixture.page.getByRole("group", { name: "Membership 2 BASIC", exact: true });
+    expect(await entryPack.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["1", "1", "10"]);
+    expect(await basicPack.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["7", "5", "11"]);
+    expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
     await fixture.page.getByLabel("Raffle title").fill("Legacy escrowed draft retained");
+    const recoveryBlock = await chain.client.getBlock();
+    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(recoveryBlock.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await basicPack.getByLabel("Price in USDC", { exact: true }).fill("8");
+    await basicPack.getByLabel("Bonus entries", { exact: true }).fill("6");
+    await basicPack.getByLabel("Supply", { exact: true }).fill("12");
     await fixture.page.evaluate(() => {
       Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for escrow retention test"); } });
     });
@@ -558,6 +502,10 @@ run("rendered seller portal on isolated Anvil", () => {
     const afterEscrowed = await chain.service.readRaffle({ id: 31n });
     expect(afterEscrowed.raffle.reserveNonce).toBe(beforeEscrowed.raffle.reserveNonce);
     expect(afterEscrowed.raffle.reserveCommit).toBe(beforeEscrowed.raffle.reserveCommit);
+    expect(afterEscrowed.packs.map((pack) => ({ name: pack.name, priceUsdc: pack.priceUsdc, bonusEntries: pack.bonusEntries, maxSupply: pack.maxSupply }))).toEqual([
+      { name: "eNTRY", priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 },
+      { name: "BASIC", priceUsdc: 8_000_000n, bonusEntries: 6, maxSupply: 12 }
+    ]);
     expect(reserveRequests).toBe(0);
     await fixture.page.unroute("**/api/reserve");
   }, 60_000);

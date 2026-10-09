@@ -1,14 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import type { PackName } from "@/lib/seed";
 import { BUYER_FEE_BPS } from "@/lib/chain/fees";
+import { STANDARD_MEMBERSHIP_TIERS } from "@/lib/membership-tiers";
 
 export const metadata: Metadata = {
   title: "Membership packs",
   description: "Compare LABx membership pack tiers and review the current pack rules."
 };
-
-const PACKS: PackName[] = ["Entry", "Bronze", "Silver", "Gold", "Platinum"];
 
 export default function MembershipPage() {
   return (
@@ -24,8 +22,8 @@ export default function MembershipPage() {
       </div>
       <section className="well pad stack" aria-labelledby="tiers-title">
         <h2 id="tiers-title">Pack tiers</h2>
-        <ol className="tier-list">{PACKS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}><span>{pack}</span><span className="tier-orbs" aria-hidden="true" /></li>)}</ol>
-        <p className="muted">These are LABx’s visual tiers. A reviewed raffle can publish up to eight custom membership names, prices, bonus entries and supply limits.</p>
+        <ol className="tier-list">{STANDARD_MEMBERSHIP_TIERS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}><span>{pack}</span><span className="tier-orbs" aria-hidden="true" /></li>)}</ol>
+        <p className="muted">New LABx raffles use these five standard membership names in this order. Each raffle sets its own prices, bonus entries and supply. Existing raffles keep the membership packs already published on-chain.</p>
       </section>
       <article className="notice warning stack">
         <strong>Review your total before purchasing.</strong>

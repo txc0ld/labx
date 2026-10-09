@@ -168,9 +168,8 @@
 }
 
 .packCard>legend { color:var(--charcoal); font-size:.76rem; }
-.removePack { justify-self:start; min-height:2.75rem; }
-
-.packSection>:global(.btn) { justify-self:start; }
+.packCard>legend span { margin-inline-end:.45rem; }
+.packCard>legend strong { color:var(--ink); font-size:.9rem; }
 
 .reviewAction {
   display:flex;
@@ -192,11 +191,7 @@
 @container (min-width:36rem) {
   .detailsGrid { grid-template-columns:minmax(0,1.4fr) minmax(15rem,.6fr); }
   .nftGrid { grid-template-columns:minmax(0,1.5fr) minmax(10rem,.5fr); }
-  .packFields { grid-template-columns:repeat(2,minmax(0,1fr)); }
-}
-
-@container (min-width:54rem) {
-  .packFields { grid-template-columns:minmax(12rem,1.25fr) repeat(3,minmax(9rem,.75fr)); }
+  .packFields { grid-template-columns:repeat(3,minmax(0,1fr)); }
 }
 
 @container (max-width:35.99rem) {

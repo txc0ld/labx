@@ -2,6 +2,7 @@
 
 import React, { useId, type CSSProperties } from "react";
 import type { Pack, PackName } from "@/lib/seed";
+import { STANDARD_MEMBERSHIP_TIERS } from "@/lib/membership-tiers";
 
 type SquishyPackCardProps = {
   pack: Pick<Pack, "name" | "priceUsdc" | "bonusEntries" | "remaining">;
@@ -59,10 +60,8 @@ type MembershipPackCardProps = {
   onSelect: () => void;
 };
 
-const TIER_NAMES: readonly PackName[] = ["Entry", "Bronze", "Silver", "Gold", "Platinum"];
-
 export function MembershipPackCard({ name, price, bonusEntries, remaining, feeLabel, value, selected, disabled, onSelect }: MembershipPackCardProps) {
-  const tier = TIER_NAMES.find((candidate) => candidate.toLowerCase() === name.trim().toLowerCase()) ?? "Entry";
+  const tier = STANDARD_MEMBERSHIP_TIERS.find((candidate) => candidate.toLowerCase() === name.trim().toLowerCase()) ?? "Entry";
   const bubbleFillId = useId();
   const entriesLabel = bonusEntries === 1 ? "entry" : "entries";
 
