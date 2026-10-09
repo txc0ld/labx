@@ -460,7 +460,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: error instanceof Error ? error.message : "Saved creation could not be retired." });
-    } finally { if (lifetime.operation === operation) lifetime.busy = false; }
+    } finally {
+      if (lifetime.operation === operation) {
+        lifetime.busy = false;
+        if (lifetime.mounted && lifetime.generation !== generation) setCreation(current => current.kind === "busy" ? { kind: "error", message: "The wallet or creation details changed. Review the saved creation before trying again." } : current);
+      }
+    }
   }
 
   function review(event: FormEvent) {
