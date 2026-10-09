@@ -67,6 +67,7 @@ async function setup(selected = "fixture-injected", liveAccount = account) {
         const topic = provider.session?.topic;
         provider.session = undefined;
         provider.emit("session_delete", { topic });
+        provider.emit("disconnect", { data: topic });
       })
     });
   }

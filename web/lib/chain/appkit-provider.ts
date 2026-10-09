@@ -465,6 +465,12 @@ function clearConnection(current: AppKitRuntime, connection: OwnedConnection) {
   if (current.adoption === connection) current.adoption = undefined;
 }
 
+function isDisconnected(current: AppKitRuntime) {
+  return current.appKit.getProvider("eip155") == null
+    && ConnectorController.getConnectorId("eip155") == null
+    && current.appKit.getAccount("eip155")?.isConnected !== true;
+}
+
 export function hasAuthorizedRestoreSession(provider: unknown, consent: WalletConsent): boolean {
   if (!provider || typeof provider !== "object" || !("session" in provider)) return false;
   const session = provider.session;
@@ -574,13 +580,27 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
             adapter.releaseConnection(captured.connectorId, captured.provider);
             clearConnection(current, captured);
           } else {
+            let disconnectAppKit = true;
             if (captured.walletConnectProvider) {
               if (!captured.walletConnectTopic) throw new Error("The WalletConnect session could not be identified.");
               await adapter.disconnectWalletConnectSession(captured.walletConnectProvider, captured.walletConnectTopic);
-              if (!matchesConnection(current, captured, false)) throw new Error("The captured wallet connection changed during cleanup.");
+              if (current.active !== captured) {
+                ownedConnection = undefined;
+                disconnectAppKit = false;
+              } else {
+                if (captured.runtimeGeneration !== current.generation || adapter.getWalletConnectProvider() !== captured.walletConnectProvider) {
+                  throw new Error("The captured wallet connection changed during cleanup.");
+                }
+                const sameProvider = appKit.getProvider("eip155") === captured.provider;
+                const sameConnector = !captured.connectorId || ConnectorController.getConnectorId("eip155") === captured.connectorId;
+                if (!sameProvider || !sameConnector) {
+                  if (!isDisconnected(current)) throw new Error("The captured wallet connection changed during cleanup.");
+                  disconnectAppKit = false;
+                }
+              }
             }
-            await appKit.disconnect("eip155");
-            clearConnection(current, captured);
+            if (disconnectAppKit) await appKit.disconnect("eip155");
+            if (current.active === captured) clearConnection(current, captured);
           }
           if (current.active !== captured) ownedConnection = undefined;
         } catch (error) {
