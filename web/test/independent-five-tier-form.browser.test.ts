@@ -9,7 +9,7 @@ import type { DraftInput } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
-const run = process.env.RUN_FIVE_TIER_VERIFICATION === "1" ? describe : describe.skip;
+const run = process.env.RUN_FIVE_TIER_VERIFICATION === "1" || process.env.RUN_SELLER_PORTAL_BROWSER === "1" ? describe : describe.skip;
 
 run("independent five-tier rendered journey", () => {
   let chain: LocalChain;

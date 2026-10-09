@@ -95,6 +95,7 @@ jobs:
             test/independent-browser-recovery.test.ts \
             test/independent-browser-catalog.test.ts \
             test/seller-portal.browser.test.ts \
+            test/independent-five-tier-form.browser.test.ts \
             test/wallet-nft-picker.verification.browser.test.ts \
             test/private-record-feedback.browser.test.ts \
             test/buyer-ui-repairs.browser.test.ts \

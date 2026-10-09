@@ -6,7 +6,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 
-const run = process.env.RUN_FIVE_TIER_VERIFICATION === "1" ? describe : describe.skip;
+const run = process.env.RUN_FIVE_TIER_VERIFICATION === "1" || process.env.RUN_CHAIN_INTEGRATION === "1" ? describe : describe.skip;
 
 const CANONICAL_NAMES = ["Entry", "Bronze", "Silver", "Gold", "Platinum"] as const;
 
