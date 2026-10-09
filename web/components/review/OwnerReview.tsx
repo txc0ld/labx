@@ -417,7 +417,7 @@ function DiscoveryStatus({ state, busy, onRetry }: { state: DiscoveryState; busy
     {state.kind === "error" ? <span role="status" aria-live="polite">{state.message}</span> : null}
     {state.kind === "range" && state.caughtUp ? <span role="status" aria-live="polite">No completed approval found yet. LABx will check again while this page is visible.{state.reset ? " The check restarted after the chain changed." : ""}</span> : null}
     {state.kind === "range" && !state.caughtUp ? <span role="status" aria-live="polite">Checked approval events through block {state.toBlock.toString()} of {state.head.toString()}. LABx will continue while this page is visible.{state.reset ? " The check restarted after the chain changed." : ""}</span> : null}
-    {busy && state.kind !== "idle" ? <span className="muted" aria-hidden="true">Checking again…</span> : null}
+    {state.kind !== "idle" ? <span className={`${styles.checkingLine} muted`} data-visible={busy ? "true" : "false"} aria-hidden="true">Checking again…</span> : null}
     {state.kind === "error" ? <button className="text-link" type="button" disabled={busy} onClick={onRetry}>Retry automatic check</button> : null}
   </div>;
 }
@@ -456,6 +456,8 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
   const lifetime = useRef({ mounted: false, generation: 0, nextOperation: 0, exclusiveOperation: null as number | null, reviewHash });
   const discoveryCursor = useRef<OwnerExecutionDiscoveryCursor | undefined>(undefined);
   const previousReviewHash = useRef(reviewHash);
+  const latestReview = useRef(review);
+  latestReview.current = review;
   if (lifetime.current.reviewHash !== reviewHash) {
     lifetime.current.reviewHash = reviewHash;
     lifetime.current.nextOperation += 1;
@@ -612,7 +614,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       if (pendingHash !== null) {
         setDiscoveryOutcome(rangeOutcome);
         setHashInput(pendingHash);
-        const confirmationOnly = isRevokeConfirmationRecovery(intent, review);
+        const confirmationOnly = isRevokeConfirmationRecovery(intent, latestReview.current);
         setState(current => current.kind === "pending" && current.intent === intent && current.hash === pendingHash && current.confirmationOnly === confirmationOnly
           ? current
           : { kind: "pending", intent, hash: pendingHash, confirmationOnly });

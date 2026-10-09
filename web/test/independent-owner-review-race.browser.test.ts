@@ -13,7 +13,7 @@ run("independent owner review race verification", () => {
     chain = await localChain();
     const block = await chain.client.getBlock();
     const commitment = keccak256(toBytes("independent-owner-review-race"));
-    for (const id of [1n, 2n, 3n, 4n, 5n, 6n]) {
+    for (const id of [1n, 2n, 3n, 4n, 5n, 6n, 7n]) {
       const tokenId = 880n + id;
       await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
       await chain.write(chain.raffle, "createRaffle", [
@@ -49,7 +49,10 @@ run("independent owner review race verification", () => {
   async function openChecklist(id: bigint) {
     await openReview(id);
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const checkboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await checkboxes.count()).toBe(3);
+    for (const checkbox of await checkboxes.all()) await checkbox.check();
   }
 
   async function prepareApproval() {
@@ -126,7 +129,10 @@ run("independent owner review race verification", () => {
     expect(await ownerStorageKeys()).toEqual([]);
 
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const refreshedCheckboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await refreshedCheckboxes.count()).toBe(3);
+    for (const checkbox of await refreshedCheckboxes.all()) await checkbox.check();
     await prepareApproval();
     expect(await ownerStorageKeys()).toHaveLength(1);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
@@ -138,7 +144,10 @@ run("independent owner review race verification", () => {
     const reviewAgain = fixture.page.getByRole("button", { name: "Review checklist for a new file", exact: true });
     await expect.poll(() => reviewAgain.isEnabled(), { timeout: 10_000 }).toBe(true);
     await reviewAgain.click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const restoredCheckboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await restoredCheckboxes.count()).toBe(3);
+    for (const checkbox of await restoredCheckboxes.all()) expect(await checkbox.isChecked()).toBe(false);
     expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
   }, 30_000);
 
@@ -159,8 +168,11 @@ run("independent owner review race verification", () => {
     await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Discard exported review", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const reopenedCheckboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await reopenedCheckboxes.count()).toBe(3);
+    for (const checkbox of await reopenedCheckboxes.all()) expect(await checkbox.isChecked()).toBe(false);
+    for (const checkbox of await reopenedCheckboxes.all()) await checkbox.check();
     await prepareApproval();
     await fixture.page.evaluate(() =>
       (window as unknown as Window & { __resolveIndependentOwnerCopy(): void }).__resolveIndependentOwnerCopy());
@@ -267,6 +279,40 @@ run("independent owner review race verification", () => {
     expect(await ownerStorageKeys()).toEqual([]);
   }, 30_000);
 
+  it("keeps same-session revocation recovery confirmation-only while discovery is pending", async () => {
+    const approved = await chain.service.readAdmission({ id: 7n });
+    if (approved.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
+    await chain.write(chain.raffle, "approveRaffle", [7n, approved.snapshot.admission.reviewHash]);
+    await openReview(7n);
+    await fixture.page.getByRole("button", { name: "Prepare revocation", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Download revocation file", exact: true }).click();
+    const handoffHeading = fixture.page.getByRole("heading", { name: "Finish the revocation in Safe", exact: true });
+    await handoffHeading.waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => handoffHeading.locator("../..").getAttribute("aria-busy"), { timeout: 10_000 }).toBe("false");
+
+    const before = await chain.service.readAdmission({ id: 7n });
+    if (before.snapshot.admission.reviewHash === null) throw new Error("Approved review hash missing.");
+    await chain.write(chain.raffle, "revokeRaffleApproval", [7n, before.snapshot.admission.reviewHash]);
+    await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
+    const recoveryHeading = fixture.page.getByRole("heading", { name: "Confirm the recorded revocation", exact: true });
+    await recoveryHeading.waitFor({ state: "visible", timeout: 10_000 });
+
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    const recovery = recoveryHeading.locator("../..");
+    await expect.poll(() => recovery.getAttribute("aria-busy"), { timeout: 10_000 }).toBe("false");
+    expect(await recoveryHeading.isVisible()).toBe(true);
+    expect(await fixture.page.getByRole("heading", { name: "Choose the current draft action", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /Download (?:approval|revocation) file/ }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Copy exact call fields", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByLabel("Executed Ethereum transaction hash").isVisible()).toBe(true);
+    await fixture.page.getByText(/has not reached two canonical confirmations/i).waitFor({ state: "visible", timeout: 10_000 });
+
+    await chain.mine();
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await ownerStorageKeys()).toEqual([]);
+  }, 30_000);
+
   it("keeps a confirmed approval receipt historical after the seller changes the draft", async () => {
     await openChecklist(5n);
     await prepareApproval();
@@ -301,7 +347,10 @@ run("independent owner review race verification", () => {
     expect(await receiptPanel.getByText(receipt.blockNumber.toString(), { exact: true }).count()).toBe(1);
     await fixture.page.getByRole("button", { name: "Review current state", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const changedCheckboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await changedCheckboxes.count()).toBe(3);
+    for (const checkbox of await changedCheckboxes.all()) expect(await checkbox.isChecked()).toBe(false);
     expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
   }, 30_000);
 
@@ -329,7 +378,10 @@ run("independent owner review race verification", () => {
     await fixture.page.getByRole("heading", { name: "Stale at confirmation", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.getByRole("button", { name: "Review current state", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const staleCheckboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await staleCheckboxes.count()).toBe(3);
+    for (const checkbox of await staleCheckboxes.all()) expect(await checkbox.isChecked()).toBe(false);
     expect(await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).isDisabled()).toBe(true);
     await restoreAutomaticDiscovery();
   }, 30_000);

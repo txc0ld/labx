@@ -42,7 +42,10 @@ run("owner review async lifetimes", () => {
     const review = fixture.page.getByRole("button", { name: "Review approval checklist", exact: true });
     await review.waitFor({ state: "visible", timeout: 10_000 });
     await review.click();
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const checkboxes = fixture.page.locator("fieldset input[type=checkbox]");
+    expect(await checkboxes.count()).toBe(3);
+    for (const checkbox of await checkboxes.all()) await checkbox.check();
   }
 
   async function prepareExport() {

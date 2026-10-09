@@ -299,6 +299,15 @@
   min-width: 0;
 }
 
+.checkingLine {
+  min-height: 1.2em;
+  visibility: hidden;
+}
+
+.checkingLine[data-visible="true"] {
+  visibility: visible;
+}
+
 .stepList :global(.btn) {
   margin: .2rem .35rem .35rem 0;
 }

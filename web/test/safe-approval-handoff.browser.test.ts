@@ -93,7 +93,9 @@ run("Safe approval handoff", () => {
     await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ timeout: 5_000 });
     const approval = fixture.page.getByRole("button", { name: "Download approval file", exact: true });
     expect(await approval.isDisabled()).toBe(true);
-    for (const checkbox of await fixture.page.getByRole("checkbox").all()) {
+    const approvalCheckboxes = fixture.page.getByRole("checkbox");
+    expect(await approvalCheckboxes.count()).toBe(3);
+    for (const checkbox of await approvalCheckboxes.all()) {
       await checkbox.focus();
       await fixture.page.keyboard.press("Space");
     }
@@ -146,7 +148,10 @@ run("Safe approval handoff", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.getByRole("checkbox").all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const pollingCheckboxes = fixture.page.getByRole("checkbox");
+    expect(await pollingCheckboxes.count()).toBe(3);
+    for (const checkbox of await pollingCheckboxes.all()) await checkbox.check();
 
     let logCalls = 0;
     let releaseFirst: (() => void) | undefined;
@@ -180,6 +185,7 @@ run("Safe approval handoff", () => {
     const enabledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
     expect({ width: disabledBox?.width, height: disabledBox?.height }).toEqual({ width: enabledBox?.width, height: enabledBox?.height });
     const originalStatus = await politeError.elementHandle();
+    const settledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
 
     for (let expected = 2; expected <= 3; expected += 1) {
       await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
@@ -189,6 +195,8 @@ run("Safe approval handoff", () => {
     expect(await politeError.count()).toBe(1);
     expect(await originalStatus?.evaluate(node => node.isConnected)).toBe(true);
     expect(await flow.getByRole("alert").filter({ hasText: /poll unavailable/i }).count()).toBe(0);
+    const repolledBox = await flow.getByRole("button", { name: "Discard exported review", exact: true }).boundingBox();
+    expect({ x: repolledBox?.x, y: repolledBox?.y }).toEqual({ x: settledBox?.x, y: settledBox?.y });
     await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
 
@@ -200,7 +208,10 @@ run("Safe approval handoff", () => {
     await fixture.switchAccount(chain.operator);
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByRole("button", { name: "Review approval checklist", exact: true }).click();
-    for (const checkbox of await fixture.page.getByRole("checkbox").all()) await checkbox.check();
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const candidateCheckboxes = fixture.page.getByRole("checkbox");
+    expect(await candidateCheckboxes.count()).toBe(3);
+    for (const checkbox of await candidateCheckboxes.all()) await checkbox.check();
     await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
     const heading = fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true });
     await heading.waitFor({ state: "visible", timeout: 10_000 });
