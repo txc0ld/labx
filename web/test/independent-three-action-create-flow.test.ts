@@ -105,13 +105,13 @@ function service(overrides: Partial<RaffleService> = {}): RaffleService {
     manifest: { chainId: 31337, address: raffle },
     pending: async () => null,
     prepare: async () => prepared,
-    submit: async input => { input.beforeRequest?.(checkpoint); return submitted; },
+    submit: async (input: Parameters<RaffleService["submit"]>[0]) => { input.beforeRequest?.(checkpoint); return submitted; },
     confirm: async ({ beforeJournalClear }: Parameters<RaffleService["confirm"]>[0]) => {
       beforeJournalClear?.({ receipt, pending: null });
       return { kind: "confirmed", hash: receipt.hash, blockNumber: receipt.blockNumber, replacedHash: null, receipt };
     },
     inspectOutcome: async () => ({ kind: "confirmed", hash: receipt.hash, blockNumber: receipt.blockNumber, replacedHash: null, receipt }),
-    acknowledgeOutcome: async ({ acknowledge }) => acknowledge(),
+    acknowledgeOutcome: async (input: Parameters<RaffleService["acknowledgeOutcome"]>[0]) => input.acknowledge(),
     resolveCreatedDraft: async () => canonical,
     readRaffle: async () => canonical,
     readAccount: async () => ({ account: seller, snapshot: canonical, principal: 0n, fee: 0n, usdcBalance: 0n, usdcAllowance: 0n, nftOwner: raffle, nftApproved: true }),
