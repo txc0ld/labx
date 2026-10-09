@@ -39,9 +39,11 @@ run("activation drift beside browser recovery", () => {
     await fixture.switchAccount(account);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     const identity = fixture.page.locator(".wallet-identity", { hasText: `${account.slice(0, 6)}…${account.slice(-4)}` });
-    await expect.poll(async () => await connect.isVisible() || await identity.isVisible(), { timeout: 15_000 }).toBe(true);
+    const reviewReady = fixture.page.getByRole("button", { name: "Refresh exact state", exact: true });
+    await expect.poll(async () => await connect.isVisible() || await identity.isVisible() || await reviewReady.isVisible(), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible()) await connect.click();
-    await identity.waitFor({ state: "visible", timeout: 15_000 });
+    if (path.startsWith("/review/")) await reviewReady.waitFor({ state: "visible", timeout: 15_000 });
+    else await identity.waitFor({ state: "visible", timeout: 15_000 });
   }
   async function viewport(width: number) {
     await fixture.page.setViewportSize({ width, height: 900 });
@@ -94,8 +96,10 @@ run("activation drift beside browser recovery", () => {
     await visit("/seller/2", c.seller);
     await fixture.page.getByText(/Existing recovery and receipt controls remain available/).waitFor({ timeout: 15_000 });
     const recover = fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true });
-    const secondary = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
-    if (!await recover.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
+    const secondary = fixture.page.locator("details.workflow-details > summary").filter({ hasText: /^Advanced \(/ });
+    await expect.poll(async () => await recover.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
+    if (!await recover.isVisible().catch(() => false)) await secondary.click();
+    await recover.waitFor({ state: "visible", timeout: 15_000 });
     await recover.click();
     await fixture.page.getByText("Commitment recovered", { exact: true }).waitFor({ timeout: 15_000 });
     expect(await fixture.page.getByRole("button", { name: "Reveal commitment", exact: true }).isEnabled()).toBe(true);

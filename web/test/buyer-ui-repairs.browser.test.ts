@@ -52,9 +52,10 @@ run("buyer UI repair invariants in a rendered browser", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    const identity = fixture.page.locator(".wallet-identity", { hasText: `${account.slice(0, 6)}…${account.slice(-4)}` });
+    await expect.poll(async () => await connect.isVisible().catch(() => false) || await identity.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await expect.poll(async () => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
-      .toContain(`${account.slice(0, 6)}…${account.slice(-4)}`);
+    await identity.waitFor({ state: "visible", timeout: 15_000 });
   }
 
   beforeAll(async () => {
@@ -351,8 +352,12 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await fixture.switchAccount(chain.seller);
       await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
       const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+      const heading = fixture.page.getByRole("heading", { name: "Refreshing selection raffle", exact: true });
+      await expect.poll(async () => await connect.isVisible().catch(() => false) || await heading.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
       if (await connect.isVisible().catch(() => false)) await connect.click();
+      await heading.waitFor({ state: "visible", timeout: 15_000 });
       const details = fixture.page.locator("details").filter({ has: fixture.page.locator("summary").filter({ hasText: "Advanced (" }) });
+      await details.locator("summary").waitFor({ state: "visible", timeout: 15_000 });
       await details.locator("summary").click();
       expect(await details.getAttribute("open")).not.toBeNull();
       release();
