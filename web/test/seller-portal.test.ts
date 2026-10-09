@@ -281,13 +281,36 @@ describe("seller next step", () => {
     const actions = currentSellerActions(value).map(item => item.kind === "requestRandomness" ? { ...item, enabled: false, reason } : item);
     expect(sellerNextStep(value, actions)).toEqual({ kind: "waiting", title: "Draw not ready", message: reason });
   });
+  it("only mentions draw recovery once the actual randomness timeout action is enabled", () => {
+    const value = snapshot({ id: 1n, phase: 3 });
+    value.raffle.revealed = true;
+    value.raffle.vrfRequestedAt = value.raffle.salesEnd;
+    value.block.timestamp = value.raffle.vrfRequestedAt + value.randomnessGrace - 1n;
+    const beforeTimeout = currentSellerActions(value);
+    expect(beforeTimeout.filter(item => item.enabled)).toEqual([]);
+    expect(sellerNextStep(value, beforeTimeout)).toEqual({ kind: "waiting", title: "Waiting for the draw", message: "The randomness request is pending. Refresh after fulfillment." });
+    value.block.timestamp += 1n;
+    const atTimeout = currentSellerActions(value);
+    expect(atTimeout.find(item => item.kind === "abortDrawing")).toMatchObject({ enabled: true, label: "Enable refunds" });
+    expect(sellerNextStep(value, atTimeout)).toEqual({ kind: "waiting", title: "Waiting for the draw", message: "The randomness request is pending. Refresh after fulfillment. Use Enable refunds under Advanced." });
+  });
+  it.each([
+    { lots: 0n, principal: 0n, message: "No memberships were purchased." },
+    { lots: 1n, principal: 1_000_000n, message: "Buyers can claim any remaining refundable principal." }
+  ])("describes cancelled raffle purchases accurately with $lots recorded lots", ({ lots, principal, message }) => {
+    const value = snapshot({ id: 1n, phase: 6, principalEscrow: principal });
+    value.raffle.escrowed = false;
+    value.lotCount = lots;
+    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Raffle cancelled", message });
+  });
   it("only points cancelled raffles to NFT recovery when that control exists", () => {
     const value = snapshot({ id: 1n, phase: 6 });
+    value.lotCount = 1n;
     const actions = currentSellerActions(value);
-    expect(sellerNextStep(value, actions)).toMatchObject({ message: "Reclaim the NFT under Advanced. Buyers can claim their refundable principal." });
-    expect(sellerNextStep(value, actions.map(item => ({ ...item, enabled: false })))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim their refundable principal." });
+    expect(sellerNextStep(value, actions)).toMatchObject({ message: "Reclaim the NFT under Advanced. Buyers can claim any remaining refundable principal." });
+    expect(sellerNextStep(value, actions.map(item => ({ ...item, enabled: false })))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim any remaining refundable principal." });
     value.raffle.escrowed = false;
-    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim their refundable principal." });
+    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim any remaining refundable principal." });
   });
   it.each(["pending", "changed"] as const)("keeps cancellation secondary for an escrowed %s draft", status => {
     expect(sellerNextStep(draft(status), [cancel])).toMatchObject({ kind: "waiting", title: "Awaiting LABx review" });

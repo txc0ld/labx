@@ -69,14 +69,14 @@ export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly Selle
       return next(raffle.snapshotted ? ["requestRandomness"] : ["snapshot"], "Draw not ready", "Review the draw status. Available recovery actions are under Advanced.");
     }
     case 3:
-      return waiting("Waiting for the draw", "The randomness request is pending. Refresh after fulfillment. Available recovery actions are under Advanced.");
+      return waiting("Waiting for the draw", `The randomness request is pending. Refresh after fulfillment.${actions.some(item => item.kind === "abortDrawing" && item.enabled) ? " Use Enable refunds under Advanced." : ""}`);
     case 4:
       return next(["settle", "reveal"], "Waiting for settlement", "Settlement becomes available after reveal or the published grace period.");
     case 5:
       if (raffle.principalEscrow === 0n) return waiting("Raffle settled", "There are no seller proceeds left to claim.");
       return next(["claimProceeds"], "Raffle settled", "There are no seller proceeds left to claim.");
     case 6:
-      return waiting("Raffle cancelled", `${raffle.escrowed && actions.some(item => item.kind === "reclaimPrize" && item.enabled) ? "Reclaim the NFT under Advanced. " : ""}Buyers can claim their refundable principal.`);
+      return waiting("Raffle cancelled", `${raffle.escrowed && actions.some(item => item.kind === "reclaimPrize" && item.enabled) ? "Reclaim the NFT under Advanced. " : ""}${snapshot.lotCount > 0n ? "Buyers can claim any remaining refundable principal." : "No memberships were purchased."}`);
     default:
       return waiting("Raffle state unavailable", "Refresh the verified contract state before continuing.");
   }
