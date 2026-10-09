@@ -99,7 +99,8 @@ export function ownerExecutionDiscoverer(client: PublicClient, manifest: Deploym
       if (cursor !== undefined) {
         if (cursor.nextBlock !== cursor.checkpoint.number + 1n || cursor.checkpoint.number < intent.reviewBlock.number) throw new Error("Owner execution discovery cursor is invalid.");
         const checkpoint = await client.getBlock({ blockNumber: cursor.checkpoint.number });
-        if (checkpoint.number !== cursor.checkpoint.number || checkpoint.hash === null || !sameHash(checkpoint.hash, cursor.checkpoint.hash)) reset = true;
+        if (checkpoint.number !== cursor.checkpoint.number || checkpoint.hash === null) throw new Error("Owner execution discovery cursor checkpoint is unavailable.");
+        if (!sameHash(checkpoint.hash, cursor.checkpoint.hash)) reset = true;
         else fromBlock = cursor.nextBlock;
       }
 
@@ -156,7 +157,8 @@ export function ownerExecutionDiscoverer(client: PublicClient, manifest: Deploym
           || !sameHash(decoded.args.reviewHash, intent.action.expectedReviewHash)) continue;
         if (decoded.eventName === "RaffleApprovalRevoked" && decoded.args.nextRevision !== intent.reviewRevision + 1n) continue;
         const eventBlock = await client.getBlock({ blockNumber: log.blockNumber });
-        if (eventBlock.number !== log.blockNumber || eventBlock.hash === null || !sameHash(eventBlock.hash, log.blockHash)) continue;
+        if (eventBlock.number !== log.blockNumber || eventBlock.hash === null) throw new Error("Owner execution discovery event block is unavailable.");
+        if (!sameHash(eventBlock.hash, log.blockHash)) continue;
         const key = log.transactionHash.toLowerCase();
         if (!seen.has(key)) {
           seen.add(key);

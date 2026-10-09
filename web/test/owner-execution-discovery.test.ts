@@ -172,9 +172,7 @@ describe("owner execution discovery", () => {
       hash: first.cursor.checkpoint.hash,
       timestamp: first.cursor.checkpoint.timestamp
     });
-    const reset = await wrongCursor.discover({ intent: intent(), cursor: first.cursor, timeoutMs: 1_000 });
-    expect(reset.reset).toBe(true);
-    expect(reset.scanned.fromBlock).toBe(reviewBlock.number);
+    await expect(wrongCursor.discover({ intent: intent(), cursor: first.cursor, timeoutMs: 1_000 })).rejects.toThrow(/cursor checkpoint/i);
   });
 
   it("requires every indexed topic to match the canonical event encoding", async () => {
@@ -183,5 +181,14 @@ describe("owner execution discovery", () => {
     topics[2] = `0x${"ff".repeat(12)}${SAFE.slice(2)}`;
     const f = fixture([{ ...malformed, topics }, rpcLog({ hash: HASH_B, blockNumber: 111n, logIndex: 2 })]);
     expect((await f.discover({ intent: intent(), timeoutMs: 1_000 })).candidates).toEqual([HASH_B]);
+  });
+
+  it("fails the page when an explicit event-block lookup returns another height", async () => {
+    const f = fixture([rpcLog({ hash: HASH_A, blockNumber: 110n, logIndex: 1 })]);
+    f.getBlock
+      .mockResolvedValueOnce({ number: 2_099n, hash: NEXT_BLOCK_HASH, timestamp: head.timestamp })
+      .mockResolvedValueOnce({ number: 2_099n, hash: NEXT_BLOCK_HASH, timestamp: head.timestamp })
+      .mockResolvedValueOnce({ number: 111n, hash: NEXT_BLOCK_HASH, timestamp: head.timestamp });
+    await expect(f.discover({ intent: intent(), timeoutMs: 1_000 })).rejects.toThrow(/event block/i);
   });
 });

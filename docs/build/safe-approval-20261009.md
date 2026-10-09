@@ -21,7 +21,7 @@ Pinned source evidence is in `artifacts/safe-approval-20261009/reference/`. The 
 Passing checks observed before the first candidate freeze:
 
 - `npx tsc --noEmit`: PASS.
-- Focused unit/UI suite: 3 files, 22 tests PASS (`39-green-discovery-block-topic-identity.log`, `40-typecheck-second-candidate.log`).
+- Focused unit/UI suite: 3 files, 23 tests PASS (`46-green-all-header-boundaries.log`, `47-typecheck-third-candidate.log`).
 - Admission integration: 13 tests PASS (`13-admission-integration.log`).
 - Safe handoff browser: 2 tests PASS, including `/review` wrong-wallet help, responsive widths 320/390/768/1440, keyboard checklist/download, downloaded JSON, and discovery on return (`26-safe-approval-browser-queue.log`).
 - Owner review race browser: 4 tests PASS (`27-owner-review-race.log`).
@@ -30,4 +30,4 @@ Passing checks observed before the first candidate freeze:
 - Activation-trust browser: 4 tests PASS with `RUN_BROWSER_ACCEPTANCE=1` (`35-activation-trust-browser-enabled.log`).
 - Contract fixture build: PASS (`12-contract-fixture-build.log`).
 
-Red-to-green evidence includes checksum compatibility, discovery paging, reorg during log query, malformed log data/topics/identity, malformed RPC items that precede a valid candidate, exact explicit block-number identity, and byte-for-byte indexed topic encoding. Full logs are under `artifacts/safe-approval-20261009/builder/`.
+Red-to-green evidence includes checksum compatibility, discovery paging, reorg during log query, malformed log data/topics/identity, malformed RPC items that precede a valid candidate, exact explicit block-number identity at every header lookup, and byte-for-byte indexed topic encoding. A malformed explicit block response fails the page so its cursor never advances; only an exact-height event header with a different hash is filtered as an orphan. Full logs are under `artifacts/safe-approval-20261009/builder/`.
