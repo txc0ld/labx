@@ -8,8 +8,8 @@ import { receiptAuthorizationMessage } from "../receipt-delivery";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../published-terms";
 import { hashCommitment } from "../commitment";
 import type { WalletSessionPort } from "./ports";
-import type { AgreementResult, CommitmentInput, PrivateRecords, PublicReserve, ReceiptInput, ReceiptResult, RecordsInput, ReserveRecord, WorkflowContext } from "./api-types";
-export type { AgreementResult, CommitmentInput, PrivateRecords, PublicReserve, ReceiptInput, ReceiptResult, RecordsInput, ReserveRecord, WorkflowContext } from "./api-types";
+import type { AgreementResult, CommitmentInput, PrivateRecords, PublicReserve, PreparationRecoveryInput, ReceiptInput, ReceiptResult, RecordsInput, ReserveRecord, WorkflowContext } from "./api-types";
+export type { AgreementResult, CommitmentInput, PrivateRecords, PublicReserve, PreparationRecoveryInput, ReceiptInput, ReceiptResult, RecordsInput, ReserveRecord, WorkflowContext } from "./api-types";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid workflow response.");
@@ -41,10 +41,14 @@ function publicReserve(body: Record<string, unknown>): PublicReserve {
   if (!/^\d{1,78}$/.test(tokenId) || !["11155111", "31337"].includes(chainId)) throw new Error("Invalid commitment identifiers.");
   return { seller: address(body.seller), nft: address(body.nft), tokenId, chainId, labx: address(body.labx), publicSummary: text(body.publicSummary), publicHash: hash(body.publicHash), nonce: hash(body.nonce), commit: hash(body.commit) };
 }
-export async function createCommitment(wallet: WalletSessionPort, input: CommitmentInput): Promise<PublicReserve> {
+export async function createCommitment(wallet: WalletSessionPort, input: CommitmentInput, options?: { assertIntent: () => void; beforeRequest: (identity: Hex) => void }): Promise<PublicReserve> {
   const { context, expected, deadline } = await contextFor(wallet);
   const normalized = { nft: address(input.nft), tokenId: BigInt(input.tokenId).toString(), publicSummary: input.publicSummary.trim(), privateCommitment: input.privateCommitment.trim() };
-  const signature = await wallet.signMessage({ message: workflowMessage("commitment", context, expected.account, normalized, deadline), expected });
+  const identity = keccak256(toBytes(JSON.stringify([context.chainId, context.contract.toLowerCase(), expected.account.toLowerCase(), normalized])));
+  options?.assertIntent();
+  options?.beforeRequest(identity);
+  const signature = await wallet.signMessage({ assertIntent: options?.assertIntent, message: workflowMessage("commitment", context, expected.account, normalized, deadline), expected });
+  options?.assertIntent();
   const result = publicReserve(await request("/api/reserve", { address: expected.account, input: normalized, deadline, signature }));
   await wallet.assertCurrent(expected);
   if (!sameAddress(result.seller, expected.account) || !sameAddress(result.labx, context.contract) || result.chainId !== String(context.chainId) || !sameAddress(result.nft, normalized.nft) || result.tokenId !== normalized.tokenId || result.publicSummary !== normalized.publicSummary || result.publicHash !== keccak256(toBytes(normalized.publicSummary))) throw new Error("Stored commitment does not match the reviewed request.");
@@ -86,4 +90,16 @@ export async function readPrivateRecords(wallet: WalletSessionPort, input: Recor
     agreements: body.agreements.map((value: unknown) => { const row = record(value); if (typeof row.recorded !== "boolean" || row.at !== null && typeof row.at !== "string") throw new Error("Invalid agreement record."); return { raffleId: text(row.raffleId), recorded: row.recorded, at: row.at }; }),
     receipts: body.receipts.map((value: unknown) => { const row = record(value); if (typeof row.logIndex !== "number" || !Number.isSafeInteger(row.logIndex) || row.logIndex < 0 || row.status !== "missing" && row.status !== "pending" && row.status !== "delivered") throw new Error("Invalid receipt record."); return { transactionHash: hash(row.transactionHash), logIndex: row.logIndex, status: row.status }; })
   };
+}
+
+export async function recoverPreparation(wallet: WalletSessionPort, input: PreparationRecoveryInput, assertIntent: () => void): Promise<PublicReserve> {
+  const { context, expected, deadline } = await contextFor(wallet);
+  const normalized = { requestIdentity: hash(input.requestIdentity), nft: address(input.nft), tokenId: BigInt(input.tokenId).toString() };
+  assertIntent();
+  const signature = await wallet.signMessage({ message: workflowMessage("preparation recovery", context, expected.account, normalized, deadline), expected, assertIntent });
+  assertIntent();
+  const result = publicReserve(await request("/api/reserve/preparation", { address: expected.account, input: normalized, deadline, signature }));
+  await wallet.assertCurrent(expected);
+  if (!sameAddress(result.seller, expected.account) || !sameAddress(result.labx, context.contract) || result.chainId !== String(context.chainId) || !sameAddress(result.nft, normalized.nft) || result.tokenId !== normalized.tokenId) throw new Error("Recovered preparation does not match.");
+  return result;
 }

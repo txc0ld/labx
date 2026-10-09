@@ -1,4 +1,5 @@
 "use client";
+import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 
 import { useActionTrust } from "../workflow/useActionTrust";
 import Link from "next/link";
@@ -520,13 +521,12 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     if (!raw) return;
     try {
       const intent = parseOwnerExecutionIntent(raw, service.manifest, owner);
-      if (intent.action.id !== review.snapshot.id || reviewHash === null) {
+      if (intent.action.id !== review.snapshot.id) {
         window.localStorage.removeItem(storageKey);
         return;
       }
-      if (intent.action.expectedReviewHash !== reviewHash) {
-        if (isRevokeConfirmationRecovery(intent, review)) setState({ kind: "recovery", intent });
-        else window.localStorage.removeItem(storageKey);
+      if (intent.action.expectedReviewHash !== reviewHash && isRevokeConfirmationRecovery(intent, review)) {
+        setState({ kind: "recovery", intent });
         return;
       }
       setSelected(intent.action.kind);
@@ -555,7 +555,9 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
       return;
     }
     if (intent !== null && intent.action.expectedReviewHash !== reviewHash) {
-      window.localStorage.removeItem(storageKey);
+      invalidateOperations();
+      setState({ kind: "exported", intent, copied: false });
+      return;
     }
     invalidateOperations();
     setSelected(null);
@@ -635,12 +637,13 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     }
   }
 
-  async function prepare() {
+  async function prepare(dispatch = false) {
     if (selected === null || reviewHash === null) return;
     const action: OwnerAction = selected === "approveRaffle"
       ? { kind: "approveRaffle", id: review.snapshot.id, expectedReviewHash: reviewHash, attestations: { canonicalProvenance: true, transferRestrictions: true, drawFunding: true } }
       : { kind: "revokeRaffleApproval", id: review.snapshot.id, expectedReviewHash: reviewHash };
-    if (action.kind === "approveRaffle" && !allAttested) return;
+    if (action.kind === "approveRaffle" && !(dispatch ? canApprove : allAttested)) return;
+    if (dispatch && action.kind === "approveRaffle") setAttestations({ attestedDigest: reviewHash, canonicalProvenance: true, transferRestrictions: true, drawFunding: true });
     const operation = beginOperation(true);
     if (operation === null) return;
     setSelected(action.kind);
@@ -649,18 +652,42 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     try {
       const prepared = await service.prepare({ action, wallet });
       if (!isCurrent(operation)) return;
-      const intent = await service.exportOwnerExecution({ prepared, wallet });
+      const persist = async (intent: OwnerExecutionIntent) => {
+        if (!isCurrent(operation)) throw new Error("This review is no longer active.");
+        if (intent.action.kind !== action.kind || intent.action.id !== review.snapshot.id || intent.action.expectedReviewHash !== reviewHash) throw new Error("Owner execution changed. Review again.");
+        const raw = serializeOwnerExecutionIntent(intent);
+        if (!navigator.locks) throw new Error("Safe recovery requires a browser with secure Web Locks.");
+        await navigator.locks.request(storageKey, () => {
+          if (!isCurrent(operation)) throw new Error("This review is no longer active.");
+          if (dispatch && window.localStorage.getItem(storageKey) !== null) throw new Error("A saved owner execution is still pending. Wait for canonical recovery before another request.");
+          window.localStorage.setItem(storageKey, raw);
+          if (window.localStorage.getItem(storageKey) !== raw) throw new Error("Owner execution recovery could not be saved.");
+        });
+        exported = intent;
+      };
+      if (dispatch) {
+        await service.requestOwnerExecution({ prepared, wallet, beforeRequest: persist, assertIntent: () => { if (!isCurrent(operation)) throw new Error("This review is no longer active."); } });
+      } else {
+        const intent = await service.exportOwnerExecution({ prepared, wallet });
+        await persist(intent);
+        downloadSafeFile(intent, service);
+      }
       if (!isCurrent(operation)) return;
-      if (intent.action.kind !== action.kind || intent.action.id !== review.snapshot.id || intent.action.expectedReviewHash !== reviewHash) throw new Error("Owner execution changed. Review again.");
-      window.localStorage.setItem(storageKey, serializeOwnerExecutionIntent(intent));
       discoveryCursor.current = undefined;
       setDiscovery({ kind: "idle" });
       setDiscoveryBusy(false);
-      downloadSafeFile(intent, service);
-      setState({ kind: "exported", intent, copied: false });
-      exported = intent;
+      if (exported) setState({ kind: "exported", intent: exported, copied: false });
     } catch (error) {
-      if (isCurrent(operation)) setState({ kind: "error", message: error instanceof Error ? error.message : "The owner execution payload could not be prepared." });
+      if (isCurrent(operation)) {
+        if (exported && !isWalletRequestRejected(error)) {
+          setState({ kind: "exported", intent: exported, copied: false });
+          setDiscovery({ kind: "error", message: "The wallet response is uncertain. Watching for canonical execution. Do not send another approval." });
+        } else {
+          if (exported) window.localStorage.removeItem(storageKey);
+          exported = null;
+          setState({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Review and click Approve to try again." : error instanceof Error ? error.message : "The owner execution could not be prepared." });
+        }
+      }
     } finally {
       finishOperation(operation);
     }
@@ -754,7 +781,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     return <section className={styles.flow} aria-labelledby="owner-action-title"><div><p className="kicker">Owner action</p><h2 id="owner-action-title">Choose the current draft action</h2></div><p>Only the current on-chain owner can export these zero-value calls. Connect the Safe account here and keep its signer wallet connected inside Safe.</p><div className="btn-row"><button className="btn" type="button" disabled={!canApprove || admission.status === "approved"} onClick={() => setSelected("approveRaffle")}>{admission.status === "approved" ? "Current draft approved" : "Review approval checklist"}</button><button className="btn btn-dark" type="button" disabled={!canRevoke} onClick={() => setSelected("revokeRaffleApproval")}>Prepare revocation</button></div>{trustReason ? <p className="notice warning" role="status">{trustReason} Revocation and execution confirmation remain available.</p> : null}{!draftReady && admission.status !== "approved" ? <p className="notice warning" role="status">Approval requires an escrowed NFT, confirmed current custody, runtime code and a future sales deadline.</p> : null}</section>;
   }
 
-  if (state.kind === "preparing") return <section className={styles.flow} role="status"><h2>Refreshing the owner review</h2><p>Simulating the {state.actionKind === "approveRaffle" ? "approval" : "revocation"} against current chain state before download.</p><button className="btn" type="button" disabled>Preparing exact Safe file…</button></section>;
+  if (state.kind === "preparing") return <section className={styles.flow} role="status"><h2>Refreshing the owner review</h2><p>Simulating the {state.actionKind === "approveRaffle" ? "approval" : "revocation"} against current chain state before your wallet request.</p><button className="btn" type="button" disabled>Waiting for Safe…</button></section>;
 
   if (state.kind === "exported" || state.kind === "confirming" && !state.confirmationOnly || state.kind === "pending" && !state.confirmationOnly) {
     const intent = state.intent;
@@ -763,25 +790,16 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     const freshApprovalReviewRequired = intent.action.kind === "approveRaffle" && !allAttested;
     return <section className={styles.flow} aria-labelledby="owner-execution-title" aria-busy={discoveryBusy}>
       <div><p className="kicker">Safe handoff</p><h2 id="owner-execution-title">Finish the {verb} in Safe</h2></div>
-      <p>Import this file into Safe, review it, then sign. LABx confirms after execution.</p>
-      <dl className={`${styles.facts} ${styles.executionSummary}`}>
-        <div><dt>Safe</dt><dd className="hash">{intent.from}</dd></div>
-        <div><dt>Network</dt><dd>{chainName(intent.chainId)} ({intent.chainId})</dd></div>
-        <div><dt>Target</dt><dd className="hash">{intent.to}</dd></div>
-        <div><dt>Action</dt><dd>{intent.action.kind === "approveRaffle" ? "Approve raffle" : "Revoke raffle approval"} #{intent.action.id.toString()}</dd></div>
-        <div><dt>ETH value</dt><dd>0 ETH</dd></div>
-      </dl>
-      {freshApprovalReviewRequired ? <div className="notice warning stack" role="status"><span>Review the approval checklist again before downloading a fresh file. You can still confirm the earlier execution below.</span><button className="text-link" type="button" disabled={discoveryBusy} onClick={reviewFreshApproval}>Review checklist for a new file</button></div> : null}
-      <ol className={styles.stepList}>
-        <li><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy || freshApprovalReviewRequired} onClick={() => void prepare()}>Download {verb} file</button></li>
-        <li>{safeHref ? <a className="btn btn-dark" href={safeHref} target="_blank" rel="noreferrer">Open Safe <span aria-hidden="true">↗</span></a> : <span className="muted">Open the owner Safe on the isolated local chain.</span>} Connect a signer wallet inside Safe.</li>
-        <li>Choose <strong>New transaction</strong>, then <strong>Transaction Builder</strong>, and import the file.</li>
-        <li>Review the facts above, sign and execute. Return here for confirmation.</li>
-      </ol>
+      <p>Complete the signatures and execution in your connected Safe. LABx watches automatically for the canonical transaction. A wallet acceptance or proposal alone is not approval.</p>
+      <details><summary>Advanced recovery</summary>
+      <p>Manual execution tools are available if your Safe connection cannot finish this request.</p>
+      <button className="btn btn-dark" type="button" disabled={discoveryBusy || !allAttested} onClick={() => void prepare()}>Download fresh Safe call</button>
+      {safeHref ? <a href={safeHref} target="_blank" rel="noreferrer">Open Safe</a> : null}
+      </details>
       <DiscoveryStatus state={discovery} busy={discoveryBusy} onRetry={() => void discover(intent)} />
-      <details><summary>Manual call fields and technical details</summary><p>The downloaded file contains one zero-ETH call for this exact review. LABx has not submitted it. A Safe transaction proposal hash is not an executed Ethereum transaction hash.</p><p>Before every download LABx repeats the owner, draft, policy, custody, runtime, network and simulation checks.</p><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button></div><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></details>
-      <details><summary>I already have the executed Ethereum transaction hash</summary><label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached two canonical confirmations. A matching event has not been confirmed at that depth yet.</p> : null}<button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm canonical execution"}</button></details>
-      <button className="text-link" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={discardExport}>Discard exported review</button>
+      <details><summary>Advanced call fields and technical details</summary><p>The downloaded file contains one zero-ETH call for this exact review. LABx has not submitted it. A Safe transaction proposal hash is not an executed Ethereum transaction hash.</p><p>Before every download LABx repeats the owner, draft, policy, custody, runtime, network and simulation checks.</p><pre className={styles.payload}>{formatOwnerPayload(intent)}</pre><div className={styles.payloadActions}><button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy} onClick={() => void copyPayload(intent)}>{state.kind === "exported" && state.copied ? "Payload copied" : "Copy exact call fields"}</button></div><dl className={styles.facts}><div><dt>Function</dt><dd>{intent.action.kind}(uint256 id, bytes32 expectedReviewHash)</dd></div><div><dt>ID</dt><dd>{intent.action.id.toString()}</dd></div><div><dt>Expected review hash</dt><dd className="hash">{intent.action.expectedReviewHash}</dd></div><div><dt>Calldata</dt><dd className="hash">{intent.data}</dd></div><div><dt>Review block</dt><dd>{intent.reviewBlock.number.toString()}</dd></div></dl></details>
+      <details><summary>Advanced: executed Ethereum transaction hash</summary><label className={styles.hashInput}>Executed Ethereum transaction hash<input value={hashInput} spellCheck={false} autoCapitalize="none" autoCorrect="off" placeholder="0x…" onChange={(event) => setHashInput(event.target.value.trim())} /></label>{state.kind === "pending" ? <p className="notice warning" role="status">Execution is still pending or has not reached two canonical confirmations. A matching event has not been confirmed at that depth yet.</p> : null}<button className="btn" type="button" disabled={state.kind === "confirming" || discoveryBusy || !isHex(hashInput, { strict: true }) || hashInput.length !== 66} onClick={() => void confirm(intent)}>{state.kind === "confirming" ? "Checking execution…" : state.kind === "pending" ? "Check execution again" : "Confirm canonical execution"}</button></details>
+
     </section>;
   }
 
@@ -789,5 +807,5 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     return <section className={`${styles.flow} ${styles.danger}`}><div><p className="kicker">Revocation review</p><h2>Revoke this draft approval</h2></div><p>Revocation applies only to raffle #{review.snapshot.id.toString()} while it remains in Draft. It advances the review revision so an older pending approval cannot restore the revoked decision.</p><div className="btn-row"><button className="btn btn-dark" type="button" onClick={() => void prepare()}>Download revocation file</button><button className="text-link" type="button" onClick={() => setSelected(null)}>Cancel</button></div></section>;
   }
 
-  return <section className={styles.flow} aria-labelledby="approval-checklist-title"><div><p className="kicker">Human review</p><h2 id="approval-checklist-title">Approval checklist</h2></div>{trustReason ? <p className="notice warning" role="status">{trustReason}</p> : null}{!draftReady ? <p className="notice warning" role="status">Approval requires an escrowed NFT, confirmed current custody, runtime code and a future sales deadline.</p> : null}<fieldset className={styles.checklist}><legend>Confirm each review was completed outside this interface</legend><label><input type="checkbox" checked={attestations.canonicalProvenance} onChange={(event) => updateAttestation("canonicalProvenance", event.target.checked)} /><span><strong>Canonical collection provenance</strong><br />I checked the correct network, collection contract and token against an independent canonical source.</span></label><label><input type="checkbox" checked={attestations.transferRestrictions} onChange={(event) => updateAttestation("transferRestrictions", event.target.checked)} /><span><strong>Transfer restrictions and upgradability</strong><br />I reviewed proxy controls, mutable transfer rules and restrictions that a code hash or ownerOf response cannot prove safe.</span></label><label><input type="checkbox" checked={attestations.drawFunding} onChange={(event) => updateAttestation("drawFunding", event.target.checked)} /><span><strong>Draw funding use</strong><br />I reviewed this raffle&apos;s use of the listed VRF subscription. Approval does not reserve its balance.</span></label></fieldset><div className="btn-row"><button className="btn" type="button" disabled={!allAttested || !canApprove} onClick={() => void prepare()}>Download approval file</button><button className="text-link" type="button" onClick={clearAttestations}>Clear checklist</button></div>{canRevoke ? <details><summary>Advanced owner actions</summary><button className="btn btn-dark" type="button" onClick={() => { clearAttestations(); setSelected("revokeRaffleApproval"); }}>Prepare revocation</button></details> : null}</section>;
+  return <section className={styles.flow} aria-labelledby="approval-checklist-title"><div><p className="kicker">Human review</p><h2 id="approval-checklist-title">Approve this raffle</h2></div>{trustReason ? <p className="notice warning" role="status">{trustReason}</p> : null}{!draftReady ? <p className="notice warning" role="status">Approval requires an escrowed NFT, confirmed custody and a future deadline.</p> : null}<p>By clicking Approve, I confirm that I checked the canonical collection provenance against an independent source, reviewed transfer restrictions and upgradability, and reviewed the draw funding shown above. Approval does not reserve the VRF subscription balance.</p><p className="hash">Review digest: {reviewHash}</p><button className="btn" type="button" disabled={!canApprove} onClick={() => void prepare(true)}>Approve</button>{canRevoke ? <details><summary>Advanced owner actions</summary><button className="btn btn-dark" type="button" onClick={() => { clearAttestations(); setSelected("revokeRaffleApproval"); }}>Prepare revocation</button></details> : null}</section>;
 }

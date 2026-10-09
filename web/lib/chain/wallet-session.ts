@@ -119,12 +119,17 @@ export class WalletSession implements WalletSessionPort {
     const result = await provider.request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId), ...(transaction.nonce === undefined ? {} : { nonce: toHex(transaction.nonce) }) }] });
     return hash(result);
   }
-  async signMessage({ message, expected }: Parameters<WalletSessionPort["signMessage"]>[0]) {
+  async requestExternalExecution(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: `0x${string}`; data: `0x${string}`; value: bigint }, beforeRequest: () => Promise<void>, onProviderRequest: () => void) {
+    const reference = await this.requestTransaction(expected, transaction, beforeRequest, onProviderRequest);
+    return { kind: "wallet-reference" as const, reference };
+  }
+  async signMessage({ message, expected, assertIntent }: Parameters<WalletSessionPort["signMessage"]>[0]) {
     const provider = this.requiredProvider(), epoch = this.epoch;
     await this.assertCurrent(expected);
     this.assertProvider(provider, epoch);
     this.assertSnapshot(expected);
     if (!message.startsWith("LABx ") || message.length > 24_000) throw new Error("Invalid LABx authorization message.");
+    assertIntent?.();
     const result = await provider.request({ method: "personal_sign", params: [stringToHex(message), expected.account] });
     await this.assertCurrent(expected);
     this.assertProvider(provider, epoch);

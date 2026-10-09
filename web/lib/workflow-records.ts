@@ -1,8 +1,8 @@
 import { isHex, keccak256, toBytes, type Address, type Hex } from "viem";
-import { createReserve, readReserveRecord, type PublicReserve, type ReserveRecord } from "./reserve";
-import { address, sameAddress } from "./chain/validation";
+import { createReserve, readReserveRecord, publishedReserve, type PublicReserve, type ReserveRecord } from "./reserve";
+import { address, hash, sameAddress } from "./chain/validation";
 import { verifyWorkflowAuthorization } from "./chain/server";
-import type { CommitmentInput, WorkflowContext } from "./chain/api-types";
+import type { CommitmentInput, PreparationRecoveryInput, WorkflowContext } from "./chain/api-types";
 import type { Store } from "./points";
 export type SignedWorkflowInput<T> = { address: Address; input: T; deadline: string; signature: Hex };
 export type WorkflowVerifier = (args: { address: Address; message: string; signature: Hex }) => Promise<boolean>;
@@ -28,4 +28,18 @@ export async function recoverAuthenticatedCommitment(store: Store, request: Sign
   const record = await readReserveRecord(store, request.input.commit);
   if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId)) throw new Error("This commitment does not belong to this wallet and deployment.");
   return record;
+}
+
+export function parsePreparationRecovery(input: unknown): PreparationRecoveryInput {
+  if (!input || typeof input !== "object" || !("requestIdentity" in input) || !("nft" in input) || !("tokenId" in input) || typeof input.tokenId !== "string" || !/^\d{1,78}$/.test(input.tokenId) || BigInt(input.tokenId) >= 2n ** 256n) throw new Error("Invalid preparation recovery.");
+  return { requestIdentity: hash(input.requestIdentity), nft: address(input.nft), tokenId: BigInt(input.tokenId).toString() };
+}
+export async function recoverAuthenticatedPreparation(store: Store, request: SignedWorkflowInput<PreparationRecoveryInput>, context: WorkflowContext, verify: WorkflowVerifier): Promise<PublicReserve> {
+  const input = parsePreparationRecovery(request.input);
+  await verifyWorkflowAuthorization({ operation: "preparation recovery", context, account: request.address, input, deadline: request.deadline, signature: request.signature, verify });
+  const commit = await store.get(`reserve-request:v3:${input.requestIdentity}`);
+  if (!commit) throw new Error("The saved preparation is not yet available. Retry recovery without creating a new setup.");
+  const record = await readReserveRecord(store, hash(commit));
+  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId) || !sameAddress(record.nft, input.nft) || record.tokenId !== input.tokenId) throw new Error("Preparation does not belong to this wallet, deployment and NFT.");
+  return publishedReserve(record);
 }

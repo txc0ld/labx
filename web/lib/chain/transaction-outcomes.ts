@@ -324,14 +324,14 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     try { return await work; }
     finally { if (checking.get(key) === work) checking.delete(key); }
   }
-  async function submit(prepared: PreparedAction, wallet: WalletSessionPort, onSubmitted?: (submitted: SubmittedAction) => void): Promise<TransactionOutcome> {
+  async function submit(prepared: PreparedAction, wallet: WalletSessionPort, onSubmitted?: (submitted: SubmittedAction) => void, assertIntent?: () => void): Promise<TransactionOutcome> {
     const key = accountKey(prepared.account);
     if (submitting.has(key)) throw new Error("A wallet request is already in progress.");
     submitting.add(key);
     const id = `request-${++sequence}`;
     put({ id, account: prepared.account, kind: "submitting" });
     try {
-      const submitted = await service.submit({ prepared, wallet });
+      const submitted = await service.submit({ prepared, wallet, assertIntent });
       records.set(key, getSnapshot(prepared.account).filter(item => item.id !== id));
       const submittedId = operationId(submitted.account, submitted.hash);
       put({ id: submittedId, account: submitted.account, kind: "checking", submitted });

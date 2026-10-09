@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { isAddress, type Address } from "viem";
+import { isAddress, zeroHash, type Hex, type Address } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
@@ -9,6 +9,8 @@ import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automa
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { STANDARD_MEMBERSHIP_TIERS } from "@/lib/membership-tiers";
 import { canApplyWalletNftSelection, fetchWalletNfts, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
+import { createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord, type CreateRecord } from "@/lib/chain/create-flow";
+import { recoverPreparation } from "@/lib/chain/api";
 import { TransactionFlow } from "./TransactionFlow";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
 import { useWalletSnapshot } from "./WalletGate";
@@ -46,7 +48,7 @@ function NftPreview({ item }: { item: WalletNft }) {
     : <span className={formStyles.nftPlaceholder} aria-hidden="true">NFT</span>;
 }
 
-export type SaveCommitment = (input: { nft: Address; tokenId: string; publicSummary: string; privateCommitment: string }) => Promise<PublicReserve>;
+export type SaveCommitment = (input: { nft: Address; tokenId: string; publicSummary: string; privateCommitment: string }, options?: { assertIntent: () => void; beforeRequest: (identity: Hex) => void }) => Promise<PublicReserve>;
 
 function positiveInteger(value: string, label: string, maximum: number) {
   if (!/^\d+$/.test(value)) throw new Error(`${label} must be a whole number.`);
@@ -104,6 +106,22 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const [selectionError, setSelectionError] = useState("");
   const [selectionStatus, setSelectionStatus] = useState("");
   const walletSnapshot = useWalletSnapshot(wallet);
+  const [creation, setCreation] = useState<{ kind: "idle" } | { kind: "busy"; message: string } | { kind: "error"; message: string } | { kind: "done"; id: bigint }>({ kind: "idle" });
+  const [savedCreation, setSavedCreation] = useState<CreateRecord | null>(null);
+  const createLifetime = useRef({ mounted: false, generation: 0, busy: false, service, wallet, revision: walletSnapshot.revision });
+  if (createLifetime.current.service !== service || createLifetime.current.wallet !== wallet || createLifetime.current.revision !== walletSnapshot.revision) {
+    Object.assign(createLifetime.current, { service, wallet, revision: walletSnapshot.revision, generation: createLifetime.current.generation + 1 });
+  }
+  useEffect(() => {
+    createLifetime.current.mounted = true;
+    return () => { createLifetime.current.mounted = false; createLifetime.current.generation++; };
+  }, []);
+  useEffect(() => {
+    if (existing || walletSnapshot.kind !== "connected") return;
+    try { setSavedCreation(readCreateRecord(window.localStorage, createStorageKey(service, walletSnapshot.account))); }
+    catch { setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
+  }, [service, existing, walletSnapshot]);
+
   const identityLocked = existing?.raffle.escrowed === true;
   const pickerId = useId();
   const formRef = useRef(form);
@@ -138,6 +156,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     : null;
 
   function replaceForm(update: (current: FormDraft) => FormDraft) {
+    createLifetime.current.generation++;
     const next = update(formRef.current);
     formRef.current = next;
     setForm(next);
@@ -332,6 +351,63 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     }
   }
 
+  async function create(event?: FormEvent) {
+    event?.preventDefault();
+    const lifetime = createLifetime.current;
+    if (lifetime.busy) return;
+    lifetime.busy = true;
+    const generation = lifetime.generation;
+    const session = wallet.getSnapshot();
+    const assertIntent = () => {
+      if (!lifetime.mounted || lifetime.generation !== generation || wallet.getSnapshot().revision !== session.revision) throw new Error("This creation intent is no longer active. Click Create again to resume.");
+    };
+    const status = (message: string) => { assertIntent(); setCreation({ kind: "busy", message }); };
+    try {
+      if (session.kind !== "connected" || session.chainId !== service.manifest.chainId) throw new Error("Connect the seller wallet on the configured network.");
+      if (!navigator.locks) throw new Error("Creation recovery requires a browser with secure Web Locks.");
+      const key = createStorageKey(service, session.account);
+      await navigator.locks.request(key, async () => {
+        assertIntent();
+        let record = readCreateRecord(localStorage, key);
+        const persist = (next: CreateRecord) => { writeCreateRecord(localStorage, key, next); record = next; if (lifetime.mounted) setSavedCreation(next); };
+        if (record?.kind === "preparing" && record.requestIdentity === null) { localStorage.removeItem(key); record = null; }
+        if (!record) {
+          if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before creating.");
+          const action = actionFromForm(formRef.current);
+          const input = prepareAutomaticCommitment(action.nft, action.tokenId).input;
+          const data = encodeDraft({ ...action, reserveNonce: zeroHash, reserveCommit: zeroHash });
+          persist({ kind: "preparing", data, requestIdentity: null });
+          status("Sign to securely save the draw setup…");
+          try {
+            const reserve = await saveCommitment({ nft: action.nft, tokenId: action.tokenId.toString(), ...input }, {
+              assertIntent,
+              beforeRequest: requestIdentity => { assertIntent(); persist({ kind: "preparing", data, requestIdentity }); }
+            });
+            if (reserve.nft.toLowerCase() !== action.nft.toLowerCase() || reserve.tokenId !== action.tokenId.toString() || reserve.seller.toLowerCase() !== session.account.toLowerCase() || reserve.labx.toLowerCase() !== service.manifest.address.toLowerCase() || reserve.chainId !== String(service.manifest.chainId) || reserve.publicSummary !== input.publicSummary) throw new Error("Saved draw setup differs from this NFT or seller.");
+            persist({ kind: "draft", data: encodeDraft({ ...action, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
+          } catch (error) {
+            if (isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
+            throw error;
+          }
+        } else if (record.kind === "preparing") {
+          if (record.requestIdentity === null) throw new Error("Preparation identity is unavailable.");
+          const draft = decodeDraft(record.data);
+          status("Recovering the saved draw setup…");
+          const reserve = await recoverPreparation(wallet, { requestIdentity: record.requestIdentity, nft: draft.nft, tokenId: draft.tokenId.toString() }, assertIntent);
+          persist({ kind: "draft", data: encodeDraft({ ...draft, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
+        }
+        const saved = readCreateRecord(localStorage, key);
+        if (saved?.kind !== "draft") throw new Error("Draw setup recovery is incomplete.");
+        const result = await finishCreate({ service, wallet, draft: decodeDraft(saved.data), record: saved, save: persist, assertIntent, onStep: status });
+        assertIntent();
+        setCreation({ kind: "done", id: result.id });
+        await onConfirmed?.();
+      });
+    } catch (error) {
+      if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Click Create to resume when ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });
+    } finally { lifetime.busy = false; }
+  }
+
   function review(event: FormEvent) {
     event.preventDefault();
     invalidateSelection();
@@ -386,6 +462,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     setState({ kind: "editing" });
   }
 
+  if (!existing && (savedCreation !== null || creation.kind === "busy" || creation.kind === "done")) return <section className="stack" aria-live="polite"><h2>{creation.kind === "done" ? "Raffle created" : "Create your raffle"}</h2><p>The draw setup, draft and NFT custody are separate steps. Confirm each requested action in your wallet.</p>{creation.kind === "done" ? <a className="btn" href={`/seller/${creation.id.toString()}`}>View raffle</a> : <><p role={creation.kind === "error" ? "alert" : "status"}>{creation.kind === "busy" || creation.kind === "error" ? creation.message : "Your saved creation is ready to resume. Nothing is sent until you click Create."}</p><button className="btn" type="button" disabled={creation.kind === "busy"} onClick={() => void create()}>{creation.kind === "busy" ? "Creating…" : "Create"}</button></>}</section>;
+
   if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Prepare raffle draft</h2><p className="notice">The saved draw setup for this NFT will be retained. No additional storage signature is needed.</p><p className="notice warning" role="status">Any successful draft update advances the review revision. LABx must approve the edited draft again before it can open, even if you later restore the old values.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Deadline</dt><dd>{formatDate(state.action.salesEnd)} UTC{localDeadline}</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Update raffle draft" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
 
   if (state.kind === "review" || state.kind === "saving" || state.kind === "committed") {
@@ -419,8 +497,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       : null;
 
   return (
-    <form className={`${formStyles.form} studio-form`} onSubmit={review}>
-      <p className={`${formStyles.privacyNotice} notice warning`}>LABx creates and securely stores the draw setup when you prepare the raffle. Your wallet signs that storage request before a new draw setup is used.{existing ? " An unchanged NFT keeps its saved setup without another storage signature. A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
+    <form className={`${formStyles.form} studio-form`} onSubmit={existing ? review : event => void create(event)}>
+      <p className={`${formStyles.privacyNotice} notice warning`}>Create securely saves the draw setup, creates the draft and locks your NFT in raffle custody. Multiple wallet confirmations may follow. These are separate transactions.{existing ? " An unchanged NFT keeps its saved setup without another storage signature. A successful edit invalidates the current LABx approval and requires a new owner review." : ""}</p>
 
       <fieldset className={formStyles.formSection} ref={editStage}>
         <legend><span>01</span> Raffle details</legend>
@@ -463,8 +541,9 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id} aria-label={`Membership ${index + 1}: ${pack.name}`}><legend><span>Membership {index + 1}</span><strong>{pack.name}</strong></legend><div className={formStyles.packFields}><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div></fieldset>)}</div>
       </fieldset>
 
+      {!existing && creation.kind === "error" ? <p className="notice error" role="alert">{creation.message}</p> : null}
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
-      <div className={formStyles.reviewAction}><div><strong>Ready to prepare your raffle?</strong><span>{existing ? "You will review the details. An unchanged NFT needs no new storage signature; a changed NFT does." : "You will review the details, then sign the secure storage request before the draft transaction."}</span></div><button className="btn" type="submit">Prepare raffle draft</button></div>
+      <div className={formStyles.reviewAction}><div><strong>Ready to prepare your raffle?</strong><span>{existing ? "You will review the details. An unchanged NFT needs no new storage signature; a changed NFT does." : "Create locks your NFT. Confirm the storage signature and each transaction in your wallet."}</span></div><button className="btn" type="submit">{existing ? "Prepare raffle draft" : "Create"}</button></div>
     </form>
   );
 }

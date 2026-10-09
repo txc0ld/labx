@@ -36,6 +36,7 @@ export type TransactionFlowProps = {
   disabled?: boolean;
   disabledReason?: string;
   prepareOnMount?: boolean;
+  submitOnClick?: boolean;
 };
 
 function walletSnapshot(wallet: WalletSessionPort) {
@@ -96,7 +97,7 @@ function actionReview(action: WorkflowAction) {
   );
 }
 
-export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false }: TransactionFlowProps) {
+export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
   const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
@@ -202,7 +203,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (isCurrent(expected)) setCurrent(expected, errorState(error));
   }
 
-  async function prepare() {
+  async function prepare(fromClick = false) {
     if (disabled || activeOutcome) return;
     const expected = context.current;
     const session = expected.wallet.getSnapshot();
@@ -219,7 +220,13 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         return;
       }
       const prepared = await expected.service.prepare({ action, wallet: expected.wallet });
-      setCurrent(expected, { kind: "review", prepared });
+      if (!isCurrent(expected)) return;
+      if (fromClick && submitOnClick && action.kind === "open") {
+        setCurrent(expected, { kind: "submitting", prepared });
+        await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
+          if (isCurrent(expected)) ownSubmission.current = { scope: expected.generation, submitted };
+        }, () => { if (!isCurrent(expected)) throw new Error("This listing intent is no longer active."); }), expected);
+      } else setCurrent(expected, { kind: "review", prepared });
     } catch (error) {
       await showError(error, expected);
     } finally {
@@ -312,7 +319,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   if (state.kind === "recovery") return <section className="transaction-state notice warning stack" role="status"><strong>Reconcile pending wallet activity</strong><p>This wallet has an unresolved transaction at nonce {state.nonce}. Check the wallet’s activity and confirm its transaction or replacement hash before another action. Reloading does not remove this protection.</p><label>Transaction hash<input value={state.hash} spellCheck={false} onChange={event => setCurrent(context.current, { ...state, hash: event.target.value.trim() })} /></label><button className="btn" type="button" disabled={disabled || !isHex(state.hash, { strict: true }) || state.hash.length !== 66} onClick={() => { if (isHex(state.hash)) void resume(state.hash); }}>Reconcile transaction</button>{disabledReason && disabled ? <p className="notice warning">{disabledReason}</p> : null}<p className="muted">If the wallet has not broadcast it, use the wallet to replace or cancel that nonce. This page cannot safely clear an uncertain send.</p></section>;
 
   if (state.kind === "idle") {
-    return <button className="btn" type="button" disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare()}>{label}</button>;
+    return <button className="btn" type="button" disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
   }
   if (state.kind === "preparing") {
     return <button className="btn" type="button" disabled>Preparing review…</button>;

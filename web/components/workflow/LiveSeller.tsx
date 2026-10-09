@@ -10,7 +10,7 @@ export function LiveSeller() {
   const bench = useBench();
   const [revision, setRevision] = useState(0);
   const draftForm = bench.browser.kind === "configured"
-    ? <SellerDraftForm service={bench.browser.service} wallet={bench.browser.wallet} saveCommitment={(input) => createCommitment(bench.browser.wallet, input)} onConfirmed={async () => { await bench.refreshCatalog(); setRevision(value => value + 1); }} />
+    ? <SellerDraftForm service={bench.browser.service} wallet={bench.browser.wallet} saveCommitment={(input, options) => createCommitment(bench.browser.wallet, input, options)} onConfirmed={async () => { await bench.refreshCatalog(); setRevision(value => value + 1); }} />
     : undefined;
   return <SellerDashboard browser={bench.browser} draftForm={draftForm} revision={revision} />;
 }

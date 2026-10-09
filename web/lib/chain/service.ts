@@ -1,5 +1,6 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
-import { BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
+import { decodeEventLog, encodeFunctionData, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
+import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
@@ -45,7 +46,42 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       value: 0n, data: fresh.data, reviewBlock: fresh.block, ownerGeneration: review.ownerGeneration,
       openingPolicyGeneration: review.openingPolicyGeneration, reviewRevision: review.snapshot.admission.record.reviewRevision };
   }
-  async function submit({ prepared, wallet }: Parameters<RaffleService["submit"]>[0]) {
+  async function requestOwnerExecution({ prepared, wallet, beforeRequest, assertIntent }: Parameters<RaffleService["requestOwnerExecution"]>[0]) {
+    const entry = reviews.get(prepared);
+    if (!entry || entry.used || (entry.action.kind !== "approveRaffle" && entry.action.kind !== "revokeRaffleApproval")) throw new Error("Review an owner action first.");
+    if (!wallet.requestExternalExecution) throw new Error("Reconnect the Safe through a supported wallet connection.");
+    entry.used = true;
+    assertIntent();
+    await wallet.assertCurrent(entry.session);
+    const fresh = await build(entry.action, entry.session);
+    if (!sameTransaction(fresh, entry.transaction)) throw new Error("Owner execution changed. Review again.");
+    const review = await reader.readAdmission({ id: entry.action.id, block: fresh.block });
+    const intent: OwnerExecutionIntent = { action: structuredClone(entry.action), runtimeCodeHash: manifest.runtimeCodeHash, chainId: manifest.chainId, from: entry.session.account, to: manifest.address, value: 0n, data: fresh.data, reviewBlock: fresh.block, ownerGeneration: review.ownerGeneration, openingPolicyGeneration: review.openingPolicyGeneration, reviewRevision: review.snapshot.admission.record.reviewRevision };
+    return wallet.requestExternalExecution(entry.session, { to: intent.to, data: intent.data, value: intent.value }, async () => {
+      assertIntent();
+      await beforeRequest(structuredClone(intent));
+      assertIntent();
+    }, assertIntent);
+  }
+  async function resolveCreatedDraft({ receipt, draft }: Parameters<RaffleService["resolveCreatedDraft"]>[0]) {
+    if (!canonicalReceipts.has(receipt) || receipt.status !== "success" || !receipt.to || !sameAddress(receipt.to, manifest.address) || receipt.value !== 0n) throw new Error("Verify the exact canonical draft transaction first.");
+    const data = encodeFunctionData({ abi: raffleAbi, functionName: "createRaffle", args: [draft.nft, draft.tokenId, draft.salesEnd, draft.reserveNonce, draft.reserveCommit, draft.title, draft.packs] });
+    if (receipt.data.toLowerCase() !== data.toLowerCase()) throw new Error("Created draft calldata differs from this intent.");
+    const raw = await client.getTransactionReceipt({ hash: receipt.hash });
+    await validateReceipt(raw, receipt.account);
+    const matches = raw.logs.filter(log => sameAddress(log.address, manifest.address)).flatMap(log => {
+      try { const event = decodeEventLog({ abi: raffleAbi, eventName: "RaffleCreated", data: log.data, topics: log.topics, strict: true }); return [event.args]; } catch { return []; }
+    });
+    if (matches.length !== 1) throw new Error("Expected one canonical creation event.");
+    const event = matches[0];
+    if (!sameAddress(event.seller, receipt.account) || !sameAddress(event.nft, draft.nft) || event.tokenId !== draft.tokenId || event.reserveCommit !== draft.reserveCommit) throw new Error("Creation event differs from this intent.");
+    const snapshot = await reader.readRaffle({ id: event.id });
+    const raffle = snapshot.raffle;
+    if (!sameAddress(raffle.seller, receipt.account) || !sameAddress(raffle.nft, draft.nft) || raffle.tokenId !== draft.tokenId || raffle.reserveNonce !== draft.reserveNonce || raffle.reserveCommit !== draft.reserveCommit || raffle.title !== draft.title || raffle.salesEnd !== draft.salesEnd || snapshot.packs.length !== draft.packs.length || snapshot.packs.some((pack, index) => { const expected = draft.packs[index]; return pack.name !== expected.name || pack.priceUsdc !== expected.priceUsdc || pack.bonusEntries !== expected.bonusEntries || pack.maxSupply !== expected.maxSupply; })) throw new Error("Created raffle no longer matches the captured draft.");
+    return snapshot;
+  }
+  async function submit({ prepared, wallet, assertIntent }: Parameters<RaffleService["submit"]>[0]) {
+    assertIntent?.();
     const entry = reviews.get(prepared);
     if (!entry || entry.used) throw new Error("This review is invalid or already submitted. Review again.");
     const account = entry.session.account, key = account.toLowerCase();
@@ -68,11 +104,12 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await wallet.assertCurrent(entry.session);
       const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce }, async () => {
         await journal.exclusive(account, async () => {
+          assertIntent?.();
           if (journal.read(account)) throw new Error(unresolved);
           intent = { id: crypto.randomUUID(), intentHash: transactionIntent(entry.transaction), nonce, startedBlock: fresh.block.number.toString(), hash: null };
           journal.write(account, intent);
         });
-      }, () => { walletRequested = true; });
+      }, () => { assertIntent?.(); walletRequested = true; });
       broadcastHash = txHash;
       if (!walletRequested) throw new Error("Wallet adapter did not establish transaction recovery protection.");
       await journal.exclusive(account, async () => {
@@ -254,6 +291,6 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const current = journal.read(session.account); return current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null;
   }
-  return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution,
+  return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, requestOwnerExecution, resolveCreatedDraft,
     discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
 }

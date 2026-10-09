@@ -22,6 +22,7 @@ export type OwnerExecutionIntent = {
   action: OwnerAction; runtimeCodeHash: Hex; chainId: number; from: Address; to: Address; value: 0n; data: Hex;
   reviewBlock: BlockRef; ownerGeneration: bigint; openingPolicyGeneration: bigint; reviewRevision: bigint;
 };
+export type ExternalExecutionReference = { kind: "wallet-reference"; reference: Hex };
 export type OwnerExecutionConfirmation =
   | { kind: "pending"; hash: Hex }
   | { kind: "executed"; hash: Hex; blockNumber: bigint; state: "approved" | "revoked" | "stale"; review: AdmissionReview };
