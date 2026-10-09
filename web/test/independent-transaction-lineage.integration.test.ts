@@ -396,7 +396,12 @@ run("independent transaction replacement lineage on isolated Anvil", () => {
     await chain.write(chain.raffle, "escrow", [id], chain.seller);
     await chain.admit(id);
     const policy = await service.openingPolicy();
-    await chain.write(chain.raffle, "openWithPolicy", [id, policy.hash], chain.seller);
+    const seller = chain.wallet(chain.seller).session;
+    await seller.connect();
+    const listing = await service.submit({ prepared: await service.prepare({ action: { kind: "open", id, expectedPolicyHash: policy.hash }, wallet: seller }), wallet: seller });
+    await chain.client.waitForTransactionReceipt({ hash: listing.hash });
+    await chain.mine();
+    await expect(service.confirm({ transaction: listing, timeoutMs: 2_000 })).resolves.toMatchObject({ kind: "confirmed" });
     await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
     const owner = createTransactionOutcomes(service, () => storage);

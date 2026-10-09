@@ -102,17 +102,21 @@ run("action-specific activation trust on isolated Anvil", () => {
     await expect(c.service.prepare({ action: { kind: "approveUsdc", id: unsafe, packId: 0, quantity: 1 }, wallet: buyer })).rejects.toThrow(/not opened with approval/);
     await expect(c.service.prepare({ action: purchase(unsafe), wallet: buyer })).rejects.toThrow(/not opened with approval/);
   });
-  it("rechecks trust after preparation before any wallet request or owner payload export", async () => {
+  it("rechecks trust after preparation before any wallet, Safe request or owner payload export", async () => {
     const service = createRaffleService(c.client, c.manifest, memoryPendingJournal());
     const approvals = [await approval(), await opening(), { kind: "approveUsdc", id: openId, packId: 0, quantity: 1 } satisfies WorkflowAction, purchase()];
     const wallets = [owner, seller, buyer, buyer];
     const prepared = await Promise.all(approvals.map((action, i) => service.prepare({ action, wallet: wallets[i] })));
     const exported = await service.prepare({ action: await approval(), wallet: owner });
+    const requested = await service.prepare({ action: await approval(), wallet: owner });
     await c.write(c.raffle, "transferOwnership", [c.stranger]);
     const requests = wallets.map(wallet => vi.spyOn(wallet, "requestTransaction"));
+    const safeRequest = vi.spyOn(owner, "requestExternalExecution");
     for (let i = 0; i < prepared.length; i++) await expect(service.submit({ prepared: prepared[i], wallet: wallets[i] })).rejects.toThrow(/pending ownership transfer/);
+    await expect(service.requestOwnerExecution({ prepared: requested, wallet: owner, beforeRequest: async () => {}, assertIntent: () => {} })).rejects.toThrow(/pending ownership transfer/);
     await expect(service.exportOwnerExecution({ prepared: exported, wallet: owner })).rejects.toThrow(/pending ownership transfer/);
     requests.forEach(request => expect(request).not.toHaveBeenCalled());
+    expect(safeRequest).not.toHaveBeenCalled();
     expect(await service.pending({ wallet: buyer })).toBeNull();
   });
   it("rejects a changed pinned block after trust reads", async () => {

@@ -73,14 +73,11 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
   }
 
   async function transact(label: string) {
-    const automatic = ["Create raffle draft", "Approve NFT", "Escrow NFT", "Open memberships"].includes(label);
-    if (!automatic) {
-      const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
-      const secondary = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
-      await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
-      if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
-      await trigger.click();
-    }
+    const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
+    const secondary = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
+    await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
+    if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
+    await trigger.click();
     const confirm = fixture.page.getByRole("button", { name: `Confirm ${label.toLowerCase()}`, exact: true });
     await confirm.waitFor({ state: "visible", timeout: 15_000 });
     const review = confirm.locator("xpath=ancestor::section[contains(@class, 'transaction-review')]");
@@ -101,7 +98,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
   async function createDraft(input: { tokenId: bigint; title: string; price: string; supply: string; deadline: number }) {
     await goto("/seller", chain.seller);
-    const draftSummary = fixture.page.locator("summary").filter({ hasText: "Prepare a draft" });
+    const draftSummary = fixture.page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ });
     await draftSummary.waitFor({ state: "visible", timeout: 10_000 });
     await draftSummary.click();
     await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible", timeout: 10_000 });
@@ -110,50 +107,27 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await fixture.page.getByLabel("Token ID").fill(input.tokenId.toString());
     await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(input.deadline * 1000).toISOString().slice(0, 16));
     await fillStandardMembershipEconomics(fixture.page, () => ({ price: input.price, bonusEntries: "3", supply: input.supply }));
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    const review = await transact("Create raffle draft");
-    expect(review).toContain(chain.raffle.address);
-    const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" }) - 1n;
-    const card = fixture.page.locator("li").filter({ has: fixture.page.getByRole("heading", { name: input.title, exact: true }) });
-    const manage = card.getByRole("link", { name: /Manage raffle/ });
-    await manage.waitFor({ state: "visible", timeout: 15_000 });
-    await manage.click();
+    const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
+    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
+    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
     await fixture.page.waitForURL(`**/seller/${id.toString()}`);
     await ensureConnected(chain.seller);
+    const snapshot = await chain.service.readRaffle({ id });
+    expect(snapshot.raffle.escrowed).toBe(true);
+    expect(snapshot.raffle.tokenId).toBe(input.tokenId);
     return id;
   }
 
   async function approveDraftAsOwner(id: bigint) {
     await switchAccount(chain.operator);
     await goto(`/review/${id.toString()}`, chain.operator);
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    for (const checkbox of await fixture.page.locator("fieldset input[type=checkbox]").all()) await checkbox.check();
-    await fixture.page.getByRole("button", { name: "Download approval file", exact: true }).click();
-    await fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const review = await chain.service.readAdmission({ id });
-    if (review.snapshot.admission.reviewHash === null) throw new Error("Draft review hash missing.");
-    const receipt = await chain.write(chain.raffle, "approveRaffle", [id, review.snapshot.admission.reviewHash]);
-    await chain.mine();
-    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
-    await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
-    await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
+    await fixture.page.getByRole("button", { name: "Approve", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
   }
 
   async function escrowAndOpen(id: bigint) {
-    const approvalReview = fixture.page.locator(".transaction-review");
-    await approvalReview.getByRole("button", { name: "Confirm approve nft", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    const nonceBeforeCancel = await chain.client.getTransactionCount({ address: chain.seller });
-    await approvalReview.getByRole("button", { name: "Cancel", exact: true }).click();
-    const prepareAgain = fixture.page.getByRole("button", { name: "Approve NFT", exact: true });
-    await prepareAgain.waitFor({ state: "visible", timeout: 5_000 });
-    await fixture.page.waitForTimeout(250);
-    expect(await approvalReview.count()).toBe(0);
-    expect(await chain.client.getTransactionCount({ address: chain.seller })).toBe(nonceBeforeCancel);
-    await prepareAgain.click();
-    expect(await transact("Approve NFT")).toContain(chain.raffle.address);
-    expect(await transact("Escrow NFT")).toContain(chain.raffle.address);
     await fixture.page.getByRole("heading", { name: "Awaiting LABx review", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     const cancel = fixture.page.getByRole("button", { name: "Cancel draft", exact: true });
     expect(await cancel.isVisible()).toBe(false);
@@ -161,12 +135,15 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await advanced.click();
     expect(await cancel.isVisible()).toBe(true);
     await advanced.click();
-    expect(await fixture.page.getByRole("button", { name: "Confirm open memberships", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "List", exact: true }).count()).toBe(0);
     await approveDraftAsOwner(id);
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
-    await fixture.page.getByRole("heading", { name: "Open memberships", exact: true, level: 2 }).waitFor({ state: "visible" });
-    expect(await transact("Open memberships")).toContain(chain.raffle.address);
+    await fixture.page.getByRole("heading", { name: "List your raffle", exact: true, level: 2 }).waitFor({ state: "visible" });
+    await fixture.page.getByText(chain.manifest.expectedPolicy.termsHash, { exact: true }).waitFor({ state: "visible" });
+    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
+    await fixture.page.getByRole("button", { name: "List", exact: true }).click();
+    await expect.poll(async () => (await chain.service.readRaffle({ id })).raffle.phase, { timeout: 15_000 }).toBe(1);
   }
 
   async function purchase(id: bigint, expectedTotal: string) {

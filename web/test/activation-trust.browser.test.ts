@@ -48,7 +48,7 @@ run("activation drift beside browser recovery", () => {
     await viewport(1440);
     await visit("/review/3", c.operator);
     await fixture.page.getByText(/reviewed deployment has a pending ownership transfer/).waitFor({ state: "visible", timeout: 15_000 });
-    const approveDraft = fixture.page.getByRole("button", { name: "Download approval file", exact: true });
+    const approveDraft = fixture.page.getByRole("button", { name: "Approve", exact: true });
     expect(await approveDraft.isDisabled()).toBe(true);
     expect(await fixture.page.getByText(/Approval requires an escrowed NFT/).count()).toBe(0);
     await viewport(375);
@@ -59,9 +59,8 @@ run("activation drift beside browser recovery", () => {
     await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
     const displayedDigest = fixture.page.locator("dt", { hasText: /^Draft digest$/ }).locator("..").locator("dd");
     await expect.poll(() => displayedDigest.textContent(), { timeout: 15_000 }).toBe(refreshedReview.snapshot.admission.reviewHash);
-    const checklist = fixture.page.getByRole("checkbox");
-    expect(await checklist.count()).toBe(3);
-    for (const checkbox of await checklist.all()) await checkbox.check();
+    expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
+    await fixture.page.getByText(/By clicking Approve, I confirm that I checked the canonical collection provenance/).waitFor({ state: "visible" });
     await expect.poll(() => approveDraft.isEnabled(), { timeout: 15_000 }).toBe(true);
     await c.admit(1n); await c.write(c.raffle, "transferOwnership", [c.stranger]);
     await visit("/review/1", c.operator);
@@ -76,7 +75,7 @@ run("activation drift beside browser recovery", () => {
     const review = await c.service.readAdmission({ id: 1n });
     if (!review.snapshot.admission.reviewHash) throw new Error("Missing revocation hash.");
     const receipt = await c.write(c.raffle, "revokeRaffleApproval", [1n, review.snapshot.admission.reviewHash]); await c.mine();
-    await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
+    await fixture.page.getByText("Advanced: executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(receipt.transactionHash);
     await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ timeout: 15_000 });
@@ -153,16 +152,17 @@ run("activation drift beside browser recovery", () => {
       const now = (await c.client.getBlock()).timestamp, digest = keccak256("0x5678");
       await c.write(c.raffle, "createRaffle", [c.nft.address, 4n, now + 86400n, digest, digest, "Cold NFT approval", [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]], c.seller);
       await visit("/seller/4", c.seller);
-      await fixture.page.getByRole("button", { name: "Confirm approve nft", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.getByRole("button", { name: "Create", exact: true }).waitFor({ timeout: 15_000 });
       await fixture.page.waitForLoadState("networkidle");
       const nftApproval = await c.write(c.nft, "approve", [c.raffle.address, 4n], c.seller); await c.mine();
       raffleReads = 0;
       await recoverReceipt(c.seller, nftApproval.transactionHash);
       expect(raffleReads).toBe(0);
       await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
-      await fixture.page.getByRole("button", { name: "Confirm escrow nft", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+      await fixture.page.getByRole("heading", { name: "Awaiting LABx review", exact: true }).waitFor({ timeout: 15_000 });
       expect(raffleReads).toBeGreaterThan(0);
-      await fixture.page.locator(".transaction-review").waitFor({ timeout: 15_000 });
+      expect((await c.service.readRaffle({ id: 4n })).raffle.escrowed).toBe(true);
     } finally { await fixture.page.unroute(`${c.url}/`); }
   }, 70_000);
 

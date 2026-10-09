@@ -1,15 +1,14 @@
-import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Page } from "playwright";
-import type { Hex } from "viem";
 import { hash } from "../lib/chain/validation";
+import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
 
 const run = process.env.RUN_INDEPENDENT_TRANSACTION_LINEAGE_BROWSER === "1" ? describe : describe.skip;
 
-run("rendered cross-tab replacement lineage on isolated Anvil", () => {
+run("rendered creation replacement lineage on isolated Anvil", () => {
   let chain: LocalChain;
   let fixture: Awaited<ReturnType<typeof browserChain>>;
   let tabA: Page;
@@ -39,113 +38,66 @@ run("rendered cross-tab replacement lineage on isolated Anvil", () => {
     expect(response?.status()).toBe(200);
     const connect = page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await page.locator("summary").filter({ hasText: "Prepare a draft" }).waitFor({ state: "visible", timeout: 15_000 });
+    await page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ }).waitFor({ state: "visible", timeout: 15_000 });
   }
 
-  async function prepareDraft(page: Page) {
-    const summary = page.locator("summary").filter({ hasText: "Prepare a draft" });
-    await summary.click();
+  async function fillDraft(page: Page) {
+    await page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ }).click();
     const block = await chain.client.getBlock();
     await page.getByLabel("Raffle title").fill("Rendered replacement lineage");
     await page.getByLabel("NFT contract").fill(chain.nft.address);
     await page.getByLabel("Token ID").fill("9101");
     await page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 3600n) * 1000).toISOString().slice(0, 16));
     await fillStandardMembershipEconomics(page, () => ({ price: "1", bonusEntries: "1", supply: "10" }));
-    await page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).click();
-    await page.locator(".transaction-review").getByRole("button", { name: "Confirm create raffle draft", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }
 
-  function transactionHash(text: string): Hex {
-    const value = text.match(/0x[0-9a-fA-F]{64}/)?.[0];
-    if (!value) throw new Error(`Transaction hash missing from rendered outcome: ${text}`);
-    return hash(value);
-  }
-
-  it("keeps a prehydrated tab and stale seller check on canonical H2 without an orphan", async () => {
-    // Tab B owns an already-hydrated empty outcome store before tab A submits H1.
+  it("keeps a replaced Create step recoverable and never starts another send on reload", async () => {
     await openSeller(tabB);
     await openSeller(tabA);
-    await prepareDraft(tabA);
+    await fillDraft(tabA);
     await chain.rpc("evm_setAutomine", [false]);
+    await tabA.getByRole("button", { name: "Create", exact: true }).click();
 
-    await tabA.locator(".transaction-review").getByRole("button", { name: "Confirm create raffle draft", exact: true }).click();
-    const submitted = tabA.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction submitted" });
-    await submitted.waitFor({ state: "visible", timeout: 10_000 });
-    const h1 = transactionHash(await submitted.innerText());
-
-    // Expire only tab A's real confirmation watcher; the on-chain transaction remains unmined.
-    await tabA.clock.fastForward(61_000);
-    const staleCheck = tabA.getByRole("button", { name: "Check confirmation", exact: true }).last();
-    await staleCheck.waitFor({ state: "visible", timeout: 10_000 });
+    const readJournal = () => tabA.evaluate(account => {
+      const key = Object.keys(localStorage).find(candidate => candidate.startsWith("labx:pending:v1:") && candidate.includes(account.toLowerCase()));
+      return key ? localStorage.getItem(key) : null;
+    }, chain.seller);
+    await expect.poll(readJournal, { timeout: 15_000 }).toMatch(/^\{.+\}$/);
+    const journal = await readJournal();
+    if (journal === null) throw new Error("Pending Create journal missing.");
+    const parsed: unknown = JSON.parse(journal);
+    if (!parsed || typeof parsed !== "object" || !("hash" in parsed) || typeof parsed.hash !== "string") throw new Error("Submitted Create hash missing.");
+    const h1 = hash(parsed.hash);
 
     const original = await chain.client.getTransaction({ hash: h1 });
-    const h2 = hash(await chain.rpc("eth_sendTransaction", [{
-      from: chain.seller,
-      to: chain.seller,
-      nonce: `0x${original.nonce.toString(16)}`,
-      gasPrice: "0xb2d05e00",
-      gas: "0x989680",
-      value: "0x0",
-      data: "0x"
-    }]));
+    const h2 = hash(await chain.rpc("eth_sendTransaction", [{ from: chain.seller, to: chain.seller, nonce: `0x${original.nonce.toString(16)}`, gasPrice: "0xb2d05e00", gas: "0x989680", value: "0x0", data: "0x" }]));
     await chain.mine();
     await chain.mine();
+    await tabA.clock.fastForward(121_000);
+    await tabA.getByRole("alert").filter({ hasText: /Creation stopped|canonical confirmation|replaced/ }).waitFor({ state: "visible", timeout: 15_000 });
 
-    const profile = await tabB.goto(`${fixture.baseUrl}/profile`, { waitUntil: "domcontentloaded" });
-    expect(profile?.status()).toBe(200);
-    const connectProfile = tabB.getByRole("button", { name: "Connect wallet", exact: true });
-    if (await connectProfile.isVisible().catch(() => false)) await connectProfile.click();
-    const tabBRecovery = tabB.locator(".resume-transaction form");
-    await tabBRecovery.waitFor({ state: "visible", timeout: 10_000 });
-    await tabBRecovery.getByLabel("Transaction hash").fill(h2);
-    await tabBRecovery.getByRole("button", { name: "Check transaction", exact: true }).click();
-    const canonicalB = tabB.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
-    await openWalletActivity(tabB);
-    await canonicalB.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-
-    await staleCheck.click();
-    const staleResult = tabA.locator(".transaction-state", { hasText: "Transaction replaced" });
-    try {
-      await staleResult.getByText("Transaction replaced", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    } catch (error) {
-      const diagnostic = {
-        flow: await tabA.locator(".transaction-state").allInnerTexts(),
-        outcomes: await tabA.locator(".resume-transaction .transaction-outcome").allInnerTexts(),
-        alerts: await tabA.locator("[role=alert]").allInnerTexts()
-      };
-      throw new Error(`Stale seller check did not resolve to H2: ${JSON.stringify(diagnostic)}`, { cause: error });
-    }
-    await openWalletActivity(tabA);
-    const canonicalA = tabA.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
-    await expect.poll(() => canonicalA.innerText(), { timeout: 15_000 }).toMatch(/Transaction (?:replaced|confirmed)/);
-    expect(await canonicalA.innerText()).not.toMatch(/Purchase confirmed|create raffle draft/i);
-    expect(await tabA.getByRole("button", { name: "Confirm create raffle draft", exact: true }).count()).toBe(0);
-    await tabA.getByRole("button", { name: "Review again", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-
-    const checkpoints = await tabA.evaluate(account => Array.from({ length: localStorage.length }, (_, index) => {
-      const key = localStorage.key(index);
-      return key === null ? null : [key, localStorage.getItem(key) ?? ""] as const;
-    }).filter((entry): entry is readonly [string, string] => entry !== null
-      && entry[0].startsWith("labx:outcome:")
-      && entry[0].includes(account.toLowerCase())), chain.seller);
-    expect(checkpoints).toHaveLength(1);
-    expect(checkpoints[0]?.[0]).toContain(chain.seller.toLowerCase());
-    expect(checkpoints[0]?.[1].toLowerCase()).toContain(h2.toLowerCase());
+    const createRecord = await tabA.evaluate(account => {
+      const key = Object.keys(localStorage).find(candidate => candidate.startsWith("labx:create:v1:") && candidate.endsWith(account.toLowerCase()));
+      return key ? localStorage.getItem(key) : null;
+    }, chain.seller);
+    expect(createRecord).not.toBeNull();
+    expect(createRecord?.toLowerCase()).toContain(h1.toLowerCase());
+    expect(createRecord?.toLowerCase()).not.toContain(h2.toLowerCase());
+    expect(await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" })).toBe(1n);
 
     await tabA.reload({ waitUntil: "domcontentloaded" });
-    await openWalletActivity(tabA);
-    const reloaded = tabA.locator(".resume-transaction .transaction-outcome", { hasText: h2 });
-    await expect.poll(() => reloaded.innerText(), { timeout: 15_000 }).toMatch(/Transaction (?:replaced|confirmed)/);
-    expect(await reloaded.innerText()).not.toMatch(/Purchase confirmed|create raffle draft/i);
-    expect(await tabA.getByText(/Saved transaction needs verification|Transaction needs attention/).count()).toBe(0);
+    await tabA.getByRole("button", { name: "Create", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await tabA.evaluate(() => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      type Scope = Window & { ethereum: { request: Request }; __lineageReloadSends: number };
+      const scope = window as unknown as Scope;
+      const originalRequest = scope.ethereum.request.bind(scope.ethereum);
+      scope.__lineageReloadSends = 0;
+      scope.ethereum.request = input => { if (input.method === "eth_sendTransaction") scope.__lineageReloadSends += 1; return originalRequest(input); };
+    });
+    await tabA.waitForTimeout(750);
+    expect(await tabA.evaluate(() => (window as unknown as Window & { __lineageReloadSends: number }).__lineageReloadSends)).toBe(0);
     expect(await tabA.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    const bounds = await reloaded.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds && bounds.x >= -1 && bounds.x + bounds.width <= 391).toBe(true);
-    const dismiss = reloaded.getByRole("button", { name: "Dismiss receipt", exact: true });
-    await dismiss.waitFor({ state: "visible", timeout: 10_000 });
-    expect(await dismiss.isEnabled()).toBe(true);
     expect(pageErrors).toEqual([]);
-  }, 120_000);
+  }, 150_000);
 });
