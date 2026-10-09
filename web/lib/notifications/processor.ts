@@ -4,17 +4,20 @@ import type { BlockRef } from "../chain/types";
 import type { Store } from "../points";
 import type { MailSender } from "../receipt-delivery";
 import { deliverNotification } from "./delivery";
-import { adaptNotificationWorkflow, NotificationRangeTooDenseError, parseNotificationEvent, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow, type VerifiedEventPage } from "./events";
+import { adaptNotificationWorkflow, NotificationRangeTooDenseError, NotificationReadBudgetError, NotificationRpcTimeoutError, parseNotificationEvent, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow, type VerifiedEventPage } from "./events";
 
 const PAGE_BLOCKS = 250n;
 const MAX_INGESTION_PAGES = 2;
 const MAX_RETRY_PAGES = 4;
 const MAX_EVENT_CHECKS = 400;
 const MAX_SENDS = 3;
-const MAX_RUNTIME_MS = 8_000;
+const DELIVERY_RUNTIME_MS = 31_000;
+const INGESTION_RUNTIME_MS = 10_000;
+const SOURCE_CALL_MS = 6_000;
+const MIN_NOTIFICATION_LOG_GAS = 1_125n;
 
 type StoredActivation = { version: 1; deployment: string; blockNumber: string; blockHash: Hex };
-type StoredPage = {
+type StoredPageV1 = {
   version: 1;
   deployment: string;
   startBlock: string;
@@ -22,18 +25,27 @@ type StoredPage = {
   nextBlock: string;
   events: readonly NotificationEvent[];
 };
+type StoredRangePage = Omit<StoredPageV1, "version"> & { version: 2; kind: "range" };
+type StoredSingleBlockPage = Omit<StoredPageV1, "version"> & {
+  version: 2;
+  kind: "single-block";
+  blockNumber: string;
+  blockHash: Hex;
+  gasLimit: string;
+};
+type StoredPage = StoredPageV1 | StoredRangePage | StoredSingleBlockPage;
 
 export type NotificationProcessorSource = {
   deployment: string;
   origin: string;
   latest: BlockRef;
   finalized(): Promise<BlockRef>;
-  block(number: bigint): Promise<BlockRef>;
+  block(number: bigint): Promise<BlockRef & { gasLimit?: bigint }>;
   events(fromBlock: bigint, toBlock: bigint): Promise<VerifiedEventPage>;
 };
 
 export type NotificationRunReport = {
-  status: "activated" | "ok" | "idle" | "reconciliation-required";
+  status: "activated" | "ok" | "idle" | "degraded" | "reconciliation-required";
   activationBlock: string;
   finalizedBlock: string;
   ingestedPages: number;
@@ -46,7 +58,11 @@ export type NotificationRunReport = {
   ingestionNextBlock: string;
   retryNextBlock: string;
   reconciliation?: string;
+  ingestion: { status: "idle" | "advanced" | "blocked"; fromBlock?: string; toBlock?: string; reason?: IngestionFailureReason; incident?: string };
+  lastIncident?: { id: string; kind: "ingestion" | "delivery" | "reconciliation"; reason: string };
 };
+
+type IngestionFailureReason = "range-too-dense" | "rpc-budget-exhausted" | "rpc-timeout" | "source-unavailable";
 
 export async function notificationProcessorSource(): Promise<NotificationProcessorSource> {
   const server = await serverWorkflow();
@@ -84,7 +100,6 @@ export async function processNotifications(args: {
 }): Promise<NotificationRunReport> {
   const now = args.now ?? Date.now();
   const deliveryClock = args.clock ?? (args.now === undefined ? Date.now : () => now);
-  const startedAt = Date.now();
   const prefix = `raffle-notifications:v1:${args.source.deployment}`;
   const activationKey = `${prefix}:activation`;
   const activationCandidate: StoredActivation = {
@@ -109,13 +124,13 @@ export async function processNotifications(args: {
     return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary needs reconciliation." };
   }
 
-  const finalized = await args.source.finalized();
-  empty.finalizedBlock = finalized.number.toString();
-  if (finalized.number < activationBlock) return { ...empty, status: "idle" };
   const verifiedBoundaryKey = `${prefix}:activation-verified`;
   const verifiedBoundary = await args.store.get(verifiedBoundaryKey);
   if (verifiedBoundary === null) {
-    const boundary = await args.source.block(activationBlock);
+    const finalized = await within(() => args.source.finalized(), SOURCE_CALL_MS);
+    empty.finalizedBlock = finalized.number.toString();
+    if (finalized.number < activationBlock) return { ...empty, status: "idle" };
+    const boundary = await within(() => args.source.block(activationBlock), SOURCE_CALL_MS);
     if (boundary.hash.toLowerCase() !== activation.blockHash.toLowerCase()) {
       const marker = JSON.stringify({ version: 1, reason: "activation-boundary-changed", recordedAt: now });
       await args.store.setIfAbsent({ [terminalKey]: marker });
@@ -125,102 +140,79 @@ export async function processNotifications(args: {
   } else {
     parseVerifiedBoundary(verifiedBoundary, activation);
   }
-  if (finalized.number < firstEventBlock) return { ...empty, status: "idle" };
 
   const ingestionHintKey = `${prefix}:ingestion-hint`;
   const retryHintKey = `${prefix}:retry-hint`;
   const lastPageKey = `${prefix}:last-ingested-page`;
-  let ingestionStart = await verifiedProgressHint(args.store, await args.store.get(ingestionHintKey), firstEventBlock, prefix, "ingestion");
-  let ingestedPages = 0;
-  let ingestedEvents = 0;
-  const ingestedStarts: bigint[] = [];
-  while (
-    ingestionStart <= finalized.number
-    && ingestedPages < MAX_INGESTION_PAGES
-    && Date.now() - startedAt < MAX_RUNTIME_MS
-  ) {
-    const page = await loadOrCreatePage(args.store, args.source, prefix, ingestionStart, finalized.number);
-    await args.store.set(ingestionHintKey, page.nextBlock);
-    await args.store.set(lastPageKey, page.startBlock);
-    ingestionStart = BigInt(page.nextBlock);
-    ingestedStarts.push(BigInt(page.startBlock));
-    ingestedPages += 1;
-    ingestedEvents += page.events.length;
-  }
-
   const retryStart = await verifiedProgressHint(args.store, await args.store.get(retryHintKey), firstEventBlock, prefix, "retry");
   const retryStarts = await retryPageStarts(args.store, prefix, retryStart);
   const lastPage = parseOptionalHint(await args.store.get(lastPageKey));
   if (lastPage !== null && !retryStarts.includes(lastPage)) retryStarts.push(lastPage);
-  for (const start of ingestedStarts) if (!retryStarts.includes(start)) retryStarts.push(start);
+  const delivery = {
+    deadline: Date.now() + DELIVERY_RUNTIME_MS,
+    checkedEvents: 0,
+    sends: 0,
+    accepted: 0,
+    pending: 0,
+    reconciliationRequired: 0,
+    retryNext: retryStart,
+    lastIncident: await readLatestIncident(args.store, prefix)
+  };
+  await processDeliveryPages(args, prefix, retryStarts, delivery, now, deliveryClock);
 
-  let checkedEvents = 0;
-  let sends = 0;
-  let accepted = 0;
-  let pending = 0;
-  let reconciliationRequired = 0;
-  let retryNext = retryStart;
-  for (const pageStart of retryStarts) {
-    if (checkedEvents >= MAX_EVENT_CHECKS || Date.now() - startedAt >= MAX_RUNTIME_MS) break;
-    const raw = await args.store.get(pageKey(prefix, pageStart));
-    if (raw === null) continue;
-    const page = parsePage(raw, args.source.deployment, pageStart);
-    const resumeKey = `${pageKey(prefix, pageStart)}:resume`;
-    let index = parseResume(await args.store.get(resumeKey), page.events.length);
-    let scanned = 0;
-    let allTerminal = true;
-    while (scanned < page.events.length && checkedEvents < MAX_EVENT_CHECKS) {
-      let budgetBlocked = false;
-      const budgetedSender: MailSender = async (payload, key) => {
-        if (sends >= MAX_SENDS) {
-          budgetBlocked = true;
-          return false;
-        }
-        sends += 1;
-        return args.sender(payload, key);
-      };
-      const result = await deliverNotification({
-        store: args.store,
-        event: page.events[index]!,
-        deployment: args.source.deployment,
-        origin: args.source.origin,
-        sender: budgetedSender,
-        from: args.from,
-        transportIdentity: args.transportIdentity,
-        now,
-        clock: deliveryClock
-      });
-      checkedEvents += 1;
-      scanned += 1;
-      index = (index + 1) % page.events.length;
-      await args.store.set(resumeKey, index.toString());
-      if (result.status === "accepted") accepted += 1;
-      else if (result.status === "pending") { pending += 1; allTerminal = false; }
-      else reconciliationRequired += 1;
-      if (budgetBlocked || Date.now() - startedAt >= MAX_RUNTIME_MS) break;
+  let ingestionStart = await verifiedProgressHint(args.store, await args.store.get(ingestionHintKey), firstEventBlock, prefix, "ingestion");
+  let ingestedPages = 0;
+  let ingestedEvents = 0;
+  const ingestedStarts: bigint[] = [];
+  let ingestion: NotificationRunReport["ingestion"] = { status: "idle" };
+  const ingestionDeadline = Date.now() + INGESTION_RUNTIME_MS;
+  let finalizedBlock = activation.blockNumber;
+  try {
+    const finalized = await within(() => args.source.finalized(), SOURCE_CALL_MS);
+    finalizedBlock = finalized.number.toString();
+    if (finalized.number < activationBlock) throw new Error("Finalized height regressed below activation.");
+    while (ingestionStart <= finalized.number && ingestedPages < MAX_INGESTION_PAGES && Date.now() < ingestionDeadline) {
+      const requestedEnd = minimum(ingestionStart + PAGE_BLOCKS - 1n, finalized.number);
+      const page = await loadOrCreatePage(args.store, args.source, prefix, ingestionStart, finalized.number, ingestionDeadline);
+      await args.store.set(ingestionHintKey, page.nextBlock);
+      await args.store.set(lastPageKey, page.startBlock);
+      ingestionStart = BigInt(page.nextBlock);
+      ingestedStarts.push(BigInt(page.startBlock));
+      ingestedPages += 1;
+      ingestedEvents += page.events.length;
+      ingestion = { status: "advanced", fromBlock: page.startBlock, toBlock: page.actualEnd };
+      await args.store.set(`${prefix}:ingestion-status`, JSON.stringify({ version: 1, state: "advanced", nextBlock: page.nextBlock, recordedAt: now }));
+      if (BigInt(page.actualEnd) < requestedEnd) break;
     }
-    if (scanned < page.events.length) allTerminal = false;
-    if (pageStart === retryNext && allTerminal) {
-      const proofKey = `${prefix}:retry-proof:${page.nextBlock}`;
-      await args.store.setIfAbsent({ [proofKey]: page.startBlock });
-      retryNext = BigInt(page.nextBlock);
-      await args.store.set(retryHintKey, page.nextBlock);
-    }
+  } catch (error) {
+    const reason = ingestionFailureReason(error);
+    const incident = `${prefix}:incident:ingestion:${ingestionStart}`;
+    const marker = JSON.stringify({ version: 1, kind: "ingestion", reason, fromBlock: ingestionStart.toString(), recordedAt: now });
+    await args.store.setIfAbsent({ [incident]: marker });
+    await args.store.set(`${prefix}:ingestion-status`, marker);
+    await writeLatestIncident(args.store, prefix, { id: incident, kind: "ingestion", reason });
+    delivery.lastIncident = { id: incident, kind: "ingestion", reason };
+    ingestion = { status: "blocked", fromBlock: ingestionStart.toString(), reason, incident };
   }
 
+  const freshStarts = ingestedStarts.filter(start => !retryStarts.includes(start));
+  await processDeliveryPages(args, prefix, freshStarts, delivery, now, deliveryClock);
+
   return {
-    status: ingestedPages || checkedEvents ? "ok" : "idle",
+    status: ingestion.status === "blocked" ? "degraded" : delivery.reconciliationRequired ? "reconciliation-required" : ingestedPages || delivery.checkedEvents ? "ok" : "idle",
     activationBlock: activation.blockNumber,
-    finalizedBlock: finalized.number.toString(),
+    finalizedBlock,
     ingestedPages,
     ingestedEvents,
-    checkedEvents,
-    sends,
-    accepted,
-    pending,
-    reconciliationRequired,
+    checkedEvents: delivery.checkedEvents,
+    sends: delivery.sends,
+    accepted: delivery.accepted,
+    pending: delivery.pending,
+    reconciliationRequired: delivery.reconciliationRequired,
     ingestionNextBlock: ingestionStart.toString(),
-    retryNextBlock: retryNext.toString()
+    retryNextBlock: delivery.retryNext.toString(),
+    ingestion,
+    ...(delivery.lastIncident ? { lastIncident: delivery.lastIncident } : {})
   };
 }
 
@@ -229,17 +221,19 @@ async function loadOrCreatePage(
   source: NotificationProcessorSource,
   prefix: string,
   start: bigint,
-  finalized: bigint
+  finalized: bigint,
+  deadline: number
 ): Promise<StoredPage> {
   const key = pageKey(prefix, start);
   let raw = await store.get(key);
   if (raw === null) {
-    let actualEnd = start + PAGE_BLOCKS - 1n < finalized ? start + PAGE_BLOCKS - 1n : finalized;
+    let actualEnd = minimum(start + PAGE_BLOCKS - 1n, finalized);
     let verified: VerifiedEventPage | null = null;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    while (verified === null) {
+      if (Date.now() >= deadline) throw new NotificationRpcTimeoutError();
       let candidate: VerifiedEventPage;
       try {
-        candidate = await source.events(start, actualEnd);
+        candidate = await within(() => source.events(start, actualEnd), Math.min(SOURCE_CALL_MS, deadline - Date.now()));
       } catch (error) {
         if (!(error instanceof NotificationRangeTooDenseError) || actualEnd === start) throw error;
         actualEnd = start + (actualEnd - start) / 2n;
@@ -252,18 +246,36 @@ async function loadOrCreatePage(
         verified = candidate;
         break;
       }
-      if (actualEnd === start) throw new Error("A finalized block exceeds the notification event page limit.");
+      if (actualEnd === start) {
+        verified = candidate;
+        break;
+      }
       actualEnd = start + (actualEnd - start) / 2n;
     }
-    if (verified === null) throw new Error("Notification event page could not fit its bounded page size.");
-    const candidate: StoredPage = {
-      version: 1,
+    const common = {
       deployment: source.deployment,
       startBlock: start.toString(),
       actualEnd: actualEnd.toString(),
       nextBlock: (actualEnd + 1n).toString(),
       events: verified.events
     };
+    let candidate: StoredPage;
+    if (actualEnd === start) {
+      const canonical = verified.singleBlock ?? await within(() => source.block(start), Math.min(SOURCE_CALL_MS, deadline - Date.now()));
+      if (canonical.number !== start || canonical.gasLimit === undefined || canonical.gasLimit <= 0n) {
+        throw new Error("Notification single-block page lacks its canonical gas bound.");
+      }
+      candidate = {
+        version: 2,
+        kind: "single-block",
+        ...common,
+        blockNumber: start.toString(),
+        blockHash: canonical.hash,
+        gasLimit: canonical.gasLimit.toString()
+      };
+    } else {
+      candidate = { version: 2, kind: "range", ...common };
+    }
     await store.setIfAbsent({
       [key]: JSON.stringify(candidate),
       [`${prefix}:ingestion-proof:${candidate.nextBlock}`]: candidate.startBlock
@@ -272,6 +284,98 @@ async function loadOrCreatePage(
   }
   if (raw === null) throw new Error("Notification event page was not persisted.");
   return parsePage(raw, source.deployment, start);
+}
+
+type DeliveryState = {
+  deadline: number;
+  checkedEvents: number;
+  sends: number;
+  accepted: number;
+  pending: number;
+  reconciliationRequired: number;
+  retryNext: bigint;
+  lastIncident?: NotificationRunReport["lastIncident"];
+};
+
+async function processDeliveryPages(
+  args: {
+    store: Store;
+    source: NotificationProcessorSource;
+    sender: MailSender;
+    from: string;
+    transportIdentity: string;
+  },
+  prefix: string,
+  starts: readonly bigint[],
+  state: DeliveryState,
+  now: number,
+  clock: () => number
+): Promise<void> {
+  for (const pageStart of starts) {
+    if (state.checkedEvents >= MAX_EVENT_CHECKS || Date.now() >= state.deadline || state.sends >= MAX_SENDS) break;
+    const raw = await args.store.get(pageKey(prefix, pageStart));
+    if (raw === null) continue;
+    const page = parsePage(raw, args.source.deployment, pageStart);
+    const resumeKey = `${pageKey(prefix, pageStart)}:resume`;
+    let index = parseResume(await args.store.get(resumeKey), page.events.length);
+    let scanned = 0;
+    while (
+      scanned < page.events.length
+      && state.checkedEvents < MAX_EVENT_CHECKS
+      && Date.now() < state.deadline
+      && state.sends < MAX_SENDS
+    ) {
+      const event = page.events[index]!;
+      try {
+        const result = await deliverNotification({
+          store: args.store,
+          event,
+          deployment: args.source.deployment,
+          origin: args.source.origin,
+          sender: async (payload, key) => {
+            state.sends += 1;
+            return args.sender(payload, key);
+          },
+          from: args.from,
+          transportIdentity: args.transportIdentity,
+          now,
+          clock
+        });
+        if (result.status === "accepted") {
+          state.accepted += 1;
+          await markEventTerminal(args.store, prefix, pageStart, index);
+        } else if (result.status === "pending") state.pending += 1;
+        else {
+          state.reconciliationRequired += 1;
+          await markEventTerminal(args.store, prefix, pageStart, index);
+          const incident = `${result.key}:reconciliation`;
+          const summary = { id: incident, kind: "reconciliation" as const, reason: result.reason };
+          await writeLatestIncident(args.store, prefix, summary);
+          state.lastIncident = summary;
+        }
+      } catch {
+        const incident = `${pageKey(prefix, pageStart)}:event-incident:${index}`;
+        const marker = JSON.stringify({ version: 1, kind: "delivery", reason: "processing-failed", blockNumber: event.blockNumber, logIndex: event.logIndex, recordedAt: now });
+        await args.store.setIfAbsent({ [incident]: marker });
+        const summary = { id: incident, kind: "delivery" as const, reason: "processing-failed" };
+        await writeLatestIncident(args.store, prefix, summary);
+        state.lastIncident = summary;
+        state.pending += 1;
+      }
+      state.checkedEvents += 1;
+      scanned += 1;
+      index = page.events.length === 0 ? 0 : (index + 1) % page.events.length;
+      await args.store.set(resumeKey, index.toString());
+    }
+    const terminalPrefix = await advanceTerminalPrefix(args.store, prefix, pageStart, page.events.length);
+    const allTerminal = terminalPrefix === page.events.length;
+    if (pageStart === state.retryNext && allTerminal) {
+      const proofKey = `${prefix}:retry-proof:${page.nextBlock}`;
+      await args.store.setIfAbsent({ [proofKey]: page.startBlock });
+      state.retryNext = BigInt(page.nextBlock);
+      await args.store.set(`${prefix}:retry-hint`, page.nextBlock);
+    }
+  }
 }
 
 async function retryPageStarts(store: Store, prefix: string, start: bigint): Promise<bigint[]> {
@@ -289,6 +393,53 @@ async function retryPageStarts(store: Store, prefix: string, start: bigint): Pro
 
 function pageKey(prefix: string, start: bigint): string {
   return `${prefix}:page:${start}`;
+}
+
+function terminalMarkerKey(prefix: string, start: bigint, index: number): string {
+  return `${pageKey(prefix, start)}:terminal:${index}`;
+}
+
+async function markEventTerminal(store: Store, prefix: string, start: bigint, index: number): Promise<void> {
+  const key = terminalMarkerKey(prefix, start, index);
+  await store.setIfAbsent({ [key]: "terminal" });
+  if (await store.get(key) !== "terminal") throw new Error("Notification terminal marker was not persisted.");
+}
+
+async function advanceTerminalPrefix(
+  store: Store,
+  prefix: string,
+  start: bigint,
+  length: number
+): Promise<number> {
+  const hintKey = `${pageKey(prefix, start)}:terminal-prefix`;
+  let prefixLength = await verifiedTerminalPrefix(store, prefix, start, length, await store.get(hintKey));
+  let checked = 0;
+  while (prefixLength < length && checked < MAX_EVENT_CHECKS) {
+    if (await store.get(terminalMarkerKey(prefix, start, prefixLength)) !== "terminal") break;
+    prefixLength += 1;
+    checked += 1;
+  }
+  if (prefixLength > 0) {
+    const proofKey = `${pageKey(prefix, start)}:terminal-proof:${prefixLength}`;
+    await store.setIfAbsent({ [proofKey]: "proved" });
+    if (await store.get(proofKey) !== "proved") throw new Error("Notification terminal progress proof was not persisted.");
+    await store.set(hintKey, prefixLength.toString());
+  }
+  return prefixLength;
+}
+
+async function verifiedTerminalPrefix(
+  store: Store,
+  prefix: string,
+  start: bigint,
+  length: number,
+  raw: string | null
+): Promise<number> {
+  if (raw === null || !/^(0|[1-9]\d*)$/.test(raw)) return 0;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0 || value > length) return 0;
+  if (value === 0) return 0;
+  return await store.get(`${pageKey(prefix, start)}:terminal-proof:${value}`) === "proved" ? value : 0;
 }
 
 function parseActivation(raw: string, deployment: string): StoredActivation {
@@ -312,11 +463,17 @@ function parsePage(raw: string, deployment: string, expectedStart: bigint): Stor
   const nextBlock = Reflect.get(value, "nextBlock");
   const rawEvents = Reflect.get(value, "events");
   if (
-    version !== 1 || storedDeployment !== deployment || !isBlockString(startBlock) || BigInt(startBlock) !== expectedStart
+    (version !== 1 && version !== 2) || storedDeployment !== deployment || !isBlockString(startBlock) || BigInt(startBlock) !== expectedStart
     || !isBlockString(actualEnd) || BigInt(actualEnd) < expectedStart
     || !isBlockString(nextBlock) || BigInt(nextBlock) !== BigInt(actualEnd) + 1n
-    || !Array.isArray(rawEvents) || rawEvents.length > 100
+    || !Array.isArray(rawEvents)
   ) throw new Error("Notification event page is invalid.");
+  const kind = Reflect.get(value, "kind");
+  if (version === 1 && rawEvents.length > 100) throw new Error("Notification event page is invalid.");
+  if (version === 2 && kind !== "range" && kind !== "single-block") throw new Error("Notification event page is invalid.");
+  if (version === 2 && kind === "range" && (BigInt(actualEnd) === expectedStart || rawEvents.length > 100)) {
+    throw new Error("Notification event page is invalid.");
+  }
   const events = rawEvents.map(parseNotificationEvent);
   let previous: NotificationEvent | null = null;
   for (const event of events) {
@@ -325,7 +482,18 @@ function parsePage(raw: string, deployment: string, expectedStart: bigint): Stor
     if (previous && compareEvents(previous, event) >= 0) throw new Error("Notification event page is invalid.");
     previous = event;
   }
-  return { version, deployment: storedDeployment, startBlock, actualEnd, nextBlock, events };
+  if (version === 1) return { version, deployment: storedDeployment, startBlock, actualEnd, nextBlock, events };
+  if (kind === "range") return { version, kind, deployment: storedDeployment, startBlock, actualEnd, nextBlock, events };
+  const blockNumber = Reflect.get(value, "blockNumber");
+  const blockHash = Reflect.get(value, "blockHash");
+  const gasLimit = Reflect.get(value, "gasLimit");
+  if (
+    !isBlockString(blockNumber) || BigInt(blockNumber) !== expectedStart || BigInt(actualEnd) !== expectedStart
+    || !isHash(blockHash) || !isBlockString(gasLimit) || BigInt(gasLimit) <= 0n
+    || BigInt(events.length) > 5n * BigInt(gasLimit) / (4n * MIN_NOTIFICATION_LOG_GAS)
+    || events.some(event => BigInt(event.blockNumber) !== expectedStart || event.blockHash.toLowerCase() !== blockHash.toLowerCase())
+  ) throw new Error("Notification event page is invalid.");
+  return { version, kind, deployment: storedDeployment, startBlock, actualEnd, nextBlock, events, blockNumber, blockHash, gasLimit };
 }
 
 function compareEvents(left: NotificationEvent, right: NotificationEvent): number {
@@ -372,7 +540,7 @@ async function verifiedProgressHint(
 function parseResume(raw: string | null, length: number): number {
   if (length === 0) return 0;
   if (raw === null) return 0;
-  if (!/^\d{1,3}$/.test(raw)) return 0;
+  if (!/^(0|[1-9]\d*)$/.test(raw)) return 0;
   const index = Number(raw);
   if (!Number.isSafeInteger(index) || index < 0 || index >= length) return 0;
   return index;
@@ -403,15 +571,63 @@ function isHash(value: unknown): value is Hex {
   return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
 }
 
-function checkedBlock(block: { number: bigint | null; hash: Hex | null; timestamp: bigint }): BlockRef {
+function checkedBlock(block: { number: bigint | null; hash: Hex | null; timestamp: bigint; gasLimit?: bigint }): BlockRef & { gasLimit?: bigint } {
   if (block.number === null || block.hash === null || block.timestamp < 0n) throw new Error("Notification block metadata is incomplete.");
-  return { number: block.number, hash: block.hash, timestamp: block.timestamp };
+  const gasLimit = Reflect.get(block, "gasLimit");
+  if (gasLimit !== undefined && (typeof gasLimit !== "bigint" || gasLimit <= 0n)) throw new Error("Notification block gas limit is invalid.");
+  return { number: block.number, hash: block.hash, timestamp: block.timestamp, ...(typeof gasLimit === "bigint" ? { gasLimit } : {}) };
 }
 
 function baseReport(activationBlock: string, finalizedBlock: string, next: bigint): NotificationRunReport {
   return {
     status: "idle", activationBlock, finalizedBlock, ingestedPages: 0, ingestedEvents: 0,
     checkedEvents: 0, sends: 0, accepted: 0, pending: 0, reconciliationRequired: 0,
-    ingestionNextBlock: next.toString(), retryNextBlock: next.toString()
+    ingestionNextBlock: next.toString(), retryNextBlock: next.toString(), ingestion: { status: "idle" }
   };
+}
+
+function ingestionFailureReason(error: unknown): IngestionFailureReason {
+  if (error instanceof NotificationRangeTooDenseError) return "range-too-dense";
+  if (error instanceof NotificationReadBudgetError) return "rpc-budget-exhausted";
+  if (error instanceof NotificationRpcTimeoutError) return "rpc-timeout";
+  return "source-unavailable";
+}
+
+async function writeLatestIncident(
+  store: Store,
+  prefix: string,
+  incident: NonNullable<NotificationRunReport["lastIncident"]>
+): Promise<void> {
+  await store.set(`${prefix}:latest-incident`, JSON.stringify({ version: 1, ...incident }));
+}
+
+async function readLatestIncident(store: Store, prefix: string): Promise<NotificationRunReport["lastIncident"]> {
+  const raw = await store.get(`${prefix}:latest-incident`);
+  if (raw === null) return undefined;
+  const value = parseObject(raw, "Notification incident record is invalid.");
+  const id = Reflect.get(value, "id");
+  const kind = Reflect.get(value, "kind");
+  const reason = Reflect.get(value, "reason");
+  if (
+    Reflect.get(value, "version") !== 1 || typeof id !== "string" || typeof reason !== "string"
+    || (kind !== "ingestion" && kind !== "delivery" && kind !== "reconciliation")
+  ) throw new Error("Notification incident record is invalid.");
+  return { id, kind, reason };
+}
+
+function minimum(left: bigint, right: bigint): bigint {
+  return left < right ? left : right;
+}
+
+async function within<T>(operation: () => Promise<T>, milliseconds: number): Promise<T> {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw new NotificationRpcTimeoutError();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new NotificationRpcTimeoutError()), milliseconds); })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

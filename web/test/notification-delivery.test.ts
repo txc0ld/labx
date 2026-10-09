@@ -61,12 +61,13 @@ describe("admin notification delivery", () => {
     expect(await store.get(`${result.key}:reconciliation`)).not.toBeNull();
   });
 
-  it("rejects corrupt persisted reservations without sending", async () => {
+  it("records corrupt persisted reservations for reconciliation without sending", async () => {
     const store = new MemoryStore();
     const key = `raffle-notification:${keccak256(toBytes(`${base.deployment}:${event.blockHash}:${event.transactionHash}:${event.logIndex}:RaffleCreated`))}`;
     await store.set(key, JSON.stringify({ version: 1, payload: { to: "attacker@example.com" } }));
     const sender = vi.fn(async () => true);
-    await expect(deliverNotification({ ...base, store, sender })).rejects.toThrow(/record is invalid/);
+    await expect(deliverNotification({ ...base, store, sender }))
+      .resolves.toMatchObject({ status: "reconciliation-required", reason: "invalid-record" });
     expect(sender).not.toHaveBeenCalled();
   });
 
@@ -88,6 +89,29 @@ describe("admin notification delivery", () => {
       clock: () => baseTime + 23 * 60 * 60 * 1_000
     })).resolves.toMatchObject({ status: "reconciliation-required", reason: "retry-window-ended" });
     expect(sender).not.toHaveBeenCalled();
+  });
+
+  it("records payload configuration drift but preserves historical acceptance", async () => {
+    const pendingStore = new MemoryStore();
+    await deliverNotification({ ...base, store: pendingStore, sender: async () => false });
+    const changedSender = vi.fn(async () => true);
+    await expect(deliverNotification({
+      ...base,
+      store: pendingStore,
+      sender: changedSender,
+      from: "LABx <fixed@example.com>"
+    })).resolves.toMatchObject({ status: "reconciliation-required", reason: "payload-configuration-changed" });
+    expect(changedSender).not.toHaveBeenCalled();
+
+    const acceptedStore = new MemoryStore();
+    await deliverNotification({ ...base, store: acceptedStore, sender: async () => true });
+    await expect(deliverNotification({
+      ...base,
+      store: acceptedStore,
+      sender: changedSender,
+      from: "LABx <fixed@example.com>"
+    })).resolves.toMatchObject({ status: "accepted", repeated: true });
+    expect(changedSender).not.toHaveBeenCalled();
   });
 });
 
@@ -129,12 +153,14 @@ describe("admin connection test delivery", () => {
     expect(keys[0]).toBe(keys[1]);
   });
 
-  it("does not report a cached acceptance after provider credentials change", async () => {
+  it("sends one fresh connection test after provider credentials change", async () => {
     const store = new MemoryStore();
     await deliverAdminConnectionTest({ ...connection, store, sender: async () => true });
     const sender = vi.fn(async () => true);
     await expect(deliverAdminConnectionTest({ ...connection, store, sender, transportIdentity: "b".repeat(64) }))
-      .resolves.toMatchObject({ status: "reconciliation-required", reason: "provider-identity-changed" });
-    expect(sender).not.toHaveBeenCalled();
+      .resolves.toMatchObject({ status: "accepted", repeated: false });
+    await expect(deliverAdminConnectionTest({ ...connection, store, sender, transportIdentity: "b".repeat(64) }))
+      .resolves.toMatchObject({ status: "accepted", repeated: true });
+    expect(sender).toHaveBeenCalledTimes(1);
   });
 });

@@ -49,7 +49,7 @@ export function createNotificationCronHandler(dependencies: CronDependencies) {
     if (configuration instanceof Response) return configuration;
 
     try {
-      const source = await dependencies.source();
+      const source = await within(dependencies.source(), 12_000);
       const transportIdentity = createHash("sha256").update(configuration.apiKey).digest("hex");
       const report = await processNotifications({
         store: dependencies.store(),
@@ -58,7 +58,22 @@ export function createNotificationCronHandler(dependencies: CronDependencies) {
         from: configuration.from,
         transportIdentity
       });
-      return Response.json({ ok: true, ...report }, { headers: { "Cache-Control": "no-store" } });
+      const ok = report.status !== "degraded" && report.status !== "reconciliation-required";
+      console.info("notification-cron", {
+        status: report.status,
+        ingestedPages: report.ingestedPages,
+        ingestedEvents: report.ingestedEvents,
+        checkedEvents: report.checkedEvents,
+        sends: report.sends,
+        accepted: report.accepted,
+        pending: report.pending,
+        reconciliationRequired: report.reconciliationRequired,
+        ingestion: report.ingestion,
+        ingestionNextBlock: report.ingestionNextBlock,
+        retryNextBlock: report.retryNextBlock,
+        lastIncident: report.lastIncident
+      });
+      return Response.json({ ok, ...report }, { headers: { "Cache-Control": "no-store" } });
     } catch {
       return cronError("Notification processing did not complete.", 503);
     }
@@ -73,7 +88,7 @@ export function createNotificationConnectionTestHandler(dependencies: CronDepend
     try { body = await request.text(); } catch { return cronError("Connection test request is invalid.", 400); }
     if (body.length !== 0) return cronError("Connection test does not accept a request body.", 400);
     try {
-      const source = await dependencies.source();
+      const source = await within(dependencies.source(), 12_000);
       const result = await deliverAdminConnectionTest({
         store: dependencies.store(),
         deployment: source.deployment,
@@ -82,7 +97,7 @@ export function createNotificationConnectionTestHandler(dependencies: CronDepend
         transportIdentity: createHash("sha256").update(configuration.apiKey).digest("hex")
       });
       return Response.json(
-        { ok: true, status: result.status, providerAccepted: result.status === "accepted", repeated: result.status === "accepted" ? result.repeated : false },
+        { ok: result.status !== "reconciliation-required", status: result.status, providerAccepted: result.status === "accepted", repeated: result.status === "accepted" ? result.repeated : false },
         { headers: { "Cache-Control": "no-store" } }
       );
     } catch {
@@ -113,4 +128,16 @@ function validBearer(header: string | null, expected: string): boolean {
 
 function cronError(error: string, status: number): Response {
   return Response.json({ ok: false, error }, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+async function within<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Notification source timed out.")), milliseconds); })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

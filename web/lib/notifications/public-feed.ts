@@ -1,5 +1,5 @@
 import type { Hex } from "viem";
-import { notificationWorkflow, NotificationRangeTooDenseError, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow } from "./events";
+import { createNotificationReadBudget, notificationWorkflow, NotificationRangeTooDenseError, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow } from "./events";
 
 const RANGE_SIZE = 500n;
 const MAX_RANGES = 4;
@@ -31,13 +31,12 @@ export async function readRecentNotifications(args: {
   const limit = args.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) throw new Error("Notification page size is invalid.");
   const cursor = args.cursor === undefined ? null : parsePublicCursor(args.cursor);
-  const workflow = await (args.workflow ?? notificationWorkflow)();
-  const finalizedRaw = await workflow.client.getBlock({ blockTag: "finalized" });
+  const workflow = await within((args.workflow ?? notificationWorkflow)(), 8_000);
+  const finalizedRaw = await within(workflow.client.getBlock({ blockTag: "finalized" }), 8_000);
   if (finalizedRaw.number === null || finalizedRaw.hash === null || finalizedRaw.timestamp < 0n) {
     throw new Error("Finalized notification history is unavailable.");
   }
   const finalized = { number: finalizedRaw.number, hash: finalizedRaw.hash, timestamp: finalizedRaw.timestamp };
-  if (finalized.number > workflow.block.number) throw new Error("Finalized notification history is inconsistent.");
   let end = cursor?.kind === "event" ? cursor.blockNumber : cursor?.beforeBlock ?? finalized.number;
   if (end > finalized.number || end < workflow.manifest.deploymentBlock) throw new Error("Notification cursor is outside the reviewed deployment.");
 
@@ -46,6 +45,7 @@ export async function readRecentNotifications(args: {
   let cursorFound = cursor === null || cursor.kind === "range";
   let completedRanges = 0;
   let attempts = 0;
+  const readBudget = createNotificationReadBudget(64, 8_000);
   while (completedRanges < MAX_RANGES && attempts < MAX_RANGES * 4 && end >= workflow.manifest.deploymentBlock && collected.length <= limit) {
     const possibleStart = end - RANGE_SIZE + 1n;
     let start = possibleStart > workflow.manifest.deploymentBlock ? possibleStart : workflow.manifest.deploymentBlock;
@@ -53,7 +53,7 @@ export async function readRecentNotifications(args: {
     while (page === null && attempts < MAX_RANGES * 4) {
       attempts += 1;
       try {
-        page = await readFinalizedEvents({ fromBlock: start, toBlock: end, workflow: async () => workflow });
+        page = await readFinalizedEvents({ fromBlock: start, toBlock: end, workflow: async () => workflow, budget: readBudget });
       } catch (error) {
         if (!(error instanceof NotificationRangeTooDenseError) || start === end) throw error;
         start = start + (end - start + 1n) / 2n;
@@ -147,4 +147,16 @@ function compareToCursor(event: NotificationEvent, cursor: PublicCursor): number
   if (block !== cursor.blockNumber) return block < cursor.blockNumber ? -1 : 1;
   if (event.transactionIndex !== cursor.transactionIndex) return event.transactionIndex - cursor.transactionIndex;
   return event.logIndex - cursor.logIndex;
+}
+
+async function within<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Notification public read timed out.")), milliseconds); })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

@@ -14,6 +14,8 @@ const MAX_BLOCK_RANGE = 500n;
 const MAX_LOGS_PER_RANGE = 100;
 const MAX_CANONICAL_BLOCKS = 25;
 const MAX_LOG_REQUESTS = 32;
+const READ_DEADLINE_MS = 6_000;
+const MIN_NOTIFICATION_LOG_GAS = 1_125n;
 const createdEvent = parseAbiItem("event RaffleCreated(uint256 indexed id, address indexed seller, address indexed nft, uint256 tokenId, bytes32 reserveCommit)");
 const openedEvent = parseAbiItem("event Opened(uint256 indexed id)");
 const notificationAbi = [createdEvent, openedEvent] as const;
@@ -36,11 +38,12 @@ export type VerifiedEventPage = {
   events: readonly NotificationEvent[];
   range: { fromBlock: bigint; toBlock: bigint };
   finalized: BlockRef;
+  singleBlock?: { number: bigint; hash: Hex; gasLimit: bigint };
 };
 
 export type NotificationChainReader = {
   getChainId(): Promise<number>;
-  getBlock(args: { blockTag: "finalized" } | { blockNumber: bigint }): Promise<{ number: bigint | null; hash: Hex | null; timestamp: bigint }>;
+  getBlock(args: { blockTag: "finalized" } | { blockNumber: bigint }): Promise<{ number: bigint | null; hash: Hex | null; timestamp: bigint; gasLimit?: bigint }>;
   getLogs(args: { address: Address; events: typeof notificationAbi; fromBlock: bigint; toBlock: bigint; strict: false }): Promise<readonly unknown[]>;
 };
 export type NotificationWorkflow = {
@@ -52,6 +55,23 @@ export type NotificationWorkflow = {
 
 export class NotificationRangeTooDenseError extends Error {
   constructor() { super("Notification event range is too dense."); }
+}
+
+export class NotificationReadBudgetError extends Error {
+  constructor() { super("Notification RPC read budget was exhausted."); }
+}
+
+export class NotificationRpcTimeoutError extends Error {
+  constructor() { super("Notification RPC read timed out."); }
+}
+
+export type NotificationReadBudget = { remaining: number; deadline: number };
+
+export function createNotificationReadBudget(maxRequests = MAX_LOG_REQUESTS, deadlineMs = READ_DEADLINE_MS): NotificationReadBudget {
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 1 || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1) {
+    throw new Error("Notification read budget is invalid.");
+  }
+  return { remaining: maxRequests, deadline: Date.now() + deadlineMs };
 }
 
 export function parseNotificationEvent(value: unknown): NotificationEvent {
@@ -98,35 +118,36 @@ export async function readFinalizedEvents(args: {
   fromBlock: bigint;
   toBlock: bigint;
   workflow?: () => Promise<NotificationWorkflow>;
+  budget?: NotificationReadBudget;
 }): Promise<VerifiedEventPage> {
-  const workflow = await (args.workflow ?? defaultWorkflow)();
+  const budget = args.budget ?? createNotificationReadBudget();
+  const workflow = await rpcRead(budget, args.workflow ?? defaultWorkflow);
   requireApprovedWorkflow(workflow);
-  if (await workflow.client.getChainId() !== workflow.manifest.chainId) throw new Error("Notification RPC network is invalid.");
+  if (await rpcRead(budget, () => workflow.client.getChainId()) !== workflow.manifest.chainId) throw new Error("Notification RPC network is invalid.");
   if (
     args.fromBlock < workflow.manifest.deploymentBlock
     || args.toBlock < args.fromBlock
     || args.toBlock - args.fromBlock + 1n > MAX_BLOCK_RANGE
   ) throw new Error("Notification block range is invalid or too large.");
 
-  const finalized = await readBlock(workflow.client, { blockTag: "finalized" });
-  if (finalized.number > workflow.block.number || args.toBlock > finalized.number) {
+  const finalized = await readBlock(workflow.client, { blockTag: "finalized" }, budget);
+  if (args.toBlock > finalized.number) {
     throw new Error("Notification range is not finalized.");
   }
 
-  const budget = { remaining: MAX_LOG_REQUESTS };
   const rawLogs = await fetchLogs(workflow.client, workflow.manifest.address, args.fromBlock, args.toBlock, budget);
   if (rawLogs.length > MAX_LOGS_PER_RANGE) {
-    if (args.fromBlock === args.toBlock) throw new Error("A finalized block exceeds the notification log limit.");
-    throw new NotificationRangeTooDenseError();
+    if (args.fromBlock !== args.toBlock) throw new NotificationRangeTooDenseError();
   }
   const parsed = rawLogs.map(parseRawLog);
   if (parsed.some(log => log.blockNumber < args.fromBlock || log.blockNumber > args.toBlock)) {
     throw new Error("Notification log is outside the requested range.");
   }
   const blockNumbers = [...new Set(parsed.map(log => log.blockNumber))];
+  if (args.fromBlock === args.toBlock && !blockNumbers.includes(args.fromBlock)) blockNumbers.push(args.fromBlock);
   if (blockNumbers.length > MAX_CANONICAL_BLOCKS) throw new NotificationRangeTooDenseError();
-  const blocks = new Map<bigint, BlockRef>();
-  const results = await Promise.all(blockNumbers.map(number => readBlock(workflow.client, { blockNumber: number })));
+  const blocks = new Map<bigint, BlockRef & { gasLimit?: bigint }>();
+  const results = await Promise.all(blockNumbers.map(number => readBlock(workflow.client, { blockNumber: number }, budget)));
   results.forEach((block, index) => blocks.set(blockNumbers[index]!, block));
 
   const seen = new Set<string>();
@@ -143,9 +164,25 @@ export async function readFinalizedEvents(args: {
     return { log, eventName: decodedLog.eventName, id, timestamp: canonical.timestamp };
   });
 
-  const recheckedFinalized = await readBlock(workflow.client, { blockTag: "finalized" });
-  if (recheckedFinalized.number !== finalized.number || !sameHex(recheckedFinalized.hash, finalized.hash)) {
+  const pinnedFinalized = await readBlock(workflow.client, { blockNumber: finalized.number }, budget);
+  if (!sameHex(pinnedFinalized.hash, finalized.hash)) {
     throw new Error("The pinned finalized head changed during the notification read.");
+  }
+  const recheckedFinalized = await readBlock(workflow.client, { blockTag: "finalized" }, budget);
+  if (
+    recheckedFinalized.number < finalized.number
+    || recheckedFinalized.number === finalized.number && !sameHex(recheckedFinalized.hash, finalized.hash)
+  ) throw new Error("The pinned finalized head changed during the notification read.");
+
+  let singleBlock: VerifiedEventPage["singleBlock"];
+  if (args.fromBlock === args.toBlock) {
+    const canonical = blocks.get(args.fromBlock) ?? pinnedFinalized;
+    if (canonical.number !== args.fromBlock || canonical.gasLimit === undefined || canonical.gasLimit <= 0n) {
+      throw new Error("Notification block gas limit is unavailable.");
+    }
+    const maximumLogs = 5n * canonical.gasLimit / (4n * MIN_NOTIFICATION_LOG_GAS);
+    if (BigInt(rawLogs.length) > maximumLogs) throw new Error("Notification block log count exceeds its canonical gas bound.");
+    singleBlock = { number: canonical.number, hash: canonical.hash, gasLimit: canonical.gasLimit };
   }
 
   decoded.sort((left, right) => {
@@ -156,7 +193,8 @@ export async function readFinalizedEvents(args: {
   return {
     events: decoded.map(({ log, eventName, id, timestamp }) => publicEvent(eventName, id, log, timestamp)),
     range: { fromBlock: args.fromBlock, toBlock: args.toBlock },
-    finalized
+    finalized,
+    ...(singleBlock ? { singleBlock } : {})
   };
 }
 
@@ -179,7 +217,7 @@ export function adaptNotificationWorkflow(workflow: Awaited<ReturnType<typeof se
         const block = "blockTag" in args
           ? await workflow.client.getBlock({ blockTag: args.blockTag })
           : await workflow.client.getBlock({ blockNumber: args.blockNumber });
-        return { number: block.number, hash: block.hash, timestamp: block.timestamp };
+        return { number: block.number, hash: block.hash, timestamp: block.timestamp, gasLimit: block.gasLimit };
       },
       async getLogs(args) {
         return workflow.client.getLogs(args);
@@ -200,32 +238,26 @@ async function fetchLogs(
   address: Address,
   fromBlock: bigint,
   toBlock: bigint,
-  budget: { remaining: number }
+  budget: NotificationReadBudget
 ): Promise<readonly unknown[]> {
-  if (budget.remaining < 1) throw new Error("Notification log read budget was exhausted.");
-  budget.remaining -= 1;
-  let logs: readonly unknown[];
   try {
-    logs = await client.getLogs({ address, events: notificationAbi, fromBlock, toBlock, strict: false });
-  } catch {
-    return splitOrFail(client, address, fromBlock, toBlock, budget);
+    return await rpcRead(budget, () => client.getLogs({ address, events: notificationAbi, fromBlock, toBlock, strict: false }));
+  } catch (error) {
+    if (error instanceof NotificationRpcTimeoutError || error instanceof NotificationReadBudgetError) throw error;
+    if (isTimeoutError(error)) throw new NotificationRpcTimeoutError();
+    if (fromBlock !== toBlock && isRangeLimitError(error)) throw new NotificationRangeTooDenseError();
+    throw error;
   }
-  if (logs.length <= MAX_LOGS_PER_RANGE) return logs;
-  return splitOrFail(client, address, fromBlock, toBlock, budget);
 }
 
-async function splitOrFail(
-  client: NotificationChainReader,
-  address: Address,
-  fromBlock: bigint,
-  toBlock: bigint,
-  budget: { remaining: number }
-): Promise<readonly unknown[]> {
-  if (fromBlock === toBlock) throw new Error("A finalized block exceeds the notification log limit.");
-  const midpoint = fromBlock + (toBlock - fromBlock) / 2n;
-  const left = await fetchLogs(client, address, fromBlock, midpoint, budget);
-  const right = await fetchLogs(client, address, midpoint + 1n, toBlock, budget);
-  return [...left, ...right];
+function isRangeLimitError(error: unknown): boolean {
+  if (error instanceof NotificationRangeTooDenseError) return true;
+  if (!(error instanceof Error) || isTimeoutError(error)) return false;
+  return /range|too many|limit|response size|query returned/i.test(error.message);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (/timeout|timed out|abort/i.test(error.message) || error.name === "AbortError");
 }
 
 function parseRawLog(value: unknown): RawLog {
@@ -277,14 +309,32 @@ function decodeNotificationLog(log: RawLog): { eventName: "RaffleCreated" | "Ope
 
 async function readBlock(
   client: NotificationChainReader,
-  args: { blockTag: "finalized" } | { blockNumber: bigint }
-): Promise<BlockRef> {
-  const block = "blockTag" in args
-    ? await client.getBlock({ blockTag: args.blockTag })
-    : await client.getBlock({ blockNumber: args.blockNumber });
+  args: { blockTag: "finalized" } | { blockNumber: bigint },
+  budget: NotificationReadBudget
+): Promise<BlockRef & { gasLimit?: bigint }> {
+  const block = await rpcRead(budget, () => "blockTag" in args
+    ? client.getBlock({ blockTag: args.blockTag })
+    : client.getBlock({ blockNumber: args.blockNumber }));
   if (block.number === null || block.hash === null || block.timestamp < 0n) throw new Error("Notification block metadata is incomplete.");
   if ("blockNumber" in args && block.number !== args.blockNumber) throw new Error("Notification block number is invalid.");
-  return { number: block.number, hash: block.hash, timestamp: block.timestamp };
+  if (block.gasLimit !== undefined && block.gasLimit <= 0n) throw new Error("Notification block gas limit is invalid.");
+  return { number: block.number, hash: block.hash, timestamp: block.timestamp, ...(block.gasLimit === undefined ? {} : { gasLimit: block.gasLimit }) };
+}
+
+async function rpcRead<T>(budget: NotificationReadBudget, operation: () => Promise<T>): Promise<T> {
+  if (budget.remaining < 1) throw new NotificationReadBudgetError();
+  const remainingMs = budget.deadline - Date.now();
+  if (remainingMs <= 0) throw new NotificationRpcTimeoutError();
+  budget.remaining -= 1;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new NotificationRpcTimeoutError()), remainingMs); })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function publicEvent(eventName: "RaffleCreated" | "Opened", id: bigint, log: RawLog, timestamp: bigint): NotificationEvent {

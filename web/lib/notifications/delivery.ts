@@ -21,8 +21,8 @@ type DeliveryReservation = {
 export type NotificationDeliveryResult =
   | { status: "accepted"; repeated: boolean; key: string }
   | { status: "pending"; key: string }
-  | { status: "reconciliation-required"; reason: "provider-identity-changed" | "retry-window-ended"; key: string };
-type ReconciliationReason = "provider-identity-changed" | "retry-window-ended";
+  | { status: "reconciliation-required"; reason: ReconciliationReason; key: string };
+type ReconciliationReason = "provider-identity-changed" | "payload-configuration-changed" | "retry-window-ended" | "invalid-record";
 
 export async function deliverNotification(args: {
   store: Store;
@@ -48,9 +48,7 @@ export async function deliverNotification(args: {
     binding: args.event,
     payload: notificationPayload(args.from, args.origin, args.event),
     transportIdentity: args.transportIdentity,
-    now,
-    clock: args.clock ?? (args.now === undefined ? Date.now : () => now),
-    requireCurrentTransportForRepeat: false
+    clock: args.clock ?? (args.now === undefined ? Date.now : () => now)
   });
 }
 
@@ -65,19 +63,19 @@ export async function deliverAdminConnectionTest(args: {
 }): Promise<NotificationDeliveryResult> {
   const now = args.now ?? Date.now();
   requireMailConfig(args.from, args.transportIdentity, now);
-  const identity = `${args.deployment}:admin-connection-test:v1`;
+  const payload = connectionTestPayload(args.from);
+  const configuration = keccak256(toBytes(JSON.stringify({ version: 2, payload, transportIdentity: args.transportIdentity })));
+  const identity = `${args.deployment}:admin-connection-test:v2:${configuration}`;
   return deliverReservedMail({
     store: args.store,
     sender: args.sender,
     identity,
     key: `raffle-notification-test:${keccak256(toBytes(identity))}`,
     deployment: args.deployment,
-    binding: { kind: "admin-connection-test", version: 1 },
-    payload: connectionTestPayload(args.from),
+    binding: { kind: "admin-connection-test", version: 2, configuration },
+    payload,
     transportIdentity: args.transportIdentity,
-    now,
-    clock: args.clock ?? (args.now === undefined ? Date.now : () => now),
-    requireCurrentTransportForRepeat: true
+    clock: args.clock ?? (args.now === undefined ? Date.now : () => now)
   });
 }
 
@@ -90,18 +88,18 @@ async function deliverReservedMail(args: {
   binding: unknown;
   payload: MailPayload;
   transportIdentity: string;
-  now: number;
   clock: () => number;
-  requireCurrentTransportForRepeat: boolean;
 }): Promise<NotificationDeliveryResult> {
   let raw = await args.store.get(args.key);
   if (raw === null) {
+    const reservationTime = args.clock();
+    requireTimestamp(reservationTime);
     const candidate: DeliveryReservation = {
       version: 1,
       identity: args.identity,
       deployment: args.deployment,
       binding: args.binding,
-      createdAt: args.now,
+      createdAt: reservationTime,
       transportIdentity: args.transportIdentity,
       payload: args.payload
     };
@@ -109,27 +107,16 @@ async function deliverReservedMail(args: {
     raw = await args.store.get(args.key);
   }
   if (raw === null) throw new Error("Notification reservation was not persisted.");
-  const reservation = parseReservation(raw, {
-    identity: args.identity,
-    deployment: args.deployment,
-    binding: args.binding,
-    payload: args.payload
-  });
+  let reservation: DeliveryReservation;
+  try {
+    reservation = parseReservation(raw, { identity: args.identity, deployment: args.deployment, binding: args.binding });
+  } catch {
+    return recordReconciliation(args.store, `${args.key}:reconciliation`, "invalid-record", checkedClock(args.clock), args.key);
+  }
 
   const acceptedKey = `${args.key}:accepted`;
   const accepted = await args.store.get(acceptedKey);
-  if (
-    accepted === "accepted"
-    && (!args.requireCurrentTransportForRepeat || reservation.transportIdentity === args.transportIdentity)
-  ) return { status: "accepted", repeated: true, key: args.key };
-  if (accepted === "accepted") {
-    const reconciliationKey = `${args.key}:reconciliation`;
-    const existing = await args.store.get(reconciliationKey);
-    if (existing !== null) return { status: "reconciliation-required", reason: parseReconciliation(existing), key: args.key };
-    const recordedAt = args.clock();
-    if (!Number.isSafeInteger(recordedAt) || recordedAt < 0) throw new Error("Notification delivery configuration is invalid.");
-    return recordReconciliation(args.store, reconciliationKey, "provider-identity-changed", recordedAt, args.key);
-  }
+  if (accepted === "accepted") return { status: "accepted", repeated: true, key: args.key };
   if (accepted !== null) throw new Error("Notification acceptance record is invalid.");
 
   const reconciliationKey = `${args.key}:reconciliation`;
@@ -138,8 +125,11 @@ async function deliverReservedMail(args: {
     return { status: "reconciliation-required", reason: parseReconciliation(existingReconciliation), key: args.key };
   }
 
-  const sendTime = args.clock();
-  if (!Number.isSafeInteger(sendTime) || sendTime < 0) throw new Error("Notification delivery configuration is invalid.");
+  if (JSON.stringify(reservation.payload) !== JSON.stringify(args.payload)) {
+    return recordReconciliation(args.store, reconciliationKey, "payload-configuration-changed", checkedClock(args.clock), args.key);
+  }
+
+  const sendTime = checkedClock(args.clock);
   const reason = reconciliationReason(reservation, args.transportIdentity, sendTime);
   if (reason) {
     return recordReconciliation(args.store, reconciliationKey, reason, sendTime, args.key);
@@ -220,7 +210,7 @@ function connectionTestPayload(from: string): MailPayload {
 
 function parseReservation(
   raw: string,
-  expected: { identity: string; deployment: string; binding: unknown; payload: MailPayload }
+  expected: { identity: string; deployment: string; binding: unknown }
 ): DeliveryReservation {
   let value: unknown;
   try {
@@ -241,16 +231,16 @@ function parseReservation(
     || !Number.isSafeInteger(createdAt) || createdAt < 0
     || typeof transportIdentity !== "string" || !/^[0-9a-f]{64}$/.test(transportIdentity)
     || JSON.stringify(binding) !== JSON.stringify(expected.binding)
-    || JSON.stringify(payload) !== JSON.stringify(expected.payload)
+    || !isMailPayload(payload)
   ) throw new Error("Notification delivery record is invalid.");
   return {
     version,
     identity,
     deployment,
-    binding: expected.binding,
+    binding,
     createdAt,
     transportIdentity,
-    payload: expected.payload
+    payload
   };
 }
 
@@ -264,7 +254,7 @@ function reconciliationReason(
   return null;
 }
 
-function parseReconciliation(raw: string): "provider-identity-changed" | "retry-window-ended" {
+function parseReconciliation(raw: string): ReconciliationReason {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -277,8 +267,27 @@ function parseReconciliation(raw: string): "provider-identity-changed" | "retry-
   const reason = Reflect.get(value, "reason");
   const recordedAt = Reflect.get(value, "recordedAt");
   if (
-    (reason !== "provider-identity-changed" && reason !== "retry-window-ended")
+    (reason !== "provider-identity-changed" && reason !== "payload-configuration-changed" && reason !== "retry-window-ended" && reason !== "invalid-record")
     || !Number.isSafeInteger(recordedAt) || recordedAt < 0
   ) throw new Error("Notification reconciliation record is invalid.");
   return reason;
+}
+
+function isMailPayload(value: unknown): value is MailPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return typeof Reflect.get(value, "from") === "string"
+    && Reflect.get(value, "to") === ADMIN_NOTIFICATION_RECIPIENT
+    && typeof Reflect.get(value, "subject") === "string"
+    && typeof Reflect.get(value, "text") === "string"
+    && typeof Reflect.get(value, "html") === "string";
+}
+
+function checkedClock(clock: () => number): number {
+  const value = clock();
+  requireTimestamp(value);
+  return value;
+}
+
+function requireTimestamp(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error("Notification delivery configuration is invalid.");
 }

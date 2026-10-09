@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, type Address, type Hex } from "viem";
 import { raffleAbi } from "@/lib/chain/abi";
 import { APPROVED_DEPLOYMENTS } from "@/lib/chain/deployment";
-import { readFinalizedEvents, type NotificationChainReader, type NotificationWorkflow } from "@/lib/notifications/events";
+import { NotificationReadBudgetError, NotificationRpcTimeoutError, readFinalizedEvents, type NotificationChainReader, type NotificationWorkflow } from "@/lib/notifications/events";
 
 const manifest = APPROVED_DEPLOYMENTS[0]!;
 const eventBlock = manifest.deploymentBlock + 1n;
@@ -53,10 +53,10 @@ function source(logs: readonly unknown[], changedHead = false): () => Promise<No
     async getBlock(args) {
       if ("blockTag" in args) {
         finalizedReads += 1;
-        return { number: finalizedBlock, hash: changedHead && finalizedReads > 1 ? hashes.latest : hashes.finalized, timestamp: 1_760_000_100n };
+        return { number: finalizedBlock, hash: changedHead && finalizedReads > 1 ? hashes.latest : hashes.finalized, timestamp: 1_760_000_100n, gasLimit: 30_000_000n };
       }
-      if (args.blockNumber === eventBlock) return { number: eventBlock, hash: hashes.event, timestamp: 1_760_000_000n };
-      if (args.blockNumber === finalizedBlock) return { number: finalizedBlock, hash: hashes.finalized, timestamp: 1_760_000_100n };
+      if (args.blockNumber === eventBlock) return { number: eventBlock, hash: hashes.event, timestamp: 1_760_000_000n, gasLimit: 30_000_000n };
+      if (args.blockNumber === finalizedBlock) return { number: finalizedBlock, hash: hashes.finalized, timestamp: 1_760_000_100n, gasLimit: 30_000_000n };
       throw new Error("unexpected block");
     }
   };
@@ -98,5 +98,104 @@ describe("finalized notification event reader", () => {
       toBlock: finalizedBlock,
       workflow: source([rawCreated({ blockNumber: finalizedBlock + 1n })])
     })).rejects.toThrow(/outside the requested range/);
+  });
+
+  it("accepts a gas-bounded dense single block and allows finalized height advancement", async () => {
+    const logs = Array.from({ length: 101 }, (_, index) => rawOpened({
+      blockNumber: eventBlock,
+      blockHash: hashes.event,
+      transactionHash: `0x${(index + 1).toString(16).padStart(64, "0")}`,
+      transactionIndex: index,
+      logIndex: index
+    }));
+    let finalizedReads = 0;
+    const reader: NotificationChainReader = {
+      async getChainId() { return manifest.chainId; },
+      async getLogs() { return logs; },
+      async getBlock(args) {
+        if ("blockTag" in args) {
+          finalizedReads += 1;
+          return finalizedReads === 1
+            ? { number: eventBlock, hash: hashes.event, timestamp: 1_760_000_000n, gasLimit: 100_000n }
+            : { number: eventBlock + 1n, hash: hashes.finalized, timestamp: 1_760_000_100n, gasLimit: 100_000n };
+        }
+        return { number: args.blockNumber, hash: args.blockNumber === eventBlock ? hashes.event : hashes.finalized, timestamp: 1_760_000_000n, gasLimit: 100_000n };
+      }
+    };
+    const workflow = async (): Promise<NotificationWorkflow> => ({
+      context: { chainId: manifest.chainId, contract: manifest.address, origin: "https://labx.example" },
+      manifest,
+      client: reader,
+      block: { number: eventBlock + 1n, hash: hashes.finalized, timestamp: 1_760_000_100n }
+    });
+    const page = await readFinalizedEvents({ fromBlock: eventBlock, toBlock: eventBlock, workflow });
+    expect(page.events).toHaveLength(101);
+    expect(page.singleBlock).toEqual({ number: eventBlock, hash: hashes.event, gasLimit: 100_000n });
+  });
+
+  it("rejects a single-block count above the refund-aware gas bound", async () => {
+    const logs = Array.from({ length: 5 }, (_, index) => rawOpened({
+      blockNumber: eventBlock,
+      blockHash: hashes.event,
+      transactionHash: `0x${(index + 1).toString(16).padStart(64, "0")}`,
+      transactionIndex: index,
+      logIndex: index
+    }));
+    const reader: NotificationChainReader = {
+      async getChainId() { return manifest.chainId; },
+      async getLogs() { return logs; },
+      async getBlock(args) {
+        return { number: "blockTag" in args ? eventBlock : args.blockNumber, hash: hashes.event, timestamp: 1_760_000_000n, gasLimit: 3_600n };
+      }
+    };
+    const workflow = async (): Promise<NotificationWorkflow> => ({
+      context: { chainId: manifest.chainId, contract: manifest.address, origin: "https://labx.example" },
+      manifest,
+      client: reader,
+      block: { number: eventBlock, hash: hashes.event, timestamp: 1_760_000_000n }
+    });
+    await expect(readFinalizedEvents({ fromBlock: eventBlock, toBlock: eventBlock, workflow })).rejects.toThrow(/gas bound/);
+  });
+
+  it("does not recursively split a transient timeout", async () => {
+    let calls = 0;
+    const reader: NotificationChainReader = {
+      async getChainId() { return manifest.chainId; },
+      async getLogs() { calls += 1; throw new NotificationRpcTimeoutError(); },
+      async getBlock(args) {
+        return { number: "blockTag" in args ? finalizedBlock : args.blockNumber, hash: hashes.finalized, timestamp: 1_760_000_100n, gasLimit: 30_000_000n };
+      }
+    };
+    const workflow = async (): Promise<NotificationWorkflow> => ({
+      context: { chainId: manifest.chainId, contract: manifest.address, origin: "https://labx.example" },
+      manifest,
+      client: reader,
+      block: { number: finalizedBlock, hash: hashes.finalized, timestamp: 1_760_000_100n }
+    });
+    await expect(readFinalizedEvents({ fromBlock: eventBlock, toBlock: finalizedBlock, workflow }))
+      .rejects.toBeInstanceOf(NotificationRpcTimeoutError);
+    expect(calls).toBe(1);
+  });
+
+  it("fails with a typed error before starting an RPC beyond the request budget", async () => {
+    const getChainId = vi.fn(async () => manifest.chainId);
+    const reader: NotificationChainReader = {
+      getChainId,
+      async getLogs() { return []; },
+      async getBlock(args) { return { number: "blockTag" in args ? finalizedBlock : args.blockNumber, hash: hashes.finalized, timestamp: 1_760_000_100n, gasLimit: 30_000_000n }; }
+    };
+    const workflow = async (): Promise<NotificationWorkflow> => ({
+      context: { chainId: manifest.chainId, contract: manifest.address, origin: "https://labx.example" },
+      manifest,
+      client: reader,
+      block: { number: finalizedBlock, hash: hashes.finalized, timestamp: 1_760_000_100n }
+    });
+    await expect(readFinalizedEvents({
+      fromBlock: eventBlock,
+      toBlock: finalizedBlock,
+      workflow,
+      budget: { remaining: 1, deadline: Date.now() + 1_000 }
+    })).rejects.toBeInstanceOf(NotificationReadBudgetError);
+    expect(getChainId).not.toHaveBeenCalled();
   });
 });
