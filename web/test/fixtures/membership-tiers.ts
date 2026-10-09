@@ -10,7 +10,7 @@ export function standardMembershipPacks(economics: (tier: MembershipTierName, in
 
 export async function fillStandardMembershipEconomics(page: Page, economics: (tier: MembershipTierName, index: number) => { price: string; bonusEntries: string; supply: string }): Promise<void> {
   for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
-    const group = page.getByRole("group", { name: `Membership ${index + 1} ${tier}`, exact: true });
+    const group = page.getByRole("group", { name: `Membership ${index + 1}: ${tier}`, exact: true });
     const values = economics(tier, index);
     await group.getByLabel("Price in USDC", { exact: true }).fill(values.price);
     await group.getByLabel("Bonus entries", { exact: true }).fill(values.bonusEntries);

@@ -101,8 +101,8 @@ run("isolated Anvil seller and membership journeys", () => {
     const legacyCases: readonly { tokenId: bigint; title: string; packs: DraftInput["packs"] }[] = [
       { tokenId: 7_011n, title: "Legacy one", packs: [{ name: "Founding", priceUsdc: 2_000_000n, bonusEntries: 1, maxSupply: 5 }] },
       { tokenId: 7_012n, title: "Legacy two", packs: [
-        { name: "eNTRY", priceUsdc: 3_000_000n, bonusEntries: 2, maxSupply: 6 },
-        { name: "BASIC", priceUsdc: 7_000_000n, bonusEntries: 5, maxSupply: 9 }
+        { name: " eNTRY ", priceUsdc: 3_000_000n, bonusEntries: 2, maxSupply: 6 },
+        { name: "   ", priceUsdc: 7_000_000n, bonusEntries: 5, maxSupply: 9 }
       ] },
       { tokenId: 7_018n, title: "Legacy eight", packs: Array.from({ length: 8 }, (_, index) => ({ name: `Legacy ${index + 1}`, priceUsdc: BigInt(index + 1) * 1_000_000n, bonusEntries: index + 1, maxSupply: index + 2 })) }
     ];

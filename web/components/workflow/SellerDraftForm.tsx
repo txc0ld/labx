@@ -69,7 +69,7 @@ function actionFromForm(form: FormDraft): Omit<DraftInput, "reserveNonce" | "res
     title,
     salesEnd: BigInt(Math.floor(closeMilliseconds / 1000)),
     packs: form.packs.map((pack) => {
-      const name = pack.name.trim();
+      const name = pack.name;
       if (!name || new TextEncoder().encode(name).length > 32) throw new Error("Each membership name must contain 1–32 UTF-8 bytes.");
       return { name, priceUsdc: parseUsdc(pack.price), bonusEntries: positiveInteger(pack.bonusEntries, `${name} bonus entries`, 10_000), maxSupply: positiveInteger(pack.maxSupply, `${name} supply`, 4_294_967_295) };
     })
@@ -460,7 +460,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       <fieldset className={`${formStyles.formSection} ${formStyles.packSection}`}>
         <legend><span>03</span> Membership packs</legend>
         <div className={formStyles.sectionIntro}><p className={formStyles.sectionHelp}>{existing ? "This raffle keeps its existing membership names and order. Edit the price, bonus entries and supply for each pack; no pack is added or removed." : "Every new raffle uses the five standard tiers. Set the price, bonus entries and supply for each tier."}</p><span>{existing ? `${form.packs.length} existing membership${form.packs.length === 1 ? "" : "s"}` : "5 standard tiers"}</span></div>
-        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id}><legend><span>Membership {index + 1}</span><strong>{pack.name}</strong></legend><div className={formStyles.packFields}><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div></fieldset>)}</div>
+        <div className={formStyles.packList}>{form.packs.map((pack, index) => <fieldset className={formStyles.packCard} key={pack.id} aria-label={`Membership ${index + 1}: ${pack.name}`}><legend><span>Membership {index + 1}</span><strong>{pack.name}</strong></legend><div className={formStyles.packFields}><label>Price in USDC<input inputMode="decimal" value={pack.price} onChange={(event) => updatePack(pack.id, "price", event.target.value)} required /></label><label>Bonus entries<input inputMode="numeric" value={pack.bonusEntries} onChange={(event) => updatePack(pack.id, "bonusEntries", event.target.value)} required /></label><label>Supply<input inputMode="numeric" value={pack.maxSupply} onChange={(event) => updatePack(pack.id, "maxSupply", event.target.value)} required /></label></div></fieldset>)}</div>
       </fieldset>
 
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}

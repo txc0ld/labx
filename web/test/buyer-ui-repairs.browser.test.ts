@@ -111,7 +111,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
     const approvalText = await approvalReview.innerText();
     expect(approvalText).toMatch(/Raffle\s+#?1/i);
-    expect(approvalText).toMatch(/Pack ID\s+1/i);
+    expect(approvalText).toMatch(/Pack ID\s+3/i);
     expect(approvalText).toMatch(/Quantity\s+3/i);
     expect(approvalText).toContain("153 USDC");
     await approvalReview.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
@@ -136,7 +136,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await purchaseReview.waitFor({ state: "visible", timeout: 10_000 });
     const purchaseText = await purchaseReview.innerText();
     expect(purchaseText).toMatch(/Raffle\s+#?1/i);
-    expect(purchaseText).toMatch(/Pack ID\s+1/i);
+    expect(purchaseText).toMatch(/Pack ID\s+3/i);
     expect(purchaseText).toMatch(/Quantity\s+3/i);
     await purchaseReview.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
 

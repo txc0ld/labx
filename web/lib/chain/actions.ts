@@ -16,7 +16,7 @@ function validateDraft(draft: DraftInput, now: bigint) {
   if (typeof draft.title !== "string" || !draft.title.trim() || new TextEncoder().encode(draft.title).length > 80) throw new Error("A title must contain 1–80 UTF-8 bytes.");
   if (!Array.isArray(draft.packs) || draft.packs.length < 1 || draft.packs.length > 8) throw new Error("Configure 1–8 memberships.");
   for (const pack of draft.packs) {
-    if (typeof pack.name !== "string" || !pack.name.trim() || new TextEncoder().encode(pack.name).length > 32) throw new Error("Membership names must contain 1–32 UTF-8 bytes.");
+    if (typeof pack.name !== "string" || !pack.name || new TextEncoder().encode(pack.name).length > 32) throw new Error("Membership names must contain 1–32 UTF-8 bytes.");
     if (typeof pack.priceUsdc !== "bigint" || pack.priceUsdc <= 0n || pack.priceUsdc > 1_000_000_000_000n) throw new Error("Membership price is outside the contract limit.");
     boundedNumber(pack.bonusEntries, 1, 10_000); boundedNumber(pack.maxSupply, 1, 4_294_967_295);
   }

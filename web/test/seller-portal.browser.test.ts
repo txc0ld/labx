@@ -194,7 +194,7 @@ run("rendered seller portal on isolated Anvil", () => {
       await fixture.page.getByRole("group", { name }).waitFor({ state: "visible" });
     }
     for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
-      await fixture.page.getByRole("group", { name: `Membership ${index + 1} ${tier}`, exact: true }).waitFor({ state: "visible" });
+      await fixture.page.getByRole("group", { name: `Membership ${index + 1}: ${tier}`, exact: true }).waitFor({ state: "visible" });
     }
     expect(await fixture.page.getByRole("button", { name: "Choose from wallet", exact: true }).isDisabled()).toBe(true);
     await fixture.page.getByText("Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.", { exact: true }).waitFor({ state: "visible" });
@@ -204,7 +204,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.getByLabel("Name", { exact: true }).count()).toBe(0);
     expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
     for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
-      const group = fixture.page.getByRole("group", { name: `Membership ${index + 1} ${tier}`, exact: true });
+      const group = fixture.page.getByRole("group", { name: `Membership ${index + 1}: ${tier}`, exact: true });
       expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["", "", ""]);
     }
     await fillStandardMembershipEconomics(fixture.page, (_tier, index) => ({ price: String((index + 1) * 10), bonusEntries: String(index + 1), supply: String((index + 1) * 10) }));
@@ -433,7 +433,7 @@ run("rendered seller portal on isolated Anvil", () => {
     const beforeUnescrowed = await chain.service.readRaffle({ id: 3n });
     await fixture.page.locator("summary").filter({ hasText: "Edit draft" }).click();
     await fixture.page.getByText("1 existing membership", { exact: true }).waitFor({ state: "visible" });
-    const existingPack = fixture.page.getByRole("group", { name: "Membership 1 Membership", exact: true });
+    const existingPack = fixture.page.getByRole("group", { name: "Membership 1: Membership", exact: true });
     expect(await existingPack.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["25", "2", "100"]);
     expect(await fixture.page.getByLabel("Name", { exact: true }).count()).toBe(0);
     expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
@@ -481,8 +481,8 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.getByLabel("NFT contract").isDisabled()).toBe(true);
     expect(await fixture.page.getByLabel("Token ID").isDisabled()).toBe(true);
     await fixture.page.getByText("2 existing memberships", { exact: true }).waitFor({ state: "visible" });
-    const entryPack = fixture.page.getByRole("group", { name: "Membership 1 eNTRY", exact: true });
-    const basicPack = fixture.page.getByRole("group", { name: "Membership 2 BASIC", exact: true });
+    const entryPack = fixture.page.getByRole("group", { name: "Membership 1: eNTRY", exact: true });
+    const basicPack = fixture.page.getByRole("group", { name: "Membership 2: BASIC", exact: true });
     expect(await entryPack.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["1", "1", "10"]);
     expect(await basicPack.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["7", "5", "11"]);
     expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
