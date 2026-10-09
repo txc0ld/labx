@@ -643,6 +643,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
     if (action.kind === "approveRaffle" && !allAttested) return;
     const operation = beginOperation(true);
     if (operation === null) return;
+    setSelected(action.kind);
     setState({ kind: "preparing", actionKind: selected });
     let exported: OwnerExecutionIntent | null = null;
     try {

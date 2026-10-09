@@ -39,7 +39,9 @@ run("owner review async lifetimes", () => {
     expect(response?.status()).toBe(200);
     const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     if (await connect.isVisible().catch(() => false)) await connect.click();
-    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Approval checklist", exact: true }).waitFor({ state: "visible", timeout: 10_000 }).catch(async error => {
+      throw new Error(`${String(error)}\nRendered owner page:\n${await fixture.page.locator("#content").innerText()}`);
+    });
     const checkboxes = fixture.page.locator("fieldset input[type=checkbox]");
     expect(await checkboxes.count()).toBe(3);
     for (const checkbox of await checkboxes.all()) await checkbox.check();

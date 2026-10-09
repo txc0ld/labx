@@ -217,6 +217,10 @@ run("Safe approval handoff", () => {
     await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await fixture.page.getByText("I already have the executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByText(/has not reached two canonical confirmations/i).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
+    await fixture.page.getByText("Approved for current draft", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await heading.isVisible()).toBe(true);
+    expect(await fixture.page.getByLabel("Executed Ethereum transaction hash").isVisible()).toBe(true);
 
     await chain.mine();
     await chain.mine();
