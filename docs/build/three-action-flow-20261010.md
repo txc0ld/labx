@@ -2,6 +2,31 @@
 
 Base: 01d567043cbed72fb5ecef97d096fedc37da19e3. User requirement: "1 button create, 1 button approve. 1 button list. thats it". This supersedes the prior scope that retained per-operation website confirmations and normal-path Safe JSON export. Risk R3: user-intent orchestration, signatures, custody and canonical execution. Root Astra design preflight approves the bounded implementation below, subject to independent verification/review and the standing human website-release authorization.
 
+## Integrated candidate status at source freeze
+
+The release candidate simplifies the normal seller journey to one website activation per stage: Create, Safe Approve and List. Native wallet confirmations remain separate. Seller accounting and recovery tools are secondary disclosures. Buyer quantity, price, fees and required consents are grouped together. Refresh restores only the exact previously authorized wallet and network, without prompting or submitting. Contracts, deployed addresses and fee policy are unchanged.
+
+Production source is frozen at `b1d2d482047d308710aca6361532a430a04e2f57`. Integration at `32c5aa669ec047f9df72b6ee270848e4a4436a09` adds only independently reviewed test changes after that source revision. The chronological builder notes below retain earlier failures and intermediate checks; they are not claims of current deployment.
+
+Observed evidence under the workspace artifact directory `artifacts/three-action-flow-20261010/`:
+
+| Gate | Observed result | Revision or artifact |
+| --- | --- | --- |
+| Aggregate with chain integration, wallet repairs and transaction lineage enabled | PASS: 786 tests; 85 skipped | b1; `integrated-aggregate-b1d2d48.log` |
+| Production build | PASS | b1; `build-b1d2d48.log` |
+| Installed AppKit startup and cleanup matrix | PASS: 13 tests | b1 production tree; `verification/wallet-lifecycle-b1d2d48-prepublication-final.log` |
+| Rendered stale Create/Recover views | PASS: 4 tests, zero new preparation/sign/send after stale state | b1 production tree; `verification/create-stale-cross-tab-9e40fa8-final.log` |
+| Independent Create, Safe Approve and List browser flow | PASS: 3 tests | b1 production tree; `verification/final-independent-three-action-browser-b1d2d48.log` |
+| Native Astra independent source and test reviews | Scoped PASS | source b1 and tests 32c; `astra-final-ownership-intent-review.md`, `astra-final-test-evidence-review.md` |
+| Actual Claude Opus 5.5, maximum effort, final repair review | Scoped source PASS | b1; `claude-final-ownership-intent/REVIEW.md` |
+| Complete 24-file browser acceptance gate | IN PROGRESS | browser-gate cd96131 has an identical web/CI tree to 32c; `browser-gate/full-browser-final.log` |
+| Broader actual Claude wallet lifecycle review | IN PROGRESS; final repair review above covers subsequent fixes | `claude-wallet-lifecycle-final/` |
+| Exact release CI, preview and production publication | NOT_RUN | Main and production remain at 01d5670 as of the last verification |
+
+Responsive headless Chromium checks cover widths 320, 390, 768 and 1440, keyboard activation, 200% page scale and RTL. Screenshots are under `verification/final-screenshots-b1d2d48/`. Native iOS was unavailable and Android startup failed; native-device and real-wallet signing checks are not claimed. The actual installed SDK tests use controlled providers, and the transaction workflow uses local-chain fixtures.
+
+Root owns the remaining browser/release gates and the nonblocking copy/availability follow-ups in `claude-findings-disposition.md`. A disappeared cross-tab Create record could offer clearer guidance; a hung dynamic import can leave Connect waiting; two manual Safe recovery messages could be more precise. These do not bypass explicit user intent or canonical confirmation. This source review is not a comprehensive external audit or a guarantee of live wallet compatibility.
+
 ## Acceptance and visible journey
 
 The connected seller fills the existing validated NFT, title, deadline and five-tier fields and clicks Create once. Without more website prepare/review/continue clicks, the app securely saves the signed draw commitment, creates the on-chain draft, approves the exact NFT token if required, and escrows it. Each distinct wallet signature/transaction still requires the human's wallet confirmation. The visible Create consent must state the NFT will be locked and multiple wallet confirmations may follow. Never imply these are one atomic transaction. No on-chain submission happens merely by mounting or restoring a page.
