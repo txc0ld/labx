@@ -370,8 +370,8 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await expect.poll(() => outcome.innerText(), { timeout: 10_000 }).toContain("Transaction confirmed");
       await fixture.page.waitForTimeout(300);
       expect(await details.getAttribute("open")).not.toBeNull();
-      expect(await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).isVisible()).toBe(true);
-      expect(await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).isEnabled()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Confirm the draw", exact: true }).isVisible()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Confirm the draw", exact: true }).isEnabled()).toBe(true);
     } finally { release(); await fixture.page.unroute(`${chain.url}/`); }
   }, 30_000);
 

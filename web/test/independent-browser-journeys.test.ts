@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { erc20Abi, parseUnits, erc721Abi } from "viem";
+import { decodeFunctionData, erc20Abi, parseUnits, erc721Abi } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
 import { connectWallet } from "./fixtures/connect-wallet";
 import { localDeadlineValue, openCreatePanel } from "./fixtures/seller-create";
+import { watchWallet } from "./fixtures/wallet-watch";
 
 const run = process.env.RUN_BROWSER_ACCEPTANCE === "1" ? describe : describe.skip;
 
@@ -75,11 +76,29 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     }), { timeout: 5_000 }).toEqual([account]);
   }
 
-  async function transact(label: string, confirmName = `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`) {
+  async function revealTrigger(label: string) {
     const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
     const secondary = fixture.page.locator("summary").filter({ hasText: /^(Advanced \(|Help finish this raffle)/ });
     await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
     if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
+    return trigger;
+  }
+
+  async function settled(blockBeforeSubmit: bigint) {
+    await expect.poll(async () => chain.client.getBlockNumber({ cacheTime: 0 }), { timeout: 15_000 }).toBeGreaterThan(blockBeforeSubmit);
+    await fixture.page.waitForTimeout(250);
+    await expect.poll(async () => {
+      const reviews = await fixture.page.locator("section.transaction-review").count();
+      const states = await fixture.page.locator(".transaction-state").allInnerTexts();
+      return reviews === 0 && !states.some((text: string) => /Transaction submitted|Waiting for wallet|Checking confirmation|Confirming|Finishing your last step/i.test(text));
+    }, { timeout: 15_000 }).toBe(true);
+    const alerts = (await fixture.page.locator(".notice.error[role=alert], .transaction-state[role=alert]").allInnerTexts()).map((text: string) => text.trim()).filter(Boolean);
+    expect(alerts).toEqual([]);
+  }
+
+  /** A buyer payment or public help step: the website review opens first, then the wallet. */
+  async function transact(label: string, confirmName = `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`) {
+    const trigger = await revealTrigger(label);
     await trigger.click();
     const confirm = fixture.page.getByRole("button", { name: confirmName, exact: true });
     await confirm.waitFor({ state: "visible", timeout: 15_000 });
@@ -88,16 +107,23 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const reviewed = await review.innerText();
     const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });
     await review.getByRole("button", { name: confirmName, exact: true }).click();
-    await expect.poll(async () => chain.client.getBlockNumber({ cacheTime: 0 }), { timeout: 15_000 }).toBeGreaterThan(blockBeforeSubmit);
-    await fixture.page.waitForTimeout(250);
-    await expect.poll(async () => {
-      const reviews = await confirm.count();
-      const states = await fixture.page.locator(".transaction-state").allInnerTexts();
-      return reviews === 0 && !states.some((text: string) => /Transaction submitted|Waiting for wallet|Checking confirmation|Confirming|Finishing your last step/i.test(text));
-    }, { timeout: 15_000 }).toBe(true);
-    const alerts = (await fixture.page.locator(".notice.error[role=alert], .transaction-state[role=alert]").allInnerTexts()).map((text: string) => text.trim()).filter(Boolean);
-    expect(alerts).toEqual([]);
+    await settled(blockBeforeSubmit);
     return reviewed;
+  }
+
+  /** A seller step on the seller page: one click sends one exact call straight to the wallet, with no website review. */
+  async function sendDirect(label: string, functionName: string, args: readonly unknown[]) {
+    const trigger = await revealTrigger(label);
+    const wallet = await watchWallet(fixture.page);
+    const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });
+    await trigger.click();
+    await settled(blockBeforeSubmit);
+    expect(await wallet.reviews()).toBe(0);
+    const requests = await wallet.requests();
+    expect(requests.map(request => request.method)).toEqual(["eth_sendTransaction"]);
+    expect(requests[0].to).toBe(chain.raffle.address.toLowerCase());
+    expect(decodeFunctionData({ abi: raffleAbi, data: requests[0].data as `0x${string}` })).toEqual({ functionName, args });
+    return wallet;
   }
 
   async function createDraft(input: { tokenId: bigint; title: string; price: string; supply: string; deadline: number }) {
@@ -181,9 +207,9 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await chain.warp(BigInt(firstDeadline));
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
-    await transact("Close sales");
-    await transact("Count entries");
-    await transact("Start draw");
+    await sendDirect("Close sales", "close", [id]);
+    await sendDirect("Count entries", "snapshot", [id, 100n]);
+    await sendDirect("Start draw", "requestRandomness", [id]);
     await fixture.page.getByRole("heading", { name: "Drawing a winner", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.evaluate(() => {
       const scope = window as unknown as Window & { __pausedNoticeSeen: boolean };
@@ -194,19 +220,30 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const drawing = await chain.service.readRaffle({ id });
     await chain.write(chain.vrf, "fulfill", [chain.raffle.address, drawing.raffle.vrfRequestId, 0n]);
     // The waiting page re-reads the raffle by itself while visible, without a Refresh click or the paused-controls notice.
-    await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+    const confirmDraw = fixture.page.getByRole("button", { name: "Confirm the draw", exact: true });
+    await confirmDraw.waitFor({ state: "visible", timeout: 30_000 });
     expect(await fixture.page.evaluate(() => (window as unknown as Window & { __pausedNoticeSeen: boolean }).__pausedNoticeSeen)).toBe(false);
-    await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Submit draw setup", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await transact("Submit draw setup");
-    await transact("Finish raffle");
+    // One click: the draw-setup signature, then the confirmation straight to the wallet.
+    const drawWallet = await watchWallet(fixture.page);
+    const beforeReveal = await chain.client.getBlockNumber({ cacheTime: 0 });
+    await confirmDraw.click();
+    await settled(beforeReveal);
+    expect((await chain.service.readRaffle({ id })).raffle.revealed).toBe(true);
+    expect(await drawWallet.reviews()).toBe(0);
+    const drawRequests = await drawWallet.requests();
+    expect(drawRequests.map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
+    expect(drawRequests[1].to).toBe(chain.raffle.address.toLowerCase());
+    const reveal = decodeFunctionData({ abi: raffleAbi, data: drawRequests[1].data as `0x${string}` });
+    expect(reveal.functionName).toBe("reveal");
+    expect(reveal.args?.[0]).toBe(id);
+    await sendDirect("Finish raffle", "settle", [id]);
 
     await switchAccount(chain.buyer);
     await goto(`/piece/${id.toString()}`, chain.buyer);
     await transact("Claim your NFT");
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
-    await transact("Claim 24.50 USDC");
+    await sendDirect("Claim 24.50 USDC", "claimProceeds", [id]);
     await switchAccount(chain.stranger);
     await goto(`/piece/${id.toString()}`, chain.stranger);
     await transact("Send LABx fees");
@@ -230,13 +267,18 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
       await chain.warp(snapshot.raffle.salesEnd + snapshot.drawStartGrace);
       await switchAccount(chain.seller);
       await goto(`/seller/${id.toString()}`, chain.seller);
-      await transact("Enable refunds");
+      const refunds = await sendDirect("Enable refunds", "cancel", [id]);
+      // Buyers need refunds first, so cancelling a raffle with sales never chains the NFT reclaim.
+      await fixture.page.getByRole("button", { name: "Reclaim NFT", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+      await fixture.page.waitForTimeout(1_000);
+      expect((await refunds.requests()).length).toBe(1);
+      expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [302n] })).toBe(chain.raffle.address);
       await switchAccount(chain.buyer);
       await goto(`/piece/${id.toString()}`, chain.buyer);
       await transact("Claim 40.00 USDC refund");
       await switchAccount(chain.seller);
       await goto(`/seller/${id.toString()}`, chain.seller);
-      await transact("Reclaim NFT");
+      await sendDirect("Reclaim NFT", "reclaimPrize", [id]);
     } finally {
       await chain.write(chain.raffle, "setPaused", [false]);
     }

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
-import { cancelGuidance, parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions, sellerStepText } from "../lib/chain/seller-actions";
+import { cancelGuidance, cancelReclaimsPrize, parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions, sellerStepText } from "../lib/chain/seller-actions";
+import { drawRunnerEnabled } from "../lib/draw-runner";
 import { catalogAvailability, fromPriceLabel } from "../components/workflow/format";
 import { availableActions } from "../lib/chain/workflow";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";
@@ -260,19 +261,32 @@ describe("seller next step", () => {
     expect(sellerNextStep(value, actions)).toEqual({ kind: "action", action: actions.find(item => item.kind === "cancel"), message: "No entries were counted. Enable refunds so buyers get their membership price back." });
     expect(sellerNextStep(value, actions.filter(item => item.kind !== "cancel"))).toEqual({ kind: "waiting", title: "Draw cannot start", message: "No entries were counted." });
   });
-  it.each([1, 2])("offers cancellation, then NFT reclaim, for an expired phase %i raffle without memberships", phase => {
+  it.each([1, 2])("offers one Cancel and get NFT back click, then NFT reclaim, for an expired phase %i raffle without memberships", phase => {
     const value = snapshot({ id: 1n, phase });
     value.block.timestamp = value.raffle.salesEnd;
     const actions = currentSellerActions(value);
     const cancelRaffle = actions.find(item => item.kind === "cancel");
     expect(cancelRaffle).toMatchObject({ enabled: true, label: "Cancel raffle" });
+    expect(cancelReclaimsPrize(value)).toBe(true);
     const next = sellerNextStep(value, actions);
-    expect(next).toEqual({ kind: "action", action: cancelRaffle, message: "No memberships were sold. Cancel the raffle, then reclaim your NFT." });
+    expect(next).toEqual({ kind: "action", action: { ...cancelRaffle, label: "Cancel and get NFT back" }, message: "No memberships were sold. Cancel the raffle and get your NFT back. Your wallet asks you to confirm twice." });
+    expect(sellerNextStep(value, actions, true)).toEqual(next);
     expect(sellerSecondaryActions(value, actions, next)).toEqual([]);
     const cancelled = snapshot({ id: 1n, phase: 6 });
     cancelled.block.timestamp = value.block.timestamp;
     const after = currentSellerActions(cancelled);
     expect(sellerNextStep(cancelled, after)).toEqual({ kind: "action", action: after.find(item => item.kind === "reclaimPrize"), message: "The raffle is cancelled. Reclaim your NFT." });
+  });
+  it("keeps Enable refunds without an NFT reclaim when memberships were sold, and Cancel raffle before the deadline", () => {
+    const sold = snapshot({ id: 1n, phase: 1 });
+    sold.lotCount = 2n;
+    sold.block.timestamp = sold.raffle.salesEnd + sold.drawStartGrace;
+    expect(cancelReclaimsPrize(sold)).toBe(false);
+    expect(sellerNextStep(sold, currentSellerActions(sold))).toMatchObject({ kind: "action", action: { kind: "cancel", label: "Enable refunds" }, message: "The draw didn’t start in time. Enable refunds so buyers get their membership price back." });
+    const early = snapshot({ id: 1n, phase: 1 });
+    expect(cancelReclaimsPrize(early)).toBe(false);
+    const actions = currentSellerActions(early);
+    expect(sellerSecondaryActions(early, actions, sellerNextStep(early, actions)).find(item => item.kind === "cancel")).toMatchObject({ label: "Cancel raffle" });
   });
   it("tells other wallets that only the seller reclaims the NFT", () => {
     const value = snapshot({ id: 1n, phase: 1 });
@@ -384,6 +398,101 @@ describe("seller next step", () => {
     drawing.raffle.vrfRequestedAt = drawing.block.timestamp;
     expect(sellerNextStep(drawing, actions)).toMatchObject({ kind: "waiting", title: "Drawing a winner" });
     expect(sellerNextStep(snapshot({ id: 1n, phase: 6 }), actions)).toMatchObject({ kind: "waiting", title: "Raffle cancelled" });
+  });
+});
+
+describe("seller next step with the draw runner", () => {
+  const DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
+  const SETTLE = "LABx finishes the raffle automatically after you confirm the draw.";
+  function currentSellerActions(value: RaffleSnapshot) {
+    return sellerPortalActions(availableActions(value, {
+      account: SELLER, snapshot: value, principal: 0n, fee: 0n,
+      usdcBalance: 0n, usdcAllowance: 0n, nftOwner: null, nftApproved: false
+    }));
+  }
+  function sold(phase: number) {
+    const value = snapshot({ id: 1n, phase });
+    value.lotCount = 1n;
+    value.block.timestamp = value.raffle.salesEnd;
+    return value;
+  }
+  function drawn(revealed: boolean) {
+    const value = snapshot({ id: 1n, phase: 4 });
+    value.lotCount = 1n;
+    value.raffle.revealed = revealed;
+    value.raffle.drawnAt = value.block.timestamp;
+    return value;
+  }
+  const counted = () => { const value = sold(2); value.raffle.snapshotted = true; value.raffle.snapshotTotal = 3n; return value; };
+
+  it.each([
+    { name: "close", value: () => sold(1), kind: "close", title: "Sales ended", message: DRAW },
+    { name: "count", value: () => sold(2), kind: "snapshot", title: "Sales closed", message: DRAW },
+    { name: "start", value: counted, kind: "requestRandomness", title: "Entries counted", message: DRAW },
+    { name: "finish", value: () => drawn(true), kind: "settle", title: "Draw confirmed", message: SETTLE }
+  ])("leaves the $name step to LABx and keeps it as a fallback", ({ value, kind, title, message }) => {
+    const raffle = value();
+    const actions = currentSellerActions(raffle);
+    const manual = sellerNextStep(raffle, actions);
+    expect(manual).toMatchObject({ kind: "action", action: { kind, enabled: true } });
+    expect(sellerNextStep(raffle, actions, false)).toEqual(manual);
+    const automatic = sellerNextStep(raffle, actions, true);
+    expect(automatic).toEqual({ kind: "automatic", action: actions.find(item => item.kind === kind), title, message });
+    // The fallback lives in Run it yourself, so Advanced does not repeat it.
+    expect(sellerSecondaryActions(raffle, actions, automatic).map(item => item.kind)).not.toContain(kind);
+  });
+
+  it("finishes an unconfirmed draw after the reveal window without asking the seller to finish it", () => {
+    const value = drawn(false);
+    value.block.timestamp = value.raffle.drawnAt + value.revealGrace;
+    const actions = currentSellerActions(value);
+    expect(sellerNextStep(value, actions, true)).toMatchObject({ kind: "automatic", action: { kind: "settle" }, title: "Winner drawn", message: SETTLE });
+    expect(sellerSecondaryActions(value, actions, sellerNextStep(value, actions, true)).map(item => item.kind)).toEqual(["reveal"]);
+  });
+
+  it("keeps confirming the draw, claims, cancellation, refunds and reclaim with the seller", () => {
+    const reveal = drawn(false);
+    expect(sellerNextStep(reveal, currentSellerActions(reveal), true)).toMatchObject({ kind: "action", action: { kind: "reveal", label: "Confirm the draw" } });
+    const paid = snapshot({ id: 1n, phase: 5, principalEscrow: 1_000_000n });
+    expect(sellerNextStep(paid, currentSellerActions(paid), true)).toMatchObject({ kind: "action", action: { kind: "claimProceeds" } });
+    const empty = snapshot({ id: 1n, phase: 1 });
+    empty.block.timestamp = empty.raffle.salesEnd;
+    expect(sellerNextStep(empty, currentSellerActions(empty), true)).toMatchObject({ kind: "action", action: { kind: "cancel", label: "Cancel and get NFT back" } });
+    const late = sold(2);
+    late.block.timestamp = late.raffle.salesEnd + late.drawStartGrace;
+    expect(sellerNextStep(late, currentSellerActions(late), true)).toMatchObject({ kind: "action", action: { kind: "cancel", label: "Enable refunds" } });
+    const stuck = sold(3);
+    stuck.raffle.vrfRequestedAt = stuck.raffle.salesEnd;
+    stuck.block.timestamp = stuck.raffle.vrfRequestedAt + stuck.randomnessGrace;
+    expect(sellerNextStep(stuck, currentSellerActions(stuck), true)).toMatchObject({ kind: "action", action: { kind: "abortDrawing" } });
+    const cancelled = snapshot({ id: 1n, phase: 6 });
+    expect(sellerNextStep(cancelled, currentSellerActions(cancelled), true)).toMatchObject({ kind: "action", action: { kind: "reclaimPrize" } });
+  });
+
+  it("leaves waiting states unchanged", () => {
+    const live = snapshot({ id: 1n, phase: 1 });
+    expect(sellerNextStep(live, currentSellerActions(live), true)).toEqual(sellerNextStep(live, currentSellerActions(live)));
+    const drawing = sold(3);
+    drawing.raffle.vrfRequestedAt = drawing.block.timestamp;
+    expect(sellerNextStep(drawing, currentSellerActions(drawing), true)).toEqual({ kind: "waiting", title: "Drawing a winner", message: "This usually takes a few minutes. This page updates on its own." });
+  });
+});
+
+describe("draw runner flag", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("is on only for exactly 1", () => {
+    expect(drawRunnerEnabled("1")).toBe(true);
+    for (const value of [undefined, "", "0", "true", "on", " 1", "1 "]) expect(drawRunnerEnabled(value)).toBe(false);
+  });
+
+  it("reads NEXT_PUBLIC_LABX_DRAW_RUNNER and is off when it is unset", () => {
+    vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", undefined);
+    expect(drawRunnerEnabled()).toBe(false);
+    vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", "1");
+    expect(drawRunnerEnabled()).toBe(true);
+    vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", "0");
+    expect(drawRunnerEnabled()).toBe(false);
   });
 });
 

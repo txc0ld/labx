@@ -568,6 +568,6 @@ run("rendered seller portal on isolated Anvil", () => {
     const sellerRoute = await fixture.page.goto(`${fixture.baseUrl}/seller/29`, { waitUntil: "domcontentloaded" });
     expect(sellerRoute?.status()).toBe(200);
     await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet." }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await fixture.page.getByRole("button", { name: /Submit draw setup|Sign to continue|Finish raffle|^Claim [\d.,]+ USDC$/ }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /Confirm the draw|Finish raffle|^Claim [\d.,]+ USDC$/ }).count()).toBe(0);
   }, 30_000);
 });

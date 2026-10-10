@@ -35,12 +35,15 @@ export type TransactionFlowProps = {
   label: string;
   formatUsdc: AmountFormatter;
   resumeHash?: Hex;
-  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction) => void | Promise<void>;
+  /** direct is true only when the confirmation came straight from this flow's own wallet request, not a later check or recovery. */
+  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction, direct: boolean) => void | Promise<void>;
   onCancel?: () => void;
   disabled?: boolean;
   disabledReason?: string;
   prepareOnMount?: boolean;
   submitOnClick?: boolean;
+  /** Sends once on mount as if the button was pressed. Only for a step the person's own click just started. */
+  submitOnMount?: boolean;
 };
 
 function walletSnapshot(wallet: WalletSessionPort) {
@@ -97,11 +100,11 @@ type Operation = { scope: number; id: number };
 // Calls that only change raffle state. Their prepared recipient is the contract default, not a payee, so the review names the called contract.
 const CONTRACT_CALL_KINDS = new Set<WorkflowAction["kind"]>(["createDraft", "updateDraft", "approveRaffle", "revokeRaffleApproval", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing"]);
 
-// Plain rows people can check before the wallet opens. Full addresses, chain ID and pack index stay in Transaction details.
 // Seller steps that pay nobody but the seller. The wallet shows the exact call, so like List they
 // skip the website review. Buyer payments always keep it.
-const SUBMIT_ON_CLICK_KINDS = new Set<WorkflowAction["kind"]>(["open", "close", "snapshot", "requestRandomness", "settle", "cancel", "abortDrawing", "reclaimPrize", "claimProceeds"]);
+const SUBMIT_ON_CLICK_KINDS = new Set<WorkflowAction["kind"]>(["open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing", "reclaimPrize", "claimProceeds"]);
 
+// Plain rows people can check before the wallet opens. Full addresses, chain ID and pack index stay in Transaction details.
 function reviewRows(prepared: PreparedAction, raffle: Address, formatUsdc: AmountFormatter) {
   const party = (value: Address) => sameAddress(value, raffle) ? `LABx raffle ${shortAddress(value)}`
     : sameAddress(value, prepared.account) ? `Your wallet ${shortAddress(value)}` : shortAddress(value);
@@ -123,7 +126,7 @@ function confirmLabel(action: WorkflowAction, label: string) {
   return action.kind === "approveUsdc" ? "Confirm approval" : action.kind === "buyMembership" ? "Confirm purchase" : `Confirm ${lowerFirst(label)}`;
 }
 
-export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false }: TransactionFlowProps) {
+export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false, submitOnMount = false }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
   const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
@@ -149,6 +152,9 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const attemptedScope = useRef<number | null>(null);
   const [clearJournalScope, setClearJournalScope] = useState<number | null>(null);
   const ownSubmission = useRef<{ scope: number; submitted: SubmittedAction } | null>(null);
+  // Read once at mount, and spent on the first decision: a later prop, scope or journal change never sends on its own.
+  const [autoSubmit] = useState(submitOnMount);
+  const autoSubmitSpent = useRef(false);
   const callbacks = useRef({ onConfirmed, onCancel });
   callbacks.current = { onConfirmed, onCancel };
 
@@ -273,7 +279,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
           if (!isCurrent(expected)) return;
           ownSubmission.current = { scope: expected.generation, submitted };
           setCurrent(expected, { kind: "confirming", submitted });
-        }, () => { if (!isCurrent(expected)) throw new Error("This action is no longer active."); }), expected);
+        }, () => { if (!isCurrent(expected)) throw new Error("This action is no longer active."); }), expected, true);
       } else setCurrent(expected, { kind: "review", prepared });
     } catch (error) {
       await showError(error, expected);
@@ -290,7 +296,18 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prepareOnMount, disabled, activeOutcome, state.kind, clearJournalScope, scope, currentWallet, service]);
 
-  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext) {
+  useEffect(() => {
+    if (!autoSubmit || autoSubmitSpent.current) return;
+    // A saved transaction that needs a check, or an unreadable journal, ends the automatic send. The button stays.
+    if (state.kind === "recovery" || state.kind === "error") { autoSubmitSpent.current = true; return; }
+    if (state.kind !== "idle" || clearJournalScope !== scope || disabled || activeOutcome) return;
+    autoSubmitSpent.current = true;
+    void prepare(true);
+    // prepare re-reads the journal and checks the wallet and network before anything reaches the wallet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSubmit, state.kind, clearJournalScope, scope, disabled, activeOutcome]);
+
+  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext, direct = false) {
     if (!isCurrent(expected)) return;
     if (outcome.kind === "terminal") {
       const confirmation = outcome.confirmation;
@@ -299,7 +316,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         setCurrent(expected, { kind: "receipt", confirmation });
       } else if (confirmation.kind === "confirmed") {
         setCurrent(expected, { kind: "confirmed", confirmation });
-        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted);
+        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted, direct);
       } else setCurrent(expected, { kind: confirmation.kind, confirmation });
     } else if (outcome.kind === "pending" || outcome.kind === "checking") {
       setCurrent(expected, { kind: "pending", submitted: outcome.submitted });
@@ -334,7 +351,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         if (!isCurrent(expected)) return;
         ownSubmission.current = { scope: expected.generation, submitted };
         setCurrent(expected, { kind: "confirming", submitted });
-      }), expected);
+      }), expected, true);
     } catch (error) {
       await showError(error, expected);
     } finally {
