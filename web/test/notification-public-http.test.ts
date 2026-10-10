@@ -220,6 +220,39 @@ describe("notification cron boundary", () => {
     expect(dependencies.sender).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["cron", createNotificationCronHandler, "GET"],
+    ["connection test", createNotificationConnectionTestHandler, "POST"]
+  ] as const)("treats a cron secret shorter than 16 characters as not configured for the %s", async (_, create, method) => {
+    for (const secret of ["0123456789abcde", "x"]) {
+      process.env.CRON_SECRET = secret;
+      process.env.RESEND_API_KEY = "resend-test";
+      process.env.RESEND_FROM = "LABx <alerts@example.com>";
+      process.env.LABX_ADMIN_EMAIL = "team@fantomlabs.io";
+      const dependencies = { store: vi.fn(), source: vi.fn(), sender: vi.fn() };
+      const response = await create(dependencies)(new Request("https://labx.example/api/cron/notifications", { method, headers: { Authorization: `Bearer ${secret}` } }));
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ ok: false, error: "Notification cron is not configured." });
+      expect(dependencies.store).not.toHaveBeenCalled();
+      expect(dependencies.source).not.toHaveBeenCalled();
+      expect(dependencies.sender).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects a bearer of another length or content without touching dependencies", async () => {
+    process.env.CRON_SECRET = "1234567890abcdef";
+    process.env.RESEND_API_KEY = "resend-test";
+    process.env.RESEND_FROM = "LABx <alerts@example.com>";
+    process.env.LABX_ADMIN_EMAIL = "team@fantomlabs.io";
+    for (const header of ["Bearer 1234567890abcde", "Bearer 1234567890abcdeg", "Bearer 1234567890abcdef0", `Bearer ${"1234567890abcdef".repeat(64)}`, "bearer 1234567890abcdef", "Bearer  1234567890abcdef"]) {
+      const dependencies = { store: vi.fn(), source: vi.fn(), sender: vi.fn() };
+      const response = await createNotificationCronHandler(dependencies)(new Request("https://labx.example/api/cron/notifications", { headers: { Authorization: header } }));
+      expect(response.status).toBe(401);
+      expect(dependencies.store).not.toHaveBeenCalled();
+      expect(dependencies.source).not.toHaveBeenCalled();
+    }
+  });
+
   it("returns a bounded unavailable response when initial source attestation fails", async () => {
     process.env.CRON_SECRET = "1234567890abcdef";
     process.env.RESEND_API_KEY = "resend-test";

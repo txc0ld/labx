@@ -2,8 +2,9 @@ import type { Hex } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import type { Store } from "../points";
 import { sameAddress } from "../chain/validation";
-import { validBearer } from "../notifications/http";
-import { RUN_MS, runDraw, type DrawChain, type RunReport, type RunStatus } from "./run";
+import { MIN_CRON_SECRET_LENGTH, validBearer } from "../notifications/http";
+import { within } from "./errors";
+import { FINISH_RESERVE_MS, RUN_MS, runDraw, type DrawChain, type RunReport, type RunStatus } from "./run";
 
 const HEALTHY: ReadonlySet<RunStatus> = new Set(["complete", "busy", "send-cap", "deadline"]);
 
@@ -21,7 +22,7 @@ export function createDrawCronHandler(dependencies: {
   const now = dependencies.now ?? (() => Date.now());
   return async function GET(request: Request): Promise<Response> {
     const secret = process.env.CRON_SECRET;
-    if (!secret) return cronError("Draw runner cron is not configured.", 503);
+    if (!secret || secret.length < MIN_CRON_SECRET_LENGTH) return cronError("Draw runner cron is not configured.", 503);
     if (!validBearer(request.headers.get("authorization"), secret)) return cronError("Draw runner authorization failed.", 401);
     const account = runnerAccount(process.env.LABX_KEEPER_PRIVATE_KEY);
     if (!account) return cronError("The draw runner key is missing or invalid.", 503);
@@ -29,8 +30,8 @@ export function createDrawCronHandler(dependencies: {
 
     let chain: DrawChain;
     try {
-      chain = await dependencies.chain(account);
-      const privileged = await chain.privilegedAddresses();
+      chain = await within(dependencies.chain(account), deadline - FINISH_RESERVE_MS - now());
+      const privileged = await within(chain.privilegedAddresses(), deadline - FINISH_RESERVE_MS - now());
       if (privileged.some(item => sameAddress(item, account.address))) {
         return cronError("The draw runner key must not belong to the LABx owner, a Safe signer or the treasury.", 503);
       }
@@ -44,7 +45,7 @@ export function createDrawCronHandler(dependencies: {
     } catch {
       return cronError("The draw runner did not complete.", 503);
     }
-    const ok = HEALTHY.has(report.status) && report.items.every(item => item.outcome === "succeeded" || item.outcome === "skipped");
+    const ok = HEALTHY.has(report.status) && report.items.every(item => item.outcome === "succeeded" || (item.outcome === "skipped" && (item.error === null || item.error === "EstimateGasRevert")));
     console.info("draw-runner", report);
     return Response.json({ ok, ...report }, { headers: { "Cache-Control": "no-store" } });
   };
