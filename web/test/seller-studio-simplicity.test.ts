@@ -171,12 +171,12 @@ const TIER_PACKS = [
   { name: "Gold", priceUsdc: 100_000_000n, bonusEntries: 10, maxSupply: 10, sold: 0, active: true }
 ];
 
-function raffleSnapshot(input: { phase: number; escrowed?: boolean; salesEnd?: bigint; admission?: "pending" | "approved" | "opened"; lotCount?: bigint; principalEscrow?: bigint; winner?: Address; revealed?: boolean; snapshotted?: boolean; snapshotTotal?: bigint; packs?: typeof TIER_PACKS }): RaffleSnapshot {
+function raffleSnapshot(input: { phase: number; escrowed?: boolean; salesEnd?: bigint; drawnAt?: bigint; admission?: "pending" | "approved" | "opened"; lotCount?: bigint; principalEscrow?: bigint; winner?: Address; revealed?: boolean; snapshotted?: boolean; snapshotTotal?: bigint; packs?: typeof TIER_PACKS }): RaffleSnapshot {
   return {
     id: 7n,
     block: { number: 50n, hash: zeroHash, timestamp: NOW },
     raffle: {
-      seller: SELLER, nft: zeroAddress, tokenId: 7n, salesEnd: input.salesEnd ?? NOW + 3_600n, createdAt: 1n, drawnAt: 0n, vrfRequestedAt: 0n,
+      seller: SELLER, nft: zeroAddress, tokenId: 7n, salesEnd: input.salesEnd ?? NOW + 3_600n, createdAt: 1n, drawnAt: input.drawnAt ?? 0n, vrfRequestedAt: 0n,
       phase: input.phase, escrowed: input.escrowed ?? true, snapshotted: input.snapshotted ?? false, revealed: input.revealed ?? false,
       reserveNonce: zeroHash, reserveCommit: zeroHash, publicHash: zeroHash, lotCursor: 0n, snapshotTotal: input.snapshotTotal ?? 0n,
       principalEscrow: input.principalEscrow ?? 0n, feeEscrow: 0n, vrfRequestId: 0n, randomWord: 0n, winner: input.winner ?? zeroAddress, packCount: 2, title: "Copper Moon"
@@ -224,7 +224,7 @@ describe("Studio card next step", () => {
     const closing = raffleSnapshot({ phase: 1, salesEnd: NOW, lotCount: 3n });
     const counting = raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n });
     const starting = raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n, snapshotted: true, snapshotTotal: 3n });
-    const finishing = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, lotCount: 3n, revealed: true });
+    const finishing = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, drawnAt: NOW - 30n, lotCount: 3n, revealed: true });
     for (const value of [closing, counting, starting]) expect(cardNextStep(value, SELLER, true)).toEqual({ label: "View", status: draw });
     expect(cardNextStep(finishing, SELLER, true)).toEqual({ label: "View", status: "LABx finishes the raffle automatically after you confirm the draw." });
     expect(cardNextStep(finishing, SELLER, false)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
@@ -233,6 +233,16 @@ describe("Studio card next step", () => {
     expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER, true)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle complete" });
     expect(cardNextStep(raffleSnapshot({ phase: 6 }), SELLER, true)).toEqual({ label: "Reclaim NFT", status: "Raffle cancelled" });
     expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: NOW - 604_800n }), SELLER, true)).toMatchObject({ label: "Cancel and get NFT back" });
+  });
+
+  it("puts an overdue runner step back on the card once it is 30 minutes late by block time", () => {
+    const due = NOW - 1_800n;
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: due + 1n, lotCount: 3n }), SELLER, true)).toMatchObject({ label: "View" });
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: due, lotCount: 3n }), SELLER, true)).toEqual({ label: "Close sales", status: "Sales ended" });
+    expect(cardNextStep(raffleSnapshot({ phase: 2, salesEnd: due, lotCount: 3n }), SELLER, true)).toEqual({ label: "Count entries", status: "Sales closed" });
+    expect(cardNextStep(raffleSnapshot({ phase: 2, salesEnd: due, lotCount: 3n, snapshotted: true, snapshotTotal: 3n }), SELLER, true)).toEqual({ label: "Start draw", status: "Entries counted" });
+    expect(cardNextStep(raffleSnapshot({ phase: 4, salesEnd: due - 60n, drawnAt: due + 1n, lotCount: 3n, revealed: true }), SELLER, true)).toMatchObject({ label: "View" });
+    expect(cardNextStep(raffleSnapshot({ phase: 4, salesEnd: due - 60n, drawnAt: due, lotCount: 3n, revealed: true }), SELLER, true)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
   });
 
   it("reads the draw runner flag and keeps manual steps when it is off", () => {

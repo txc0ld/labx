@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { decodeFunctionData, encodeFunctionData, erc721Abi, keccak256, toBytes, type Address, type Hex } from "viem";
-import type { Locator } from "playwright";
+import type { Locator, Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
@@ -20,6 +20,11 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
   let earlyId: bigint;
   let publicCancelId: bigint;
   let rejectedId: bigint;
+  let reloadFailedId: bigint;
+  let accountFailedId: bigint;
+  let switchedId: bigint;
+  let reclaimedElsewhereId: bigint;
+  let transientId: bigint;
 
   async function act(action: WorkflowAction, wallet: WalletSessionPort) {
     const prepared = await service.prepare({ action, wallet });
@@ -127,6 +132,57 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     return fixture.page.getByRole("button", { name, exact: true, includeHidden: true }).count();
   }
 
+  type RpcCall = { id?: unknown; method?: unknown; params?: unknown };
+
+  /** True for an eth_call of exactly `data` pinned to a block after `after`. */
+  function readAfter(call: RpcCall, data: Hex, after: bigint) {
+    if (call.method !== "eth_call" || !Array.isArray(call.params)) return false;
+    const [request, block] = call.params as [unknown, unknown];
+    return !!request && typeof request === "object" && "data" in request && typeof request.data === "string"
+      && request.data.toLowerCase() === data.toLowerCase() && typeof block === "string" && block.startsWith("0x") && BigInt(block) > after;
+  }
+
+  /**
+   * Intercepts the page's RPC requests that contain an eth_call of `data` pinned after block `after`. "fail" answers the whole
+   * request with RPC errors; "hold" keeps it waiting until restore(). Everything else passes through.
+   */
+  async function interceptReads(data: Hex, after: bigint, mode: "fail" | "hold") {
+    let matched = 0, active = true, release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const waiting: Promise<void>[] = [];
+    const handler = async (route: Route) => {
+      const body: unknown = route.request().postDataJSON();
+      const calls = (Array.isArray(body) ? body : [body]) as RpcCall[];
+      if (!active || !calls.some(call => readAfter(call, data, after))) return route.continue();
+      matched += 1;
+      if (mode === "fail") {
+        const failure = (call: RpcCall) => ({ jsonrpc: "2.0", id: call.id, error: { code: -32000, message: "Test read failure" } });
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(Array.isArray(body) ? calls.map(failure) : failure(calls[0])) });
+      }
+      const resumed = held.then(() => route.continue());
+      waiting.push(resumed);
+      await resumed;
+    };
+    await fixture.page.route(`${chain.url}/`, handler);
+    return {
+      matched: () => matched,
+      async restore() {
+        active = false;
+        release();
+        await Promise.allSettled(waiting);
+        await fixture.page.unroute(`${chain.url}/`, handler);
+      }
+    };
+  }
+
+  function raffleRead(id: bigint) {
+    return encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [id] });
+  }
+
+  function primaryCard(title: string) {
+    return fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: title, exact: true, level: 2 }) });
+  }
+
   async function statusPill() {
     return (await fixture.page.locator(".piece-status").textContent())?.trim();
   }
@@ -148,12 +204,18 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await chain.write(chain.nft, "mint", [chain.seller, 1002n]);
     await chain.write(chain.nft, "mint", [chain.seller, 1003n]);
     await chain.write(chain.nft, "mint", [chain.seller, 1004n]);
+    for (const tokenId of [1005n, 1006n, 1007n, 1008n, 1009n]) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
     const latest = await chain.client.getBlock();
     const shortDeadline = latest.timestamp + 3_600n;
     expiredId = await createOpenRaffle(1001n, "Empty expired raffle", shortDeadline);
     earlyId = await createOpenRaffle(1002n, "Empty early raffle", latest.timestamp + 30n * 86_400n);
     publicCancelId = await createOpenRaffle(1003n, "Empty public recovery raffle", shortDeadline);
     rejectedId = await createOpenRaffle(1004n, "Empty rejected reclaim raffle", shortDeadline);
+    reloadFailedId = await createOpenRaffle(1005n, "Empty failed reload raffle", shortDeadline);
+    accountFailedId = await createOpenRaffle(1006n, "Empty failed account raffle", shortDeadline);
+    switchedId = await createOpenRaffle(1007n, "Empty switched account raffle", shortDeadline);
+    reclaimedElsewhereId = await createOpenRaffle(1008n, "Empty reclaimed elsewhere raffle", shortDeadline);
+    transientId = await createOpenRaffle(1009n, "Empty transient reclaim raffle", shortDeadline);
     // Past the sales deadline but inside the seven-day draw-start grace, so only the seller or operator may cancel.
     await chain.warp(shortDeadline + 60n);
     fixture = await browserChain(chain, chain.stranger);
@@ -293,6 +355,162 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await fixture.page.locator("section.workflow-next[role=status]").filter({ has: fixture.page.getByRole("heading", { name: "Raffle cancelled", exact: true }) }).waitFor({ state: "visible", timeout: 15_000 });
     await idle();
     expect((await wallet.requests()).map(request => call(request))).toEqual([{ functionName: "reclaimPrize", args: [rejectedId] }]);
+    expect(await wallet.reviews()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
+
+  it("ends the chained reclaim when the reload after the cancellation fails, so Try again never sends it", async () => {
+    await openAs(`/seller/${reloadFailedId.toString()}`, chain.seller);
+    const cancelNow = fixture.page.getByRole("button", { name: "Cancel and get NFT back", exact: true });
+    await cancelNow.waitFor({ state: "visible", timeout: 15_000 });
+    const wallet = await watchWallet(fixture.page);
+    // Every read of this raffle after the cancellation's block fails until reads are restored.
+    const reads = await interceptReads(raffleRead(reloadFailedId), await chain.client.getBlockNumber({ cacheTime: 0 }), "fail");
+    const failure = fixture.page.locator("p.notice.error[role=alert]").filter({ hasText: "Couldn’t update the raffle" });
+    try {
+      await cancelNow.click();
+      await expect.poll(async () => (await service.readRaffle({ id: reloadFailedId })).raffle.phase, { timeout: 15_000 }).toBe(6);
+      await failure.waitFor({ state: "visible", timeout: 20_000 });
+      expect(reads.matched()).toBeGreaterThan(0);
+      await fixture.page.waitForTimeout(2_000);
+    } finally { await reads.restore(); }
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+
+    // Reads work again. Try again loads the cancelled raffle, and Reclaim NFT waits for the seller's own click.
+    await failure.getByRole("button", { name: "Try again", exact: true }).click();
+    const reclaim = primaryCard("Reclaim NFT").getByRole("button", { name: "Reclaim NFT", exact: true });
+    await expect.poll(async () => await reclaim.isVisible() || (await wallet.requests()).length > 1, { timeout: 15_000 }).toBe(true);
+    await fixture.page.waitForTimeout(2_000);
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+    expect(await ownerOf(1005n)).toBe(chain.raffle.address);
+    expect(await reclaim.isVisible()).toBe(true);
+
+    await reclaim.click();
+    await expect.poll(async () => ownerOf(1005n), { timeout: 15_000 }).toBe(chain.seller);
+    await idle();
+    expect((await wallet.requests()).map(request => call(request))).toEqual([{ functionName: "cancel", args: [reloadFailedId] }, { functionName: "reclaimPrize", args: [reloadFailedId] }]);
+    expect(await wallet.reviews()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
+
+  it("ends the chained reclaim when the seller's account cannot be read after the cancellation, so a later Refresh never sends it", async () => {
+    await openAs(`/seller/${accountFailedId.toString()}`, chain.seller);
+    const cancelNow = fixture.page.getByRole("button", { name: "Cancel and get NFT back", exact: true });
+    await cancelNow.waitFor({ state: "visible", timeout: 15_000 });
+    const wallet = await watchWallet(fixture.page);
+    // The raffle reloads, but reading the seller's account at the new block fails.
+    const principal = encodeFunctionData({ abi: raffleAbi, functionName: "principalOf", args: [accountFailedId, chain.seller] });
+    const reads = await interceptReads(principal, await chain.client.getBlockNumber({ cacheTime: 0 }), "fail");
+    try {
+      await cancelNow.click();
+      await expect.poll(async () => (await service.readRaffle({ id: accountFailedId })).raffle.phase, { timeout: 15_000 }).toBe(6);
+      await expect.poll(statusPill, { timeout: 15_000 }).toBe("Cancelled");
+      await expect.poll(() => reads.matched(), { timeout: 15_000 }).toBeGreaterThan(0);
+      await fixture.page.waitForTimeout(2_000);
+      expect(await buttonCount("Reclaim NFT")).toBe(0);
+    } finally { await reads.restore(); }
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
+    const reclaim = primaryCard("Reclaim NFT").getByRole("button", { name: "Reclaim NFT", exact: true });
+    await expect.poll(async () => await reclaim.isVisible() || (await wallet.requests()).length > 1, { timeout: 15_000 }).toBe(true);
+    await fixture.page.waitForTimeout(2_000);
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+    expect(await ownerOf(1006n)).toBe(chain.raffle.address);
+    await reclaim.click();
+    await expect.poll(async () => ownerOf(1006n), { timeout: 15_000 }).toBe(chain.seller);
+    await idle();
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
+
+  it("ends the chained reclaim when the wallet switches accounts between the two requests, and leaves Reclaim NFT for a click", async () => {
+    await openAs(`/seller/${switchedId.toString()}`, chain.seller);
+    const cancelNow = fixture.page.getByRole("button", { name: "Cancel and get NFT back", exact: true });
+    await cancelNow.waitFor({ state: "visible", timeout: 15_000 });
+    const wallet = await watchWallet(fixture.page);
+    // Hold the reload that follows the cancellation, so the account switch lands between the two wallet requests.
+    const reads = await interceptReads(raffleRead(switchedId), await chain.client.getBlockNumber({ cacheTime: 0 }), "hold");
+    try {
+      await cancelNow.click();
+      await expect.poll(async () => (await service.readRaffle({ id: switchedId })).raffle.phase, { timeout: 15_000 }).toBe(6);
+      await expect.poll(() => reads.matched(), { timeout: 15_000 }).toBeGreaterThan(0);
+      await fixture.switchAccount(chain.stranger);
+      await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet.", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
+      await fixture.switchAccount(chain.seller);
+    } finally { await reads.restore(); }
+
+    const reclaim = primaryCard("Reclaim NFT").getByRole("button", { name: "Reclaim NFT", exact: true });
+    await expect.poll(async () => await reclaim.isVisible() || (await wallet.requests()).length > 1, { timeout: 20_000 }).toBe(true);
+    await fixture.page.waitForTimeout(2_000);
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+    expect(await ownerOf(1007n)).toBe(chain.raffle.address);
+    expect(await reclaim.isVisible()).toBe(true);
+
+    await reclaim.click();
+    await expect.poll(async () => ownerOf(1007n), { timeout: 15_000 }).toBe(chain.seller);
+    await idle();
+    expect((await wallet.requests()).map(request => call(request))).toEqual([{ functionName: "cancel", args: [switchedId] }, { functionName: "reclaimPrize", args: [switchedId] }]);
+    expect(await wallet.reviews()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
+
+  it("sends no reclaim when the NFT came back from another session first, and shows the cancelled raffle instead of an error", async () => {
+    await openAs(`/seller/${reclaimedElsewhereId.toString()}`, chain.seller);
+    const cancelNow = fixture.page.getByRole("button", { name: "Cancel and get NFT back", exact: true });
+    await cancelNow.waitFor({ state: "visible", timeout: 15_000 });
+    const wallet = await watchWallet(fixture.page);
+    // The page reloads the cancelled raffle at the cancellation's block. Before it can prepare the reclaim, the seller's other
+    // session reclaims the NFT.
+    const reads = await interceptReads(raffleRead(reclaimedElsewhereId), await chain.client.getBlockNumber({ cacheTime: 0 }), "hold");
+    try {
+      await cancelNow.click();
+      await expect.poll(async () => (await service.readRaffle({ id: reclaimedElsewhereId })).raffle.phase, { timeout: 15_000 }).toBe(6);
+      await expect.poll(() => reads.matched(), { timeout: 15_000 }).toBeGreaterThan(0);
+      await chain.write(chain.raffle, "reclaimPrize", [reclaimedElsewhereId], chain.seller);
+      expect(await ownerOf(1008n)).toBe(chain.seller);
+    } finally { await reads.restore(); }
+
+    const cancelled = fixture.page.locator("section.workflow-next[role=status]").filter({ has: fixture.page.getByRole("heading", { name: "Raffle cancelled", exact: true, level: 2 }) });
+    await cancelled.waitFor({ state: "visible", timeout: 20_000 });
+    expect(await cancelled.getByText("No memberships were sold.", { exact: true }).isVisible()).toBe(true);
+    await idle();
+    await fixture.page.waitForTimeout(1_000);
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+    expect(await wallet.reviews()).toBe(0);
+    expect(await fixture.page.getByText("Only the seller can reclaim the NFT.").count()).toBe(0);
+    expect(await fixture.page.locator(".notice.error[role=alert], .transaction-state[role=alert]").allInnerTexts()).toEqual([]);
+    expect(await buttonCount("Reclaim NFT")).toBe(0);
+    expect(await statusPill()).toBe("Cancelled");
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
+
+  it("keeps the error and Try again when the chained reclaim fails for a reason other than the raffle, and sends only on a click", async () => {
+    await openAs(`/seller/${transientId.toString()}`, chain.seller);
+    const cancelNow = fixture.page.getByRole("button", { name: "Cancel and get NFT back", exact: true });
+    await cancelNow.waitFor({ state: "visible", timeout: 15_000 });
+    const wallet = await watchWallet(fixture.page);
+    // The raffle reloads normally, but the reclaim's simulation fails at the RPC, so the raffle itself has not moved on.
+    const simulation = encodeFunctionData({ abi: raffleAbi, functionName: "reclaimPrize", args: [transientId] });
+    const reads = await interceptReads(simulation, await chain.client.getBlockNumber({ cacheTime: 0 }), "fail");
+    const reclaimCard = primaryCard("Reclaim NFT");
+    try {
+      await cancelNow.click();
+      await reclaimCard.getByText("Action unavailable", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+      expect(reads.matched()).toBeGreaterThan(0);
+      await fixture.page.waitForTimeout(1_500);
+      expect(await reclaimCard.getByText("Action unavailable", { exact: true }).isVisible()).toBe(true);
+    } finally { await reads.restore(); }
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+
+    await reclaimCard.getByRole("button", { name: "Try again", exact: true }).click();
+    const reclaim = reclaimCard.getByRole("button", { name: "Reclaim NFT", exact: true });
+    await reclaim.waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.waitForTimeout(1_500);
+    expect((await wallet.requests()).map(request => call(request).functionName)).toEqual(["cancel"]);
+    await reclaim.click();
+    await expect.poll(async () => ownerOf(1009n), { timeout: 15_000 }).toBe(chain.seller);
+    await idle();
+    expect((await wallet.requests()).map(request => call(request))).toEqual([{ functionName: "cancel", args: [transientId] }, { functionName: "reclaimPrize", args: [transientId] }]);
     expect(await wallet.reviews()).toBe(0);
     expect(pageErrors).toEqual([]);
   }, 120_000);

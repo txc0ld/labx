@@ -44,6 +44,8 @@ export type TransactionFlowProps = {
   submitOnClick?: boolean;
   /** Sends once on mount as if the button was pressed. Only for a step the person's own click just started. */
   submitOnMount?: boolean;
+  /** Awaited before the error shows when preparing that automatic send fails, often because the raffle already moved on, so the page can re-read it and show the step that fits now. */
+  onUnavailable?: () => void | Promise<void>;
 };
 
 function walletSnapshot(wallet: WalletSessionPort) {
@@ -126,7 +128,7 @@ function confirmLabel(action: WorkflowAction, label: string) {
   return action.kind === "approveUsdc" ? "Confirm approval" : action.kind === "buyMembership" ? "Confirm purchase" : `Confirm ${lowerFirst(label)}`;
 }
 
-export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false, submitOnMount = false }: TransactionFlowProps) {
+export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, onUnavailable, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false, submitOnMount = false }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
   const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
@@ -155,8 +157,8 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   // Read once at mount, and spent on the first decision: a later prop, scope or journal change never sends on its own.
   const [autoSubmit] = useState(submitOnMount);
   const autoSubmitSpent = useRef(false);
-  const callbacks = useRef({ onConfirmed, onCancel });
-  callbacks.current = { onConfirmed, onCancel };
+  const callbacks = useRef({ onConfirmed, onCancel, onUnavailable });
+  callbacks.current = { onConfirmed, onCancel, onUnavailable };
   const reviewButtons = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -256,7 +258,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (isCurrent(expected)) setCurrent(expected, errorState(error));
   }
 
-  async function prepare(fromClick = false) {
+  async function prepare(fromClick = false, automatic = false) {
     if (disabled || activeOutcome) return;
     const expected = context.current;
     const session = expected.wallet.getSnapshot();
@@ -272,7 +274,11 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         setCurrent(expected, { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce, saved: pending.hash });
         return;
       }
-      const prepared = await expected.service.prepare({ action, wallet: expected.wallet });
+      const prepared = await expected.service.prepare({ action, wallet: expected.wallet }).catch(async (error: unknown) => {
+        // Nothing reached the wallet. A re-read may replace this flow; if it is still shown, the error below explains.
+        if (automatic) await callbacks.current.onUnavailable?.();
+        throw error;
+      });
       if (!isCurrent(expected)) return;
       if (fromClick && submitOnClick && SUBMIT_ON_CLICK_KINDS.has(action.kind)) {
         setCurrent(expected, { kind: "submitting", prepared });
@@ -303,7 +309,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (state.kind === "recovery" || state.kind === "error") { autoSubmitSpent.current = true; return; }
     if (state.kind !== "idle" || clearJournalScope !== scope || disabled || activeOutcome) return;
     autoSubmitSpent.current = true;
-    void prepare(true);
+    void prepare(true, true);
     // prepare re-reads the journal and checks the wallet and network before anything reaches the wallet.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSubmit, state.kind, clearJournalScope, scope, disabled, activeOutcome]);

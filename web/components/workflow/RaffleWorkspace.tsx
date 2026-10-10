@@ -148,8 +148,8 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
     }
   }
 
-  /** Read-only background re-read. It never pauses controls, never claims a refresh version, applies only a changed view, and leaves errors to Refresh. */
-  async function poll() {
+  /** Read-only background re-read. It never pauses controls, never claims a refresh version, applies only a changed view while canApply() holds, and leaves errors to Refresh. */
+  async function poll(canApply: () => boolean) {
     if (browser.kind !== "configured") return;
     const scope: Extract<WorkspaceScope, { kind: "configured" }> = { kind: "configured", service: browser.service, wallet: browser.wallet, id };
     if (!sameWorkspace(scope, currentScope.current)) return;
@@ -158,7 +158,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
       const deployment = await browser.service.attest();
       if (deployment.kind !== "verified") return;
       const snapshot = await browser.service.readRaffle({ id });
-      if (version !== request.current || !sameWorkspace(scope, currentScope.current)) return;
+      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !canApply()) return;
       setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && viewKey(current.snapshot) !== viewKey(snapshot)
         ? { ...current, snapshot }
         : current);
@@ -198,7 +198,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
   recoverCommitment?: RecoverCommitment;
   recordAgreement?: RecordAgreement;
   refresh: () => Promise<void>;
-  poll: () => Promise<void>;
+  poll: (canApply: () => boolean) => Promise<void>;
   refreshState: Extract<WorkspaceState, { kind: "ready" }>["refresh"];
   mode: RaffleWorkspaceMode;
 }) {
@@ -242,6 +242,9 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
   const phase = Number(r.phase);
   const seller = walletSnapshot.kind === "connected" && sellerOwnsRaffle(walletSnapshot.account, snapshot);
   const reload = async () => { await refresh(); };
+  // A chained seller step whose fresh check failed re-reads the raffle, so a raffle that moved on shows its next step and an
+  // unchanged one keeps the error and its Try again.
+  const recheck = () => poll(() => true);
   const writesEnabled = refreshState.kind === "idle";
   const writeDisabledReason = refreshState.kind === "loading"
     ? "Wait for the raffle to finish updating."
@@ -263,13 +266,14 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
     if (!shouldPoll) return;
     const start = Date.now();
     let inFlight = false;
+    // A review, a submission or confirmation, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps
+    // the page still, so a re-read never remounts a control mid-sequence. A read that started before the control got busy is dropped.
+    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, .transaction-state, [aria-busy=true]");
     const timer = window.setInterval(() => {
       if (Date.now() - start < pollDelaySeconds * 1000) return;
-      // A review, a submission or confirmation, a wallet request in flight (aria-busy) or a chained seller step keeps the page still,
-      // so a re-read never remounts a control mid-sequence.
-      if (inFlight || document.visibilityState !== "visible" || pieceRef.current?.querySelector(".transaction-review, .transaction-state, [aria-busy=true]")) return;
+      if (inFlight || document.visibilityState !== "visible" || busy()) return;
       inFlight = true;
-      void pollRef.current().finally(() => { inFlight = false; });
+      void pollRef.current(() => !busy()).finally(() => { inFlight = false; });
     }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [shouldPoll, pollDelaySeconds, now]);
@@ -313,7 +317,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           {accountState === "loading" ? <p className="notice" role="status">Loading your account state…</p> : null}
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
-            ? <SellerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
+            ? <SellerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} onUnavailable={recheck} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
           {mode === "seller" && phase >= 1 ? <SellerProgress snapshot={snapshot} /> : null}
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Earnings</summary><SellerEarnings snapshot={snapshot} /></details> : null}
@@ -709,36 +713,43 @@ function sellerActionFact(snapshot: RaffleSnapshot, kind: SellerActionKind) {
   }
 }
 
-function SellerActions({ browser, snapshot, account, availability, recoverCommitment, onConfirmed, writesEnabled, writeDisabledReason, editDraft }: {
+function SellerActions({ browser, snapshot, account, availability, recoverCommitment, onConfirmed, onUnavailable, reloadFailed, writesEnabled, writeDisabledReason, editDraft }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
   recoverCommitment?: RecoverCommitment;
   onConfirmed: () => Promise<void>;
+  onUnavailable: () => Promise<void>;
+  /** The last read of the raffle or of this wallet's account failed. */
+  reloadFailed: boolean;
   writesEnabled: boolean;
   writeDisabledReason?: string;
   editDraft: ReactNode;
 }) {
+  const wallet = useWalletSnapshot(browser.wallet);
   // The cancellation this page just confirmed, so Reclaim NFT can follow it once. Kept only in memory: a reload never resumes it.
-  const [reclaimAfter, setReclaimAfter] = useState<{ id: bigint; block: bigint } | null>(null);
+  // from is the raffle state shown when it confirmed, and revision the wallet session that confirmed it.
+  const [reclaimAfter, setReclaimAfter] = useState<{ id: bigint; block: bigint; from: RaffleSnapshot; revision: number } | null>(null);
   const loaded = account !== null;
   useEffect(() => {
-    // The first loaded state at or after the cancellation either starts Reclaim NFT or ends the sequence.
-    if (reclaimAfter && loaded && snapshot.block.number >= reclaimAfter.block) setReclaimAfter(null);
-  }, [reclaimAfter, loaded, snapshot.block.number]);
+    // The reload after the cancellation decides once. Its first loaded state at or after the cancellation starts Reclaim NFT.
+    // A failed raffle or account read, an older state or a wallet change ends the sequence, so no later refresh or Try again starts it.
+    if (reclaimAfter && (reloadFailed || wallet.revision !== reclaimAfter.revision || loaded && (snapshot !== reclaimAfter.from || snapshot.block.number >= reclaimAfter.block))) setReclaimAfter(null);
+  }, [reclaimAfter, reloadFailed, wallet.revision, loaded, snapshot]);
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
   const sellerAvailability = sellerPortalActions(availability);
   const next = sellerNextStep(snapshot, sellerAvailability, drawRunnerEnabled());
   const primary = next.kind === "action" ? next.action : null;
-  const reclaimNow = primary?.kind === "reclaimPrize" && reclaimAfter !== null && reclaimAfter.id === snapshot.id && snapshot.block.number >= reclaimAfter.block;
+  const reclaimNow = primary?.kind === "reclaimPrize" && reclaimAfter !== null && reclaimAfter.id === snapshot.id && reclaimAfter.revision === wallet.revision
+    && !reloadFailed && snapshot.block.number >= reclaimAfter.block;
   const secondary = sellerSecondaryActions(snapshot, sellerAvailability, next);
-  const control = (item: SellerActionAvailability) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />;
+  const control = (item: SellerActionAvailability) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} onUnavailable={onUnavailable} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />;
   const paid = Number(snapshot.raffle.phase) === 5 && snapshot.raffle.principalEscrow === 0n ? sellerAccounting(snapshot).paidProceeds : null;
   return (
     // aria-busy holds the page's background re-read until Reclaim NFT has started after its cancellation.
     <div className="stack" aria-busy={reclaimAfter !== null || undefined}>
-      {primary ? <SellerActionControl key={primary.kind} primary description={next.kind === "action" ? next.message : undefined} browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} onCancelled={block => setReclaimAfter({ id: snapshot.id, block })} submitOnMount={reclaimNow} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
+      {primary ? <SellerActionControl key={primary.kind} primary description={next.kind === "action" ? next.message : undefined} browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} onUnavailable={onUnavailable} onCancelled={block => setReclaimAfter({ id: snapshot.id, block, from: snapshot, revision: wallet.revision })} submitOnMount={reclaimNow} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
         : next.kind === "automatic" ? <><section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section><details className="workflow-details"><summary>Run it yourself</summary>{control(next.action)}</details></>
         : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p>{paid !== null ? <p className="workflow-fact">Paid to you: {formatUsdcAmount(paid)} USDC</p> : null}</section> : null}
       {editDraft || secondary.length ? <div className="seller-more">
@@ -751,7 +762,7 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   );
 }
 
-function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, onCancelled, submitOnMount = false, writesEnabled, writeDisabledReason, primary = false, description }: {
+function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, onUnavailable, onCancelled, submitOnMount = false, writesEnabled, writeDisabledReason, primary = false, description }: {
   primary?: boolean;
   description?: string;
   browser: Extract<BrowserService, { kind: "configured" }>;
@@ -759,6 +770,8 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   availability: SellerActionAvailability;
   recoverCommitment?: RecoverCommitment;
   onConfirmed: () => Promise<void>;
+  /** Re-reads the raffle when a step sent on its own finds it can no longer run. */
+  onUnavailable: () => Promise<void>;
   /** Called with the block of a cancellation confirmed straight from its own click, when Reclaim NFT should follow. */
   onCancelled?: (block: bigint) => void;
   /** Send this step once on mount: the seller's click on the previous step asked for it. */
@@ -794,7 +807,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
     const heading = <div><h2>{availability.label}</h2><p>{sellerStepText(snapshot, "reveal")}</p></div>;
     if (!recovered) return <section className="workflow-next stack">{heading}<button className="btn" type="button" aria-busy={preflight === "loading" || undefined} disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Waiting for signature…" : availability.label}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
     // One click: the signature above loaded the draw setup, so the confirmation goes straight to the wallet once. A retry needs a click.
-    return <section className="workflow-next stack">{heading}<TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label={availability.label} submitOnClick submitOnMount formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+    return <section className="workflow-next stack">{heading}<TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label={availability.label} submitOnClick submitOnMount formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} onUnavailable={onUnavailable} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
   }
   if (availability.kind === "updateDraft") return null;
   const action: WorkflowAction = availability.kind === "snapshot"
@@ -807,7 +820,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   const confirmed = reclaimNext
     ? async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, direct: boolean) => { if (direct) reclaimNext(confirmation.blockNumber); await onConfirmed(); }
     : onConfirmed;
-  return <section className="workflow-next stack"><div><h2>{label}</h2><p>{availability.reason || description || sellerStepText(snapshot, availability.kind)}</p>{fact ? <p className="workflow-fact">{fact}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} submitOnClick={STATE_ONLY_KINDS.has(availability.kind)} submitOnMount={submitOnMount} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={label} formatUsdc={formatUsdcAmount} onConfirmed={confirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+  return <section className="workflow-next stack"><div><h2>{label}</h2><p>{availability.reason || description || sellerStepText(snapshot, availability.kind)}</p>{fact ? <p className="workflow-fact">{fact}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} submitOnClick={STATE_ONLY_KINDS.has(availability.kind)} submitOnMount={submitOnMount} onUnavailable={onUnavailable} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={label} formatUsdc={formatUsdcAmount} onConfirmed={confirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
 }
 
 function OpeningPolicyControl({ browser, snapshot, onConfirmed, writesEnabled, writeDisabledReason }: {

@@ -476,6 +476,34 @@ describe("seller next step with the draw runner", () => {
     expect(sellerNextStep(cancelled, currentSellerActions(cancelled), true)).toMatchObject({ kind: "action", action: { kind: "reclaimPrize" } });
   });
 
+  const LATE = "LABx hasn’t run this step yet. You can run it yourself.";
+
+  it.each([
+    { name: "close", value: () => sold(1), kind: "close", due: (value: RaffleSnapshot) => value.raffle.salesEnd },
+    { name: "count", value: () => sold(2), kind: "snapshot", due: (value: RaffleSnapshot) => value.raffle.salesEnd },
+    { name: "start", value: counted, kind: "requestRandomness", due: (value: RaffleSnapshot) => value.raffle.salesEnd },
+    { name: "finish", value: () => drawn(true), kind: "settle", due: (value: RaffleSnapshot) => value.raffle.drawnAt }
+  ])("gives the $name step back to the seller once it is 30 minutes overdue by block time", ({ value, kind, due }) => {
+    const raffle = value();
+    raffle.block.timestamp = due(raffle) + 1_799n;
+    expect(sellerNextStep(raffle, currentSellerActions(raffle), true)).toMatchObject({ kind: "automatic", action: { kind } });
+    raffle.block.timestamp = due(raffle) + 1_800n;
+    const actions = currentSellerActions(raffle);
+    const late = sellerNextStep(raffle, actions, true);
+    expect(late).toEqual({ kind: "action", action: actions.find(item => item.kind === kind), message: LATE });
+    expect(sellerSecondaryActions(raffle, actions, late).map(item => item.kind)).not.toContain(kind);
+    // Without the runner the same step is the plain manual step.
+    expect(sellerNextStep(raffle, actions, false)).toEqual({ kind: "action", action: actions.find(item => item.kind === kind) });
+  });
+
+  it("times an unconfirmed draw's finish from the end of the confirmation window", () => {
+    const value = drawn(false);
+    value.block.timestamp = value.raffle.drawnAt + value.revealGrace + 1_799n;
+    expect(sellerNextStep(value, currentSellerActions(value), true)).toMatchObject({ kind: "automatic", action: { kind: "settle" }, title: "Winner drawn" });
+    value.block.timestamp = value.raffle.drawnAt + value.revealGrace + 1_800n;
+    expect(sellerNextStep(value, currentSellerActions(value), true)).toMatchObject({ kind: "action", action: { kind: "settle" }, message: LATE });
+  });
+
   it("leaves waiting states unchanged", () => {
     const live = snapshot({ id: 1n, phase: 1 });
     expect(sellerNextStep(live, currentSellerActions(live), true)).toEqual(sellerNextStep(live, currentSellerActions(live)));
