@@ -12,6 +12,7 @@ const sdk = vi.hoisted(() => ({
   connectorType: "INJECTED",
   selected: "independent-injected",
   accountReads: 0,
+  allowPermissionRequest: false,
   liveAccounts: [] as string[],
   walletConnectTopics: [] as string[],
   walletConnectConnects: 0,
@@ -128,6 +129,7 @@ async function setupActualSdk(
   });
   vi.stubGlobal("localStorage", localStorage);
   sdk.accountReads = 0;
+  sdk.allowPermissionRequest = false;
   sdk.liveAccounts = [liveAccount];
   sdk.walletConnectTopics = [...(options.walletConnectTopics ?? [])];
   sdk.walletConnectConnects = 0;
@@ -195,6 +197,8 @@ async function setupActualSdk(
         return [...sdk.liveAccounts];
       }
       if (method === "eth_chainId") return "0xaa36a7";
+      if (method === "eth_requestAccounts" && sdk.allowPermissionRequest) return [...sdk.liveAccounts];
+      if (method === "wallet_switchEthereumChain" && sdk.allowPermissionRequest) return null;
       throw new Error(`Forbidden restoration method: ${method}`);
     }
   });
@@ -222,6 +226,7 @@ afterEach(() => {
   sdk.connectorType = "INJECTED";
   sdk.selected = "independent-injected";
   sdk.accountReads = 0;
+  sdk.allowPermissionRequest = false;
   sdk.liveAccounts = [];
   sdk.walletConnectTopics = [];
   sdk.walletConnectConnects = 0;
@@ -584,6 +589,32 @@ describe("independent installed AppKit restoration race", () => {
     await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/reload/i);
   });
 
+  it("keeps a failed WalletConnect deletion quarantined after late exact terminal events", async () => {
+    await setupActualSdk(0, "walletConnect");
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+    const provider = sdk.provider as EventEmitter & {
+      session?: { topic: string };
+      disconnect(): Promise<void>;
+    };
+    await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
+    if (!provider.session) throw new Error("The actual WalletConnect fixture did not restore.");
+    const topic = provider.session.topic;
+    provider.disconnect = vi.fn(async () => {
+      sdk.walletConnectDisconnects++;
+      throw new Error("controlled remote deletion failure");
+    });
+
+    await expect(chooser.disconnect()).rejects.toThrow(/reload/i);
+    provider.session = undefined;
+    provider.emit("session_delete", { topic });
+    provider.emit("disconnect", { data: topic });
+
+    const retry = await createAppKitProvider(project, scope);
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/reload/i);
+    expect(sdk.walletConnectDisconnects).toBe(1);
+  });
+
   it("accepts an injected SDK empty-account reset and allows one new actual SDK connection", async () => {
     await setupActualSdk(0, "injected");
     const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
@@ -603,6 +634,7 @@ describe("independent installed AppKit restoration race", () => {
       expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
     });
     sdk.liveAccounts = [account];
+    sdk.allowPermissionRequest = true;
     const open = vi.spyOn(appKit, "open").mockImplementation(async () => {
       const controller = (appKit as unknown as {
         connectionControllerClient: { connectExternal?(params: { id: string; type: string; chainId: number }): Promise<unknown> };
