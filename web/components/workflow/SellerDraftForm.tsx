@@ -11,7 +11,7 @@ import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automa
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { STANDARD_MEMBERSHIP_TIERS } from "@/lib/membership-tiers";
 import { canApplyWalletNftSelection, fetchWalletNfts, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
-import { captureCreateGeneration, assertCreateGeneration, advanceCreateGeneration, retireUnsentCreate, recoverCreateTransaction, createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord, retireCompletedCreate, type CreateRecord } from "@/lib/chain/create-flow";
+import { captureCreateGeneration, assertCreateGeneration, advanceCreateGeneration, retireUnsentCreate, recoverCreateTransaction, createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, serializeCreateRecord, writeCreateRecord, retireCompletedCreate, type CreateRecord } from "@/lib/chain/create-flow";
 import { recoverPreparation } from "@/lib/chain/api";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
 import { TransactionFlow } from "./TransactionFlow";
@@ -357,6 +357,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   async function create(event?: FormEvent, recoveryHash?: Hex) {
     event?.preventDefault();
+    const mode = recoveryHash ? "recover" : event ? "new" : "resume";
+    const displayed = savedCreation;
     const lifetime = createLifetime.current;
     if (lifetime.busy) return;
     lifetime.busy = true;
@@ -376,8 +378,13 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         assertIntent();
         assertCreateGeneration(localStorage, key, clicked);
         let record = readCreateRecord(localStorage, key);
+        if ((record ? serializeCreateRecord(record) : null) !== (displayed ? serializeCreateRecord(displayed) : null)) {
+          setSavedCreation(record);
+          throw new Error("Creation changed in another tab. Review its saved state before clicking Create again.");
+        }
+        if (mode === "recover" && (record?.kind !== "draft" || !record.pending)) throw new Error("There is no saved creation transaction to recover. Review the saved creation before continuing.");
+        if (mode !== "new" && !record) throw new Error("The saved creation is no longer available. Review your raffles before creating another.");
         const persist = (next: CreateRecord) => { writeCreateRecord(localStorage, key, next); record = next; if (lifetime.mounted && lifetime.generation === generation && wallet.getSnapshot().revision === session.revision) setSavedCreation(next); };
-        if (record?.kind === "preparing" && record.requestIdentity === null) { localStorage.removeItem(key); record = null; }
         if (!record) {
           if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before creating.");
           assertIntent();
@@ -401,7 +408,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
             throw new Error("The draw setup could not be prepared or saved. Click Create to recover the saved preparation.");
           }
         } else if (record.kind === "preparing") {
-          if (record.requestIdentity === null) throw new Error("Preparation identity is unavailable.");
+          if (record.requestIdentity === null) throw new Error("The draw setup was not saved. Open Advanced recovery to start over and edit details.");
           const draft = decodeDraft(record.data);
           status("Recovering the saved draw setup…");
           const reserve = await recoverPreparation(wallet, { requestIdentity: record.requestIdentity, nft: draft.nft, tokenId: draft.tokenId.toString() }, assertIntent);
@@ -422,12 +429,13 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         retireCompletedCreate(localStorage, key, completed, result.id);
         setSavedCreation(null);
         setCreation({ kind: "done", id: result.id });
-        await onConfirmed?.();
+        try { await onConfirmed?.(); }
+        catch { /* Canonical completion remains final if the optional view refresh fails. */ }
         assertIntent();
         router.push(`/seller/${result.id.toString()}`);
       });
     } catch (error) {
-      if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Click Create to resume when ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });
+      if (lifetime.mounted && lifetime.generation === generation) setCreation(current => current.kind === "done" ? current : { kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Click Create to resume when ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });
     } finally {
       if (lifetime.operation === operation) {
         lifetime.busy = false;
