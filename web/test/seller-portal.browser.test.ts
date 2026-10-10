@@ -453,7 +453,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(response?.status()).toBe(200);
     await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
     await fixture.page.locator("summary").filter({ hasText: "Earnings" }).click();
-    await fixture.page.getByText("Refunds not yet claimed", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByText("Owed to buyers", { exact: true }).waitFor({ state: "visible" });
     await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-detail-mobile.png"), fullPage: true });
     await fixture.switchAccount(chain.stranger);
     await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet." }).waitFor({ state: "visible", timeout: 5_000 });
@@ -549,7 +549,7 @@ run("rendered seller portal on isolated Anvil", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/piece/29`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     const start = fixture.page.getByRole("button", { name: "Start draw", exact: true });
-    const help = fixture.page.locator("summary").filter({ hasText: "Help finish this raffle" });
+    const help = fixture.page.locator("summary").filter({ hasText: "Other actions" });
     await connectWallet(fixture.page, help);
     expect(await start.isVisible()).toBe(false);
     await help.click();

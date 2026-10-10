@@ -13,12 +13,13 @@ export function isTransactionHistory(outcome: TransactionOutcome, journalClear: 
     || outcome.kind === "error" && outcome.submitted === null && outcome.id !== "storage-error" && journalClear;
 }
 
-type Props = { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean; scope?: string; confirmedThroughBlock?: bigint; deferRefresh?: boolean };
+/** showWait adds the visible "Confirming your last transaction…" line to a normal wait. Pages whose own transaction controls show the wait turn it off. */
+type Props = { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean; scope?: string; confirmedThroughBlock?: bigint; deferRefresh?: boolean; showWait?: boolean };
 export function ResumeTransaction(props: Props) {
   return props.browser.kind === "configured" ? <ConfiguredResume {...props} browser={props.browser} /> : null;
 }
 
-function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "wallet", confirmedThroughBlock, deferRefresh = false }: Props & { browser: Extract<BrowserService, { kind: "configured" }> }) {
+function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "wallet", confirmedThroughBlock, deferRefresh = false, showWait = true }: Props & { browser: Extract<BrowserService, { kind: "configured" }> }) {
   const wallet = useWalletSnapshot(browser.wallet);
   const { owner, outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
   const [hash, setHash] = useState("");
@@ -131,7 +132,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     <section className="stack resume-transaction" aria-label="Wallet transaction outcomes">
       {unresolved.filter(outcome => !waiting(outcome)).map(renderOutcome)}
       {history.length ? <details className="workflow-details"><summary>Activity ({history.length})</summary><div className="stack">{history.map(renderOutcome)}</div></details> : null}
-      {normalWait ? <details className="workflow-details"><summary>Transaction details</summary><div className="stack">{unresolved.filter(waiting).map(renderOutcome)}{form}</div></details> : form}
+      {normalWait ? <>{showWait ? <p className="transaction-progress" role="status"><span className="transaction-spinner" aria-hidden="true" />Confirming your last transaction…</p> : null}<details className="workflow-details"><summary>Transaction details</summary><div className="stack">{unresolved.filter(waiting).map(renderOutcome)}{form}</div></details></> : form}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </section>
   );

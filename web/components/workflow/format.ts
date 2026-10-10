@@ -50,7 +50,25 @@ export function formatShortDate(timestamp: bigint) {
   return `${new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(milliseconds))} UTC`;
 }
 
-export const PHASE_LABELS = ["Draft", "Open", "Closed", "Drawing", "Drawn", "Settled", "Cancelled"] as const;
+/** The timestamp in the viewer's time zone with UTC in brackets: "10 Oct 2026, 5:08 pm (9:08 am UTC)". The UTC date repeats only when it differs, and a viewer in UTC sees UTC once. */
+export function formatLocalDate(timestamp: bigint, short = false) {
+  const utcOnly = short ? formatShortDate(timestamp) : `${formatDate(timestamp)} UTC`;
+  const milliseconds = Number(timestamp) * 1000;
+  if (!Number.isSafeInteger(milliseconds)) return utcOnly;
+  const date = new Date(milliseconds);
+  if (date.getTimezoneOffset() === 0) return utcOnly;
+  const day: Intl.DateTimeFormatOptions = short ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" };
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const format = (options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-AU", options).format(date);
+  const sameDay = format(day) === format({ ...day, timeZone: "UTC" });
+  return `${format({ ...day, ...time })} (${format({ ...(sameDay ? {} : day), ...time, timeZone: "UTC" })} UTC)`;
+}
+
+export function networkName(chainId: number) {
+  return chainId === 11155111 ? "Ethereum Sepolia" : "the local test network";
+}
+
+export const PHASE_LABELS = ["Draft", "Open", "Closed", "Drawing", "Drawn", "Complete", "Cancelled"] as const;
 
 export function lowerFirst(label: string) {
   return label.charAt(0).toLowerCase() + label.slice(1);

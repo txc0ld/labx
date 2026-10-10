@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserService } from "@/lib/chain/ports";
 import type { BlockRef, HistoryItem } from "@/lib/chain/types";
-import { formatUsdcAmount } from "./usdc-amount";
+import { formatUsdcAmount } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type HistoryState =

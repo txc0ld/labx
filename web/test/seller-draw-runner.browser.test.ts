@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeFunctionData, erc20Abi, toHex, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, erc20Abi, toHex, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { workflowMessage } from "../lib/chain/messages";
 import { hash } from "../lib/chain/validation";
@@ -36,9 +36,16 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     fixture.page.on("pageerror", (error: Error) => pageErrors.push(error.message));
     fixture.page.on("console", (message: { type(): string; text(): string }) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     await chain.write(chain.nft, "mint", [chain.seller, 501n]);
+    await chain.write(chain.nft, "mint", [chain.seller, 502n]);
     await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
-    // Save a draw setup through the app, signed by the local seller account, so Confirm the draw can load it later.
-    const input = { nft: chain.nft.address, tokenId: "501", publicSummary: "Runner raffle", privateCommitment: "Runner private commitment" };
+    const listed = await listSoldRaffle(501n, "Runner raffle");
+    id = listed.id;
+    await chain.warp(listed.salesEnd);
+  }, 150_000);
+
+  /** Saves a draw setup through the app, signed by the local seller account so Confirm the draw can load it later, then lists a raffle with one sale. */
+  async function listSoldRaffle(tokenId: bigint, title: string) {
+    const input = { nft: chain.nft.address, tokenId: tokenId.toString(), publicSummary: title, privateCommitment: `${title} private commitment` };
     const deadline = String(Math.floor(Date.now() / 1000) + 300);
     const context = { origin: fixture.baseUrl, chainId: chain.manifest.chainId, contract: chain.raffle.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
     const signature = await chain.rpc("personal_sign", [toHex(workflowMessage("commitment", context, chain.seller, input, deadline)), chain.seller]);
@@ -47,16 +54,16 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     const record: unknown = await response.json();
     if (!record || typeof record !== "object" || !("commit" in record) || !("nonce" in record)) throw new Error("Missing saved draw setup.");
     const salesEnd = (await chain.client.getBlock()).timestamp + 3_600n;
-    id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
-    await chain.write(chain.raffle, "createRaffle", [chain.nft.address, 501n, salesEnd, hash(record.nonce), hash(record.commit), "Runner raffle", [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]], chain.seller);
-    await chain.write(chain.nft, "approve", [chain.raffle.address, 501n], chain.seller);
-    await chain.write(chain.raffle, "escrow", [id], chain.seller);
-    await chain.admit(id);
-    await chain.write(chain.raffle, "open", [id], chain.seller);
+    const raffleId = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
+    await chain.write(chain.raffle, "createRaffle", [chain.nft.address, tokenId, salesEnd, hash(record.nonce), hash(record.commit), title, [{ name: "Entry", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]], chain.seller);
+    await chain.write(chain.nft, "approve", [chain.raffle.address, tokenId], chain.seller);
+    await chain.write(chain.raffle, "escrow", [raffleId], chain.seller);
+    await chain.admit(raffleId);
+    await chain.write(chain.raffle, "open", [raffleId], chain.seller);
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 27_500_000n], chain.buyer);
-    await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
-    await chain.warp(salesEnd);
-  }, 150_000);
+    await chain.write(chain.raffle, "buyPack", [raffleId, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+    return { id: raffleId, salesEnd };
+  }
 
   afterAll(async () => {
     try {
@@ -183,4 +190,73 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
   }, 120_000);
+
+  it("holds the background re-read while Confirm the draw waits for its signature, so the control is never remounted", async () => {
+    // A second raffle, drawn and past its 7-day confirmation window: LABx's finish step is pending, so the page re-reads itself,
+    // and Confirm the draw sits under Advanced.
+    const listed = await listSoldRaffle(502n, "Held confirmation raffle");
+    await chain.warp(listed.salesEnd);
+    for (const step of ["close", "snapshot", "requestRandomness"] as const) await chain.write(chain.raffle, step, step === "snapshot" ? [listed.id, 100n] : [listed.id], chain.stranger);
+    const drawing = await chain.service.readRaffle({ id: listed.id });
+    await chain.write(chain.vrf, "fulfill", [chain.raffle.address, drawing.raffle.vrfRequestId, 0n]);
+    const drawn = await chain.service.readRaffle({ id: listed.id });
+    await chain.warp(drawn.raffle.drawnAt + drawn.revealGrace);
+
+    await open(`/seller/${listed.id.toString()}`, SETTLE);
+    expect(await automaticCard("Winner drawn").getByText(SETTLE, { exact: true }).isVisible()).toBe(true);
+    const read = encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [listed.id] });
+    let reads = 0;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      for (const request of Array.isArray(body) ? body : [body]) {
+        if (!request || typeof request !== "object" || !("method" in request) || request.method !== "eth_call" || !("params" in request) || !Array.isArray(request.params)) continue;
+        const call: unknown = request.params[0];
+        if (call && typeof call === "object" && "data" in call && typeof call.data === "string" && call.data.toLowerCase() === read.toLowerCase()) reads++;
+      }
+      await route.continue();
+    });
+    try {
+      // The waiting page re-reads by itself.
+      await expect.poll(() => reads, { timeout: 25_000 }).toBeGreaterThan(0);
+
+      await fixture.page.locator("summary", { hasText: /^Advanced \(/ }).click();
+      await fixture.page.evaluate(() => {
+        type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+        const scope = window as unknown as Window & { ethereum: { request: Request }; __heldSignatures: number; __releaseSignature(): void };
+        const original = scope.ethereum.request.bind(scope.ethereum);
+        let release = () => {};
+        const held = new Promise<void>(resolve => { release = resolve; });
+        scope.__heldSignatures = 0;
+        scope.__releaseSignature = () => release();
+        scope.ethereum.request = async input => {
+          if (input.method === "personal_sign") { scope.__heldSignatures += 1; await held; }
+          return original(input);
+        };
+      });
+      const wallet = await watchWallet(fixture.page);
+      await visibleButton("Confirm the draw").click();
+      await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __heldSignatures: number }).__heldSignatures), { timeout: 10_000 }).toBe(1);
+      const waiting = fixture.page.getByRole("button", { name: "Waiting for signature…", exact: true });
+      const control = await waiting.elementHandle();
+      if (!control) throw new Error("The signature step is not shown.");
+
+      // A real change on the raffle while the signature is open. Without the hold, the next re-read would apply it and
+      // reload the seller controls, dropping the signature step.
+      await chain.write(chain.raffle, "setPaused", [true]);
+      reads = 0;
+      await fixture.page.waitForTimeout(35_000);
+      expect(reads).toBe(0);
+      expect(await control.evaluate(element => element.isConnected && element.getAttribute("aria-busy"))).toBe("true");
+
+      await fixture.page.evaluate(() => (window as unknown as Window & { __releaseSignature(): void }).__releaseSignature());
+      await expect.poll(async () => (await chain.service.readRaffle({ id: listed.id })).raffle.revealed, { timeout: 30_000 }).toBe(true);
+      expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
+      expect(await wallet.reviews()).toBe(0);
+    } finally {
+      await fixture.page.evaluate(() => (window as unknown as Window & { __releaseSignature?(): void }).__releaseSignature?.()).catch(() => {});
+      await fixture.page.unroute(`${chain.url}/`);
+      await chain.write(chain.raffle, "setPaused", [false]);
+    }
+    expect(pageErrors).toEqual([]);
+  }, 150_000);
 });

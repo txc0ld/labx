@@ -28,7 +28,7 @@ describe("workflow value presentation", () => {
 
   it("labels every contract phase and does not invent unknown states", () => {
     expect(Array.from({ length: 7 }, (_, phase) => phaseLabel(phase))).toEqual([
-      "Draft", "Open", "Closed", "Drawing", "Drawn", "Settled", "Cancelled"
+      "Draft", "Open", "Closed", "Drawing", "Drawn", "Complete", "Cancelled"
     ]);
     expect(phaseLabel(99)).toBe("Unknown");
   });

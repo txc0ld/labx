@@ -5,7 +5,7 @@ import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import type { Hex } from "viem";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
-import { createStepMessage } from "./create-progress";
+import { createStepMessage, unnumberedStep } from "./create-progress";
 import { useWalletSnapshot } from "./WalletGate";
 
 export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirmed }: {
@@ -43,7 +43,7 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
           await recoverCreateTransaction({ service, wallet, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, hash: recoveryHash });
           assertIntent(); setState({ kind: "idle" }); return;
         }
-        const result = await finishCreate({ service, wallet, draft, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, onStep: message => { assertIntent(); setState({ kind: "busy", message: createStepMessage(message, r.tokenId) }); } });
+        const result = await finishCreate({ service, wallet, draft, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, onStep: message => { assertIntent(); setState({ kind: "busy", message: unnumberedStep(createStepMessage(message, r.tokenId)) }); } });
         assertIntent();
         const completed = readCreateRecord(localStorage, key);
         if (completed?.kind !== "draft") throw new Error("Creation recovery changed.");

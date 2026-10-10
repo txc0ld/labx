@@ -301,18 +301,25 @@ describe("seller next step", () => {
     expect(actions.find(item => item.kind === "cancel")).toMatchObject({ enabled: true, label: "Cancel raffle" });
     const next = sellerNextStep(value, actions);
     expect(next).toMatchObject({ kind: "waiting", title: "Your raffle is live" });
-    expect(sellerSecondaryActions(value, actions, next).map(item => item.kind)).toEqual(["reveal", "cancel"]);
+    // Confirm the draw waits for a drawn winner, so a live raffle offers only cancellation.
+    expect(sellerSecondaryActions(value, actions, next).map(item => item.kind)).toEqual(["cancel"]);
     value.lotCount = 1n;
     expect(currentSellerActions(value).find(item => item.kind === "cancel")).toMatchObject({ enabled: false, label: "Enable refunds" });
   });
-  it("keeps draw controls secondary while a sold raffle can still be drawn", () => {
+  it("keeps Confirm the draw out of Advanced until a winner is drawn", () => {
     const value = snapshot({ id: 1n, phase: 1 });
     value.lotCount = 1n;
     value.block.timestamp = value.raffle.salesEnd;
     const actions = currentSellerActions(value);
     const next = sellerNextStep(value, actions);
     expect(next).toMatchObject({ kind: "action", action: { kind: "close", enabled: true } });
-    expect(sellerSecondaryActions(value, actions, next).map(item => item.kind)).toEqual(["reveal"]);
+    expect(actions.find(item => item.kind === "reveal")).toMatchObject({ enabled: true });
+    expect(sellerSecondaryActions(value, actions, next)).toEqual([]);
+    for (const phase of [2, 3]) {
+      const early = { ...value, raffle: { ...value.raffle, phase } };
+      const earlyActions = currentSellerActions(early);
+      expect(sellerSecondaryActions(early, earlyActions, sellerNextStep(early, earlyActions)).map(item => item.kind)).not.toContain("reveal");
+    }
   });
   it.each([true, false])("uses the real draw-start cutoff when snapshot completion is %s", snapshotted => {
     const value = snapshot({ id: 1n, phase: 2 });
@@ -514,7 +521,9 @@ describe("raffle page wording", () => {
 
   it("describes each seller step in plain words and keeps the refund rule for cancellations with sales", () => {
     const open = snapshot({ id: 1n, phase: 1 });
+    expect(sellerStepText(open, "close")).toBe("Sales have ended. Close sales so entries can be counted.");
     expect(sellerStepText(open, "snapshot")).toBe("Locks in every purchase for the draw.");
+    expect(sellerStepText(open, "settle")).toBe("Finishes the raffle so you can claim your sales and the winner can claim the NFT.");
     expect(sellerStepText(open, "reveal")).toBe("Sign to load your saved draw setup, then confirm it. This lets you finish now instead of waiting 7 days.");
     expect(sellerStepText(open, "cancel")).toBe("Ends sales now. You can then reclaim your NFT.");
     expect(sellerStepText({ ...open, lotCount: 2n }, "cancel")).toBe("Enable refunds so buyers get their membership price back.");

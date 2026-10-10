@@ -16,6 +16,7 @@ import { recoverPreparation } from "@/lib/chain/api";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
 import { TransactionFlow } from "./TransactionFlow";
 import { CREATE_STEPS, createStepMessage } from "./create-progress";
+import { LocalTime } from "./LocalTime";
 import { localDeadlineInput, localDeadlineSeconds } from "./deadline";
 import { formatDate, formatUsdc, formatUsdcInput, parseUsdc, shortAddress } from "./format";
 import { useWalletSnapshot } from "./WalletGate";
@@ -120,7 +121,6 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 }) {
   const router = useRouter();
   const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
-  const [localDateFormatter, setLocalDateFormatter] = useState<Intl.DateTimeFormat | null>(null);
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
@@ -173,19 +173,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const titleEditGeneration = useRef(0);
   const autoTitle = useRef<string | null>(null);
 
-  useEffect(() => {
-    setLocalDateFormatter(new Intl.DateTimeFormat(undefined, {
-      day: "numeric", month: "short", year: "numeric",
-      hour: "numeric", minute: "2-digit", timeZoneName: "short"
-    }));
-  }, []);
-
   const closingSeconds = localDeadlineSeconds(form.closing);
   const deadlineNote = !form.closing ? "" : closingSeconds === null ? DEADLINE_SKIPPED : `(${formatDate(BigInt(closingSeconds))} UTC)`;
-  const deadline = (salesEnd: bigint) => {
-    const milliseconds = Number(salesEnd) * 1000;
-    return <>{localDateFormatter ? <><time dateTime={new Date(milliseconds).toISOString()}>{localDateFormatter.format(milliseconds)}</time> </> : null}({formatDate(salesEnd)} UTC)</>;
-  };
 
   function replaceForm(update: (current: FormDraft) => FormDraft) {
     createLifetime.current.generation++;
@@ -588,7 +577,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     </section>;
   }
 
-  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Save raffle changes</h2><p className="notice" role="status">Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Sales deadline</dt><dd>{deadline(state.action.salesEnd)}</dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Save changes" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
+  if (state.kind === "retained" && existing) return <div className={`${formStyles.review} studio-review stack`}><h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>Save raffle changes</h2><p className="notice" role="status">Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.</p><dl className="review-list"><div><dt>Title</dt><dd>{state.action.title}</dd></div><div><dt>Sales deadline</dt><dd><LocalTime at={state.action.salesEnd} /></dd></div>{state.action.packs.map((pack, index) => <div key={index}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl><TransactionFlow service={service} wallet={wallet} action={{ kind: "updateDraft", id: existing.id, draft: state.action }} label="Save changes" formatUsdc={formatUsdc} onConfirmed={onConfirmed} /><button className="btn btn-dark" type="button" onClick={returnToEdit}>Edit draft</button></div>;
 
   if (state.kind === "review" || state.kind === "saving" || state.kind === "committed") {
     const { action } = state;
@@ -596,7 +585,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       <div className={`${formStyles.review} studio-review stack`}>
         <h2 className={formStyles.stageHeading} ref={reviewFocus} tabIndex={-1}>{existing ? "Save raffle changes" : "Create raffle"}</h2>
         <p className="notice" role="status">Check these details. Your wallet will ask you to sign to save the draw setup for this NFT. Signing doesn't send a transaction.{existing ? " Saving sends your raffle back to LABx for review." : ""}</p>
-        <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd>{deadline(action.salesEnd)}</dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
+        <dl className="review-list"><div><dt>Title</dt><dd>{action.title}</dd></div><div><dt>NFT</dt><dd>{shortAddress(action.nft)} · token #{action.tokenId.toString()}</dd></div><div><dt>Sales deadline</dt><dd><LocalTime at={action.salesEnd} /></dd></div><div><dt>Memberships</dt><dd>{action.packs.length}</dd></div>{action.packs.map((pack, index) => <div key={`${index}-${pack.name}`}><dt>{pack.name}</dt><dd>{formatUsdc(pack.priceUsdc)} USDC · {pack.bonusEntries} bonus entries · {pack.maxSupply} supply</dd></div>)}</dl>
         {state.kind === "committed" ? (
           <>
             <div className="notice ok stack" role="status"><strong>Draw setup saved</strong><span>{existing ? "Save your changes next." : "Create the raffle next."}</span></div>

@@ -96,24 +96,16 @@ run("activation drift beside browser recovery", () => {
     expect(await fixture.page.getByText(/Existing recovery and receipt controls remain available/).isVisible()).toBe(true);
     await visit("/seller/2", c.seller);
     await fixture.page.getByText(/Existing recovery and receipt controls remain available/).waitFor({ timeout: 15_000 });
-    const confirmDraw = fixture.page.getByRole("button", { name: "Confirm the draw", exact: true });
+    // The seller's recovery control stays usable beside the warning. Confirm the draw waits for a drawn winner; the last
+    // test checks its draw-setup signature under the same ownership drift.
     const secondary = fixture.page.locator("details.workflow-details > summary").filter({ hasText: /^Advanced \(/ });
-    await expect.poll(async () => await confirmDraw.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
-    if (!await confirmDraw.isVisible().catch(() => false)) await secondary.click();
-    await confirmDraw.waitFor({ state: "visible", timeout: 15_000 });
-    // The draw-setup signature still loads the private setup beside the warning, and the confirmation goes straight to
-    // the wallet. The test wallet refuses that confirmation so raffle 2 stays unrevealed for the later checks.
-    const wallet = await watchWallet(fixture.page);
-    await wallet.reject(encodeFunctionData({ abi: raffleAbi, functionName: "reveal", args: [2n, commit, commit, commit] }).slice(0, 74));
-    await confirmDraw.click();
-    await fixture.page.getByText("Cancelled in your wallet. Nothing was sent.", { exact: true }).waitFor({ timeout: 15_000 });
-    expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
-    expect(await wallet.reviews()).toBe(0);
-    expect((await c.service.readRaffle({ id: 2n })).raffle.revealed).toBe(false);
-    await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
-    expect(await confirmDraw.isEnabled()).toBe(true);
+    await secondary.click();
+    const cancel = fixture.page.getByRole("button", { name: "Cancel raffle", exact: true });
+    await cancel.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await cancel.isEnabled()).toBe(true);
+    expect(await fixture.page.getByRole("button", { name: "Confirm the draw", exact: true, includeHidden: true }).count()).toBe(0);
     await viewport(1440);
-    expect(await confirmDraw.isEnabled()).toBe(true);
+    expect(await cancel.isEnabled()).toBe(true);
     expect((await fetch(`${fixture.baseUrl}/api/workflow/context`)).status).toBe(200);
   }, 40_000);
   it("preserves explicit approval refresh and automatic recognized-raffle refresh during cold receipt recovery", async () => {
@@ -241,5 +233,35 @@ run("activation drift beside browser recovery", () => {
     expect(await fixture.page.evaluate(key => localStorage.getItem(key), key)).toBe(newerJournal);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
   }, 45_000);
+
+  it("loads the private draw setup and sends Confirm the draw straight to the wallet during an ownership transfer", async () => {
+    // Raffle 2 has one purchase from the earlier checks. Draw it, then start an ownership transfer again.
+    const { raffle } = await c.service.readRaffle({ id: 2n });
+    await c.warp(raffle.salesEnd);
+    await c.write(c.raffle, "close", [2n], c.stranger);
+    await c.write(c.raffle, "snapshot", [2n, 100n], c.stranger);
+    await c.write(c.raffle, "requestRandomness", [2n], c.stranger);
+    const drawing = await c.service.readRaffle({ id: 2n });
+    await c.write(c.vrf, "fulfill", [c.raffle.address, drawing.raffle.vrfRequestId, 0n]);
+    expect((await c.service.readRaffle({ id: 2n })).raffle.phase).toBe(4);
+    await c.write(c.raffle, "transferOwnership", [c.stranger]);
+    await viewport(375);
+    await visit("/seller/2", c.seller);
+    const confirmDraw = fixture.page.getByRole("button", { name: "Confirm the draw", exact: true });
+    await confirmDraw.waitFor({ state: "visible", timeout: 15_000 });
+    // The draw-setup signature still loads the private setup, and the confirmation goes straight to the wallet.
+    // The test wallet refuses that confirmation so the step stays available to retry.
+    const wallet = await watchWallet(fixture.page);
+    await wallet.reject(encodeFunctionData({ abi: raffleAbi, functionName: "reveal", args: [2n, commit, commit, commit] }).slice(0, 74));
+    await confirmDraw.click();
+    await fixture.page.getByText("Cancelled in your wallet. Nothing was sent.", { exact: true }).waitFor({ timeout: 15_000 });
+    expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
+    expect(await wallet.reviews()).toBe(0);
+    expect((await c.service.readRaffle({ id: 2n })).raffle.revealed).toBe(false);
+    await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
+    expect(await confirmDraw.isEnabled()).toBe(true);
+    await viewport(1440);
+    expect(await confirmDraw.isEnabled()).toBe(true);
+  }, 60_000);
 
 });

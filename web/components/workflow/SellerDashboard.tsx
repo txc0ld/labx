@@ -9,9 +9,9 @@ import { scanSellerPortfolio, sellerPortfolioTotals } from "@/lib/chain/seller-p
 import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
 import styles from "./SellerPortal.module.css";
 import { ResumeTransaction } from "./ResumeTransaction";
-import { catalogAvailability, formatDate } from "./format";
+import { catalogAvailability, formatUsdcAmount, networkName } from "./format";
+import { LocalTime } from "./LocalTime";
 import { cardNextStep } from "./seller-card";
-import { formatUsdcAmount } from "./usdc-amount";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type SellerState =
@@ -33,6 +33,8 @@ export function SellerDashboard({ browser, draftForm, revision = 0, loading = fa
   const [state, setState] = useState<SellerState>({ kind: "idle" });
   // null until the seller opens or closes Create; until then it opens by itself for a seller with no raffles.
   const [createToggled, setCreateToggled] = useState<boolean | null>(null);
+  // The draft form, with its wallet NFT gallery, loads the first time Create opens and then stays, so closing keeps the seller's entries.
+  const [createLoaded, setCreateLoaded] = useState(false);
   const request = useRef(0);
 
   async function load() {
@@ -63,7 +65,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0, loading = fa
   if (loading) return <div className={styles.skeleton} role="status"><span /><span /><span /><p>Loading your studio…</p></div>;
   if (browser.kind === "unavailable") return <div className={`${styles.gate} notice warning`} role="status"><strong>The studio is unavailable right now.</strong><span>{browser.reason}</span></div>;
   if (wallet.kind === "connected" && wallet.chainId !== browser.service.manifest.chainId) {
-    return <div className={`${styles.gate} notice warning`} role="status"><strong>Wrong network</strong><span>Switch your wallet to chain {browser.service.manifest.chainId} to load this seller portfolio.</span><small>Raffle data and totals stay hidden until the wallet and reviewed deployment use the same network.</small></div>;
+    return <div className={`${styles.gate} notice warning`} role="status"><strong>Wrong network</strong><span>Switch your wallet to {networkName(browser.service.manifest.chainId)} to load your raffles.</span><small>Raffle data and totals stay hidden until the wallet and reviewed deployment use the same network.</small></div>;
   }
 
   const totals = state.kind === "ready" ? sellerPortfolioTotals(state.raffles) : null;
@@ -71,6 +73,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0, loading = fa
   const scanning = state.kind === "idle" || state.kind === "scanning";
   const seller = wallet.kind === "connected" ? wallet.account : null;
   const createOpen = createToggled ?? (creating || state.kind === "ready" && state.raffles.length === 0);
+  if (createOpen && !createLoaded) setCreateLoaded(true);
 
   return (
     <WalletGate wallet={browser.wallet}>
@@ -80,7 +83,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0, loading = fa
         <section className={styles.createPanel} aria-label="Create a raffle draft">
           <details open={createOpen} onToggle={event => { const open = event.currentTarget.open; if (open !== createOpen) setCreateToggled(open); }}>
             <summary><span><strong>Create a raffle</strong><em>Choose your NFT, set memberships, then press Create. LABx reviews it before you list.</em></span><span className={styles.summaryIcon} aria-hidden="true">＋</span></summary>
-            <div className={styles.createBody}>{draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
+            <div className={styles.createBody}>{!createLoaded ? null : draftForm ?? <><p>Draft creation needs the commitment recovery service.</p><p className="notice warning" role="status">Never enter a seed phrase, wallet key or account password.</p></>}</div>
           </details>
         </section>
 
@@ -133,7 +136,7 @@ function SellerRaffleCard({ snapshot, seller }: { snapshot: RaffleSnapshot; sell
   return (
     <li>
       <div className={styles.cardTopline}><span>Raffle #{snapshot.id.toString()}</span><span className={styles.phase}>{catalogAvailability(snapshot).label}</span></div>
-      <div className={styles.cardTitle}><h3>{snapshot.raffle.title}</h3><p>Closes {formatDate(snapshot.raffle.salesEnd)} UTC</p></div>
+      <div className={styles.cardTitle}><h3>{snapshot.raffle.title}</h3><p>Closes <LocalTime at={snapshot.raffle.salesEnd} /></p></div>
       <dl className={styles.cardFacts}><div><dt>Sales</dt><dd>{formatUsdcAmount(accounting.grossPrincipal)} USDC</dd></div>{accounting.refundLiability > 0n ? <div><dt>Owed to buyers</dt><dd>{formatUsdcAmount(accounting.refundLiability)} USDC</dd></div> : null}</dl>
       <p className={styles.cardNext}>{next.status}</p>
       <Link className={`btn btn-dark ${styles.manageButton}`} href={`/seller/${snapshot.id.toString()}`} aria-label={`${next.label}: ${snapshot.raffle.title}`}>{next.label} <span aria-hidden="true">→</span></Link>

@@ -157,6 +157,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const autoSubmitSpent = useRef(false);
   const callbacks = useRef({ onConfirmed, onCancel });
   callbacks.current = { onConfirmed, onCancel };
+  const reviewButtons = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -307,6 +308,11 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSubmit, state.kind, clearJournalScope, scope, disabled, activeOutcome]);
 
+  // A review can open below the screen edge, most often on a phone: bring Confirm and Back into view once.
+  useEffect(() => {
+    if (state.kind === "review") reviewButtons.current?.scrollIntoView({ block: "nearest" });
+  }, [state.kind]);
+
   async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext, direct = false) {
     if (!isCurrent(expected)) return;
     if (outcome.kind === "terminal") {
@@ -408,14 +414,15 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     );
   }
 
+  // aria-busy marks a wallet request that is about to start or in flight, which also holds the raffle page's background re-read.
   if (state.kind === "idle") {
-    return <button className="btn" type="button" disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
+    return <button className="btn" type="button" aria-busy={autoSubmit && !autoSubmitSpent.current || undefined} disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
   }
   if (state.kind === "preparing") {
-    return <button className="btn" type="button" disabled>{submitOnClick ? "Preparing…" : "Preparing review…"}</button>;
+    return <button className="btn" type="button" aria-busy="true" disabled>{submitOnClick ? "Preparing…" : "Preparing review…"}</button>;
   }
   if (state.kind === "submitting" && submitOnClick) {
-    return <button className="btn" type="button" disabled>Waiting for wallet…</button>;
+    return <button className="btn" type="button" aria-busy="true" disabled>Waiting for wallet…</button>;
   }
   if (state.kind === "review" || state.kind === "submitting") {
     const stale = !sameWallet(state.prepared, currentWallet);
@@ -432,7 +439,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
           {action.kind === "approveUsdc" || action.kind === "buyMembership" ? <p>Raffle #{action.id.toString()} · Pack ID {action.packId} · Quantity {action.quantity}</p> : null}
           <p>Chain ID {prepared.chainId}</p>
         </details>
-        <div className="btn-row">
+        <div className="btn-row" ref={reviewButtons}>
           <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : confirmLabel(action, label)}</button>
           <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Back</button>
         </div>
@@ -469,7 +476,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   if (state.kind === "reverted" || state.kind === "replaced") {
     return (
       <div className="transaction-state notice error stack" role="alert">
-        <strong>{state.kind === "reverted" ? "Transaction failed. Nothing changed." : "Your wallet replaced this transaction"}</strong>
+        <strong>{state.kind === "reverted" ? "Transaction failed. The raffle did not change." : "Your wallet replaced this transaction"}</strong>
         {state.kind === "replaced" ? <span>This action did not run.</span> : null}
         <details><summary>Transaction details</summary><p className="hash">{state.confirmation.hash}</p></details>
         <button className="btn btn-dark" type="button" onClick={() => setCurrent(context.current, { kind: "idle" })}>Review again</button>

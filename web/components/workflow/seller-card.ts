@@ -3,7 +3,7 @@ import { CANCEL_AND_RECLAIM, drawBlocker, sellerNextStep, sellerPortalActions, t
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import { availableActions } from "@/lib/chain/workflow";
 import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
-import { formatUsdcAmount } from "./usdc-amount";
+import { formatUsdcAmount } from "./format";
 
 export type CardStep = { label: string; status: string };
 
@@ -14,7 +14,7 @@ const CARD_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) =>
   requestRandomness: () => ({ label: "Start draw", status: "Entries counted" }),
   reveal: () => ({ label: "Confirm the draw", status: "Winner drawn" }),
   settle: ({ raffle }) => ({ label: "Finish raffle", status: raffle.revealed ? "Draw confirmed" : "Winner drawn" }),
-  claimProceeds: ({ raffle }) => ({ label: `Claim ${formatUsdcAmount(raffle.principalEscrow)} USDC`, status: "Raffle finished" }),
+  claimProceeds: ({ raffle }) => ({ label: `Claim ${formatUsdcAmount(raffle.principalEscrow)} USDC`, status: "Raffle complete" }),
   // The card only offers cancellation once no draw can happen.
   cancel: snapshot => ({ label: snapshot.lotCount === 0n ? CANCEL_AND_RECLAIM : "Enable refunds", status: drawBlocker(snapshot) ?? "Sales ended" }),
   abortDrawing: () => ({ label: "Enable refunds", status: "The draw timed out" }),

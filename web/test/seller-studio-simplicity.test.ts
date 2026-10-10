@@ -8,10 +8,10 @@ import type { AccountRaffleState, CanonicalReceipt, DraftInput, HistoryItem, Raf
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { buyerRaffleRow } from "../components/workflow/buyer-raffles";
 import { cardNextStep } from "../components/workflow/seller-card";
-import { createStepMessage, CREATE_STEPS } from "../components/workflow/create-progress";
+import { createStepMessage, CREATE_STEPS, unnumberedStep } from "../components/workflow/create-progress";
 import { localDeadlineInput, localDeadlineSeconds } from "../components/workflow/deadline";
-import { formatDate } from "../components/workflow/format";
-import { formatUsdcAmount } from "../components/workflow/usdc-amount";
+import { formatDate, formatLocalDate } from "../components/workflow/format";
+import { formatUsdcAmount } from "../components/workflow/format";
 import { standardMembershipPacks } from "./fixtures/membership-tiers";
 
 const originalZone = process.env.TZ;
@@ -31,6 +31,17 @@ describe("seller deadline in local time", () => {
     expect(seconds).toBe(Date.UTC(2026, 9, 10, 9, 8) / 1000);
     expect(formatDate(BigInt(seconds ?? 0))).toBe("10 Oct 2026, 9:08 am");
     expect(inZone("Australia/Perth", () => localDeadlineInput(seconds ?? 0))).toBe("2026-10-10T17:08");
+  });
+
+  it("shows a deadline in the viewer's time with UTC in brackets, and UTC once for a viewer in UTC", () => {
+    const evening = BigInt(Date.UTC(2026, 9, 10, 9, 8) / 1000);
+    expect(inZone("Australia/Perth", () => formatLocalDate(evening))).toBe("10 Oct 2026, 5:08 pm (9:08 am UTC)");
+    expect(inZone("Australia/Perth", () => formatLocalDate(evening, true))).toBe("10 Oct, 5:08 pm (9:08 am UTC)");
+    expect(inZone("America/New_York", () => formatLocalDate(evening))).toBe("10 Oct 2026, 5:08 am (9:08 am UTC)");
+    const lateUtc = BigInt(Date.UTC(2026, 9, 10, 20, 0) / 1000);
+    expect(inZone("Australia/Perth", () => formatLocalDate(lateUtc))).toBe("11 Oct 2026, 4:00 am (10 Oct 2026, 8:00 pm UTC)");
+    expect(inZone("UTC", () => formatLocalDate(evening))).toBe("10 Oct 2026, 9:08 am UTC");
+    expect(inZone("UTC", () => formatLocalDate(evening, true))).toBe("10 Oct, 9:08 am UTC");
   });
 
   it("matches UTC exactly for a seller in UTC", () => {
@@ -141,6 +152,12 @@ describe("Create progress", () => {
     ]);
   });
 
+  it("drops the step numbers when finishing a raffle that already exists", () => {
+    expect(unnumberedStep(createStepMessage("Approve this NFT in your wallet…", 501n))).toBe("Approve NFT #501 in your wallet.");
+    expect(unnumberedStep(createStepMessage("Locking the NFT in raffle custody…", 501n))).toBe("Confirm in your wallet to lock the NFT.");
+    expect(unnumberedStep("Checking the saved creation transaction…")).toBe("Checking the saved creation transaction…");
+  });
+
   it("passes unknown steps through unchanged", () => {
     expect(createStepMessage("Checking the saved creation transaction…", 1n)).toBe("Checking the saved creation transaction…");
   });
@@ -187,7 +204,7 @@ describe("Studio card next step", () => {
     expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: NOW, lotCount: 3n }), SELLER)).toEqual({ label: "Close sales", status: "Sales ended" });
     expect(cardNextStep(raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n }), SELLER)).toEqual({ label: "Count entries", status: "Sales closed" });
     expect(cardNextStep(raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n, snapshotted: true, snapshotTotal: 3n }), SELLER)).toEqual({ label: "Start draw", status: "Entries counted" });
-    expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle finished" });
+    expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle complete" });
     expect(cardNextStep(raffleSnapshot({ phase: 5 }), SELLER)).toMatchObject({ label: "View" });
   });
 
@@ -213,7 +230,7 @@ describe("Studio card next step", () => {
     expect(cardNextStep(finishing, SELLER, false)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
     const unconfirmed = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, lotCount: 3n });
     expect(cardNextStep({ ...unconfirmed, raffle: { ...unconfirmed.raffle, drawnAt: NOW } }, SELLER, true)).toEqual({ label: "Confirm the draw", status: "Winner drawn" });
-    expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER, true)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle finished" });
+    expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER, true)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle complete" });
     expect(cardNextStep(raffleSnapshot({ phase: 6 }), SELLER, true)).toEqual({ label: "Reclaim NFT", status: "Raffle cancelled" });
     expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: NOW - 604_800n }), SELLER, true)).toMatchObject({ label: "Cancel and get NFT back" });
   });

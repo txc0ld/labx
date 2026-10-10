@@ -5,7 +5,8 @@ import { Layers3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserService, RaffleService } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
-import { catalogAvailability, formatDate, fromPriceLabel } from "./format";
+import { catalogAvailability, fromPriceLabel } from "./format";
+import { LocalTime } from "./LocalTime";
 import { RaffleArtwork } from "./RaffleArtwork";
 
 export type CatalogState =
@@ -106,7 +107,7 @@ function RaffleCard({ service, snapshot }: { service?: RaffleService; snapshot: 
         <div className="capsule-meta">
           <div className="capsule-title-row"><div><h3>{snapshot.raffle.title}</h3></div><span className={`capsule-status ${status.purchasable ? "is-open" : ""}`}>{status.label}</span></div>
           {price ? <p className="capsule-price">{price}</p> : null}
-          <div className="capsule-foot"><span>{status.purchasable ? `${status.remaining.toLocaleString("en-US")} left · ` : ""}{snapshot.raffle.phase >= 2 || snapshot.block.timestamp >= snapshot.raffle.salesEnd ? "Sales ended" : "Sales end"} {formatDate(snapshot.raffle.salesEnd)} UTC</span><span className="capsule-open" aria-hidden="true">View raffle</span></div>
+          <div className="capsule-foot"><span>{status.purchasable ? `${status.remaining.toLocaleString("en-US")} left · ` : ""}{snapshot.raffle.phase >= 2 || snapshot.block.timestamp >= snapshot.raffle.salesEnd ? "Sales ended" : "Sales end"} <LocalTime at={snapshot.raffle.salesEnd} /></span><span className="capsule-open" aria-hidden="true">View raffle</span></div>
         </div>
       </Link>
     </li>

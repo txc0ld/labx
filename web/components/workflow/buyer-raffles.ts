@@ -1,8 +1,7 @@
 import type { AccountRaffleState, HistoryItem } from "@/lib/chain/types";
 import { sameAddress } from "@/lib/chain/validation";
 import { availableActions } from "@/lib/chain/workflow";
-import { catalogAvailability } from "./format";
-import { formatUsdcAmount } from "./usdc-amount";
+import { catalogAvailability, formatUsdcAmount } from "./format";
 
 export type BuyerRaffleRow = { id: bigint; title: string; status: string; memberships: string; entries: number; action: string | null };
 
