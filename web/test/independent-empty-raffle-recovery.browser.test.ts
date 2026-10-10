@@ -149,6 +149,7 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await fixture.page.getByRole("heading", { name: "Empty expired raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await statusPill()).toBe("Sales ended");
     await fixture.page.getByText("Membership sales ended at the published deadline.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.locator(".notice.error[role=alert]").allInnerTexts()).toEqual([]);
     // Hold the absence across several renders after account state loaded.
     for (let check = 0; check < 3; check += 1) {
       expect(await buttonCount("Close sales")).toBe(0);
@@ -157,6 +158,21 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
       expect(await fixture.page.getByText("Available now", { exact: true }).count()).toBe(0);
       await fixture.page.waitForTimeout(400);
     }
+    expect((await service.readRaffle({ id: expiredId })).raffle.phase).toBe(1);
+    expect(pageErrors).toEqual([]);
+  }, 60_000);
+
+  it("offers the operator Cancel raffle on the expired empty raffle's public page", async () => {
+    await openAs(`/piece/${expiredId.toString()}`, chain.operator);
+    await fixture.page.getByRole("heading", { name: "Empty expired raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await statusPill()).toBe("Sales ended");
+    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByText("Available now", { exact: true }) });
+    await cancelNow.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await cancelNow.getByText("No memberships were sold. Cancel the raffle so the seller can reclaim the NFT.", { exact: true }).isVisible()).toBe(true);
+    expect(await cancelNow.getByRole("button", { name: "Cancel raffle", exact: true }).isVisible()).toBe(true);
+    expect(await buttonCount("Cancel raffle")).toBe(1);
+    expect(await buttonCount("Close sales")).toBe(0);
+    expect(await buttonCount("Freeze next entries")).toBe(0);
     expect((await service.readRaffle({ id: expiredId })).raffle.phase).toBe(1);
     expect(pageErrors).toEqual([]);
   }, 60_000);
@@ -207,6 +223,31 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     expect(terms).toContain("Sales close");
     expect(terms).not.toContain("Snapshot progress");
     expect(terms).not.toContain("Eligible bonus entries");
+    expect(pageErrors).toEqual([]);
+  }, 90_000);
+
+  it("offers the operator Cancel raffle before the deadline on the public page and backs out of the review without sending", async () => {
+    await openAs(`/piece/${earlyId.toString()}`, chain.operator);
+    await fixture.page.getByRole("heading", { name: "Empty early raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await statusPill()).toBe("Open");
+    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByText("Available now", { exact: true }) });
+    await cancelNow.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await cancelNow.getByText("No memberships have been sold. Cancelling ends sales now so the seller can reclaim the NFT.", { exact: true }).isVisible()).toBe(true);
+    const trigger = cancelNow.getByRole("button", { name: "Cancel raffle", exact: true });
+    expect(await buttonCount("Cancel raffle")).toBe(1);
+
+    const before = await chain.client.getBlockNumber({ cacheTime: 0 });
+    const { confirm, rows } = await openReview(trigger, "Confirm cancel raffle");
+    expect(rows.map(([term]) => term)).toEqual(["Wallet", "Network", "Contract"]);
+    expect(rows.find(([term]) => term === "Wallet")?.[1]).toBe(`${chain.operator.slice(0, 6)}…${chain.operator.slice(-4)}`);
+    const review = confirm.locator("xpath=ancestor::section[contains(@class, 'transaction-review')]");
+    await review.getByRole("button", { name: "Back", exact: true }).click();
+    await expect.poll(async () => fixture.page.locator("section.transaction-review").count(), { timeout: 10_000 }).toBe(0);
+    expect(await buttonCount("Confirm cancel raffle")).toBe(0);
+    await trigger.waitFor({ state: "visible", timeout: 10_000 });
+    expect(await buttonCount("Cancel raffle")).toBe(1);
+    expect(await chain.client.getBlockNumber({ cacheTime: 0 })).toBe(before);
+    expect((await service.readRaffle({ id: earlyId })).raffle.phase).toBe(1);
     expect(pageErrors).toEqual([]);
   }, 90_000);
 
