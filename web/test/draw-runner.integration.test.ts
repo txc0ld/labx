@@ -340,7 +340,8 @@ run("draw runner on a local chain", () => {
 
   it("never follows an off-chain lookup from the treasury, and refuses", async () => {
     let hits = 0;
-    const gateway = createServer((_, response) => { hits++; response.writeHead(200, { "Content-Type": "application/json" }).end('{"data":"0x"}'); });
+    // The gateway fails every request, so a client that follows the lookup makes one request and stops.
+    const gateway = createServer((_, response) => { hits++; response.writeHead(500).end(); });
     await new Promise<void>(done => gateway.listen(0, "127.0.0.1", done));
     try {
       await isolated(async () => {
@@ -354,9 +355,9 @@ run("draw runner on a local chain", () => {
         expect(await invoke()).toEqual({ status: 503, body: { ok: false, error: UNCHECKED } });
         expect(await runnerNonce()).toBe(before);
         expect(hits).toBe(0);
-        // The same revert does reach the gateway through a default viem call, so the fixture is a live lookup.
-        await chain.client.call({ to: chain.treasury, data: "0xa0e67e2b" }).catch(() => {});
-        expect(hits).toBeGreaterThan(0);
+        // A default viem call does follow the same revert to the gateway, so the fixture is a live lookup.
+        await expect(chain.client.call({ to: chain.treasury, data: "0xa0e67e2b" })).rejects.toThrow();
+        expect(hits).toBe(1);
       });
     } finally { gateway.close(); }
   }, 60_000);
