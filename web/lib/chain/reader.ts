@@ -1,4 +1,4 @@
-import { decodeEventLog, erc20Abi, erc721Abi, isAddress, keccak256, zeroAddress, zeroHash, type Address, type PublicClient } from "viem";
+import { decodeEventLog, erc20Abi, erc721Abi, getAbiItem, isAddress, keccak256, zeroAddress, zeroHash, type Address, type PublicClient } from "viem";
 import { browserArtworkMetadata, type ArtworkMetadata } from "./metadata";
 import { requireExpectedPolicy } from "./action-trust";
 import { buyerFee } from "./fees";
@@ -8,6 +8,11 @@ import { attestDeployment, blockRef } from "./deployment";
 import type { ActionTrustInput, AccountRaffleState, AdmissionReview, AdmissionStatus, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
 import { CATALOG_PAGE_LIMIT } from "./types";
 import { boundedNumber, positiveId, sameAddress } from "./validation";
+
+const REVEALED = getAbiItem({ abi: raffleAbi, name: "Revealed" });
+/** Blocks per Revealed-event query, and the most queries one read makes going back from its block: 20,000 blocks, about 2.8 days on Sepolia. */
+const REVEAL_LOG_WINDOW = 2_000n;
+const REVEAL_LOG_WINDOWS = 10;
 
 export function createReader(client: PublicClient, manifest: DeploymentManifest) {
   let verified: BlockRef | null = null;
@@ -157,6 +162,27 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     }
     return { items, nextCursor: toBlock < at.number ? toBlock + 1n : null, block: at };
   }
+  /**
+   * Block time of raffle `id`'s Revealed event at or before `block`. The contract records no reveal time or draw block, so this
+   * searches back from `block` in 2,000-block windows, no further than the deployment block or 10 windows. Finding no event is an error.
+   */
+  async function readRevealTime({ id, block }: { id: bigint; block: BlockRef }): Promise<bigint> {
+    positiveId(id); const at = await checkedBlock(block);
+    for (let toBlock = at.number, queries = 0; queries < REVEAL_LOG_WINDOWS && toBlock >= manifest.deploymentBlock; queries++) {
+      const fromBlock = toBlock - REVEAL_LOG_WINDOW + 1n > manifest.deploymentBlock ? toBlock - REVEAL_LOG_WINDOW + 1n : manifest.deploymentBlock;
+      const logs = await client.getLogs({ address: manifest.address, event: REVEALED, args: { id }, fromBlock, toBlock, strict: true });
+      const log = logs.at(-1);
+      if (log) {
+        if (log.removed) throw new Error("The draw confirmation record is invalid.");
+        const revealed = await client.getBlock({ blockHash: log.blockHash });
+        if (revealed.number !== log.blockNumber || revealed.timestamp > at.timestamp) throw new Error("The draw confirmation record is invalid.");
+        await checkedBlock(at);
+        return revealed.timestamp;
+      }
+      toBlock = fromBlock - 1n;
+    }
+    throw new Error("The draw confirmation was not found.");
+  }
   async function openingPolicy({ block }: { block?: BlockRef } = {}) {
     const at = await checkedBlock(block); const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number };
     const [coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps, minBuyerFeeUsdc, hash] = await Promise.all([
@@ -234,5 +260,5 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     await checkedBlock(snapshot.block);
     return { ...basic, eth };
   }
-  return { checkedBlock, assertActionTrust, readOwner, readNftOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, openingPolicy, quoteMembership };
+  return { checkedBlock, assertActionTrust, readOwner, readNftOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, readRevealTime, openingPolicy, quoteMembership };
 }

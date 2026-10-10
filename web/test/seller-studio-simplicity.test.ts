@@ -248,6 +248,18 @@ describe("Studio card next step", () => {
     expect(cardNextStep(raffleSnapshot({ phase: 4, salesEnd: due - 60n, drawnAt: due, lotCount: 3n, revealed: true }), SELLER, true)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
   });
 
+  it("times the card's finish step from the draw confirmation, like the raffle page", () => {
+    // Drawn a day ago. The Studio card loads at NOW.
+    const finishing = raffleSnapshot({ phase: 4, salesEnd: NOW - 90_000n, drawnAt: NOW - 86_400n, lotCount: 3n, revealed: true });
+    const automatic = { label: "View", status: "LABx finishes the raffle automatically. This usually takes a few minutes." };
+    // Confirmed 10 minutes ago: LABx still has 20 minutes.
+    expect(cardNextStep(finishing, SELLER, true, NOW - 600n)).toEqual(automatic);
+    // Confirmed 30 minutes ago, or the card's own first read when the event can't be read.
+    expect(cardNextStep(finishing, SELLER, true, NOW - 1_800n)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
+    expect(cardNextStep(finishing, SELLER, true, NOW)).toEqual(automatic);
+    expect(cardNextStep(finishing, SELLER, false, NOW)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
+  });
+
   it("reads the draw runner flag and keeps manual steps when it is off", () => {
     const closing = raffleSnapshot({ phase: 1, salesEnd: NOW, lotCount: 3n });
     try {
@@ -260,10 +272,21 @@ describe("Studio card next step", () => {
 });
 
 describe("Guide selling steps", () => {
-  it("describe the draw and the claim the same way with or without the draw runner", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("leave the draw steps to LABx when the draw runner is on", () => {
+    vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", "1");
     const markup = renderToStaticMarkup(createElement(JourneyOverview));
     expect(markup).toContain("<strong>Draw</strong><p>After sales end, the draw runs. When a winner is drawn, confirm the draw.</p>");
     expect(markup).toContain("<strong>Claim</strong><p>When the raffle finishes, claim your sales after the 2% seller fee. If a raffle is cancelled, reclaim your NFT.</p>");
+  });
+
+  it("name every draw step the seller runs when the draw runner is off", () => {
+    vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", undefined);
+    const markup = renderToStaticMarkup(createElement(JourneyOverview));
+    expect(markup).toContain("<strong>Draw</strong><p>After sales end, close sales, count entries and start the draw. When a winner is drawn, confirm the draw and finish the raffle.</p>");
+    expect(markup).toContain("<strong>Claim</strong><p>Once you finish the raffle, claim your sales after the 2% seller fee. If a raffle is cancelled, reclaim your NFT.</p>");
+    expect(markup).not.toContain("the draw runs");
   });
 });
 

@@ -1,8 +1,23 @@
 import Link from "next/link";
 import React from "react";
 import { SELLER_FEE_BPS } from "@/lib/chain/fees";
+import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 
-const journeys = [
+/** The seller's Draw and Claim steps: LABx runs the draw steps when the draw runner is on, and the seller runs them otherwise. */
+function finishSteps(runner: boolean) {
+  const fee = `${SELLER_FEE_BPS / 100}% seller fee`;
+  return runner
+    ? [
+      { title: "Draw", copy: "After sales end, the draw runs. When a winner is drawn, confirm the draw." },
+      { title: "Claim", copy: `When the raffle finishes, claim your sales after the ${fee}. If a raffle is cancelled, reclaim your NFT.` }
+    ]
+    : [
+      { title: "Draw", copy: "After sales end, close sales, count entries and start the draw. When a winner is drawn, confirm the draw and finish the raffle." },
+      { title: "Claim", copy: `Once you finish the raffle, claim your sales after the ${fee}. If a raffle is cancelled, reclaim your NFT.` }
+    ];
+}
+
+const journeys = (runner: boolean) => [
   {
     id: "buying",
     title: "Buy a membership",
@@ -25,11 +40,10 @@ const journeys = [
       { title: "Create", copy: "Pick your NFT, set tier prices and press Create. Your wallet asks for 1 signature and up to 3 confirmations, then your NFT is locked." },
       { title: "LABx review", copy: "LABx checks the NFT and the draw funding. Editing a draft sends it back for review." },
       { title: "List", copy: "Press List to open sales. Prices and fees are fixed from then on." },
-      { title: "Draw", copy: "After sales end, the draw runs. When a winner is drawn, confirm the draw." },
-      { title: "Claim", copy: `When the raffle finishes, claim your sales after the ${SELLER_FEE_BPS / 100}% seller fee. If a raffle is cancelled, reclaim your NFT.` }
+      ...finishSteps(runner)
     ]
   }
-] as const;
+];
 
 export function JourneyOverview() {
   return (
@@ -42,7 +56,7 @@ export function JourneyOverview() {
         <p>These website actions remain unavailable until the verified contract connection is complete.</p>
       </header>
       <div className="journey-grid">
-        {journeys.map((journey) => (
+        {journeys(drawRunnerEnabled()).map((journey) => (
           <article className={`journey-card journey-card--${journey.tone}`} key={journey.title} id={journey.id} style={{ scrollMarginTop: "8rem" }}>
             <h3>{journey.title}</h3>
             <ol>
