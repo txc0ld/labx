@@ -159,13 +159,14 @@ describe("privileged address discovery", () => {
   const nested: Address = "0x7777777777777777777777777777777777777777";
   const deep: Address = "0x8888888888888888888888888888888888888888";
   type Safe = { owners: readonly Address[]; modules?: readonly Address[]; next?: Address; fail?: "getOwners" | "getModulesPaginated" };
-  function world(state: { owner?: Address; pendingOwner?: Address; treasury?: Address; safes?: Record<Address, Safe>; failCode?: Address; failRead?: string }) {
+  function world(state: { owner?: Address; pendingOwner?: Address; treasury?: Address; safes?: Record<Address, Safe>; delegated?: readonly Address[]; failCode?: Address; failRead?: string }) {
     const safes = new Map(Object.entries(state.safes ?? {}).map(([address, safe]) => [address.toLowerCase(), safe]));
     const calls: string[] = [];
     const client = {
       getCode: vi.fn(async ({ address }: { address: Address }) => {
         calls.push(`getCode:${address}`);
         if (state.failCode && address.toLowerCase() === state.failCode.toLowerCase()) throw new Error("rpc failed");
+        if (state.delegated?.some(item => item.toLowerCase() === address.toLowerCase())) return `0xef0100${"ab".repeat(20)}` as Hex;
         return safes.has(address.toLowerCase()) ? "0x6080" as Hex : undefined;
       }),
       readContract: vi.fn(async ({ address, functionName, args }: { address: Address; functionName: string; args?: readonly unknown[] }) => {
@@ -194,6 +195,13 @@ describe("privileged address discovery", () => {
   it("adds every Safe signer and every enabled module when the owner is a Safe", async () => {
     await expect(list({ safes: { [owner]: { owners: [signer, runner] } } })).resolves.toEqual([owner, signer, runner]);
     await expect(list({ safes: { [owner]: { owners: [signer], modules: [runner] } } })).resolves.toEqual([owner, signer, runner]);
+  });
+  it("treats an EIP-7702 delegated signer as a wallet instead of reading it as a Safe", async () => {
+    const { client, calls } = world({ safes: { [owner]: { owners: [signer, runner] } }, delegated: [signer] });
+    await expect(privilegedAddresses(client, manifest, 1n)).resolves.toEqual([owner, signer, runner]);
+    expect(calls).toContain(`getCode:${signer}`);
+    expect(calls).not.toContain(`getOwners:${signer}`);
+    await expect(list({ pendingOwner: runner, delegated: [runner] })).resolves.toEqual([owner, runner]);
   });
   it("adds the signers of a treasury Safe that differs from the owner", async () => {
     await expect(list({ treasury, safes: { [treasury]: { owners: [runner] } } })).resolves.toEqual([owner, treasury, runner]);

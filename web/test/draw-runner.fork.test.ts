@@ -103,7 +103,7 @@ run("draw runner on a loopback fork of Sepolia", () => {
     expect(await client.getChainId()).toBe(11155111);
     owner = await client.readContract({ address: deployment.address, abi: ownerAbi, functionName: "owner" });
     // Every public anvil test address carries an EIP-7702 delegation on Sepolia. A production runner is a fresh wallet
-    // without code, so the fork clears it. With the delegation in place, a privileged runner fails closed as unchecked.
+    // without code, so the fork clears it. With the delegation in place, the runner still counts as the privileged wallet.
     delegation = await client.getCode({ address: runner }) ?? "0x";
     await rpc("anvil_setCode", [runner, "0x"]);
     vi.stubEnv("LABX_STORE", "memory");
@@ -142,7 +142,7 @@ run("draw runner on a loopback fork of Sepolia", () => {
       const signer = await newSafe([runner]);
       await sendAs(owner, owner, encodeFunctionData({ abi: safeAbi, functionName: "addOwnerWithThreshold", args: [signer, 1n] }));
     }],
-    ["a pending owner whose EIP-7702 delegation does not answer Safe reads", UNCHECKED, async () => {
+    ["a pending owner with an EIP-7702 delegation, which counts as the wallet itself", PRIVILEGED, async () => {
       expect(delegation.startsWith("0xef0100")).toBe(true);
       await rpc("anvil_setCode", [runner, delegation]);
       await sendAs(owner, deployment.address, encodeFunctionData({ abi: ownerAbi, functionName: "transferOwnership", args: [runner] }));

@@ -45,10 +45,13 @@ export async function privilegedAddresses(client: Client, manifest: DeploymentMa
   }
 }
 
-/** Owners and modules when the address has code, or nothing for an account without code. */
+/**
+ * Owners and modules when the address is a contract. A wallet without code, or one with only an EIP-7702 delegation
+ * marker, is controlled by its own key, so it has no controllers to add.
+ */
 async function safeControllers(client: Client, address: Address, blockNumber: bigint): Promise<readonly Address[]> {
   const code = await client.getCode({ address, blockNumber });
-  if (!code || code === "0x") return [];
+  if (!code || code === "0x" || /^0xef0100[0-9a-f]{40}$/i.test(code)) return [];
   const [owners, [modules, next]] = await Promise.all([
     client.readContract({ address, abi: safeAbi, functionName: "getOwners", blockNumber }),
     client.readContract({ address, abi: safeAbi, functionName: "getModulesPaginated", args: [SAFE_SENTINEL, SAFE_MODULE_PAGE], blockNumber })
