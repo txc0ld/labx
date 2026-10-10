@@ -5,6 +5,7 @@ import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
 import { connectWallet } from "./fixtures/connect-wallet";
+import { localDeadlineValue, openCreatePanel } from "./fixtures/seller-create";
 
 const run = process.env.RUN_BROWSER_ACCEPTANCE === "1" ? describe : describe.skip;
 
@@ -107,12 +108,12 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await goto("/seller", chain.seller);
     const draftSummary = fixture.page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ });
     await draftSummary.waitFor({ state: "visible", timeout: 10_000 });
-    await draftSummary.click();
+    await openCreatePanel(fixture.page);
     await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByLabel("Raffle title").fill(input.title);
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill(input.tokenId.toString());
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(input.deadline * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, input.deadline));
     await fillStandardMembershipEconomics(fixture.page, () => ({ price: input.price, bonusEntries: "3", supply: input.supply }));
     const id = await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" });
     expect(await fixture.page.locator(".transaction-review").count()).toBe(0);

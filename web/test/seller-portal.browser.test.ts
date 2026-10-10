@@ -12,6 +12,8 @@ import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { STANDARD_MEMBERSHIP_TIERS } from "../lib/membership-tiers";
 import { fillStandardMembershipEconomics } from "./fixtures/membership-tiers";
 import { connectWallet } from "./fixtures/connect-wallet";
+import { localDeadlineValue, openCreatePanel } from "./fixtures/seller-create";
+import { formatDate } from "../components/workflow/format";
 
 const run = process.env.RUN_SELLER_PORTAL_BROWSER === "1" ? describe : describe.skip;
 
@@ -180,9 +182,16 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.setViewportSize({ width: 1440, height: 900 });
     await fixture.page.emulateMedia({ reducedMotion: "reduce" });
     await connectSeller();
-    await fixture.page.getByText("Revenue and sales", { exact: true }).click();
-    await expect.poll(async () => fixture.page.getByText(/Complete at block/).isVisible(), { timeout: 15_000 }).toBe(true);
-    expect(await fixture.page.getByRole("link", { name: /Manage raffle/ }).count()).toBe(26);
+    await fixture.page.getByText("Revenue", { exact: true }).click();
+    await expect.poll(async () => fixture.page.getByText("Paid to you", { exact: true }).isVisible(), { timeout: 15_000 }).toBe(true);
+    const raffleList = fixture.page.locator("section[aria-labelledby='seller-raffles-title'] ol");
+    expect(await raffleList.getByRole("link").count()).toBe(26);
+    expect(await raffleList.getByRole("link", { name: /^View: Seller portfolio (?:[3-9]|1\d|2[0-5])$/ }).count()).toBe(23);
+    expect(await raffleList.getByText("Sales deadline passed", { exact: true }).count()).toBe(23);
+    expect(await raffleList.getByRole("link", { name: "View: Seller portfolio 2", exact: true }).getAttribute("href")).toBe("/seller/2");
+    expect(await raffleList.getByRole("link", { name: "View: Seller portfolio 26", exact: true }).getAttribute("href")).toBe("/seller/26");
+    expect(await raffleList.getByRole("link", { name: "View: Seller is the winner", exact: true }).getAttribute("href")).toBe("/seller/30");
+    expect(await raffleList.locator("li", { hasText: "Seller portfolio 2" }).filter({ hasText: "Raffle cancelled" }).getByText("Owed to buyers", { exact: true }).count()).toBe(1);
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     const summary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
@@ -196,16 +205,18 @@ run("rendered seller portal on isolated Anvil", () => {
     for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
       await fixture.page.getByRole("group", { name: `Membership ${index + 1}: ${tier}`, exact: true }).waitFor({ state: "visible" });
     }
-    expect(await fixture.page.getByRole("button", { name: "Choose from wallet", exact: true }).isDisabled()).toBe(true);
+    expect(await fixture.page.getByRole("button", { name: "Choose from wallet", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("region", { name: "Wallet NFTs" }).count()).toBe(0);
     await fixture.page.getByText("Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.", { exact: true }).waitFor({ state: "visible" });
     expect(await fixture.page.getByLabel("NFT contract").isEnabled()).toBe(true);
     expect(await fixture.page.getByLabel("Token ID").isEnabled()).toBe(true);
-    expect(await fixture.page.getByText("5 standard tiers", { exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByText("Set a price for each tier. Bonus entries and supply are suggestions you can change.", { exact: true }).count()).toBe(1);
     expect(await fixture.page.getByLabel("Name", { exact: true }).count()).toBe(0);
     expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
+    const suggested = [["", "1", "100"], ["", "3", "50"], ["", "5", "25"], ["", "10", "10"], ["", "25", "5"]];
     for (const [index, tier] of STANDARD_MEMBERSHIP_TIERS.entries()) {
       const group = fixture.page.getByRole("group", { name: `Membership ${index + 1}: ${tier}`, exact: true });
-      expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["", "", ""]);
+      expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(suggested[index]);
     }
     await fillStandardMembershipEconomics(fixture.page, (_tier, index) => ({ price: String((index + 1) * 10), bonusEntries: String(index + 1), supply: String((index + 1) * 10) }));
 
@@ -223,16 +234,16 @@ run("rendered seller portal on isolated Anvil", () => {
       }
     }
 
-    expect(await fixture.page.getByLabel("Sales deadline in UTC", { exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByLabel("Sales deadline (your time)", { exact: true }).count()).toBe(1);
     expect(await fixture.page.getByLabel("Public commitment note", { exact: true }).count()).toBe(0);
     expect(await fixture.page.getByLabel("Private commitment", { exact: true }).count()).toBe(0);
-    expect(await computedAccessibility("#draft-close")).toEqual({ name: "Sales deadline in UTC", description: "Enter the deadline as UTC, not local time." });
 
     const futureDeadline = Number((await chain.client.getBlock()).timestamp + 86_400n);
     await fixture.page.getByLabel("Raffle title").fill("Responsive seller draft");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(futureDeadline * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, futureDeadline));
+    expect(await computedAccessibility("#draft-close")).toEqual({ name: "Sales deadline (your time)", description: `(${formatDate(BigInt(futureDeadline - futureDeadline % 60))} UTC)` });
     expect(await fixture.page.getByRole("button", { name: "Create", exact: true }).isEnabled()).toBe(true);
     expect(await fixture.page.getByRole("button", { name: "Sign to prepare raffle", exact: true }).count()).toBe(0);
     await fixture.page.getByLabel("Raffle title").focus();
@@ -269,7 +280,7 @@ run("rendered seller portal on isolated Anvil", () => {
 
     await fixture.page.emulateMedia({ reducedMotion: "reduce" });
     await fixture.page.setViewportSize({ width: 390, height: 844 });
-    const overview = fixture.page.getByRole("heading", { name: "Revenue at a glance" }).locator("xpath=ancestor::section[1]");
+    const overview = fixture.page.locator("details").filter({ has: fixture.page.locator("summary", { hasText: /^Revenue$/ }) });
     const columns = await overview.locator("dl").first().evaluate((element: Element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
     expect(columns).toBe(2);
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -289,12 +300,12 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
     const create = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
     await connectWallet(fixture.page, create);
-    await create.click();
+    await openCreatePanel(fixture.page);
     const block = await chain.client.getBlock();
     await fixture.page.getByLabel("Raffle title").fill("Private preparation failure");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("999");
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, block.timestamp + 86_400n));
     await fillStandardMembershipEconomics(fixture.page, () => ({ price: "1", bonusEntries: "1", supply: "10" }));
     let posts = 0, secret = "";
     await fixture.page.route("**/api/reserve", async route => {
@@ -304,10 +315,10 @@ run("rendered seller portal on isolated Anvil", () => {
     });
     await fixture.page.evaluate(() => (window as unknown as { __labxRejectNextSignature(code: number, message: string): void }).__labxRejectNextSignature(4001, "Rejected private input"));
     await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByText("The wallet request was cancelled. Click Create to resume when ready.", { exact: true }).waitFor();
+    await fixture.page.getByText("The wallet request was cancelled. Press Create to continue when you're ready.", { exact: true }).waitFor();
     expect(posts).toBe(0);
     await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByText("The draw setup could not be prepared or saved. Click Create to recover the saved preparation.", { exact: true }).waitFor();
+    await fixture.page.getByText("Couldn't save the raffle setup. Press Create to try again.", { exact: true }).waitFor();
     expect(posts).toBe(1);
     expect(secret).toMatch(/^0x[0-9a-f]{64}$/);
     expect(await fixture.page.locator("body").innerText()).not.toContain(secret);
@@ -327,12 +338,12 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(response?.status()).toBe(200);
     const create = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
     await connectWallet(fixture.page, create);
-    await create.click();
+    await openCreatePanel(fixture.page);
     const block = await chain.client.getBlock();
     await fixture.page.getByLabel("Raffle title").fill("Entropy failure");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("997");
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, block.timestamp + 86_400n));
     await fillStandardMembershipEconomics(fixture.page, () => ({ price: "1", bonusEntries: "1", supply: "1" }));
     let reserveRequests = 0;
     await fixture.page.route("**/api/reserve", async route => { reserveRequests += 1; await route.abort("failed"); });
@@ -366,14 +377,14 @@ run("rendered seller portal on isolated Anvil", () => {
     const block = await chain.client.getBlock();
     await fixture.page.getByLabel("Raffle title").fill("Canonical NFT retention");
     await fixture.page.getByLabel("Token ID").fill("0803");
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, block.timestamp + 86_400n));
     await fixture.page.evaluate(() => {
       Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for retention test"); } });
     });
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByText("The saved draw setup for this NFT will be retained. No additional storage signature is needed.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await fixture.page.getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
     await fixture.page.evaluate(() => { Reflect.deleteProperty(window.crypto, "getRandomValues"); });
-    await transact("Update raffle draft");
+    await transact("Save changes");
     const afterUnescrowed = await chain.service.readRaffle({ id: 3n });
     expect(afterUnescrowed.raffle.reserveNonce).toBe(beforeUnescrowed.raffle.reserveNonce);
     expect(afterUnescrowed.raffle.reserveCommit).toBe(beforeUnescrowed.raffle.reserveCommit);
@@ -413,17 +424,17 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.getByRole("button", { name: /Add membership|Remove membership/ }).count()).toBe(0);
     await fixture.page.getByLabel("Raffle title").fill("Legacy escrowed draft retained");
     const recoveryBlock = await chain.client.getBlock();
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(recoveryBlock.timestamp + 86_400n) * 1000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, recoveryBlock.timestamp + 86_400n));
     await basicPack.getByLabel("Price in USDC", { exact: true }).fill("8");
     await basicPack.getByLabel("Bonus entries", { exact: true }).fill("6");
     await basicPack.getByLabel("Supply", { exact: true }).fill("12");
     await fixture.page.evaluate(() => {
       Object.defineProperty(window.crypto, "getRandomValues", { configurable: true, value: () => { throw new Error("entropy disabled for escrow retention test"); } });
     });
-    await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-    await fixture.page.getByText("The saved draw setup for this NFT will be retained. No additional storage signature is needed.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await fixture.page.getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
     await fixture.page.evaluate(() => { Reflect.deleteProperty(window.crypto, "getRandomValues"); });
-    await transact("Update raffle draft");
+    await transact("Save changes");
     const afterEscrowed = await chain.service.readRaffle({ id: 31n });
     expect(afterEscrowed.raffle.reserveNonce).toBe(beforeEscrowed.raffle.reserveNonce);
     expect(afterEscrowed.raffle.reserveCommit).toBe(beforeEscrowed.raffle.reserveCommit);
