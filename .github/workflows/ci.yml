@@ -66,6 +66,7 @@ jobs:
           RUN_CHAIN_INTEGRATION: "1"
           RUN_INDEPENDENT_WALLET_REVIEW_REPAIRS: "1"
           RUN_INDEPENDENT_TRANSACTION_LINEAGE: "1"
+          RUN_DRAW_RUNNER_INTEGRATION: "1"
 
   browser-acceptance:
     runs-on: ubuntu-latest
