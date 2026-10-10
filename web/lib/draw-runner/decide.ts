@@ -3,6 +3,7 @@ import { raffleAbi } from "../chain/abi";
 import { availableActions } from "../chain/workflow";
 import { sameAddress } from "../chain/validation";
 import type { PreparedAction, Raffle, RaffleSnapshot } from "../chain/types";
+import { within } from "./errors";
 
 export const SNAPSHOT_BATCH = 100n;
 
@@ -41,6 +42,39 @@ export function scanWindow(cursor: bigint, nextId: bigint, limit: number): { ids
   const count = BigInt(limit) < total ? BigInt(limit) : total;
   const ids = Array.from({ length: Number(count) }, (_, offset) => (start - 1n + BigInt(offset)) % total + 1n);
   return { ids, nextCursor: (start - 1n + count) % total + 1n };
+}
+
+/** Raffle reads the scan keeps in flight at once. */
+export const SCAN_CONCURRENCY = 20;
+
+export type ScanResult = { candidates: bigint[]; nextCursor: bigint; stop: "deadline" | "interrupted" | null };
+
+/**
+ * Reads up to `limit` raffles from `cursor` in scanWindow order, at most SCAN_CONCURRENCY at a time, and keeps the ids
+ * whose raffle passes `keep`. The scan ends at the first read that fails or has not finished within `timeoutMs`, and
+ * only the raffles before that point count. The next cursor is the first raffle not read, or the one after a raffle
+ * whose read failed, so one unreadable raffle cannot stall the scan.
+ */
+export async function scanRaffles<T>({ cursor, nextId, limit, timeoutMs, read, keep }: {
+  cursor: bigint; nextId: bigint; limit: number; timeoutMs: number; read: (id: bigint) => Promise<T>; keep: (raffle: T) => boolean;
+}): Promise<ScanResult> {
+  const { ids, nextCursor } = scanWindow(cursor, nextId, limit);
+  const results: ({ raffle: T } | "failed")[] = [];
+  let started = 0, halted = false;
+  async function worker() {
+    while (!halted && started < ids.length) {
+      const index = started++;
+      try { results[index] = { raffle: await read(ids[index]) }; } catch { results[index] = "failed"; halted = true; }
+    }
+  }
+  await within(Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, ids.length) }, worker)), timeoutMs).catch(() => {});
+  halted = true;
+  let done = 0;
+  while (done < ids.length && typeof results[done] === "object") done++;
+  const candidates = ids.slice(0, done).filter((_, index) => keep((results[index] as { raffle: T }).raffle));
+  if (done === ids.length) return { candidates, nextCursor, stop: null };
+  if (results[done] === "failed") return { candidates, nextCursor: ids[done + 1] ?? nextCursor, stop: "interrupted" };
+  return { candidates, nextCursor: ids[done], stop: "deadline" };
 }
 
 /** Rejects any prepared transaction other than the expected zero-value draw call on the raffle contract. */

@@ -1,7 +1,7 @@
 import { parseEther, parseGwei, type Address, type Hex } from "viem";
 import type { Store } from "../points";
 import type { PreparedAction, RaffleSnapshot } from "../chain/types";
-import { assertRunnerCall, nextRunnerAction, type RunnerAction } from "./decide";
+import { assertRunnerCall, nextRunnerAction, type RunnerAction, type ScanResult } from "./decide";
 import { errorCategory, within, type ErrorCategory } from "./errors";
 
 export const RUN_MS = 56_000;
@@ -12,7 +12,10 @@ export const SEND_MIN_REMAINING_MS = 25_000;
 export const SEND_TIMEOUT_MS = 10_000;
 const CURSOR_WRITE_MS = 2_000;
 export const MAX_SENDS = 6;
-export const SCAN_LIMIT = 50;
+/** Most raffles one run reads. Two runs, about ten minutes apart, read every raffle while there are at most twice this many. */
+export const SCAN_LIMIT = 500;
+/** The scan stops reading raffles after this long, so the steps it finds still have time to run. */
+export const SCAN_MS = 20_000;
 export const MIN_BALANCE = parseEther("0.01");
 export const MAX_FEE_PER_GAS = parseGwei("50");
 /** Largest gas limit the runner signs for each call. snapshot(100) measured about 4.9M gas; the others under 200k. */
@@ -33,9 +36,10 @@ export type SendResult =
 export type DrawChain = {
   runner: Address;
   contract: Address;
-  /** Owner, pending owner, treasuries, and the owners and modules of any of them that is a contract. Throws when any of them cannot be read. */
+  /** Owner, pending owner, treasuries, and the Safe owners and modules of any of them with code, two levels down. Throws when any of them cannot be read. */
   privilegedAddresses(): Promise<readonly Address[]>;
-  scan(cursor: bigint, limit: number): Promise<{ candidates: readonly bigint[]; nextCursor: bigint }>;
+  /** Reads up to `limit` raffles from `cursor` at one block and returns those that may need a step. Stops reading after `timeoutMs`. */
+  scan(cursor: bigint, limit: number, timeoutMs: number): Promise<ScanResult>;
   read(id: bigint): Promise<RaffleSnapshot>;
   /** Builds and simulates at a pinned block. Throws when the step no longer applies. */
   prepare(action: RunnerAction): Promise<PreparedAction>;
@@ -50,7 +54,8 @@ export type DrawChain = {
 };
 
 export type RunOutcome = "succeeded" | "reverted" | "unknown" | "failed" | "skipped" | "low-funds" | "gas-cap";
-export type RunItem = { id: string; action: RunnerAction["kind"]; hash: Hex | null; outcome: RunOutcome; error: ErrorCategory | null };
+/** "Refused" marks a prepared call that the runner's own allowlist rejected. */
+export type RunItem = { id: string; action: RunnerAction["kind"]; hash: Hex | null; outcome: RunOutcome; error: ErrorCategory | "Refused" | null };
 export type RunStatus = "complete" | "busy" | "send-cap" | "deadline" | "low-funds" | "fee-cap" | "pending-transaction" | "send-failed" | "interrupted";
 export type RunReport = { status: RunStatus; runner: Address; sends: number; items: RunItem[]; nextCursor: string | null };
 
@@ -79,11 +84,13 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   if (await bounded(chain.balance()) < MIN_BALANCE) return { ...report, status: "low-funds" };
 
   const saved = await bounded(store.get(CURSOR_KEY));
-  const scan = await bounded(chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT));
+  const scan = await bounded(chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT, Math.min(SCAN_MS, workEnd - now())));
   let nextCursor = scan.nextCursor;
+  // A scan that ran out of time or hit a failed read still hands over the raffles it read; the cursor resumes after them.
+  if (scan.stop) report.status = scan.stop;
   const stop = (status: RunStatus, id: bigint) => { report.status = status; nextCursor = id; };
   raffles: for (const id of scan.candidates) {
-    const record = (action: RunnerAction, hash: Hex | null, outcome: RunOutcome, error: ErrorCategory | null) => {
+    const record = (action: RunnerAction, hash: Hex | null, outcome: RunOutcome, error: RunItem["error"]) => {
       report.items.push({ id: id.toString(), action: action.kind, hash, outcome, error });
     };
     try {
@@ -95,11 +102,17 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         let prepared: PreparedAction;
         try {
           prepared = await bounded(chain.prepare(action));
-          assertRunnerCall(prepared, action, chain.contract);
         } catch (error) {
-          // The step no longer applies, or it could not be checked. A revert or a refusal carries no label.
+          // The step no longer applies, or it could not be checked. A revert carries no label.
           const category = errorCategory(error);
           record(action, null, "skipped", category === "Other" ? null : category);
+          break;
+        }
+        try {
+          assertRunnerCall(prepared, action, chain.contract);
+        } catch {
+          // The builder produced something other than the chosen step. Nothing is sent, and the report is not ok.
+          record(action, null, "failed", "Refused");
           break;
         }
         let quote: Quote;

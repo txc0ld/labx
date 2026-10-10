@@ -1,4 +1,3 @@
-import type { Hex } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import type { Store } from "../points";
 import { sameAddress } from "../chain/validation";
@@ -8,10 +7,11 @@ import { FINISH_RESERVE_MS, RUN_MS, runDraw, type DrawChain, type RunReport, typ
 
 const HEALTHY: ReadonlySet<RunStatus> = new Set(["complete", "busy", "send-cap", "deadline"]);
 
-/** Reads the server-only runner key. Returns null for a missing or malformed key, which disables the runner. */
+/** Reads the server-only runner key: 64 hex characters, with or without 0x. Returns null for a missing or malformed key, which disables the runner. */
 export function runnerAccount(value: string | undefined): PrivateKeyAccount | null {
-  if (!value || !/^0x[0-9a-fA-F]{64}$/.test(value)) return null;
-  try { return privateKeyToAccount(value as Hex); } catch { return null; }
+  const hex = value?.match(/^(?:0x)?([0-9a-fA-F]{64})$/)?.[1];
+  if (!hex) return null;
+  try { return privateKeyToAccount(`0x${hex}`); } catch { return null; }
 }
 
 export function createDrawCronHandler(dependencies: {
