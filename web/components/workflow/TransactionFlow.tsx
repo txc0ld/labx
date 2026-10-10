@@ -98,6 +98,10 @@ type Operation = { scope: number; id: number };
 const CONTRACT_CALL_KINDS = new Set<WorkflowAction["kind"]>(["createDraft", "updateDraft", "approveRaffle", "revokeRaffleApproval", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing"]);
 
 // Plain rows people can check before the wallet opens. Full addresses, chain ID and pack index stay in Transaction details.
+// Seller steps that pay nobody but the seller. The wallet shows the exact call, so like List they
+// skip the website review. Buyer payments always keep it.
+const SUBMIT_ON_CLICK_KINDS = new Set<WorkflowAction["kind"]>(["open", "close", "snapshot", "requestRandomness", "settle", "cancel", "abortDrawing", "reclaimPrize", "claimProceeds"]);
+
 function reviewRows(prepared: PreparedAction, raffle: Address, formatUsdc: AmountFormatter) {
   const party = (value: Address) => sameAddress(value, raffle) ? `LABx raffle ${shortAddress(value)}`
     : sameAddress(value, prepared.account) ? `Your wallet ${shortAddress(value)}` : shortAddress(value);
@@ -263,13 +267,13 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       }
       const prepared = await expected.service.prepare({ action, wallet: expected.wallet });
       if (!isCurrent(expected)) return;
-      if (fromClick && submitOnClick && action.kind === "open") {
+      if (fromClick && submitOnClick && SUBMIT_ON_CLICK_KINDS.has(action.kind)) {
         setCurrent(expected, { kind: "submitting", prepared });
         await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
           if (!isCurrent(expected)) return;
           ownSubmission.current = { scope: expected.generation, submitted };
           setCurrent(expected, { kind: "confirming", submitted });
-        }, () => { if (!isCurrent(expected)) throw new Error("This listing intent is no longer active."); }), expected);
+        }, () => { if (!isCurrent(expected)) throw new Error("This action is no longer active."); }), expected);
       } else setCurrent(expected, { kind: "review", prepared });
     } catch (error) {
       await showError(error, expected);
