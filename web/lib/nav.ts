@@ -12,8 +12,7 @@ export const ACCOUNT_LINKS = [
   { href: "/membership", label: "Membership" },
   { href: "/discounts", label: "Partner discounts" },
   { href: "/profile/history", label: "History" },
-  { href: "/profile/receipts", label: "Receipts" },
-  { href: "/profile/history#agreements", label: "Agreements" }
+  { href: "/profile/receipts", label: "Receipts" }
 ];
 
 export function isCurrentPath(path: string, href: string) {

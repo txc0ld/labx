@@ -6,6 +6,7 @@ import { keccak256, toBytes } from "viem";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { fillStandardMembershipEconomics, standardMembershipPacks } from "./fixtures/membership-tiers";
+import { localDeadlineValue, openCreatePanel } from "./fixtures/seller-create";
 
 const run = process.env.RUN_INDEPENDENT_THREE_ACTION_BROWSER === "1" ? describe : describe.skip;
 
@@ -86,7 +87,7 @@ run("independent one-click Safe approval", () => {
 
   async function fillCreate(tokenId: bigint, title: string) {
     await fixture.page.getByLabel("Raffle title", { exact: true }).fill(title);
-    await fixture.page.getByLabel("Sales deadline in UTC", { exact: true }).fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)", { exact: true }).fill(await localDeadlineValue(fixture.page, Math.floor(Date.now() / 1000) + 86_400));
     await fixture.page.getByLabel("NFT contract", { exact: true }).fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID", { exact: true }).fill(tokenId.toString());
     await fillStandardMembershipEconomics(fixture.page, (_tier, index) => ({ price: String(25 + index), bonusEntries: String(index + 1), supply: "10" }));
@@ -143,7 +144,7 @@ run("independent one-click Safe approval", () => {
       expect(response?.status()).toBe(200);
       const draftSummary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
       await connectUntilReady(draftSummary);
-      await draftSummary.click();
+      await openCreatePanel(fixture.page);
       await instrumentSellerProvider();
       await fixture.page.waitForTimeout(500);
       expect((await sellerRpc()).filter(method => method === "personal_sign" || method === "eth_sign" || method === "eth_sendTransaction")).toEqual([]);
@@ -152,7 +153,7 @@ run("independent one-click Safe approval", () => {
       const create = fixture.page.getByRole("button", { name: "Create", exact: true });
       expect(await create.count()).toBe(1);
       expect(await fixture.page.getByText(/Create locks your NFT/i).isVisible()).toBe(true);
-      expect(await fixture.page.getByText(/separate transaction confirmations/i).isVisible()).toBe(true);
+      expect(await fixture.page.getByText(/1 signature and up to 3 confirmations/i).isVisible()).toBe(true);
       await create.click();
       await fixture.page.waitForURL(/\/seller\/\d+$/, { timeout: 60_000 });
 

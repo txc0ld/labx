@@ -23,14 +23,11 @@ export default function MembershipPage() {
       <section className="well pad stack" aria-labelledby="tiers-title">
         <h2 id="tiers-title">Pack tiers</h2>
         <ol className="tier-list">{STANDARD_MEMBERSHIP_TIERS.map((pack) => <li key={pack} data-tier={pack.toLowerCase()}><span>{pack}</span><span className="tier-orbs" aria-hidden="true" /></li>)}</ol>
-        <p className="muted">New LABx raffles use these five standard membership names in this order. Each raffle sets its own prices, bonus entries and supply. Existing raffles keep the membership packs already published on-chain.</p>
+        <p className="muted">Each raffle sets its own price, bonus entries and supply for these tiers.</p>
       </section>
-      <article className="notice warning stack">
-        <strong>Review your total before purchasing.</strong>
-        <span>The new contract uses the greater of 2.50 USDC or 2% of your pack subtotal. Processing fees are not refunded if a raffle is cancelled. Pack prices and purchase controls appear on open raffles; this comparison does not place an order.</span>
-      </article>
+      <p className="notice">The processing fee isn’t refunded if a raffle is cancelled. You get the membership price back.</p>
       <div className="btn-row">
-        <Link className="btn" href="/">Explore pieces</Link>
+        <Link className="btn" href="/">Browse raffles</Link>
         <Link className="btn btn-dark" href="/discounts">Partner discounts</Link>
         <Link className="btn btn-lime" href="/eligibility">Review eligibility</Link>
         <Link className="btn btn-pink" href="/legal">Membership terms</Link>

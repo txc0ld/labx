@@ -9,6 +9,7 @@ import type { DraftInput } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { connectWallet } from "./fixtures/connect-wallet";
+import { localDeadlineValue, openCreatePanel } from "./fixtures/seller-create";
 
 const run = process.env.RUN_FIVE_TIER_VERIFICATION === "1" || process.env.RUN_SELLER_PORTAL_BROWSER === "1" ? describe : describe.skip;
 
@@ -103,13 +104,14 @@ run("independent five-tier rendered journey", () => {
     await goto("/seller");
     const draftSummary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
     await draftSummary.waitFor({ state: "visible", timeout: 15_000 });
-    await draftSummary.click();
-    await fixture.page.getByText("5 standard tiers", { exact: true }).waitFor({ state: "visible" });
+    await openCreatePanel(fixture.page);
+    await fixture.page.getByText("Set a price for each tier. Bonus entries and supply are suggestions you can change.", { exact: true }).waitFor({ state: "visible" });
     const createPanel = fixture.page.locator("section[aria-label='Create a raffle draft']");
     const groups = STANDARD_MEMBERSHIP_TIERS.map((name, index) =>
       createPanel.getByRole("group", { name: `Membership ${index + 1}: ${name}`, exact: true }));
-    for (const group of groups) {
-      expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["", "", ""]);
+    const suggested = [["", "1", "100"], ["", "3", "50"], ["", "5", "25"], ["", "10", "10"], ["", "25", "5"]];
+    for (const [index, group] of groups.entries()) {
+      expect(await group.locator("input").evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(suggested[index]);
       expect(await group.locator("input").evaluateAll((inputs) => inputs.every((input) => (input as HTMLInputElement).required))).toBe(true);
     }
     expect(await fixture.page.getByLabel("Name", { exact: true }).count()).toBe(0);
@@ -147,7 +149,7 @@ run("independent five-tier rendered journey", () => {
     await fixture.page.getByLabel("Raffle title").fill("Independent five tier raffle");
     await fixture.page.getByLabel("NFT contract").fill(chain.nft.address);
     await fixture.page.getByLabel("Token ID").fill("8000");
-    await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(current.timestamp + 86_400n) * 1_000).toISOString().slice(0, 16));
+    await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, current.timestamp + 86_400n));
     for (const [index, group] of groups.entries()) {
       await group.getByLabel("Price in USDC", { exact: true }).fill(String(index + 1));
       await group.getByLabel("Bonus entries", { exact: true }).fill(String(index + 2));
@@ -205,9 +207,9 @@ run("independent five-tier rendered journey", () => {
       const repairBlock = await chain.client.getBlock();
       const salesEnd = repairBlock.timestamp + 86_400n + BigInt(fixtureIndex);
       const enteredSalesEnd = salesEnd - salesEnd % 60n;
-      await fixture.page.getByLabel("Sales deadline in UTC").fill(new Date(Number(enteredSalesEnd) * 1_000).toISOString().slice(0, 16));
-      await fixture.page.getByRole("button", { name: "Prepare raffle draft", exact: true }).click();
-      await fixture.page.getByText("The saved draw setup for this NFT will be retained. No additional storage signature is needed.", { exact: true }).waitFor({ state: "visible" });
+      await fixture.page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(fixture.page, enteredSalesEnd));
+      await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await fixture.page.getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
       if (item.draft.packs[0]?.name === " Entry ") {
         await fixture.page.evaluate(() => {
           type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
@@ -225,7 +227,7 @@ run("independent five-tier rendered journey", () => {
           };
         });
       }
-      await transact("Update raffle draft");
+      await transact("Save changes");
       if (item.draft.packs[0]?.name === " Entry ") {
         const data = await fixture.page.evaluate(() => (window as unknown as { __labxCapturedUpdateData?: string }).__labxCapturedUpdateData);
         expect(data).toMatch(/^0x[0-9a-f]+$/i);
