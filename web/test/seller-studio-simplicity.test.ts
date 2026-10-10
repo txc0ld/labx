@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { encodeFunctionData, erc721Abi, keccak256, toBytes, zeroAddress, zeroHash, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { encodeDraft, finishCreate, type CreateRecord } from "../lib/chain/create-flow";
@@ -6,6 +8,7 @@ import { transactionIntent } from "../lib/chain/pending-journal";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { AccountRaffleState, CanonicalReceipt, DraftInput, HistoryItem, RaffleSnapshot, WorkflowAction } from "../lib/chain/types";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
+import { JourneyOverview } from "../components/JourneyOverview";
 import { buyerRaffleRow } from "../components/workflow/buyer-raffles";
 import { cardNextStep } from "../components/workflow/seller-card";
 import { createStepMessage, CREATE_STEPS, unnumberedStep } from "../components/workflow/create-progress";
@@ -226,7 +229,7 @@ describe("Studio card next step", () => {
     const starting = raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n, snapshotted: true, snapshotTotal: 3n });
     const finishing = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, drawnAt: NOW - 30n, lotCount: 3n, revealed: true });
     for (const value of [closing, counting, starting]) expect(cardNextStep(value, SELLER, true)).toEqual({ label: "View", status: draw });
-    expect(cardNextStep(finishing, SELLER, true)).toEqual({ label: "View", status: "LABx finishes the raffle automatically after you confirm the draw." });
+    expect(cardNextStep(finishing, SELLER, true)).toEqual({ label: "View", status: "LABx finishes the raffle automatically. This usually takes a few minutes." });
     expect(cardNextStep(finishing, SELLER, false)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
     const unconfirmed = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, lotCount: 3n });
     expect(cardNextStep({ ...unconfirmed, raffle: { ...unconfirmed.raffle, drawnAt: NOW } }, SELLER, true)).toEqual({ label: "Confirm the draw", status: "Winner drawn" });
@@ -253,6 +256,14 @@ describe("Studio card next step", () => {
       vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", "1");
       expect(cardNextStep(closing, SELLER)).toMatchObject({ label: "View" });
     } finally { vi.unstubAllEnvs(); }
+  });
+});
+
+describe("Guide selling steps", () => {
+  it("describe the draw and the claim the same way with or without the draw runner", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyOverview));
+    expect(markup).toContain("<strong>Draw</strong><p>After sales end, the draw runs. When a winner is drawn, confirm the draw.</p>");
+    expect(markup).toContain("<strong>Claim</strong><p>When the raffle finishes, claim your sales after the 2% seller fee. If a raffle is cancelled, reclaim your NFT.</p>");
   });
 });
 

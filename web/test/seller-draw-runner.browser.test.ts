@@ -13,7 +13,7 @@ import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { watchWallet } from "./fixtures/wallet-watch";
 
 const DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
-const SETTLE = "LABx finishes the raffle automatically after you confirm the draw.";
+const SETTLE = "LABx finishes the raffle automatically. This usually takes a few minutes.";
 const LATE = "LABx hasn’t run this step yet. You can run it yourself.";
 
 // The draw runner itself is a server job. Here another local account stands in for it, so the page shows what the seller sees.
@@ -39,7 +39,7 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     fixture.page.on("console", (message: { type(): string; text(): string }) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     await chain.write(chain.nft, "mint", [chain.seller, 501n]);
     await chain.write(chain.nft, "mint", [chain.seller, 502n]);
-    for (const tokenId of [503n, 504n, 505n]) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
+    for (const tokenId of [503n, 504n, 505n, 506n, 507n]) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
     // One 27.50 USDC purchase for each listed raffle.
     await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
@@ -479,4 +479,57 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     expect(await card.getByText(DRAW, { exact: true }).count()).toBe(0);
     expect(pageErrors).toEqual([]);
   }, 120_000);
+
+  /** Marks the open page, so a later check can tell it was never reloaded. */
+  async function markPage() {
+    await fixture.page.evaluate(() => { (window as unknown as Window & { __labxStayedOpen?: boolean }).__labxStayedOpen = true; });
+    return async () => fixture.page.evaluate(() => (window as unknown as Window & { __labxStayedOpen?: boolean }).__labxStayedOpen === true);
+  }
+
+  function stepCard(title: string) {
+    return fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: title, exact: true, level: 2 }) });
+  }
+
+  it("gives a draw step back to the seller on a page that stays open past the 30 minutes", async () => {
+    const listed = await listSoldRaffle(506n, "Open page raffle");
+    await chain.warp(listed.salesEnd);
+    await open(`/seller/${listed.id.toString()}`, DRAW);
+    await automaticCard("Sales ended").waitFor({ state: "visible", timeout: 15_000 });
+    const stayedOpen = await markPage();
+
+    // Chain time passes the 30 minutes while the page stays open. Nobody presses Refresh.
+    await chain.warp(listed.salesEnd + 1_800n);
+    await stepCard("Close sales").getByText(LATE, { exact: true }).waitFor({ state: "visible", timeout: 45_000 });
+    expect(await stayedOpen()).toBe(true);
+    expect(await fixture.page.getByText(DRAW, { exact: true }).count()).toBe(0);
+    expect(await fixture.page.locator("summary", { hasText: /^Run it yourself$/ }).count()).toBe(0);
+    expect(await visibleButton("Close sales").count()).toBe(1);
+    expect((await chain.service.readRaffle({ id: listed.id })).raffle.phase).toBe(1);
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
+
+  it("leaves finishing to LABx for 30 minutes after the page sees a late confirmation, then gives it back on the open page", async () => {
+    const raffleId = await drawnRaffle(507n, "Late confirmation raffle");
+    const drawn = await chain.service.readRaffle({ id: raffleId });
+    // The seller confirms the draw a day after it, long past the draw's own 30 minutes.
+    await chain.warp(drawn.raffle.drawnAt + 86_400n);
+    await open(`/seller/${raffleId.toString()}`, "Confirm the draw");
+    await stepCard("Confirm the draw").getByRole("button", { name: "Confirm the draw", exact: true }).click();
+    const finishing = automaticCard("Draw confirmed");
+    await finishing.waitFor({ state: "visible", timeout: 30_000 });
+    expect((await chain.service.readRaffle({ id: raffleId })).raffle.revealed).toBe(true);
+    expect(await finishing.getByText(SETTLE, { exact: true }).isVisible()).toBe(true);
+    expect(await fixture.page.getByText(LATE, { exact: true }).count()).toBe(0);
+    expect(await visibleButton("Finish raffle").count()).toBe(0);
+    const stayedOpen = await markPage();
+
+    // The page read the confirmation at or before the latest block, so 30 minutes after that block the step is late.
+    const seen = (await chain.client.getBlock({ blockTag: "latest" })).timestamp;
+    await chain.warp(seen + 1_800n);
+    await stepCard("Finish raffle").getByText(LATE, { exact: true }).waitFor({ state: "visible", timeout: 45_000 });
+    expect(await stayedOpen()).toBe(true);
+    expect(await fixture.page.getByText(SETTLE, { exact: true }).count()).toBe(0);
+    expect((await chain.service.readRaffle({ id: raffleId })).raffle.phase).toBe(4);
+    expect(pageErrors).toEqual([]);
+  }, 150_000);
 });

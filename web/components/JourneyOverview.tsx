@@ -1,4 +1,5 @@
 import Link from "next/link";
+import React from "react";
 import { SELLER_FEE_BPS } from "@/lib/chain/fees";
 
 const journeys = [
@@ -24,8 +25,8 @@ const journeys = [
       { title: "Create", copy: "Pick your NFT, set tier prices and press Create. Your wallet asks for 1 signature and up to 3 confirmations, then your NFT is locked." },
       { title: "LABx review", copy: "LABx checks the NFT and the draw funding. Editing a draft sends it back for review." },
       { title: "List", copy: "Press List to open sales. Prices and fees are fixed from then on." },
-      { title: "Draw", copy: "After sales end, close sales, count entries and start the draw. When a winner is drawn, confirm the draw." },
-      { title: "Claim", copy: `Finish the raffle and claim your sales after the ${SELLER_FEE_BPS / 100}% seller fee. If a raffle is cancelled, reclaim your NFT.` }
+      { title: "Draw", copy: "After sales end, the draw runs. When a winner is drawn, confirm the draw." },
+      { title: "Claim", copy: `When the raffle finishes, claim your sales after the ${SELLER_FEE_BPS / 100}% seller fee. If a raffle is cancelled, reclaim your NFT.` }
     ]
   }
 ] as const;

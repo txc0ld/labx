@@ -10,7 +10,7 @@ import { raffleAbi } from "@/lib/chain/abi";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { FEE_DENOMINATOR, sellerAccounting } from "@/lib/chain/fees";
 import type { ActionAvailability, AccountRaffleState, Confirmation, MembershipQuote, RaffleSnapshot, SubmittedAction, WorkflowAction } from "@/lib/chain/types";
-import { cancelGuidance, cancelReclaimsPrize, drawBlocker, RECLAIM_GUIDANCE, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
+import { cancelGuidance, cancelReclaimsPrize, drawBlocker, RECLAIM_GUIDANCE, runnerLateTimes, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import { sameAddress } from "@/lib/chain/validation";
@@ -71,11 +71,11 @@ function admissionCopy(snapshot: RaffleSnapshot) {
   }
 }
 
-/** Everything a waiting page shows except the block itself, so a background re-read that changes none of it is not applied. */
-function viewKey(snapshot: RaffleSnapshot) {
+/** Everything a waiting page shows except the block itself, so a background re-read that changes none of it is not applied. The deadlines include the times a step LABx runs goes back to the seller. */
+function viewKey(snapshot: RaffleSnapshot, revealSeenAt: bigint | undefined) {
   const { block, ...rest } = snapshot;
   const r = snapshot.raffle;
-  const reached = [r.salesEnd, r.salesEnd + snapshot.drawStartGrace, r.vrfRequestedAt + snapshot.randomnessGrace, r.drawnAt + snapshot.revealGrace].map(deadline => block.timestamp >= deadline);
+  const reached = [r.salesEnd, r.salesEnd + snapshot.drawStartGrace, r.vrfRequestedAt + snapshot.randomnessGrace, r.drawnAt + snapshot.revealGrace, ...runnerLateTimes(snapshot, revealSeenAt)].map(deadline => block.timestamp >= deadline);
   return JSON.stringify([rest, reached], (_key, value: unknown) => typeof value === "bigint" ? value.toString() : value);
 }
 
@@ -112,6 +112,10 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
   mode?: RaffleWorkspaceMode;
 }) {
   const [state, setState] = useState<WorkspaceState>({ kind: "loading" });
+  // The block time this page first showed raffle `id` with its draw confirmed. LABx's finish step is not late until 30 minutes after
+  // it. Kept only in memory, so a reload starts the 30 minutes again; Run it yourself stays available meanwhile.
+  const [revealSeen, setRevealSeen] = useState<{ id: bigint; at: bigint } | null>(null);
+  const seenAt = revealSeen?.id === id ? revealSeen.at : undefined;
   const request = useRef(0);
   const currentScope = useRef(workspaceScope(browser, id));
   currentScope.current = workspaceScope(browser, id);
@@ -159,7 +163,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
       if (deployment.kind !== "verified") return;
       const snapshot = await browser.service.readRaffle({ id });
       if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !canApply()) return;
-      setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && viewKey(current.snapshot) !== viewKey(snapshot)
+      setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && viewKey(current.snapshot, seenAt) !== viewKey(snapshot, seenAt)
         ? { ...current, snapshot }
         : current);
     } catch { /* The visible state stays as it was; the next tick or Refresh tries again. */ }
@@ -186,12 +190,16 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
   }
 
   if (browser.kind !== "configured") return null;
-  return <LoadedRaffle browser={browser} snapshot={scopedState.snapshot} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} recordAgreement={recordAgreement} refresh={refresh} poll={poll} refreshState={scopedState.refresh} mode={mode} />;
+  const revealed = scopedState.snapshot.raffle.revealed;
+  if (revealed && seenAt === undefined) setRevealSeen({ id, at: scopedState.snapshot.block.timestamp });
+  return <LoadedRaffle browser={browser} snapshot={scopedState.snapshot} revealSeenAt={revealed ? seenAt ?? scopedState.snapshot.block.timestamp : undefined} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} recordAgreement={recordAgreement} refresh={refresh} poll={poll} refreshState={scopedState.refresh} mode={mode} />;
 }
 
-function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveCommitment, recoverCommitment, recordAgreement, refresh, poll, refreshState, mode }: {
+function LoadedRaffle({ browser, snapshot, revealSeenAt, termsHash, availableActions, saveCommitment, recoverCommitment, recordAgreement, refresh, poll, refreshState, mode }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
+  /** Block time this page first showed the draw confirmed, or undefined before it is confirmed. */
+  revealSeenAt: bigint | undefined;
   termsHash: Hex;
   availableActions: AvailabilityReader;
   saveCommitment?: SaveCommitment;
@@ -255,7 +263,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
   // pending, while LABx runs the seller's next draw step, and in the last 15 minutes before the sales deadline.
   // pollFrom is the chain time re-reading starts.
   const pollFrom = phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace
-    || mode === "seller" && drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true).kind === "automatic" ? now
+    || mode === "seller" && drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true, revealSeenAt).kind === "automatic" ? now
     : phase === 1 && now < r.salesEnd && (mode === "seller" || !availabilityStatus.purchasable && publicRecoveryActions(snapshot, availability, currentAccount).length === 0) ? r.salesEnd - DEADLINE_POLL_WINDOW
     : null;
   // The page's block time stands still between reads, so the wait until pollFrom is timed from this read.
@@ -317,7 +325,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           {accountState === "loading" ? <p className="notice" role="status">Loading your account state…</p> : null}
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
-            ? <SellerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} onUnavailable={recheck} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
+            ? <SellerActions browser={browser} snapshot={snapshot} revealSeenAt={revealSeenAt} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} onUnavailable={recheck} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
           {mode === "seller" && phase >= 1 ? <SellerProgress snapshot={snapshot} /> : null}
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Earnings</summary><SellerEarnings snapshot={snapshot} /></details> : null}
@@ -713,9 +721,10 @@ function sellerActionFact(snapshot: RaffleSnapshot, kind: SellerActionKind) {
   }
 }
 
-function SellerActions({ browser, snapshot, account, availability, recoverCommitment, onConfirmed, onUnavailable, reloadFailed, writesEnabled, writeDisabledReason, editDraft }: {
+function SellerActions({ browser, snapshot, revealSeenAt, account, availability, recoverCommitment, onConfirmed, onUnavailable, reloadFailed, writesEnabled, writeDisabledReason, editDraft }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
+  revealSeenAt: bigint | undefined;
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
   recoverCommitment?: RecoverCommitment;
@@ -739,7 +748,7 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   }, [reclaimAfter, reloadFailed, wallet.revision, loaded, snapshot]);
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
   const sellerAvailability = sellerPortalActions(availability);
-  const next = sellerNextStep(snapshot, sellerAvailability, drawRunnerEnabled());
+  const next = sellerNextStep(snapshot, sellerAvailability, drawRunnerEnabled(), revealSeenAt);
   const primary = next.kind === "action" ? next.action : null;
   const reclaimNow = primary?.kind === "reclaimPrize" && reclaimAfter !== null && reclaimAfter.id === snapshot.id && reclaimAfter.revision === wallet.revision
     && !reloadFailed && snapshot.block.number >= reclaimAfter.block;
