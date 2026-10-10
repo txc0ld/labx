@@ -66,7 +66,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
         ? fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true })
         : path.startsWith("/seller/")
           ? fixture.page.locator("details.workflow-details > summary").first()
-          : fixture.page.locator(".wallet-identity", { hasText: short(account) });
+          : fixture.page.getByRole("button", { name: /^(Approve exact USDC|Claim NFT|Claim refund|Send protocol fees)$/ }).first();
     await connectWallet(fixture.page, ready);
     await expect.poll(async () => fixture.page.evaluate(async () => {
       const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
