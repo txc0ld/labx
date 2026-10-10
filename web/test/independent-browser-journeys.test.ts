@@ -60,7 +60,18 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}${path}`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await fixture.page.locator("#content").waitFor({ state: "visible" });
-    await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: short(account) }));
+    const ready = path === "/seller"
+      ? fixture.page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ })
+      : path.startsWith("/review/")
+        ? fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true })
+        : path.startsWith("/seller/")
+          ? fixture.page.locator("details.workflow-details > summary").first()
+          : fixture.page.locator(".wallet-identity", { hasText: short(account) });
+    await connectWallet(fixture.page, ready);
+    await expect.poll(async () => fixture.page.evaluate(async () => {
+      const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
+      return provider.request({ method: "eth_accounts" });
+    }), { timeout: 5_000 }).toEqual([account]);
   }
 
   async function refreshState() {
@@ -136,6 +147,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
     await fixture.page.getByRole("heading", { name: "List your raffle", exact: true, level: 2 }).waitFor({ state: "visible" });
+    await fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Listing details" }).click();
     await fixture.page.getByText(chain.manifest.expectedPolicy.termsHash, { exact: true }).waitFor({ state: "visible" });
     expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
     await fixture.page.getByRole("button", { name: "List", exact: true }).click();

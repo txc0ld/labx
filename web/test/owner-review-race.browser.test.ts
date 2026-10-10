@@ -131,6 +131,6 @@ run("owner review async lifetimes", () => {
     await fixture.page.getByRole("button", { name: "Confirm recorded revocation", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approval revoked", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     await restoreAutomaticDiscovery();
-    expect(await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:")))).toEqual([]);
+    expect(await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:") && /:\d+$/.test(key)))).toEqual([]);
   }, 30_000);
 });

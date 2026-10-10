@@ -85,6 +85,9 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
     expect(await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "nextId" })).toBe(1n);
 
     await tabA.reload({ waitUntil: "domcontentloaded" });
+    const draftSummary = tabA.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ });
+    await connectWallet(tabA, draftSummary);
+    await draftSummary.click();
     await tabA.getByRole("button", { name: "Create", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await tabA.evaluate(() => {
       type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;

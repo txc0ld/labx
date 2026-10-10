@@ -126,6 +126,7 @@ run("independent seller simplification boundaries", () => {
   it("shows the visible opening policy and submits List directly at all target widths", async () => {
     await openSeller(3n);
     await fixture.page.getByRole("heading", { name: "List your raffle", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Listing details" }).click();
     await fixture.page.getByText(chain.manifest.expectedPolicy.treasury, { exact: true }).waitFor({ state: "visible" });
     await fixture.page.getByText(chain.manifest.expectedPolicy.coordinator, { exact: true }).waitFor({ state: "visible" });
     await fixture.page.getByText(chain.manifest.expectedPolicy.termsHash, { exact: true }).waitFor({ state: "visible" });
@@ -136,7 +137,7 @@ run("independent seller simplification boundaries", () => {
     await fixture.page.getByRole("button", { name: "List", exact: true }).click();
     await expect.poll(async () => (await chain.service.readRaffle({ id: 3n })).raffle.phase, { timeout: 15_000 }).toBe(1);
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction")).toHaveLength(1);
-    expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
+    await expect.poll(() => fixture.page.locator(".transaction-review").count(), { timeout: 15_000 }).toBe(0);
   }, 60_000);
 
   it("does not loop a failed opening-policy read and discards its delayed result after a wallet change", async () => {

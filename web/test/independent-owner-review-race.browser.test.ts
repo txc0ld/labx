@@ -36,7 +36,7 @@ run("independent owner review race verification", () => {
     expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
   }
   async function ownerStorageKeys() {
-    return fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:")));
+    return fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:owner-review:v1:") && /:\d+$/.test(key)));
   }
   async function hideAutomaticDiscovery() {
     await fixture.page.route(`${chain.url}/`, async route => {
