@@ -5,5 +5,5 @@ import { AccountHistory } from "./AccountHistory";
 
 export function LiveAccountHistory() {
   const bench = useBench();
-  return <AccountHistory browser={bench.browser} />;
+  return <AccountHistory browser={bench.browser} loading={!bench.ready} />;
 }

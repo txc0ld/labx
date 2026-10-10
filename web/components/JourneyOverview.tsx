@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { SELLER_FEE_BPS } from "@/lib/chain/fees";
 
 const journeys = [
   {
+    id: "buying",
     title: "Buy a membership",
     tone: "buyer",
     action: "Compare memberships",
@@ -9,18 +11,21 @@ const journeys = [
     steps: [
       { title: "Choose", copy: "Check the artwork, membership price, processing fee, supply, bonus entries and closing time." },
       { title: "Confirm", copy: "Read the rules, approve the exact USDC amount and wait for the purchase receipt to confirm." },
-      { title: "Follow", copy: "Track the draw. A winner claims the piece; a cancelled raffle returns pack principal. Processing fees are retained." }
+      { title: "Follow", copy: "Track the draw. A winner claims the piece. If a raffle is cancelled, you get the membership price back; the processing fee is not refunded." }
     ]
   },
   {
-    title: "Run a raffle",
+    id: "selling",
+    title: "How selling works",
     tone: "seller",
     action: "Open Studio",
     href: "/seller",
     steps: [
-      { title: "Prepare", copy: "Validate the NFT, configure the memberships and review the commitment before creating a draft." },
-      { title: "Open", copy: "Escrow the NFT and get LABx approval for the prize and draw funding. Then open your reviewed raffle." },
-      { title: "Complete", copy: "Close on schedule, snapshot entries, request randomness, reveal the commitment and settle the result." }
+      { title: "Create", copy: "Pick your NFT, set tier prices and press Create. Your wallet asks for 1 signature and up to 3 confirmations, then your NFT is locked." },
+      { title: "LABx review", copy: "LABx checks the NFT and the draw funding. Editing a draft sends it back for review." },
+      { title: "List", copy: "Press List to open sales. Prices and fees are fixed from then on." },
+      { title: "Draw", copy: "After sales end, close sales, count entries and start the draw. When a winner is drawn, confirm the draw." },
+      { title: "Claim", copy: `Finish the raffle and claim your sales after the ${SELLER_FEE_BPS / 100}% seller fee. If a raffle is cancelled, reclaim your NFT.` }
     ]
   }
 ] as const;
@@ -37,7 +42,7 @@ export function JourneyOverview() {
       </header>
       <div className="journey-grid">
         {journeys.map((journey) => (
-          <article className={`journey-card journey-card--${journey.tone}`} key={journey.title}>
+          <article className={`journey-card journey-card--${journey.tone}`} key={journey.title} id={journey.id} style={{ scrollMarginTop: "8rem" }}>
             <h3>{journey.title}</h3>
             <ol>
               {journey.steps.map((step, index) => (

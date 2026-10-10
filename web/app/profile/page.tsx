@@ -7,6 +7,8 @@ import { AccountNav } from "@/components/AccountNav";
 import { useBench } from "@/lib/bench";
 import { WalletConnectionControls } from "@/components/workflow/WalletConnectionControls";
 import { ResumeTransaction } from "@/components/workflow/ResumeTransaction";
+import { BuyerRaffles } from "@/components/workflow/BuyerRaffles";
+import { shortAddress } from "@/components/workflow/format";
 
 type PointsState =
   | { kind: "idle" }
@@ -80,7 +82,7 @@ export default function ProfilePage() {
     };
   }, [bench.wallet, pointsRetry]);
 
-  if (!bench.ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading profile</strong><p>Opening your local account view.</p></div></div></section>;
+  if (!bench.ready) return <section className="section state-section"><div className="pearl pad state-panel" role="status"><span className="state-orb" aria-hidden="true" /><div><strong>Loading your profile…</strong></div></div></section>;
 
   function savePreference(event: FormEvent) {
     event.preventDefault();
@@ -94,20 +96,16 @@ export default function ProfilePage() {
   return (
     <section className="section workflow-page stack">
       <header className="workflow-header stack">
-        <h1 className="page-title">Your bench</h1>
-        <p className="lede">Wallet, account records and browser-only receipt preferences.</p>
+        <h1 className="page-title">Profile</h1>
         <AccountNav />
       </header>
       <div className="split profile-grid">
       <div className="pearl pad stack profile-primary">
         <div className="terminal pad">
-          <div>wallet {bench.wallet || "not connected"}</div>
-          <div>
-            points {!bench.wallet ? "connect wallet" : currentPoints.kind === "ready" ? currentPoints.balance : currentPoints.kind === "error" ? "unavailable" : "loading"}
-          </div>
+          <div>Wallet {bench.wallet ? shortAddress(bench.wallet) : "not connected"}</div>
+          {bench.wallet ? <div>Points {currentPoints.kind === "ready" ? currentPoints.balance : currentPoints.kind === "error" ? "unavailable" : "…"}</div> : null}
         </div>
-        <OnChainStatus surface="profile" />
-        <p className="muted">Existing points records are separate from memberships and bonus entries. They do not grant an entry.</p>
+        {bench.browser.kind !== "configured" ? <OnChainStatus surface="profile" /> : null}
         <WalletConnectionControls wallet={bench.browser.wallet} />
         <div className="btn-row">
           {currentPoints.kind === "error" ? <button className="btn btn-dark" type="button" onClick={() => setPointsRetry((value) => value + 1)}>Retry points</button> : null}
@@ -115,25 +113,16 @@ export default function ProfilePage() {
         {currentPoints.kind === "error" ? <p className="notice error" role="alert">{currentPoints.message}</p> : null}
         {bench.banner ? <p className={`notice ${bench.banner.tone}`} role="status">{bench.banner.text}</p> : null}
         <form className="stack" id="email-preferences" onSubmit={savePreference}>
-          <label htmlFor="email">Email preference
+          <label htmlFor="email">Email for receipts
             <input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
-          <p className="muted">This address is stored only in this browser. With a reviewed deployment and your wallet connected, open <Link href="/profile/receipts">purchase receipts</Link> to request an email for a verified purchase. See the <Link href="/privacy">privacy policy</Link>.</p>
-          <button className="btn btn-lime" type="submit">Save email in this browser</button>
+          <p className="muted">Saved in this browser only. We use it to email your <Link href="/profile/receipts">receipts</Link>. See the <Link href="/privacy">privacy policy</Link>.</p>
+          <button className="btn btn-lime" type="submit">Save email</button>
           {note ? <p className="notice warning" role="status">{note}</p> : null}
         </form>
       </div>
       <div className="stack profile-secondary">
-        <div className="well pad">
-          <h2>Membership status</h2>
-          <p>Membership status is unknown because the website is not connected to an authoritative membership source.</p>
-          <Link href="/membership">Review membership packs</Link>
-        </div>
-        <div className="pearl pad">
-          <h2>Account records</h2>
-          <p className="muted">Confirmed purchases and claims come from contract events. Private receipt and agreement status requires a wallet signature.</p>
-          <div className="btn-row"><Link className="btn" href="/profile/history">View history</Link><Link className="btn btn-dark" href="/profile/receipts">View receipts</Link></div>
-        </div>
+        <BuyerRaffles browser={bench.browser} />
         <ResumeTransaction browser={bench.browser} />
       </div>
       </div>
