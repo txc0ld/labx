@@ -231,6 +231,63 @@ describe("authorized read-only wallet restoration", () => {
     await expect(restoring).resolves.toMatchObject({ kind: "disconnected" });
     await expect(connecting).resolves.toMatchObject({ kind: "connected", account });
   });
+  it.each([false, true])("owns a delayed restore load before a new Connect (cancelled: %s)", async cancelled => {
+    const env = environment();
+    saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
+    const loading = deferred<WalletChooser>();
+    const released = deferred<void>();
+    const restoredChooser: WalletChooser = {
+      connect: vi.fn(), restore: vi.fn(),
+      release: vi.fn(() => released.promise), disconnect: vi.fn(async () => {})
+    };
+    const p = provider();
+    const nextChooser: WalletChooser = { connect: vi.fn(async () => p.result), disconnect: vi.fn(async () => {}) };
+    const load = vi.fn().mockReturnValueOnce(loading.promise).mockResolvedValueOnce(nextChooser);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, load, scope);
+    const restoring = wallet.restore();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+
+    const owner = {};
+    const connecting = wallet.connect({ owner });
+    const outcome = connecting.then(value => value, error => error);
+    await Promise.resolve();
+    expect(load).toHaveBeenCalledOnce();
+    loading.resolve(restoredChooser);
+    await vi.waitFor(() => expect(restoredChooser.release).toHaveBeenCalledOnce());
+    expect(load).toHaveBeenCalledOnce();
+    expect(restoredChooser.restore).not.toHaveBeenCalled();
+    if (cancelled) wallet.cancelConnection(owner);
+    released.resolve();
+
+    await restoring;
+    if (cancelled) {
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(load).toHaveBeenCalledOnce();
+      expect(nextChooser.connect).not.toHaveBeenCalled();
+      expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    } else {
+      expect(await outcome).toMatchObject({ kind: "connected", account });
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(nextChooser.connect).toHaveBeenCalledOnce();
+    }
+    expect(restoredChooser.disconnect).not.toHaveBeenCalled();
+  });
+  it("blocks a new prompt when the retired restore load rejects", async () => {
+    const env = environment();
+    saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });
+    const loading = deferred<WalletChooser>();
+    const load = vi.fn(() => loading.promise);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, load, scope);
+    const restoring = wallet.restore();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    const connecting = wallet.connect();
+    const rejected = expect(connecting).rejects.toThrow(/initialize safely/);
+    loading.reject(new Error("SDK startup failed"));
+    await restoring;
+    await rejected;
+    expect(load).toHaveBeenCalledOnce();
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+  });
   it("retires pending restoration on disposal and never restores a disposed session", async () => {
     const env = environment();
     saveWalletConsent(env.key, { connectorId: "metamask", account, chainId: 11155111 });

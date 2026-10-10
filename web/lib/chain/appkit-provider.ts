@@ -524,18 +524,26 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
         : undefined;
       if (!isWalletProvider(selectedProvider)) return;
       if (consent.connectorId === "walletConnect" && (!selectedTopic || !hasAuthorizedRestoreSession(selectedProvider, consent))) return;
-      await super.syncExistingConnection();
-      const account = this.getAccount("eip155");
-      if (ConnectorController.getConnectorId("eip155") !== consent.connectorId || this.getProvider("eip155") !== selectedProvider || !account?.isConnected || account.address?.toLowerCase() !== consent.account.toLowerCase()) return;
-      if (consent.connectorId === "walletConnect" && (adapter.getWalletConnectProvider() !== selectedProvider || sessionTopic(selectedProvider as { session?: unknown }) !== selectedTopic || !hasAuthorizedRestoreSession(selectedProvider, consent))) return;
-      const target = runtimeFor(this);
-      if (target.active) {
-        if (!matchesConnection(target, target.active)) throw new Error("The restored wallet connection changed during initialization.");
-        return;
+      try {
+        await super.syncExistingConnection();
+      } finally {
+        // SDK adoption creates cleanup ownership even when account validation or readiness fails.
+        const stillSelected = ConnectorController.getConnectorId("eip155") === consent.connectorId
+          && this.getProvider("eip155") === selectedProvider;
+        const sameSession = consent.connectorId !== "walletConnect"
+          || adapter.getWalletConnectProvider() === selectedProvider
+            && sessionTopic(selectedProvider as { session?: unknown }) === selectedTopic;
+        if (stillSelected && sameSession) {
+          const target = runtimeFor(this);
+          if (target.active) {
+            if (!matchesConnection(target, target.active)) throw new Error("The restored wallet connection changed during initialization.");
+          } else {
+            const adoption = captureConnection(target, selectedProvider, consent.connectorId, consent);
+            target.active = adoption;
+            target.adoption = adoption;
+          }
+        }
       }
-      const adoption = captureConnection(target, selectedProvider, consent.connectorId, consent);
-      target.active = adoption;
-      target.adoption = adoption;
     }
     override async syncAdapterConnections() { /* Restoration is limited to the previously selected connector. */ }
   }

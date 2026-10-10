@@ -54,6 +54,7 @@ export class BrowserWalletSession extends WalletSession {
   private attempt = 0;
   private abort: AbortController | undefined;
   private chooser: WalletChooser | undefined;
+  private restoringLoad: Promise<WalletChooser> | undefined;
   private cleanup: Promise<void> = Promise.resolve();
   private cleanupFailed = false;
   private inFlight: Promise<WalletSnapshot> | undefined;
@@ -108,19 +109,24 @@ export class BrowserWalletSession extends WalletSession {
   private retire(mode: "disconnect" | "release") {
     this.abort?.abort(mode);
     this.abort = undefined;
-    const chooser = this.chooser;
+    const chooser = this.chooser ?? this.restoringLoad;
     this.chooser = undefined;
+    this.restoringLoad = undefined;
     if (!chooser) return;
     this.queueCleanup(chooser, mode, this.attempt);
   }
 
-  private queueCleanup(chooser: WalletChooser, mode: "disconnect" | "release", attempt: number) {
-    const cleanup = mode === "disconnect"
-      ? () => chooser.disconnect()
-      : chooser.release
-        ? () => chooser.release!()
-        : () => Promise.reject(new WalletChooserReloadError());
-    this.cleanup = this.cleanup.catch(() => {}).then(() => bounded(cleanup(), 8_000)).catch(error => {
+  private queueCleanup(resource: WalletChooser | Promise<WalletChooser>, mode: "disconnect" | "release", attempt: number) {
+    this.cleanup = this.cleanup.catch(() => {}).then(async () => {
+      // Own a pending SDK load immediately so a new chooser cannot overtake its retirement.
+      const chooser = await resource;
+      const cleanup = mode === "disconnect"
+        ? chooser.disconnect()
+        : chooser.release
+          ? chooser.release()
+          : Promise.reject(new WalletChooserReloadError());
+      await bounded(cleanup, 8_000);
+    }).catch(error => {
       this.cleanupFailed = true;
       if (attempt === this.attempt && this.connection.kind === "idle") {
         this.status({
@@ -166,15 +172,10 @@ export class BrowserWalletSession extends WalletSession {
         const project = this.projectId;
         if (this.chainId !== 31337 && !project) return this.getSnapshot();
         const loading = this.chainId === 31337 || !project ? undefined : this.loadChooser(project, this.restoreScope);
-        if (loading) {
-          void loading.then(chooser => {
-            if (attempt !== this.attempt || abort.signal.aborted) {
-              this.queueCleanup(chooser, abort.signal.reason === "disconnect" ? "disconnect" : "release", attempt);
-            }
-          }, () => {});
-        }
+        this.restoringLoad = loading;
         const chooser = loading ? await bounded(loading, 20_000) : undefined;
         this.active(attempt, abort);
+        if (this.restoringLoad === loading) this.restoringLoad = undefined;
         this.chooser = chooser;
         const provider = this.chainId === 31337 ? this.localInjected : await chooser?.restore?.(abort.signal);
         this.active(attempt, abort);
