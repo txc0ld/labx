@@ -71,16 +71,26 @@ export function cancelReclaimsPrize(snapshot: RaffleSnapshot): boolean {
 }
 
 const RUNNER_DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
-const RUNNER_SETTLE = "LABx finishes the raffle automatically after you confirm the draw.";
+const RUNNER_SETTLE = "LABx finishes the raffle automatically. This usually takes a few minutes.";
 const RUNNER_LATE = "LABx hasn’t run this step yet. You can run it yourself.";
 
 /** Seconds a step LABx runs may stay pending after it is due before the seller is asked to run it. */
 const RUNNER_LATE_AFTER = 30n * 60n;
 
-/** Block time a runner step became due: sales end for closing, counting and starting the draw; for finishing, the draw once it is confirmed, otherwise the end of the confirmation window. */
-function runnerDueAt({ raffle, revealGrace }: RaffleSnapshot, kind: SellerActionKind): bigint {
+/**
+ * Block time a runner step became due: sales end for closing, counting and starting the draw. Finishing an unconfirmed draw is due
+ * at the end of the confirmation window. A confirmed draw is due at the draw, or at revealSeenAt if that is later: the block time
+ * the raffle page first showed the draw confirmed, so a late confirmation still gives LABx its 30 minutes.
+ */
+function runnerDueAt({ raffle, revealGrace }: RaffleSnapshot, kind: SellerActionKind, revealSeenAt = 0n): bigint {
   if (kind !== "settle") return raffle.salesEnd;
-  return raffle.revealed ? raffle.drawnAt : raffle.drawnAt + revealGrace;
+  if (!raffle.revealed) return raffle.drawnAt + revealGrace;
+  return revealSeenAt > raffle.drawnAt ? revealSeenAt : raffle.drawnAt;
+}
+
+/** Block times at which a pending runner step goes back to the seller, so a page that stays open can tell when its view changes. */
+export function runnerLateTimes(snapshot: RaffleSnapshot, revealSeenAt?: bigint): readonly bigint[] {
+  return [runnerDueAt(snapshot, "close"), runnerDueAt(snapshot, "settle", revealSeenAt)].map(due => due + RUNNER_LATE_AFTER);
 }
 
 /** Permissionless draw steps the draw runner sends. Confirming the draw, claims, cancellation and reclaim stay with the seller. */
@@ -109,14 +119,18 @@ export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind)
   }
 }
 
-/** The seller's next step. With the draw runner on, LABx's own draw steps become automatic until they are 30 minutes overdue by block time. */
-export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], runner = false): SellerNextStep {
+/**
+ * The seller's next step. With the draw runner on, LABx's own draw steps become automatic until they are 30 minutes overdue by
+ * block time. revealSeenAt is the block time the raffle page first showed the draw confirmed; without it, finishing a confirmed
+ * draw is timed from the draw.
+ */
+export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], runner = false, revealSeenAt?: bigint): SellerNextStep {
   const next = manualNextStep(snapshot, actions);
   if (!runner || next.kind !== "action") return next;
   const automatic = RUNNER_STEPS[next.action.kind]?.(snapshot);
   if (!automatic) return next;
   // The page cannot see whether the runner is healthy, so an overdue step goes back to the seller.
-  if (snapshot.block.timestamp >= runnerDueAt(snapshot, next.action.kind) + RUNNER_LATE_AFTER) return { kind: "action", action: next.action, message: RUNNER_LATE };
+  if (snapshot.block.timestamp >= runnerDueAt(snapshot, next.action.kind, revealSeenAt) + RUNNER_LATE_AFTER) return { kind: "action", action: next.action, message: RUNNER_LATE };
   return { kind: "automatic", action: next.action, ...automatic };
 }
 

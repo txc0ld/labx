@@ -75,7 +75,8 @@ run("CompleteCreate identity refresh race", () => {
 
   it("retires the stale preparation without submit and exposes an enabled Create retry", async () => {
     await page.getByRole("button", { name: "Create", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__independentCompletePrepareStarted)).toBe(true);
+    // On a cold dev server the page can still be compiling and hydrating, so preparation can take several seconds to start.
+    await expect.poll(() => page.evaluate(() => window.__independentCompletePrepareStarted), { timeout: 15_000 }).toBe(true);
     await page.getByRole("button", { name: "Creating…", exact: true }).waitFor();
     await page.evaluate(() => window.__independentCompleteRefreshIdentity?.());
     await page.evaluate(() => window.__independentCompleteReleasePrepare?.());
@@ -85,5 +86,5 @@ run("CompleteCreate identity refresh race", () => {
     expect(await create.isEnabled()).toBe(true);
     expect(await page.evaluate(() => window.__independentCompleteSubmitCalls)).toBe(0);
     await page.getByRole("alert").filter({ hasText: /changed|resume/i }).waitFor();
-  }, 20_000);
+  }, 45_000);
 });
