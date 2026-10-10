@@ -53,7 +53,7 @@ type MembershipPackCardProps = {
   price: string;
   bonusEntries: number;
   remaining: number;
-  feeLabel: string;
+  feeLabel?: string;
   value: string;
   selected: boolean;
   disabled: boolean;
@@ -133,7 +133,7 @@ export function MembershipPackCard({ name, price, bonusEntries, remaining, feeLa
           </svg>
         </span>
         <span className="squishy-pack-details">
-          <span>+{feeLabel}</span>
+          {feeLabel ? <span>+{feeLabel}</span> : null}
           <span>{remaining > 0 ? `${remaining} remaining` : "Sold out"}</span>
         </span>
       </span>

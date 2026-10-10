@@ -128,8 +128,8 @@ describe("owner admission UI", () => {
   it("keeps refund presentation principal-only and owner intent parsing authoritative", () => {
     const workspace = readFileSync(resolve(__dirname, "../components/workflow/RaffleWorkspace.tsx"), "utf8");
     const review = readFileSync(resolve(__dirname, "../components/review/OwnerReview.tsx"), "utf8");
-    expect(workspace).toContain("Your refundable principal");
-    expect(workspace).toContain("Cancellation refunds principal only");
+    expect(workspace).toContain("If this raffle is cancelled, you get ${formatUsdcAmount(account.principal)} USDC back. The processing fee is not refunded.");
+    expect(workspace).toContain("Claim ${formatUsdcAmount(account.principal)} USDC back. The ${formatUsdcAmount(account.fee)} USDC processing fee is not refunded.");
     expect(workspace).not.toContain("account.principal + account.fee");
     expect(review).toContain("serializeOwnerExecutionIntent(intent)");
     expect(review).toContain("parseOwnerExecutionIntent(raw, service.manifest, owner)");

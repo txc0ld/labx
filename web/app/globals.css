@@ -1184,3 +1184,45 @@ html[data-motion="enabled"] [data-reveal]:focus-within { opacity:1; transform:no
 .chain-pack-grid .squishy-pack-price { font-size:clamp(1.35rem,1.6vw,1.7rem); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
 .chain-pack-grid .squishy-pack-entries,.chain-pack-grid .squishy-pack-details { font-size:.8rem; }
 .chain-pack-grid .squishy-pack-background { width:48px; height:80px; }
+
+/* Raffle page: plain header facts, seller progress and compact membership tiers. */
+.piece-seller { margin:0; color:var(--charcoal); font-size:.75rem; }
+.piece-price { margin:0; font-size:1rem; font-weight:650; font-variant-numeric:tabular-nums; }
+.piece-links { display:flex; flex-wrap:wrap; gap:0 1.25rem; }
+.workflow-next .workflow-fact { margin-top:.45rem; font-weight:650; font-variant-numeric:tabular-nums; }
+.pack-fee-note { margin:0; color:var(--charcoal); font-size:.8125rem; line-height:1.45; }
+.help-finish .stack>p { margin:0; color:var(--charcoal); }
+.seller-more { display:flex; flex-wrap:wrap; align-items:start; gap:0 1.25rem; }
+.seller-more>details[open] { flex-basis:100%; }
+.seller-progress { gap:.9rem; }
+.raffle-timeline { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:.6rem; margin:0; padding:0; list-style:none; }
+.raffle-timeline li { display:grid; align-content:start; gap:.35rem; min-width:0; color:var(--charcoal); font-size:.78rem; line-height:1.35; }
+.raffle-timeline-dot { display:inline-grid; place-items:center; width:1.4rem; height:1.4rem; border:1px solid currentColor; border-radius:999px; font-size:.7rem; }
+.raffle-timeline li[data-state="done"] .raffle-timeline-dot { border-color:var(--ink); background:var(--ink); color:var(--paper); }
+.raffle-timeline li[data-state="current"] { color:var(--ink); font-weight:650; }
+.raffle-timeline li[data-state="current"] .raffle-timeline-dot { border-color:var(--ink); background:var(--lime); }
+.seller-sales { display:grid; margin:0; padding:0; list-style:none; border-block:1px solid var(--line); }
+.seller-sales li { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.25rem 1rem; padding:.6rem 0; font-size:.875rem; }
+.seller-sales li+li { border-top:1px solid var(--line); }
+.seller-sales strong { font-variant-numeric:tabular-nums; }
+.sales-activity { gap:.75rem; }
+.sales-activity details summary { min-height:44px; }
+.chain-pack-grid .squishy-pack-card { min-height:10.5rem; }
+@media (max-width:760px) {
+  body:has(.checkout-bar) { padding-bottom:10rem; }
+  .seller-piece .chain-piece-visual { order:2; }
+  .chain-pack-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:.55rem; }
+  .chain-pack-grid .squishy-pack-card { min-height:0; padding:.75rem; border-radius:22px; }
+  .chain-pack-grid .squishy-pack-topline { gap:.25rem; }
+  .chain-pack-grid .squishy-pack-topline strong { font-size:1rem; }
+  .chain-pack-grid .squishy-pack-choice { padding:.15rem .45rem; font-size:.625rem; }
+  .chain-pack-grid .squishy-pack-body { grid-template-columns:minmax(0,1fr) 32px; gap:.4rem; padding-block:.3rem; }
+  .chain-pack-grid .squishy-pack-price { font-size:1.15rem; }
+  .chain-pack-grid .squishy-pack-entries { margin-top:.2rem; font-size:.75rem; }
+  .chain-pack-grid .squishy-pack-details { padding-top:.45rem; font-size:.7rem; }
+  .chain-pack-grid .squishy-pack-background { width:32px; height:50px; }
+}
+@media (max-width:520px) {
+  .raffle-timeline { grid-auto-flow:row; }
+  .raffle-timeline li { grid-template-columns:1.4rem minmax(0,1fr); align-items:center; gap:.6rem; }
+}

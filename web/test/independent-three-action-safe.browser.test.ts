@@ -174,7 +174,7 @@ run("independent one-click Safe approval", () => {
     await instrumentSellerProvider();
     await fixture.page.waitForTimeout(500);
     expect((await sellerRpc()).filter(method => method === "eth_sendTransaction")).toEqual([]);
-    expect(await fixture.page.getByText(/Greater of 2.5 USDC or 2% per purchase call/i).isVisible()).toBe(true);
+    expect(await fixture.page.getByText(/buyers pay 2% or 2\.50 USDC per purchase, whichever is more/).isVisible()).toBe(true);
     const listingDetails = fixture.page.locator("details").filter({ has: fixture.page.getByText("Listing details", { exact: true }) });
     expect(await listingDetails.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
     expect(await listingDetails.getByText(chain.manifest.expectedPolicy.treasury, { exact: true }).isVisible()).toBe(false);

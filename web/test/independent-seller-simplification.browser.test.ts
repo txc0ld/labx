@@ -76,7 +76,7 @@ run("independent seller simplification boundaries", () => {
     expect(response?.status()).toBe(200);
     await fixture.page.evaluate(({ key, intentHash }) => localStorage.setItem(key, JSON.stringify({ id: "held-before-create", intentHash, nonce: 77, startedBlock: "1", hash: null })), { key: pendingKey(chain.seller), intentHash: zeroHash });
     await instrumentProvider();
-    const advanced = fixture.page.locator("details.workflow-details > summary").filter({ hasText: /^Advanced \(/ });
+    const advanced = fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Cancel draft" });
     await connectWallet(fixture.page, advanced);
     await advanced.click();
     await fixture.page.getByText("Reconcile pending wallet activity", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
@@ -103,7 +103,7 @@ run("independent seller simplification boundaries", () => {
     expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction")).toEqual([]);
     await fixture.page.getByRole("button", { name: "Create", exact: true }).dblclick();
-    await fixture.page.getByRole("heading", { name: "Awaiting LABx review", exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    await fixture.page.getByRole("heading", { name: "Waiting for LABx review", exact: true }).waitFor({ state: "visible", timeout: 20_000 });
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction")).toHaveLength(2);
     const snapshot = await chain.service.readRaffle({ id: 1n });
     expect(snapshot.raffle.escrowed).toBe(true);
@@ -130,7 +130,7 @@ run("independent seller simplification boundaries", () => {
     await fixture.page.getByText(chain.manifest.expectedPolicy.treasury, { exact: true }).waitFor({ state: "visible" });
     await fixture.page.getByText(chain.manifest.expectedPolicy.coordinator, { exact: true }).waitFor({ state: "visible" });
     await fixture.page.getByText(chain.manifest.expectedPolicy.termsHash, { exact: true }).waitFor({ state: "visible" });
-    await fixture.page.getByText("Greater of 2.5 USDC or 2% per purchase call; retained after a successful purchase", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByText("Buyers can join as soon as it’s listed. Fees are fixed from here: buyers pay 2% or 2.50 USDC per purchase, whichever is more; you pay 2% of sales when the raffle completes.", { exact: true }).waitFor({ state: "visible" });
     expect(await fixture.page.locator(".transaction-review").count()).toBe(0);
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction")).toEqual([]);
     for (const width of [320, 390, 768, 1440]) await screenshot("approved-list", width);
@@ -166,7 +166,7 @@ run("independent seller simplification boundaries", () => {
       await fixture.page.waitForTimeout(750);
       expect(failures).toBe(1);
       expect(await fixture.page.getByRole("button", { name: "List", exact: true }).count()).toBe(0);
-      await fixture.page.getByRole("button", { name: "Retry opening policy", exact: true }).press("Enter");
+      await fixture.page.getByRole("button", { name: "Try again", exact: true }).press("Enter");
       await fixture.page.getByRole("button", { name: "List", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
       holdPolicy = true;
       await fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Listing details" }).click();

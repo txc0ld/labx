@@ -80,7 +80,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
       for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
       return (await Promise.all((await agreements.all()).map(checkbox => checkbox.isChecked()))).filter(Boolean).length;
     }, { timeout: 10_000 }).toBe(3);
-    await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
     const purchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
     await purchase.waitFor({ state: "visible", timeout: 10_000 });
     await purchase.click();
@@ -108,13 +108,14 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await recovery.getByText(/^Confirmed in block \d+\.$/).waitFor({ state: "visible", timeout: 10_000 });
     expect(await recovery.locator(".transaction-outcome .hash", { hasText: transactionHash }).innerText()).toBe(transactionHash);
     await expect.poll(async () => recovery.locator("form").count(), { timeout: 10_000 }).toBe(0);
-    await expect.poll(async () => fixture.page.getByRole("button", { name: "Refresh state", exact: true }).isDisabled(), { timeout: 10_000 }).toBe(false);
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Refresh", exact: true }).isDisabled(), { timeout: 10_000 }).toBe(false);
     await expect.poll(async () => fixture.page.getByRole("radiogroup", { name: "Membership packs" }).count(), { timeout: 10_000 }).toBe(0);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
     await expect.poll(async () => service.pending({ wallet: buyer }), { timeout: 10_000 }).toBeNull();
-    const purchaseReceipt = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Purchase confirmed" });
+    const purchaseReceipt = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "You’re in" });
+    await purchaseReceipt.locator("summary", { hasText: "Transaction details" }).click();
     await purchaseReceipt.getByText(transactionHash, { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await expect.poll(async () => purchaseReceipt.getByRole("button", { name: "Acknowledge purchase receipt", exact: true }).isEnabled(), { timeout: 10_000 }).toBe(true);
+    await expect.poll(async () => purchaseReceipt.getByRole("button", { name: "Dismiss", exact: true }).isEnabled(), { timeout: 10_000 }).toBe(true);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     const reloadedReceipt = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: transactionHash });
     await openWalletActivity(fixture.page);

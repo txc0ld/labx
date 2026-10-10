@@ -278,7 +278,7 @@ run("rendered seller portal on isolated Anvil", () => {
     const longPackResponse = await fixture.page.goto(`${fixture.baseUrl}/piece/26`, { waitUntil: "domcontentloaded" });
     expect(longPackResponse?.status()).toBe(200);
     await fixture.page.getByText(longPackName, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).getByText("1,000,000 USDC", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).getByText("1,000,000.00 USDC", { exact: true }).waitFor({ state: "visible" });
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
@@ -441,26 +441,28 @@ run("rendered seller portal on isolated Anvil", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
-    await fixture.page.locator("summary").filter({ hasText: "Revenue and obligations" }).click();
-    await fixture.page.getByRole("heading", { name: "Revenue and obligations" }).waitFor({ state: "visible" });
+    await fixture.page.locator("summary").filter({ hasText: "Earnings" }).click();
+    await fixture.page.getByText("Refunds not yet claimed", { exact: true }).waitFor({ state: "visible" });
     await fixture.page.screenshot({ path: resolve(evidenceDir, "seller-detail-mobile.png"), fullPage: true });
     await fixture.switchAccount(chain.stranger);
     await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet." }).waitFor({ state: "visible", timeout: 5_000 });
-    expect(await fixture.page.getByText(/Opening policy|Approve NFT|Escrow NFT/).count()).toBe(0);
+    expect(await fixture.page.getByText(/List your raffle|Approve NFT|Lock NFT/).count()).toBe(0);
 
     await fixture.switchAccount(chain.operator);
     await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet." }).waitFor({ state: "visible", timeout: 5_000 });
-    expect(await fixture.page.getByRole("button", { name: /Approve NFT|Escrow NFT|Claim proceeds/ }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /Approve NFT|Lock NFT|^Claim [\d.,]+ USDC$/ }).count()).toBe(0);
   }, 30_000);
 
   it("keeps earlier activity through a later-page failure and an empty final retry", async () => {
     await fixture.switchAccount(chain.seller);
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const activity = fixture.page.getByRole("heading", { name: "On-chain money movements" }).locator("xpath=ancestor::section[1]");
-    await activity.getByText("Membership purchased", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await activity.getByText("Membership purchased", { exact: true }).count()).toBe(1);
-    expect(await activity.getByText("Complete", { exact: true }).count()).toBe(0);
+    await fixture.page.locator("summary").filter({ hasText: "Sales and payouts" }).click();
+    const activity = fixture.page.locator("section[aria-label='Sales and payouts']");
+    const purchased = `${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`;
+    await activity.getByText(purchased, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(1);
 
     let failuresRemaining = 1;
     await fixture.page.route(`${chain.url}/`, async (route: {
@@ -482,15 +484,16 @@ run("rendered seller portal on isolated Anvil", () => {
       await route.continue();
     });
 
-    await activity.getByRole("button", { name: "Scan next 2,000 blocks", exact: true }).click();
-    await activity.getByText("Activity scan stopped", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await activity.getByRole("button", { name: "Load more", exact: true }).click();
+    await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(failuresRemaining).toBe(0);
-    expect(await activity.getByText("Membership purchased", { exact: true }).count()).toBe(1);
-    expect(await activity.getByText("Complete", { exact: true }).count()).toBe(0);
+    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
 
-    await activity.getByRole("button", { name: "Retry activity scan", exact: true }).click();
-    await activity.getByText("Complete", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await activity.getByText("Membership purchased", { exact: true }).count()).toBe(1);
+    await activity.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect.poll(async () => activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count(), { timeout: 15_000 }).toBe(0);
+    await expect.poll(async () => activity.getByRole("button", { name: "Load more", exact: true }).count(), { timeout: 15_000 }).toBe(0);
+    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
     await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
 
@@ -500,13 +503,13 @@ run("rendered seller portal on isolated Anvil", () => {
     let response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
-    expect(await fixture.page.getByRole("button", { name: "Claim refund", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Claim [\d.,]+ USDC refund$/ }).count()).toBe(0);
 
     response = await fixture.page.goto(`${fixture.baseUrl}/piece/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    await connectWallet(fixture.page, fixture.page.getByRole("button", { name: "Claim refund", exact: true }).first());
+    await connectWallet(fixture.page, fixture.page.getByRole("button", { name: "Claim 25.00 USDC refund", exact: true }).first());
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [802n] })).toBe(chain.seller);
-    await transact("Claim refund");
+    await transact("Claim 25.00 USDC refund");
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(beforeRefund + 25_000_000n);
     expect((await chain.service.readAccount({ id: 2n, account: chain.seller })).principal).toBe(0n);
   }, 30_000);
@@ -516,12 +519,12 @@ run("rendered seller portal on isolated Anvil", () => {
     let response = await fixture.page.goto(`${fixture.baseUrl}/seller/30`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     await fixture.page.getByRole("heading", { name: "Seller is the winner" }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await fixture.page.getByRole("button", { name: "Claim NFT", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Claim your NFT", exact: true }).count()).toBe(0);
 
     response = await fixture.page.goto(`${fixture.baseUrl}/piece/30`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    await fixture.page.getByRole("button", { name: "Claim NFT", exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
-    await transact("Claim NFT");
+    await fixture.page.getByRole("button", { name: "Claim your NFT", exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
+    await transact("Claim your NFT");
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [930n] })).toBe(chain.seller);
   }, 30_000);
 
@@ -535,7 +538,11 @@ run("rendered seller portal on isolated Anvil", () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/piece/29`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
     const start = fixture.page.getByRole("button", { name: "Start draw", exact: true });
-    await connectWallet(fixture.page, start);
+    const help = fixture.page.locator("summary").filter({ hasText: "Help finish this raffle" });
+    await connectWallet(fixture.page, help);
+    expect(await start.isVisible()).toBe(false);
+    await help.click();
+    await start.waitFor({ state: "visible" });
     expect(await start.count()).toBe(1);
     await start.click();
     const review = fixture.page.locator(".transaction-review");
@@ -548,6 +555,6 @@ run("rendered seller portal on isolated Anvil", () => {
     const sellerRoute = await fixture.page.goto(`${fixture.baseUrl}/seller/29`, { waitUntil: "domcontentloaded" });
     expect(sellerRoute?.status()).toBe(200);
     await fixture.page.getByRole("heading", { name: "This raffle belongs to another wallet." }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await fixture.page.getByRole("button", { name: /Reveal commitment|Settle raffle|Claim proceeds/ }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /Submit draw setup|Sign to continue|Finish raffle|^Claim [\d.,]+ USDC$/ }).count()).toBe(0);
   }, 30_000);
 });

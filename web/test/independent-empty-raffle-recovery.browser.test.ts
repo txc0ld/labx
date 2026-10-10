@@ -108,7 +108,7 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
   }
 
   async function drawProgressTerms() {
-    return fixture.page.locator("section[aria-labelledby='draw-progress-title'] .review-list > div > dt").allTextContents();
+    return fixture.page.locator("section[aria-label='Draw details'] .review-list > div > dt").allTextContents();
   }
 
   function noOverflow() {
@@ -148,14 +148,15 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await openAs(`/piece/${expiredId.toString()}`, chain.stranger);
     await fixture.page.getByRole("heading", { name: "Empty expired raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await statusPill()).toBe("Sales ended");
-    await fixture.page.getByText("Membership sales ended at the published deadline.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Sales have ended", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByText("No memberships were sold.", { exact: true }).isVisible()).toBe(true);
     expect(await fixture.page.locator(".notice.error[role=alert]").allInnerTexts()).toEqual([]);
     // Hold the absence across several renders after account state loaded.
     for (let check = 0; check < 3; check += 1) {
       expect(await buttonCount("Close sales")).toBe(0);
-      expect(await buttonCount("Freeze next entries")).toBe(0);
+      expect(await buttonCount("Count entries")).toBe(0);
       expect(await buttonCount("Cancel raffle")).toBe(0);
-      expect(await fixture.page.getByText("Available now", { exact: true }).count()).toBe(0);
+      expect(await fixture.page.locator("section.workflow-next button").count()).toBe(0);
       await fixture.page.waitForTimeout(400);
     }
     expect((await service.readRaffle({ id: expiredId })).raffle.phase).toBe(1);
@@ -166,13 +167,13 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await openAs(`/piece/${expiredId.toString()}`, chain.operator);
     await fixture.page.getByRole("heading", { name: "Empty expired raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await statusPill()).toBe("Sales ended");
-    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByText("Available now", { exact: true }) });
+    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }) });
     await cancelNow.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await cancelNow.getByText("No memberships were sold. Cancel the raffle so the seller can reclaim the NFT.", { exact: true }).isVisible()).toBe(true);
     expect(await cancelNow.getByRole("button", { name: "Cancel raffle", exact: true }).isVisible()).toBe(true);
     expect(await buttonCount("Cancel raffle")).toBe(1);
     expect(await buttonCount("Close sales")).toBe(0);
-    expect(await buttonCount("Freeze next entries")).toBe(0);
+    expect(await buttonCount("Count entries")).toBe(0);
     expect((await service.readRaffle({ id: expiredId })).raffle.phase).toBe(1);
     expect(pageErrors).toEqual([]);
   }, 60_000);
@@ -181,13 +182,13 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await openAs(`/seller/${expiredId.toString()}`, chain.seller);
     const primary = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }) });
     await primary.waitFor({ state: "visible", timeout: 15_000 });
-    expect(await primary.locator("p.kicker").textContent()).toBe("Seller action");
+    expect(await primary.locator("p.kicker").count()).toBe(0);
     expect(await primary.getByText("No memberships were sold. Cancel the raffle, then reclaim your NFT.", { exact: true }).isVisible()).toBe(true);
     expect(await statusPill()).toBe("Sales ended");
     expect(await fixture.page.locator("summary").filter({ hasText: "Advanced (" }).count()).toBe(0);
-    expect(await buttonCount("Sign to recover commitment")).toBe(0);
+    expect(await buttonCount("Sign to continue")).toBe(0);
     expect(await buttonCount("Close sales")).toBe(0);
-    expect(await buttonCount("Freeze next entries")).toBe(0);
+    expect(await buttonCount("Count entries")).toBe(0);
 
     const { confirm, rows } = await openReview(primary.getByRole("button", { name: "Cancel raffle", exact: true }), "Confirm cancel raffle");
     expect(rows.map(([term]) => term)).toEqual(["Wallet", "Network", "Contract"]);
@@ -205,7 +206,7 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     expect(await primary.getByText("The raffle is cancelled. Reclaim your NFT.", { exact: true }).isVisible()).toBe(true);
     await expect.poll(statusPill, { timeout: 10_000 }).toBe("Cancelled");
     expect(await fixture.page.locator("summary").filter({ hasText: "Advanced (" }).count()).toBe(0);
-    expect(await drawProgressTerms()).not.toContain("Snapshot progress");
+    expect(await drawProgressTerms()).not.toContain("Entries counted");
 
     const { confirm, rows } = await openReview(primary.getByRole("button", { name: "Reclaim NFT", exact: true }), "Confirm reclaim NFT");
     expect(rows.map(([term]) => term)).toEqual(["Wallet", "Network", "Recipient"]);
@@ -216,13 +217,13 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
 
     const waiting = fixture.page.locator("section.workflow-next[role=status]").filter({ has: fixture.page.getByRole("heading", { name: "Raffle cancelled", exact: true }) });
     await waiting.waitFor({ state: "visible", timeout: 15_000 });
-    expect(await waiting.getByText("No memberships were purchased.", { exact: true }).isVisible()).toBe(true);
+    expect(await waiting.getByText("No memberships were sold.", { exact: true }).isVisible()).toBe(true);
     expect(await buttonCount("Reclaim NFT")).toBe(0);
     expect(await statusPill()).toBe("Cancelled");
     const terms = await drawProgressTerms();
-    expect(terms).toContain("Sales close");
-    expect(terms).not.toContain("Snapshot progress");
-    expect(terms).not.toContain("Eligible bonus entries");
+    expect(terms).toContain("Sales end");
+    expect(terms).not.toContain("Entries counted");
+    expect(terms).not.toContain("Entries in the draw");
     expect(pageErrors).toEqual([]);
   }, 90_000);
 
@@ -230,7 +231,7 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await openAs(`/piece/${earlyId.toString()}`, chain.operator);
     await fixture.page.getByRole("heading", { name: "Empty early raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await statusPill()).toBe("Open");
-    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByText("Available now", { exact: true }) });
+    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }) });
     await cancelNow.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await cancelNow.getByText("No memberships have been sold. Cancelling ends sales now so the seller can reclaim the NFT.", { exact: true }).isVisible()).toBe(true);
     const trigger = cancelNow.getByRole("button", { name: "Cancel raffle", exact: true });
@@ -253,7 +254,7 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
 
   it("keeps Cancel raffle inside Advanced before the deadline and off the public page", async () => {
     await openAs(`/seller/${earlyId.toString()}`, chain.seller);
-    const waiting = fixture.page.locator("section.workflow-next[role=status]").filter({ has: fixture.page.getByRole("heading", { name: "Memberships are open", exact: true }) });
+    const waiting = fixture.page.locator("section.workflow-next[role=status]").filter({ has: fixture.page.getByRole("heading", { name: "Your raffle is live", exact: true }) });
     await waiting.waitFor({ state: "visible", timeout: 15_000 });
     expect(await fixture.page.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }).count()).toBe(0);
     const advanced = fixture.page.locator("details.workflow-details").filter({ has: fixture.page.locator("summary").filter({ hasText: "Advanced (" }) });
@@ -268,11 +269,11 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     expect(await statusPill()).toBe("Open");
 
     await openAs(`/piece/${earlyId.toString()}`, chain.seller);
-    await fixture.page.getByText("This wallet does not have enough USDC for the reviewed total.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByText("Not enough USDC. You need 12.50 USDC.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await statusPill()).toBe("Open");
     for (let check = 0; check < 3; check += 1) {
       expect(await buttonCount("Cancel raffle")).toBe(0);
-      expect(await fixture.page.getByText("Available now", { exact: true }).count()).toBe(0);
+      expect(await fixture.page.locator("section.workflow-next button").count()).toBe(0);
       await fixture.page.waitForTimeout(400);
     }
     expect((await service.readRaffle({ id: earlyId })).raffle.phase).toBe(1);
@@ -284,12 +285,11 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await openAs(`/piece/${publicCancelId.toString()}`, chain.seller);
     await fixture.page.getByRole("heading", { name: "Empty public recovery raffle", exact: true, level: 1 }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await statusPill()).toBe("Sales ended");
-    await fixture.page.getByText("Membership sales ended at the published deadline.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByText("Available now", { exact: true }) });
+    const cancelNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }) });
     await cancelNow.getByRole("heading", { name: "Cancel raffle", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await cancelNow.getByText("No memberships were sold. Cancel the raffle, then reclaim your NFT.", { exact: true }).isVisible()).toBe(true);
     expect(await buttonCount("Close sales")).toBe(0);
-    expect(await buttonCount("Freeze next entries")).toBe(0);
+    expect(await buttonCount("Count entries")).toBe(0);
     expect(await noOverflow()).toBe(true);
 
     const cancelled = await openReview(cancelNow.getByRole("button", { name: "Cancel raffle", exact: true }), "Confirm cancel raffle");
@@ -298,11 +298,11 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await confirmReview(cancelled.confirm);
     await expect.poll(async () => (await service.readRaffle({ id: publicCancelId })).raffle.phase, { timeout: 15_000 }).toBe(6);
 
-    const reclaimNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByText("Available now", { exact: true }) });
+    const reclaimNow = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Reclaim NFT", exact: true, level: 2 }) });
     await reclaimNow.getByRole("heading", { name: "Reclaim NFT", exact: true, level: 2 }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await reclaimNow.getByText("The raffle is cancelled. Reclaim your NFT.", { exact: true }).isVisible()).toBe(true);
     await expect.poll(statusPill, { timeout: 10_000 }).toBe("Cancelled");
-    expect(await drawProgressTerms()).not.toContain("Snapshot progress");
+    expect(await drawProgressTerms()).not.toContain("Entries counted");
     expect(await noOverflow()).toBe(true);
 
     const reclaimed = await openReview(reclaimNow.getByRole("button", { name: "Reclaim NFT", exact: true }), "Confirm reclaim NFT");

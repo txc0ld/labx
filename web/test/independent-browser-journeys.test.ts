@@ -66,7 +66,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
         ? fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true })
         : path.startsWith("/seller/")
           ? fixture.page.locator("details.workflow-details > summary").first()
-          : fixture.page.getByRole("button", { name: /^(Approve exact USDC|Claim NFT|Claim refund|Send protocol fees)$/ }).first();
+          : fixture.page.getByRole("button", { name: /^(Approve [\d.,]+ USDC|Claim your NFT|Claim [\d.,]+ USDC refund)$/ }).or(fixture.page.locator("summary").filter({ hasText: "Help finish this raffle" })).first();
     await connectWallet(fixture.page, ready);
     await expect.poll(async () => fixture.page.evaluate(async () => {
       const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
@@ -74,14 +74,9 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     }), { timeout: 5_000 }).toEqual([account]);
   }
 
-  async function refreshState() {
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
-    await fixture.page.locator(".chain-piece").waitFor({ state: "visible", timeout: 10_000 });
-  }
-
   async function transact(label: string) {
     const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
-    const secondary = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
+    const secondary = fixture.page.locator("summary").filter({ hasText: /^(Advanced \(|Help finish this raffle)/ });
     await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
     if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
     await trigger.click();
@@ -135,10 +130,10 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
   }
 
   async function escrowAndOpen(id: bigint) {
-    await fixture.page.getByRole("heading", { name: "Awaiting LABx review", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByRole("heading", { name: "Waiting for LABx review", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     const cancel = fixture.page.getByRole("button", { name: "Cancel draft", exact: true });
     expect(await cancel.isVisible()).toBe(false);
-    const advanced = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
+    const advanced = fixture.page.locator("summary").filter({ hasText: "Cancel draft" });
     await advanced.click();
     expect(await cancel.isVisible()).toBe(true);
     await advanced.click();
@@ -157,14 +152,14 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
   async function purchase(id: bigint, expectedTotal: string) {
     await switchAccount(chain.buyer);
     await goto(`/piece/${id.toString()}`, chain.buyer);
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const approval = await transact("Approve exact USDC");
+    await fixture.page.getByRole("button", { name: `Approve ${expectedTotal}`, exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const approval = await transact(`Approve ${expectedTotal}`);
     expect(approval).toContain(expectedTotal);
     expect(approval).toContain(chain.raffle.address);
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
     for (const checkbox of await agreements.all()) await checkbox.check();
-    await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     const purchaseReview = await transact("Purchase membership");
     expect(purchaseReview).toContain(expectedTotal);
@@ -179,36 +174,45 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     const id = await createDraft({ tokenId: 301n, title: "Rendered winner path", price: "25", supply: "2", deadline: firstDeadline });
     expect(id).toBe(1n);
     await escrowAndOpen(id);
-    await purchase(id, "27.5 USDC");
+    await purchase(id, "27.50 USDC");
 
     await chain.warp(BigInt(firstDeadline));
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
     await transact("Close sales");
-    await transact("Freeze next entries");
+    await transact("Count entries");
     await transact("Start draw");
+    await fixture.page.getByRole("heading", { name: "Drawing a winner", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.evaluate(() => {
+      const scope = window as unknown as Window & { __pausedNoticeSeen: boolean };
+      scope.__pausedNoticeSeen = false;
+      new MutationObserver(() => { if (document.querySelector("#content")?.textContent?.includes("Actions are paused")) scope.__pausedNoticeSeen = true; })
+        .observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
     const drawing = await chain.service.readRaffle({ id });
     await chain.write(chain.vrf, "fulfill", [chain.raffle.address, drawing.raffle.vrfRequestId, 0n]);
-    await refreshState();
-    await fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Reveal commitment", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await transact("Reveal commitment");
-    await transact("Settle raffle");
+    // The waiting page re-reads the raffle by itself while visible, without a Refresh click or the paused-controls notice.
+    await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+    expect(await fixture.page.evaluate(() => (window as unknown as Window & { __pausedNoticeSeen: boolean }).__pausedNoticeSeen)).toBe(false);
+    await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Submit draw setup", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await transact("Submit draw setup");
+    await transact("Finish raffle");
 
     await switchAccount(chain.buyer);
     await goto(`/piece/${id.toString()}`, chain.buyer);
-    await transact("Claim NFT");
+    await transact("Claim your NFT");
     await switchAccount(chain.seller);
     await goto(`/seller/${id.toString()}`, chain.seller);
-    await transact("Claim proceeds");
+    await transact("Claim 24.50 USDC");
     await switchAccount(chain.stranger);
     await goto(`/piece/${id.toString()}`, chain.stranger);
-    await transact("Send protocol fees");
+    await transact("Send LABx fees");
 
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [301n] })).toBe(chain.buyer);
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(sellerBefore + 24_500_000n);
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(treasuryBefore + 3_000_000n);
-  }, 120_000);
+  }, 150_000);
 
   it("renders timed cancellation through exact buyer refund and seller NFT reclaim", async () => {
     await fixture.page.setViewportSize({ width: 390, height: 844 });
@@ -217,7 +221,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     expect(id).toBe(2n);
     await escrowAndOpen(id);
     const buyerBefore = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.buyer] });
-    await purchase(id, "42.5 USDC");
+    await purchase(id, "42.50 USDC");
     const snapshot = await chain.service.readRaffle({ id });
     await chain.write(chain.raffle, "setPaused", [true]);
     try {
@@ -227,7 +231,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
       await transact("Enable refunds");
       await switchAccount(chain.buyer);
       await goto(`/piece/${id.toString()}`, chain.buyer);
-      await transact("Claim refund");
+      await transact("Claim 40.00 USDC refund");
       await switchAccount(chain.seller);
       await goto(`/seller/${id.toString()}`, chain.seller);
       await transact("Reclaim NFT");

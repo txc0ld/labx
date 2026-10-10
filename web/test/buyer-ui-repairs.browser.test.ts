@@ -90,7 +90,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
   it("keeps catalog status, fee-inclusive price and deadline in each raffle link name", async () => {
     const response = await fixture.page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const card = fixture.page.getByRole("link", { name: /Exact selection raffle[\s\S]*Open[\s\S]*From 12\.5 USDC[\s\S]*Sales deadline/i });
+    const card = fixture.page.getByRole("link", { name: /Exact selection raffle[\s\S]*Open[\s\S]*From 12\.50 USDC incl\. fee[\s\S]*Sales end/i });
     await card.waitFor({ state: "visible", timeout: 10_000 });
   }, 30_000);
 
@@ -105,24 +105,24 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await quantity.fill("21");
     await fixture.page.getByText(/quantity must be a whole number from 1 to 20/i).waitFor({ state: "visible" });
     await quantity.fill("3");
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    expect(await fixture.page.getByText(/greater of 2\.50 USDC or 2% per purchase call/i).count()).toBeGreaterThan(0);
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByText(/Plus a processing fee of 2% or 2\.50 USDC per purchase, whichever is more\. Not refunded\./).count()).toBe(1);
 
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).click();
     const approvalReview = fixture.page.locator(".transaction-review");
     await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
     const approvalText = await approvalReview.innerText();
     expect(approvalText).toMatch(/Raffle\s+#?1/i);
     expect(approvalText).toMatch(/Pack ID\s+3/i);
     expect(approvalText).toMatch(/Quantity\s+3/i);
-    expect(approvalText).toContain("153 USDC");
-    await approvalReview.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
+    expect(approvalText).toContain("153.00 USDC");
+    await approvalReview.getByRole("button", { name: "Confirm approve 153.00 USDC", exact: true }).click();
 
     await expect.poll(() => gold.isChecked(), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => quantity.inputValue(), { timeout: 15_000 }).toBe("3");
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
-    const recordAgreement = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
+    const recordAgreement = fixture.page.getByRole("button", { name: "Sign agreement", exact: true });
     await expect.poll(async () => {
       for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
       return await recordAgreement.isVisible() && await recordAgreement.isEnabled();
@@ -142,8 +142,10 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(purchaseText).toMatch(/Quantity\s+3/i);
     await purchaseReview.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
 
-    const confirmed = fixture.page.locator(".transaction-state", { hasText: "Confirmed" });
+    const confirmed = fixture.page.locator(".transaction-state", { hasText: "You’re in" });
     await confirmed.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await confirmed.innerText()).toContain("3 × Gold, 21 bonus entries.");
+    await confirmed.locator("summary", { hasText: "Transaction details" }).click();
     const confirmationText = await confirmed.innerText();
     expect(confirmationText).toMatch(/Confirmed in block \d+/);
     expect(confirmationText).toMatch(/0x[0-9a-f]{64}/i);
@@ -158,12 +160,12 @@ run("buyer UI repair invariants in a rendered browser", () => {
 
     expect(await fixture.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.getByText("Purchase confirmed", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+    await fixture.page.getByText("You’re in", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
     const again = fixture.page.getByRole("button", { name: "Buy again", exact: true });
     await expect.poll(() => again.isEnabled(), { timeout: 15_000 }).toBe(true);
     await again.click();
-    await expect.poll(() => fixture.page.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+    await expect.poll(() => fixture.page.getByText("You’re in", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
     expect(await quantity.inputValue()).toBe("1");
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
     await openWalletActivity(fixture.page);
@@ -179,10 +181,11 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await act({ kind: "approveUsdc", id: 3n, packId: 0, quantity: 1 }, stranger);
     await act({ kind: "buyMembership", id: 3n, packId: 0, quantity: 1, acceptedTerms: PUBLISHED_TERMS_HASH, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } }, stranger);
     await chain.write(chain.feed, "setAnswer", [0n]);
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
     await fixture.page.getByText(/The selected pack is no longer available. Bronze is now selected/).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByText("Your order changed, so tick the boxes again.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.getByRole("button", { name: "Use USDC", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("radio", { name: /Bronze/ }).isChecked()).toBe(true);
     expect(await fixture.page.locator(".order-total").innerText()).toContain("22.5");
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
@@ -202,7 +205,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
 
     await fixture.switchAccount(chain.stranger);
     await expect.poll(async () => fixture.page.locator(".buyer-flow").getByText("Reconcile pending wallet activity", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), journalKey)).not.toBeNull();
     await fixture.page.evaluate((key: string) => localStorage.removeItem(key), journalKey);
   }, 45_000);
@@ -233,14 +236,14 @@ run("buyer UI repair invariants in a rendered browser", () => {
       };
     });
 
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).click();
     await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __buyerHeldWalletCalls: number }).__buyerHeldWalletCalls), { timeout: 5_000 }).toBeGreaterThan(0);
     await fixture.switchAccount(chain.stranger);
     await fixture.page.evaluate(() => (window as unknown as Window & { __releaseBuyerWalletCalls(): void }).__releaseBuyerWalletCalls());
 
     await expect.poll(async () => fixture.page.locator(".transaction-review").count(), { timeout: 10_000 }).toBe(0);
     await expect.poll(async () => (await fixture.page.locator(".buyer-flow [role=alert]").allInnerTexts()).join(" "), { timeout: 10_000 }).not.toMatch(/wallet or network changed/i);
-    const fresh = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    const fresh = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
     await fresh.waitFor({ state: "visible", timeout: 10_000 });
     await fresh.click();
     const review = fixture.page.locator(".transaction-review");
@@ -274,7 +277,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
       };
     });
 
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).click();
     await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __buyerRouteHeldCalls: number }).__buyerRouteHeldCalls), { timeout: 5_000 }).toBeGreaterThan(0);
     await fixture.page.getByRole("link", { name: "Back to explore", exact: true }).click();
     await fixture.page.waitForURL(url => url.pathname === "/", { timeout: 10_000 });
@@ -285,12 +288,12 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(await fixture.page.locator(".transaction-review, .transaction-state").count()).toBe(0);
     await fixture.page.getByRole("link", { name: /Recovery account raffle/ }).click();
     await fixture.page.waitForURL("**/piece/2");
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
   }, 45_000);
 
   it("shows a definite code 5000 wallet refusal as rejected and permits a fresh review", async () => {
     await openPiece(2n, chain.buyer);
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.evaluate(() => {
       type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
       type Scope = Window & { ethereum: { request: Request } };
@@ -306,11 +309,11 @@ run("buyer UI repair invariants in a rendered browser", () => {
       };
     });
 
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).click();
     await fixture.page.getByText("Wallet request rejected", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByText("The wallet request was rejected. No transaction was submitted.", { exact: true }).waitFor({ state: "visible" });
     await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).click();
     await fixture.page.locator(".transaction-review").waitFor({ state: "visible", timeout: 10_000 });
   }, 45_000);
 
@@ -318,18 +321,18 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await openPiece(2n, chain.buyer);
     const quantity = fixture.page.getByRole("spinbutton", { name: "Quantity", exact: true });
     await quantity.fill("2");
-    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
     await approve.waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.route(`${chain.url}/`, route => route.abort("failed"));
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
 
-    await fixture.page.getByText(/Refresh failed:/).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByText(/Couldn’t update the raffle:/).waitFor({ state: "visible", timeout: 15_000 });
     expect(await fixture.page.getByRole("heading", { name: "Recovery account raffle", exact: true }).isVisible()).toBe(true);
     expect(await quantity.inputValue()).toBe("2");
     expect(await approve.isDisabled()).toBe(true);
 
     await fixture.page.unroute(`${chain.url}/`);
-    await fixture.page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
     await expect.poll(() => approve.isDisabled(), { timeout: 15_000 }).toBe(false);
     expect(await quantity.inputValue()).toBe("2");
   }, 45_000);
@@ -366,8 +369,8 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await expect.poll(() => outcome.innerText(), { timeout: 10_000 }).toContain("Transaction confirmed");
       await fixture.page.waitForTimeout(300);
       expect(await details.getAttribute("open")).not.toBeNull();
-      expect(await fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true }).isVisible()).toBe(true);
-      expect(await fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true }).isEnabled()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).isVisible()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Sign to continue", exact: true }).isEnabled()).toBe(true);
     } finally { release(); await fixture.page.unroute(`${chain.url}/`); }
   }, 30_000);
 
