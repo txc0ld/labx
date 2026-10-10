@@ -57,7 +57,7 @@ To turn it on:
 3. In the wallet app, export the new account's private key. In Vercel, open the project, then Settings, then Environment Variables. Add `LABX_KEEPER_PRIVATE_KEY` with that key, for the Production environment only, and mark it Sensitive. Do not paste the key anywhere else.
 4. In the same place, add `NEXT_PUBLIC_LABX_DRAW_RUNNER` with the value `1` for Production. Check that `CRON_SECRET` is set and at least 16 characters long.
 5. Redeploy Production, because environment variable changes apply only to new deployments.
-6. After the next five-minute mark, open the project's Logs in Vercel and filter by `/api/cron/draw`. The `draw-runner` log line shows the status, the number of sends and each item. `complete` with no items means there was nothing to do. A 503 response means the key is missing, invalid or privileged, or the deployment could not be checked.
+6. After the next five-minute mark, open the project's Logs in Vercel and filter by `/api/cron/draw`. The `draw-runner` log line shows the status, the number of sends and each item. `complete` with no items means there was nothing to do. A 503 response means `CRON_SECRET` is missing or too short, the key is missing, invalid or privileged, the deployment could not be checked, or the run did not complete. The response body says which.
 
 Top up the wallet when a run reports `low-funds`.
 
