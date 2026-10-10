@@ -83,6 +83,32 @@ run("Create versus pending NFT selection", () => {
     }
   });
 
+  async function seedPreparingRecord(title: string) {
+    await page.evaluate(() => localStorage.clear());
+    await page.reload({ waitUntil: "commit" });
+    await expect.poll(() => page.evaluate(() => typeof window.__independentReleasePreparation)).toBe("function");
+    const form = page.getByRole("region", { name: "Create selection race" });
+    await form.getByLabel("Raffle title").fill(title);
+    await form.getByLabel("Sales deadline in UTC").fill("2099-01-01T00:00");
+    await form.getByLabel("NFT contract").fill("0x4444444444444444444444444444444444444444");
+    await form.getByLabel("Token ID").fill("1");
+    for (const input of await form.getByLabel("Price in USDC").all()) await input.fill("1");
+    for (const input of await form.getByLabel("Bonus entries").all()) await input.fill("1");
+    for (const input of await form.getByLabel("Supply").all()) await input.fill("10");
+    await page.evaluate(() => { window.__independentFailPreparation = true; });
+    await form.getByRole("button", { name: "Create", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__independentPreparationStarted)).toBe(true);
+    await page.evaluate(() => window.__independentReleasePreparation?.());
+    await form.getByText(/saved creation is ready to resume|could not be prepared or saved/i).waitFor();
+    return page.evaluate(() => {
+      const key = Object.keys(localStorage).find(candidate => candidate.startsWith("labx:create:v1:") && !candidate.includes(":generation") && !candidate.includes(":retired:") && !candidate.includes(":completed:"));
+      if (!key) throw new Error("The fixture did not retain a preparing record.");
+      const raw = localStorage.getItem(key);
+      if (!raw) throw new Error("The fixture preparing record is empty.");
+      return { key, raw };
+    });
+  }
+
   it("retires the changed intent and leaves an explicit Create retry available", async () => {
     const form = page.getByRole("region", { name: "Create selection race" });
     await form.getByLabel("Raffle title").fill("Race fixture");
@@ -145,5 +171,70 @@ run("Create versus pending NFT selection", () => {
 
     await expect.poll(() => restart.isEnabled(), { timeout: 5_000 }).toBe(true);
     await form.getByRole("alert").filter({ hasText: /changed|no longer active|resume/i }).waitFor();
+  }, 30_000);
+
+  it("does not start another preparation when a stale Resume view was completed in another tab", async () => {
+    const { key } = await seedPreparingRecord("Stale completed fixture");
+    const form = page.getByRole("region", { name: "Create selection race" });
+    await page.evaluate((storageKey) => {
+      localStorage.setItem(`${storageKey}:generation`, crypto.randomUUID());
+      localStorage.removeItem(storageKey);
+      window.__independentSaveCalls = 0;
+      window.__independentSignCalls = 0;
+      window.__independentSendCalls = 0;
+    }, key);
+
+    await form.getByRole("button", { name: "Create", exact: true }).click();
+    await page.waitForTimeout(250);
+    const counts = await page.evaluate(() => ({
+      save: window.__independentSaveCalls ?? 0,
+      sign: window.__independentSignCalls ?? 0,
+      send: window.__independentSendCalls ?? 0
+    }));
+    if (counts.save) await page.evaluate(() => window.__independentReleasePreparation?.());
+
+    expect(counts).toEqual({ save: 0, sign: 0, send: 0 });
+    expect((await form.getByRole("alert").allTextContents()).join(" ")).toMatch(/changed|another tab|already completed|refresh/i);
+  }, 30_000);
+
+  it("does not sign preparation recovery from a stale transaction-hash view", async () => {
+    const { key, raw } = await seedPreparingRecord("Stale recovery fixture");
+    await page.evaluate(({ storageKey, preparingRaw }) => {
+      const preparing = JSON.parse(preparingRaw) as { data: string };
+      localStorage.setItem(storageKey, JSON.stringify({
+        kind: "draft",
+        data: preparing.data,
+        creationHash: null,
+        id: null,
+        pending: {
+          step: "createDraft",
+          hash: null,
+          checkpoint: { id: "stale-recovery", nonce: 0, intentHash: `0x${"1".repeat(64)}`, startedBlock: "1" }
+        }
+      }));
+      localStorage.setItem(`${storageKey}:generation`, crypto.randomUUID());
+    }, { storageKey: key, preparingRaw: raw });
+    await page.reload({ waitUntil: "commit" });
+    const form = page.getByRole("region", { name: "Create selection race" });
+    await form.getByText("Advanced recovery", { exact: true }).click();
+    await form.getByLabel("Creation transaction hash").fill(`0x${"2".repeat(64)}`);
+    await page.evaluate(({ storageKey, preparingRaw }) => {
+      localStorage.setItem(storageKey, preparingRaw);
+      localStorage.setItem(`${storageKey}:generation`, crypto.randomUUID());
+      window.__independentSaveCalls = 0;
+      window.__independentSignCalls = 0;
+      window.__independentSendCalls = 0;
+    }, { storageKey: key, preparingRaw: raw });
+
+    await form.getByRole("button", { name: "Recover creation transaction", exact: true }).click();
+    await page.waitForTimeout(250);
+    const counts = await page.evaluate(() => ({
+      save: window.__independentSaveCalls ?? 0,
+      sign: window.__independentSignCalls ?? 0,
+      send: window.__independentSendCalls ?? 0
+    }));
+
+    expect(counts).toEqual({ save: 0, sign: 0, send: 0 });
+    expect((await form.getByRole("alert").allTextContents()).join(" ")).toMatch(/changed|another tab|already completed|refresh/i);
   }, 30_000);
 });

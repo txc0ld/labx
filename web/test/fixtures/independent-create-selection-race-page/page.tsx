@@ -17,6 +17,9 @@ declare global {
     __independentDeferPending?: boolean;
     __independentPendingCheckStarted?: boolean;
     __independentReleasePending?: () => void;
+    __independentSaveCalls?: number;
+    __independentSignCalls?: number;
+    __independentSendCalls?: number;
   }
 }
 
@@ -31,8 +34,8 @@ function walletFixture(): WalletSessionPort {
     assertCurrent: async expected => {
       if (expected.kind !== "connected" || expected.account !== SELLER || expected.chainId !== 11155111 || expected.revision !== 1) throw new Error("stale wallet");
     },
-    requestTransaction: async () => { throw new Error("unexpected transaction"); },
-    signMessage: async () => { throw new Error("unexpected signature"); }
+    requestTransaction: async () => { window.__independentSendCalls = (window.__independentSendCalls ?? 0) + 1; throw new Error("unexpected transaction"); },
+    signMessage: async () => { window.__independentSignCalls = (window.__independentSignCalls ?? 0) + 1; throw new Error("unexpected signature"); }
   };
 }
 
@@ -60,6 +63,8 @@ export default function IndependentCreateSelectionRacePage() {
     }
   }) as unknown as RaffleService, []);
   const saveCommitment: SaveCommitment = async (input, options) => {
+    window.__independentSaveCalls = (window.__independentSaveCalls ?? 0) + 1;
+    window.__independentSignCalls = (window.__independentSignCalls ?? 0) + 1;
     options?.beforeRequest?.(`0x${"e".repeat(64)}`);
     window.__independentPreparationStarted = true;
     await new Promise<void>(resolve => { preparationRelease.current = resolve; });
@@ -77,6 +82,9 @@ export default function IndependentCreateSelectionRacePage() {
     } as Awaited<ReturnType<SaveCommitment>>;
   };
   useEffect(() => {
+    window.__independentSaveCalls = 0;
+    window.__independentSignCalls = 0;
+    window.__independentSendCalls = 0;
     window.__independentResolveOwner = () => ownerRelease.current?.();
     window.__independentReleasePreparation = () => preparationRelease.current?.();
     window.__independentReleasePending = () => pendingRelease.current?.();
@@ -88,6 +96,9 @@ export default function IndependentCreateSelectionRacePage() {
       delete window.__independentDeferPending;
       delete window.__independentPendingCheckStarted;
       delete window.__independentReleasePending;
+      delete window.__independentSaveCalls;
+      delete window.__independentSignCalls;
+      delete window.__independentSendCalls;
     };
   }, []);
   return <main className="section"><section aria-label="Create selection race"><SellerDraftForm service={service} wallet={wallet} saveCommitment={saveCommitment} /></section></main>;
