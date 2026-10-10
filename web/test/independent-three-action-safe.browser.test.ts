@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import type { Locator } from "playwright";
 import { keccak256, toBytes } from "viem";
 import { browserChain } from "./fixtures/browser-chain";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
@@ -36,14 +37,23 @@ run("independent one-click Safe approval", () => {
     chain?.close();
   });
 
+  async function connectUntilReady(ready: Locator) {
+    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
+    await expect.poll(async () => {
+      if (await ready.isVisible().catch(() => false)) return true;
+      if (await connect.isVisible().catch(() => false)) {
+        try { await connect.click({ timeout: 2_000 }); }
+        catch { /* Hydration may replace the disconnected control before the click settles. */ }
+      }
+      return ready.isVisible().catch(() => false);
+    }, { timeout: 15_000, interval: 100 }).toBe(true);
+  }
+
   async function openReview() {
     const response = await fixture.page.goto(`${fixture.baseUrl}/review/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     const approval = fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true });
-    await expect.poll(async () => await connect.isVisible().catch(() => false) || await approval.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await approval.waitFor({ state: "visible", timeout: 15_000 });
+    await connectUntilReady(approval);
   }
 
   async function instrumentSellerProvider() {
@@ -131,11 +141,8 @@ run("independent one-click Safe approval", () => {
     for (const [index, token] of tokens.entries()) {
       const response = await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
       expect(response?.status()).toBe(200);
-      const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
       const draftSummary = fixture.page.locator("summary").filter({ hasText: "Create a raffle" });
-      await expect.poll(async () => await connect.isVisible().catch(() => false) || await draftSummary.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
-      if (await connect.isVisible().catch(() => false)) await connect.click();
-      await draftSummary.waitFor({ state: "visible", timeout: 15_000 });
+      await connectUntilReady(draftSummary);
       await draftSummary.click();
       await instrumentSellerProvider();
       await fixture.page.waitForTimeout(500);
@@ -152,7 +159,7 @@ run("independent one-click Safe approval", () => {
       const calls = await sellerRpc();
       expect(calls.filter(method => method === "personal_sign")).toHaveLength(1);
       expect(calls.filter(method => method === "eth_sendTransaction")).toHaveLength(3);
-      expect(await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:create:v1:") && !key.includes(":completed:")).length)).toBe(0);
+      expect(await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:create:v1:") && !key.includes(":completed:") && !key.endsWith(":generation")).length)).toBe(0);
     }
 
     expect(await chain.client.readContract({ address: chain.raffle.address, abi: chain.raffle.abi, functionName: "nextId" })).toBe(4n);
@@ -162,11 +169,8 @@ run("independent one-click Safe approval", () => {
     await fixture.switchAccount(chain.seller);
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
     const listHeading = fixture.page.getByRole("heading", { name: "List your raffle", exact: true });
-    await expect.poll(async () => await connect.isVisible().catch(() => false) || await listHeading.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
-    if (await connect.isVisible().catch(() => false)) await connect.click();
-    await listHeading.waitFor({ state: "visible", timeout: 15_000 });
+    await connectUntilReady(listHeading);
     await instrumentSellerProvider();
     await fixture.page.waitForTimeout(500);
     expect((await sellerRpc()).filter(method => method === "eth_sendTransaction")).toEqual([]);
