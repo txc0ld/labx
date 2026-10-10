@@ -12,7 +12,11 @@ const sdk = vi.hoisted(() => ({
   connectorType: "INJECTED",
   selected: "independent-injected",
   accountReads: 0,
+  liveAccounts: [] as string[],
+  walletConnectTopics: [] as string[],
+  walletConnectConnects: 0,
   walletConnectDisconnects: 0,
+  disconnectedWalletConnectTopics: [] as string[],
   walletConnectEmitEvents: true,
   walletConnectReplacement: undefined as object | undefined,
   prePublicationGate: undefined as Promise<void> | undefined,
@@ -76,13 +80,34 @@ const replacementAccount = "0x2222222222222222222222222222222222222222";
 const project = "b".repeat(32);
 const scope = "independent-actual-sdk-race";
 
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>(yes => { resolve = yes; });
+  return { promise, resolve };
+}
+
+function approveWalletConnectOnOpen(appKit: AppKit) {
+  const controller = (appKit as unknown as {
+    connectionControllerClient: { connectWalletConnect?(): Promise<void> };
+  }).connectionControllerClient;
+  return vi.spyOn(appKit, "open").mockImplementation(async () => {
+    if (!controller.connectWalletConnect) throw new Error("The actual WalletConnect controller is unavailable.");
+    await controller.connectWalletConnect();
+  });
+}
+
 async function setupActualSdk(
   changeSelectorOnAccountRead: number,
   connector: "injected" | "walletConnect" = "injected",
   usageGate?: Promise<void>,
   liveAccount = account,
   walletConnectAccounts = [liveAccount],
-  prePublicationGate?: Promise<void>
+  prePublicationGate?: Promise<void>,
+  options: {
+    saveConsent?: boolean;
+    initialWalletConnectTopic?: string | null;
+    walletConnectTopics?: string[];
+  } = {}
 ) {
   const localRecords = new Map<string, string>();
   const localStorage = {
@@ -103,7 +128,11 @@ async function setupActualSdk(
   });
   vi.stubGlobal("localStorage", localStorage);
   sdk.accountReads = 0;
+  sdk.liveAccounts = [liveAccount];
+  sdk.walletConnectTopics = [...(options.walletConnectTopics ?? [])];
+  sdk.walletConnectConnects = 0;
   sdk.walletConnectDisconnects = 0;
+  sdk.disconnectedWalletConnectTopics = [];
   sdk.walletConnectEmitEvents = true;
   sdk.walletConnectReplacement = undefined;
   sdk.prePublicationGate = prePublicationGate;
@@ -113,21 +142,39 @@ async function setupActualSdk(
   sdk.selected = sdk.connectorId;
   const methods: string[] = [];
   const provider = new EventEmitter();
+  const walletConnectSession = (topic: string) => ({
+    topic,
+    expiry: Math.floor(Date.now() / 1000) + 600,
+    peer: { metadata: { name: "Independent wallet", description: "fixture", url: "https://wallet.test", icons: [] } },
+    namespaces: {
+      eip155: {
+        accounts: walletConnectAccounts.map(selected => `eip155:11155111:${selected}`),
+        methods: ["personal_sign", "eth_sendTransaction"],
+        events: ["accountsChanged", "chainChanged"]
+      }
+    }
+  });
+  const initialWalletConnectTopic = options.initialWalletConnectTopic === undefined
+    ? "independent-existing-session"
+    : options.initialWalletConnectTopic;
   sdk.provider = Object.assign(provider, connector === "walletConnect" ? {
-    session: {
-      topic: "independent-existing-session",
-      expiry: Math.floor(Date.now() / 1000) + 600,
-      peer: { metadata: { name: "Independent wallet", description: "fixture", url: "https://wallet.test", icons: [] } },
-      namespaces: {
-        eip155: {
-          accounts: walletConnectAccounts.map(selected => `eip155:11155111:${selected}`),
-          methods: ["personal_sign", "eth_sendTransaction"],
-          events: ["accountsChanged", "chainChanged"]
-        }
+    session: initialWalletConnectTopic ? walletConnectSession(initialWalletConnectTopic) : undefined,
+    client: {
+      core: {
+        crypto: { getClientId: async () => "independent-client" }
       }
     },
+    connect: async () => {
+      const topic = sdk.walletConnectTopics.shift();
+      if (!topic) throw new Error("No approved WalletConnect topic is available.");
+      sdk.walletConnectConnects++;
+      Object.assign(provider, { session: walletConnectSession(topic) });
+      provider.emit("connect", { session: (provider as { session?: object }).session });
+    },
     disconnect: async () => {
+      const topic = (provider as { session?: { topic?: string } }).session?.topic;
       sdk.walletConnectDisconnects++;
+      if (topic) sdk.disconnectedWalletConnectTopics.push(topic);
       Object.assign(provider, { session: undefined });
       if (sdk.walletConnectReplacement) {
         sdk.provider = sdk.walletConnectReplacement;
@@ -135,8 +182,8 @@ async function setupActualSdk(
         return;
       }
       if (sdk.walletConnectEmitEvents) {
-        provider.emit("session_delete", { topic: "independent-existing-session" });
-        provider.emit("disconnect", { data: "independent-existing-session" });
+        provider.emit("session_delete", { topic });
+        provider.emit("disconnect", { data: topic });
       }
     }
   } : {}, {
@@ -145,7 +192,7 @@ async function setupActualSdk(
       if (method === "eth_accounts") {
         sdk.accountReads++;
         if (sdk.accountReads === sdk.changeSelectorOnAccountRead) sdk.changeSelector("other-injected");
-        return [liveAccount];
+        return [...sdk.liveAccounts];
       }
       if (method === "eth_chainId") return "0xaa36a7";
       throw new Error(`Forbidden restoration method: ${method}`);
@@ -158,7 +205,9 @@ async function setupActualSdk(
   };
   vi.spyOn(ApiController, "fetchUsage").mockImplementation(() => usageGate ?? Promise.resolve());
   vi.spyOn(CoreHelperUtil, "isMobile").mockReturnValue(false);
-  saveWalletConsent(consentKey(project, scope), { connectorId: sdk.connectorId, account, chainId: 11155111 });
+  if (options.saveConsent !== false) {
+    saveWalletConsent(consentKey(project, scope), { connectorId: sdk.connectorId, account, chainId: 11155111 });
+  }
   return methods;
 }
 
@@ -173,7 +222,11 @@ afterEach(() => {
   sdk.connectorType = "INJECTED";
   sdk.selected = "independent-injected";
   sdk.accountReads = 0;
+  sdk.liveAccounts = [];
+  sdk.walletConnectTopics = [];
+  sdk.walletConnectConnects = 0;
   sdk.walletConnectDisconnects = 0;
+  sdk.disconnectedWalletConnectTopics = [];
   sdk.walletConnectEmitEvents = true;
   sdk.walletConnectReplacement = undefined;
   sdk.prePublicationGate = undefined;
@@ -483,4 +536,190 @@ describe("independent installed AppKit restoration race", () => {
     expect(open).not.toHaveBeenCalled();
     expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
   }, 35_000);
+
+  it("accepts a proved external WalletConnect deletion and allows one new actual SDK connection", async () => {
+    await setupActualSdk(0, "walletConnect", undefined, account, [account], undefined, {
+      walletConnectTopics: ["external-delete-reconnect"]
+    });
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    await expect(wallet.restore()).resolves.toMatchObject({ kind: "connected", account });
+    const appKit = sdk.instance;
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string } };
+    if (!appKit || !provider.session) throw new Error("The actual WalletConnect fixture did not restore.");
+    const deletedTopic = provider.session.topic;
+
+    provider.session = undefined;
+    provider.emit("session_delete", { topic: deletedTopic });
+    provider.emit("disconnect", { data: deletedTopic });
+    await vi.waitFor(() => {
+      expect(appKit.getProvider("eip155")).toBeUndefined();
+      expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    });
+    const open = approveWalletConnectOnOpen(appKit);
+
+    await expect(wallet.connect({ owner: {} })).resolves.toMatchObject({ kind: "connected", account });
+
+    expect(open).toHaveBeenCalledOnce();
+    expect(sdk.walletConnectConnects).toBe(1);
+    expect((provider as { session?: { topic: string } }).session?.topic).toBe("external-delete-reconnect");
+    expect(sdk.walletConnectDisconnects).toBe(0);
+  });
+
+  it("keeps missing WalletConnect terminal evidence quarantined", async () => {
+    await setupActualSdk(0, "walletConnect");
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+    const provider = sdk.provider as { session?: { topic: string } };
+    await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
+
+    provider.session = undefined;
+
+    await expect(chooser.disconnect()).rejects.toThrow(/reload/i);
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    const retry = await createAppKitProvider(project, scope);
+    await expect(retry.connect(new AbortController().signal)).rejects.toThrow(/reload/i);
+  });
+
+  it("accepts an injected SDK empty-account reset and allows one new actual SDK connection", async () => {
+    await setupActualSdk(0, "injected");
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    await expect(wallet.restore()).resolves.toMatchObject({ kind: "connected", account });
+    const appKit = sdk.instance;
+    const provider = sdk.provider as EventEmitter;
+    if (!appKit) throw new Error("The actual injected fixture did not restore.");
+
+    sdk.liveAccounts = [];
+    provider.emit("accountsChanged", []);
+    await vi.waitFor(() => {
+      expect(appKit.getProvider("eip155")).toBeUndefined();
+      expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    });
+    sdk.liveAccounts = [account];
+    const open = vi.spyOn(appKit, "open").mockImplementation(async () => {
+      const controller = (appKit as unknown as {
+        connectionControllerClient: { connectExternal?(params: { id: string; type: string; chainId: number }): Promise<unknown> };
+      }).connectionControllerClient;
+      await controller.connectExternal?.({ id: "independent-injected", type: "INJECTED", chainId: 11155111 });
+    });
+
+    await expect(wallet.connect({ owner: {} })).resolves.toMatchObject({ kind: "connected", account });
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it("relinquishes explicit WalletConnect T1 locally, connects T2, ignores a late T1 deletion, and deletes T2", async () => {
+    await setupActualSdk(0, "walletConnect", undefined, account, [account], undefined, {
+      saveConsent: false,
+      initialWalletConnectTopic: null,
+      walletConnectTopics: ["explicit-t1", "explicit-t2"]
+    });
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const first = await createAppKitProvider(project, scope);
+    const appKit = sdk.instance;
+    const provider = sdk.provider as EventEmitter & { session?: { topic: string } };
+    if (!appKit) throw new Error("The actual WalletConnect fixture did not initialize.");
+    const open = approveWalletConnectOnOpen(appKit);
+
+    await expect(first.connect(new AbortController().signal)).resolves.toBeDefined();
+    expect(provider.session?.topic).toBe("explicit-t1");
+    await expect(first.release?.()).resolves.toBeUndefined();
+    expect(provider.session?.topic).toBe("explicit-t1");
+    expect(sdk.walletConnectDisconnects).toBe(0);
+
+    const second = await createAppKitProvider(project, scope);
+    await expect(second.connect(new AbortController().signal)).resolves.toBeDefined();
+    expect(provider.session?.topic).toBe("explicit-t2");
+    provider.emit("session_delete", { topic: "explicit-t1" });
+    expect(appKit.getProvider("eip155")).toBe(provider);
+
+    await expect(second.disconnect()).resolves.toBeUndefined();
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(sdk.walletConnectConnects).toBe(2);
+    expect(sdk.disconnectedWalletConnectTopics).toEqual(["explicit-t2"]);
+    expect(provider.session).toBeUndefined();
+  });
+
+  it("serializes a cross-tab release of a delayed explicit SDK adoption before the next Connect prompt", async () => {
+    const usage = deferred();
+    const loadGate = deferred();
+    let loadStarted = false;
+    await setupActualSdk(0, "walletConnect", usage.promise, account, [account], undefined, {
+      saveConsent: false,
+      walletConnectTopics: ["after-cross-tab-release"]
+    });
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => {
+      loadStarted = true;
+      await loadGate.promise;
+      return createAppKitProvider(project, scope);
+    }, scope);
+    const first = wallet.connect({ owner: {} });
+    void first.catch(() => {});
+    await vi.waitFor(() => expect(loadStarted).toBe(true));
+    saveWalletConsent(consentKey(project, scope), { connectorId: "walletConnect", account, chainId: 11155111 });
+    loadGate.resolve();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider));
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The delayed actual SDK fixture did not initialize.");
+    const open = approveWalletConnectOnOpen(appKit);
+
+    saveWalletConsent(consentKey(project, scope), { connectorId: "replacement", account, chainId: 11155111 });
+    sdk.storageChange(consentKey(project, scope));
+    const second = wallet.connect({ owner: {} });
+    void second.catch(() => {});
+    expect(open).not.toHaveBeenCalled();
+    usage.resolve();
+
+    await expect(first).rejects.toThrow();
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+    await expect(second).resolves.toMatchObject({ kind: "connected", account });
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect((sdk.provider as { session?: { topic: string } }).session?.topic).toBe("after-cross-tab-release");
+  });
+
+  it("locally releases a delayed explicit SDK adoption when disposal cancels its loader", async () => {
+    const usage = deferred();
+    const loadGate = deferred();
+    let loadStarted = false;
+    await setupActualSdk(0, "walletConnect", usage.promise, account, [account], undefined, {
+      saveConsent: false
+    });
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, async () => {
+      loadStarted = true;
+      await loadGate.promise;
+      return createAppKitProvider(project, scope);
+    }, scope);
+    const connecting = wallet.connect({ owner: {} });
+    void connecting.catch(() => {});
+    await vi.waitFor(() => expect(loadStarted).toBe(true));
+    saveWalletConsent(consentKey(project, scope), { connectorId: "walletConnect", account, chainId: 11155111 });
+    loadGate.resolve();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider));
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The delayed actual SDK fixture did not initialize.");
+    const open = vi.spyOn(appKit, "open");
+
+    wallet.dispose();
+    usage.resolve();
+
+    await expect(connecting).rejects.toThrow();
+    await vi.waitFor(() => expect(appKit.getProvider("eip155")).toBeUndefined());
+    expect(open).not.toHaveBeenCalled();
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect((sdk.provider as { session?: { topic: string } }).session?.topic).toBe("independent-existing-session");
+  });
 });
