@@ -1,5 +1,7 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { concat, decodeFunctionData, encodeAbiParameters, encodeFunctionData, maxUint256, parseEther, parseGwei, toHex, type Address, type Hex } from "viem";
+import { concat, decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeFunctionData, maxUint256, parseAbi, parseEther, parseGwei, toHex, type Address, type Hex } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { raffleAbi } from "../lib/chain/abi";
@@ -38,6 +40,12 @@ function safeStub(owners: readonly Address[], modules: readonly Address[] = [], 
   const code = "0x60003560e01c8063a0e67e2b1461001f5763cc2f84521461002d57600080fd"
     + copyAndReturn(ownersLength, body) + copyAndReturn(modulesLength, body + ownersLength) + answers.map(answer => answer.slice(2)).join("");
   return code as Hex;
+}
+
+/** Runtime code that reverts every call with `data`. */
+function revertWith(data: Hex): Hex {
+  const length = ((data.length - 2) / 2).toString(16).padStart(4, "0");
+  return `0x61${length}8061000d6000396000fd${data.slice(2)}`;
 }
 
 type Item = { id: string; action: string; hash: Hex | null; outcome: string; error: string | null };
@@ -287,7 +295,11 @@ run("draw runner on a local chain", () => {
       await chain.rpc("anvil_setCode", [delegate, safeStub([chain.stranger, runner])]);
       await chain.rpc("anvil_setCode", [chain.treasury, concat(["0xef0100", delegate])]);
     }],
-    ["unknown, because the treasury Safe has more modules than one page", UNCHECKED, async () => { await chain.rpc("anvil_setCode", [chain.treasury, safeStub([chain.stranger], [chain.buyer], chain.buyer)]); }]
+    ["unknown, because the treasury Safe has more modules than one page", UNCHECKED, async () => { await chain.rpc("anvil_setCode", [chain.treasury, safeStub([chain.stranger], [chain.buyer], chain.buyer)]); }],
+    ["unknown, because the treasury is an EIP-7702 account delegated to code that reverts every call", UNCHECKED, async () => {
+      await chain.rpc("anvil_setCode", [delegate, "0x60006000fd"]);
+      await chain.rpc("anvil_setCode", [chain.treasury, concat(["0xef0100", delegate])]);
+    }]
   ] as const)("refuses with 503 and sends nothing when the runner is %s", async (_, error, setup) => {
     await isolated(async () => {
       await setup();
@@ -300,12 +312,9 @@ run("draw runner on a local chain", () => {
     });
   }, 60_000);
 
-  it.each([
-    ["code that reverts every call", "0x60006000fd"],
-    ["an address without code", "0x"]
-  ] as const)("treats a treasury that is an EIP-7702 account delegated to %s as a wallet and runs", async (_, code) => {
+  it("treats a treasury that is an EIP-7702 account delegated to an address without code as a wallet and runs", async () => {
     await isolated(async () => {
-      await chain.rpc("anvil_setCode", [delegate, code]);
+      await chain.rpc("anvil_setCode", [delegate, "0x"]);
       await chain.rpc("anvil_setCode", [chain.treasury, concat(["0xef0100", delegate])]);
       expect(await chain.client.getCode({ address: chain.treasury })).toBe(concat(["0xef0100", delegate]).toLowerCase());
       expect(await phase(pending.id)).toBe(1);
@@ -327,6 +336,30 @@ run("draw runner on a local chain", () => {
       expect(await read("getOwners")).toEqual([chain.stranger, runner]);
       expect(await read("getModulesPaginated")).toEqual([[chain.buyer], SAFE_SENTINEL]);
     });
+  }, 60_000);
+
+  it("never follows an off-chain lookup from the treasury, and refuses", async () => {
+    let hits = 0;
+    // The gateway fails every request, so a client that follows the lookup makes one request and stops.
+    const gateway = createServer((_, response) => { hits++; response.writeHead(500).end(); });
+    await new Promise<void>(done => gateway.listen(0, "127.0.0.1", done));
+    try {
+      await isolated(async () => {
+        const url = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}/{sender}/{data}`;
+        const lookup = encodeErrorResult({
+          abi: parseAbi(["error OffchainLookup(address sender, string[] urls, bytes callData, bytes4 callbackFunction, bytes extraData)"]),
+          errorName: "OffchainLookup", args: [chain.treasury, [url], "0x", "0x12345678", "0x"]
+        });
+        await chain.rpc("anvil_setCode", [chain.treasury, revertWith(lookup)]);
+        const before = await runnerNonce();
+        expect(await invoke()).toEqual({ status: 503, body: { ok: false, error: UNCHECKED } });
+        expect(await runnerNonce()).toBe(before);
+        expect(hits).toBe(0);
+        // A default viem call does follow the same revert to the gateway, so the fixture is a live lookup.
+        await expect(chain.client.call({ to: chain.treasury, data: "0xa0e67e2b" })).rejects.toThrow();
+        expect(hits).toBe(1);
+      });
+    } finally { gateway.close(); }
   }, 60_000);
 
   it("refuses when the owner is a contract whose signers cannot be read", async () => {

@@ -3,9 +3,7 @@ import type { Store } from "../points";
 import { sameAddress } from "../chain/validation";
 import { MIN_CRON_SECRET_LENGTH, validBearer } from "../notifications/http";
 import { within } from "./errors";
-import { FINISH_RESERVE_MS, RUN_MS, runDraw, type DrawChain, type RunReport, type RunStatus } from "./run";
-
-const HEALTHY: ReadonlySet<RunStatus> = new Set(["complete", "busy", "send-cap", "deadline"]);
+import { FINISH_RESERVE_MS, RUN_MS, runDraw, type DrawChain, type RunReport } from "./run";
 
 /** Reads the server-only runner key: 64 hex characters, with or without 0x. Returns null for a missing or malformed key, which disables the runner. */
 export function runnerAccount(value: string | undefined): PrivateKeyAccount | null {
@@ -45,9 +43,8 @@ export function createDrawCronHandler(dependencies: {
     } catch {
       return cronError("The draw runner did not complete.", 503);
     }
-    const ok = HEALTHY.has(report.status) && report.items.every(item => item.outcome === "succeeded" || (item.outcome === "skipped" && (item.error === null || item.error === "EstimateGasRevert")));
     console.info("draw-runner", report);
-    return Response.json({ ok, ...report }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json(report, { headers: { "Cache-Control": "no-store" } });
   };
 }
 

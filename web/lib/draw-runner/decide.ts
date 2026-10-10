@@ -34,31 +34,40 @@ export function mayNeedRunner(r: Raffle, at: { now: bigint; drawStartGrace: bigi
   return false;
 }
 
-/** Up to `limit` raffle ids starting at `cursor`, wrapping past the newest raffle back to id 1. */
-export function scanWindow(cursor: bigint, nextId: bigint, limit: number): { ids: bigint[]; nextCursor: bigint } {
-  const total = nextId - 1n;
-  if (total <= 0n) return { ids: [], nextCursor: 1n };
-  const start = cursor >= 1n && cursor <= total ? cursor : 1n;
-  const count = BigInt(limit) < total ? BigInt(limit) : total;
-  const ids = Array.from({ length: Number(count) }, (_, offset) => (start - 1n + BigInt(offset)) % total + 1n);
-  return { ids, nextCursor: (start - 1n + count) % total + 1n };
+/** Settled and cancelled raffles never change phase again. */
+export function finalPhase(r: Raffle): boolean {
+  return r.phase === 5 || r.phase === 6;
+}
+
+/** Up to `limit` raffle ids starting at `cursor`, wrapping past the newest raffle back to the low-water mark. */
+export function scanWindow(cursor: bigint, lowWater: bigint, nextId: bigint, limit: number): { ids: bigint[]; nextCursor: bigint } {
+  const size = nextId - lowWater;
+  if (size <= 0n) return { ids: [], nextCursor: lowWater };
+  const start = cursor >= lowWater && cursor < nextId ? cursor : lowWater;
+  const count = BigInt(limit) < size ? BigInt(limit) : size;
+  const ids = Array.from({ length: Number(count) }, (_, offset) => lowWater + (start - lowWater + BigInt(offset)) % size);
+  return { ids, nextCursor: lowWater + (start - lowWater + count) % size };
 }
 
 /** Raffle reads the scan keeps in flight at once. */
-export const SCAN_CONCURRENCY = 20;
+export const SCAN_CONCURRENCY = 8;
 
-export type ScanResult = { candidates: bigint[]; nextCursor: bigint; stop: "deadline" | "interrupted" | null };
+export type ScanResult = { candidates: bigint[]; nextCursor: bigint; lowWater: bigint; stop: "deadline" | "interrupted" | null };
 
 /**
  * Reads up to `limit` raffles from `cursor` in scanWindow order, at most SCAN_CONCURRENCY at a time, and keeps the ids
  * whose raffle passes `keep`. The scan ends at the first read that fails or has not finished within `timeoutMs`, and
  * only the raffles before that point count. The next cursor is the first raffle not read, or the one after a raffle
- * whose read failed, so one unreadable raffle cannot stall the scan.
+ * whose read failed, so one unreadable raffle cannot stall the scan. The low-water mark moves up over counted raffles
+ * that pass `final` and stops at the first raffle that does not, or that was not counted.
  */
-export async function scanRaffles<T>({ cursor, nextId, limit, timeoutMs, read, keep }: {
-  cursor: bigint; nextId: bigint; limit: number; timeoutMs: number; read: (id: bigint) => Promise<T>; keep: (raffle: T) => boolean;
+export async function scanRaffles<T>({ cursor, lowWater, nextId, limit, timeoutMs, read, keep, final }: {
+  cursor: bigint; lowWater: bigint; nextId: bigint; limit: number; timeoutMs: number;
+  read: (id: bigint) => Promise<T>; keep: (raffle: T) => boolean; final: (raffle: T) => boolean;
 }): Promise<ScanResult> {
-  const { ids, nextCursor } = scanWindow(cursor, nextId, limit);
+  // A mark above the raffle count was not saved for these raffles, so the scan starts over from the first one.
+  const from = lowWater >= 1n && lowWater <= nextId ? lowWater : 1n;
+  const { ids, nextCursor } = scanWindow(cursor, from, nextId, limit);
   const results: ({ raffle: T } | "failed")[] = [];
   let started = 0, halted = false;
   async function worker() {
@@ -71,10 +80,14 @@ export async function scanRaffles<T>({ cursor, nextId, limit, timeoutMs, read, k
   halted = true;
   let done = 0;
   while (done < ids.length && typeof results[done] === "object") done++;
-  const candidates = ids.slice(0, done).filter((_, index) => keep((results[index] as { raffle: T }).raffle));
-  if (done === ids.length) return { candidates, nextCursor, stop: null };
-  if (results[done] === "failed") return { candidates, nextCursor: ids[done + 1] ?? nextCursor, stop: "interrupted" };
-  return { candidates, nextCursor: ids[done], stop: "deadline" };
+  const counted = ids.slice(0, done).map((id, index) => ({ id, raffle: (results[index] as { raffle: T }).raffle }));
+  const candidates = counted.filter(item => keep(item.raffle)).map(item => item.id);
+  const isFinal = new Map(counted.map(item => [item.id, final(item.raffle)]));
+  let mark = from;
+  while (isFinal.get(mark)) mark++;
+  if (done === ids.length) return { candidates, nextCursor, lowWater: mark, stop: null };
+  if (results[done] === "failed") return { candidates, nextCursor: ids[done + 1] ?? nextCursor, lowWater: mark, stop: "interrupted" };
+  return { candidates, nextCursor: ids[done], lowWater: mark, stop: "deadline" };
 }
 
 /** Rejects any prepared transaction other than the expected zero-value draw call on the raffle contract. */
