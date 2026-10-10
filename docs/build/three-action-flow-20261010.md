@@ -4,28 +4,30 @@ Base: 01d567043cbed72fb5ecef97d096fedc37da19e3. User requirement: "1 button crea
 
 ## Integrated candidate status at source freeze
 
-The release candidate simplifies the normal seller journey to one website activation per stage: Create, Safe Approve and List. Native wallet confirmations remain separate. Seller accounting and recovery tools are secondary disclosures. Buyer quantity, price, fees and required consents are grouped together. Refresh restores only the exact previously authorized wallet and network, without prompting or submitting. Contracts, deployed addresses and fee policy are unchanged.
+The candidate simplifies the normal seller journey to one website activation per stage: Create, Safe Approve and List. Native wallet confirmations remain separate. Seller accounting and recovery tools are secondary disclosures. Buyer quantity, price, fees and required consents are grouped together. Refresh restores only the exact previously authorized wallet and network, without prompting or submitting. Contracts, deployed addresses and fee policy are unchanged.
 
-Production source is frozen at `b1d2d482047d308710aca6361532a430a04e2f57`. Integration at `32c5aa669ec047f9df72b6ee270848e4a4436a09` adds only independently reviewed test changes after that source revision. The chronological builder notes below retain earlier failures and intermediate checks; they are not claims of current deployment.
+Final production source is `3628e0fadc1b826be61282f9d2adfbd13372e58b`; independent tests are integrated through `5383df137ffd1af4c28ef67470bcce7d470e122f`. This snapshot records verification before final publication. The chronological builder notes below retain earlier failures and intermediate checks.
+
+The last wallet repair closes three independently reproduced failures: SDK-initiated disconnect could permanently block reconnect; local WalletConnect release could retain an old-topic cleanup record; and a delayed explicit chooser could perform remote cleanup after local retirement. The repair binds terminal proof to the exact provider/topic, preserves active or failed deletion records, and gives pending explicit and restored choosers the same serialized retirement ownership. Unknown or replaced sessions remain blocked.
 
 Observed evidence under the workspace artifact directory `artifacts/three-action-flow-20261010/`:
 
 | Gate | Observed result | Revision or artifact |
 | --- | --- | --- |
-| Aggregate with chain integration, wallet repairs and transaction lineage enabled | PASS: 786 tests; 85 skipped | b1; `integrated-aggregate-b1d2d48.log` |
-| Production build | PASS | b1; `build-b1d2d48.log` |
-| Installed AppKit startup and cleanup matrix | PASS: 13 tests | b1 production tree; `verification/wallet-lifecycle-b1d2d48-prepublication-final.log` |
-| Rendered stale Create/Recover views | PASS: 4 tests, zero new preparation/sign/send after stale state | b1 production tree; `verification/create-stale-cross-tab-9e40fa8-final.log` |
-| Independent Create, Safe Approve and List browser flow | PASS: 3 tests | b1 production tree; `verification/final-independent-three-action-browser-b1d2d48.log` |
-| Native Astra independent source and test reviews | Scoped PASS | source b1 and tests 32c; `astra-final-ownership-intent-review.md`, `astra-final-test-evidence-review.md` |
-| Actual Claude Opus 5.5, maximum effort, final repair review | Scoped source PASS | b1; `claude-final-ownership-intent/REVIEW.md` |
-| Complete 24-file browser acceptance gate | IN PROGRESS | browser-gate cd96131 has an identical web/CI tree to 32c; `browser-gate/full-browser-final.log` |
-| Broader actual Claude wallet lifecycle review | IN PROGRESS; final repair review above covers subsequent fixes | `claude-wallet-lifecycle-final/` |
-| Exact release CI, preview and production publication | NOT_RUN | Main and production remain at 01d5670 as of the last verification |
+| Aggregate with chain integration, wallet repairs and transaction lineage enabled | PASS: 801 tests; 87 skipped | 3628; `aggregate-3628e0f.log` |
+| Production build | PASS | 3628; `build-3628e0f.log` |
+| Independent installed AppKit startup and retirement matrix | PASS: 20 tests; affected wallet suites 104 tests passed | Same production blobs as3628; `verification/final-wallet-review/REPORT.md` |
+| Rendered stale Create/Recover views | PASS: 4 tests, zero new preparation/sign/send after stale state | Unchanged Create source; `verification/create-stale-cross-tab-9e40fa8-final.log` |
+| Affected browser flows after final wallet repair | PASS: 4 files, 9 tests | Same production source as3628; `browser-gate/final-wallet-affected.log` |
+| Full 24-file browser gate before final wallet repair | PASS: 87 tests locally and in remote CI | ad509 baseline; `browser-gate/full-browser-final.log`, `ci-ad509b4.log` |
+| Native Astra final wallet source review | Scoped PASS | 3628; `astra-wallet-retirement-final-review.md` |
+| Actual Claude final repair review | IN PROGRESS | 3628; `claude-wallet-retirement-final/` |
+| Remote CI before final wallet repair | All four jobs PASS; baseline evidence only | ad509; GitHub run38009872447 |
+| Final-candidate remote CI and production publication | NOT_RUN at this source freeze | Root owns final gates and publication |
 
-Responsive headless Chromium checks cover widths 320, 390, 768 and 1440, keyboard activation, 200% page scale and RTL. Screenshots are under `verification/final-screenshots-b1d2d48/`. Native iOS was unavailable and Android startup failed; native-device and real-wallet signing checks are not claimed. The actual installed SDK tests use controlled providers, and the transaction workflow uses local-chain fixtures.
+Responsive headless Chromium checks cover widths 320, 390, 768 and 1440, keyboard activation, 200% page scale and RTL. The final wallet repair does not change presentation. Screenshots are under `verification/final-screenshots-b1d2d48/`. Native iOS was unavailable and Android startup failed; native-device and real-wallet signing checks are not claimed. Installed SDK tests use controlled providers; transaction workflow tests use local-chain fixtures.
 
-Root owns the remaining browser/release gates and the nonblocking copy/availability follow-ups in `claude-findings-disposition.md`. A disappeared cross-tab Create record could offer clearer guidance; a hung dynamic import can leave Connect waiting; two manual Safe recovery messages could be more precise. These do not bypass explicit user intent or canonical confirmation. This source review is not a comprehensive external audit or a guarantee of live wallet compatibility.
+Root owns remaining release gates and nonblocking copy/availability follow-ups in `claude-findings-disposition.md`. A disappeared cross-tab Create record could offer clearer guidance; a hung dynamic import can leave Connect waiting; two manual Safe recovery messages could be more precise. These do not bypass explicit user intent or canonical confirmation. The source reviews are not a comprehensive external audit or a guarantee of live wallet compatibility.
 
 ## Acceptance and visible journey
 
