@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
 import { cancelGuidance, cancelReclaimsPrize, parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions, sellerStepText } from "../lib/chain/seller-actions";
-import { drawRunnerEnabled } from "../lib/draw-runner";
+import { drawRunnerEnabled } from "../lib/draw-runner/enabled";
 import { catalogAvailability, fromPriceLabel } from "../components/workflow/format";
 import { availableActions } from "../lib/chain/workflow";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";

@@ -12,7 +12,7 @@ import { FEE_DENOMINATOR, sellerAccounting } from "@/lib/chain/fees";
 import type { ActionAvailability, AccountRaffleState, Confirmation, MembershipQuote, RaffleSnapshot, SubmittedAction, WorkflowAction } from "@/lib/chain/types";
 import { cancelGuidance, cancelReclaimsPrize, drawBlocker, RECLAIM_GUIDANCE, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
-import { drawRunnerEnabled } from "@/lib/draw-runner";
+import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import { sameAddress } from "@/lib/chain/validation";
 import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";

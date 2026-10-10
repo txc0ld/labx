@@ -2,7 +2,7 @@ import type { Address } from "viem";
 import { CANCEL_AND_RECLAIM, drawBlocker, sellerNextStep, sellerPortalActions, type SellerActionKind } from "@/lib/chain/seller-actions";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import { availableActions } from "@/lib/chain/workflow";
-import { drawRunnerEnabled } from "@/lib/draw-runner";
+import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import { formatUsdcAmount } from "./usdc-amount";
 
 export type CardStep = { label: string; status: string };
