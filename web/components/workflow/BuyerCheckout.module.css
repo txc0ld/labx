@@ -72,4 +72,16 @@
     box-shadow: 0 -10px 24px rgb(0 0 0 / 10%);
   }
   .barTotal { display: flex; }
+  /* A review, a transaction check or an error scrolls with the page, so Confirm and Back are never cut off by the screen edge. */
+  .action:has(:global(.transaction-review), :global(.transaction-state), [role="alert"]) {
+    position: static;
+    z-index: auto;
+    max-block-size: none;
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .action:has(:global(.transaction-review), :global(.transaction-state), [role="alert"]) .barTotal { display: none; }
 }

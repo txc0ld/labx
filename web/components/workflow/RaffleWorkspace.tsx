@@ -18,7 +18,8 @@ import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";
 import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
-import { catalogAvailability, formatDate, formatShortDate, formatUsdcAmount, fromPriceLabel, shortAddress } from "./format";
+import { catalogAvailability, formatUsdcAmount, fromPriceLabel, networkName, shortAddress } from "./format";
+import { LocalTime } from "./LocalTime";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 import { transactionMeaning } from "@/lib/chain/transaction-outcomes";
 import { useTransactionOutcomes } from "./useTransactionOutcomes";
@@ -35,6 +36,8 @@ export type RaffleWorkspaceMode = "public" | "seller";
 
 /** How often a waiting raffle page re-reads the contract while visible. */
 const POLL_MS = 15_000;
+/** Seconds before the sales deadline when re-reading starts. */
+const DEADLINE_POLL_WINDOW = 15n * 60n;
 
 function formatBps(bps: number) {
   const whole = Math.floor(bps / 100);
@@ -52,10 +55,6 @@ function explorerAddress(chainId: number, value: string) {
 
 function explorerToken(chainId: number, value: string, tokenId: bigint) {
   return chainId === 11155111 ? `https://sepolia.etherscan.io/token/${value}?a=${tokenId.toString()}` : null;
-}
-
-function networkName(chainId: number) {
-  return chainId === 11155111 ? "Ethereum Sepolia" : "the local test network";
 }
 
 function admissionCopy(snapshot: RaffleSnapshot) {
@@ -249,24 +248,31 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
     : refreshState.kind === "error" ? "Refresh the raffle before your next step." : undefined;
   const availabilityStatus = catalogAvailability(snapshot);
 
-  // Re-read silently only while nothing on the main path can be done: before the sales deadline, while the draw result is pending,
-  // or while LABx runs the seller's next draw step.
-  const waiting = phase === 1 && now < r.salesEnd && (mode === "seller" || !availabilityStatus.purchasable && publicRecoveryActions(snapshot, availability, currentAccount).length === 0)
-    || phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace
-    || mode === "seller" && drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true).kind === "automatic";
+  // Re-read silently only while the page can change by itself and nothing on the main path can be done: while the draw result is
+  // pending, while LABx runs the seller's next draw step, and in the last 15 minutes before the sales deadline.
+  // pollFrom is the chain time re-reading starts.
+  const pollFrom = phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace
+    || mode === "seller" && drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true).kind === "automatic" ? now
+    : phase === 1 && now < r.salesEnd && (mode === "seller" || !availabilityStatus.purchasable && publicRecoveryActions(snapshot, availability, currentAccount).length === 0) ? r.salesEnd - DEADLINE_POLL_WINDOW
+    : null;
+  // The page's block time stands still between reads, so the wait until pollFrom is timed from this read.
+  const pollDelaySeconds = pollFrom !== null && pollFrom > now ? Number(pollFrom - now) : 0;
   const walletBusy = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "overflow");
-  const shouldPoll = waiting && refreshState.kind === "idle" && !walletBusy;
+  const shouldPoll = pollFrom !== null && refreshState.kind === "idle" && !walletBusy;
   useEffect(() => {
     if (!shouldPoll) return;
+    const start = Date.now();
     let inFlight = false;
     const timer = window.setInterval(() => {
-      // An open review, submission or confirmation on this raffle keeps the page still.
-      if (inFlight || document.visibilityState !== "visible" || pieceRef.current?.querySelector(".transaction-review, .transaction-state")) return;
+      if (Date.now() - start < pollDelaySeconds * 1000) return;
+      // A review, a submission or confirmation, a wallet request in flight (aria-busy) or a chained seller step keeps the page still,
+      // so a re-read never remounts a control mid-sequence.
+      if (inFlight || document.visibilityState !== "visible" || pieceRef.current?.querySelector(".transaction-review, .transaction-state, [aria-busy=true]")) return;
       inFlight = true;
       void pollRef.current().finally(() => { inFlight = false; });
     }, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [shouldPoll]);
+  }, [shouldPoll, pollDelaySeconds, now]);
 
   if (mode === "seller" && walletSnapshot.kind === "connected" && walletSnapshot.chainId !== browser.service.manifest.chainId) {
     return <section className="section stack missing-state"><h1 className="page-title">Switch your wallet to {networkName(browser.service.manifest.chainId)}.</h1><p className="lede">Seller controls stay hidden on other networks.</p><Link className="btn btn-dark" href="/seller">Back to seller studio</Link></section>;
@@ -290,7 +296,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
       {refreshState.kind === "loading" ? <p className="notice" role="status">Updating the raffle. Actions are paused for a moment.</p> : null}
       {refreshState.kind === "error" ? <p className="notice error" role="alert">Couldn’t update the raffle: {refreshState.message} Actions stay paused until it loads. <button className="text-link" type="button" onClick={() => void refresh()}>Try again</button></p> : null}
       {trustReason ? <p className="notice warning" role="status">{trustReason} Existing recovery and receipt controls remain available.</p> : null}
-      <ResumeTransaction browser={browser} pendingOnly scope={`raffle-${snapshot.id}`} confirmedThroughBlock={snapshot.block.number} onConfirmed={refresh} />
+      <ResumeTransaction browser={browser} pendingOnly showWait={false} scope={`raffle-${snapshot.id}`} confirmedThroughBlock={snapshot.block.number} onConfirmed={refresh} />
       <section ref={pieceRef} className={`section piece-layout piece-console chain-piece${mode === "seller" ? " seller-piece" : ""}`}>
         <div className="piece-visual chain-piece-visual">
           <div className="piece-visual-topline"><span>Raffle</span><span>#{snapshot.id.toString()}</span></div>
@@ -300,7 +306,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           <header className="purchase-header">
             <div className="purchase-eyebrow">{mode === "public" ? <p className="piece-seller">Seller {shortAddress(r.seller)}</p> : null}<span className="piece-status">{availabilityStatus.label}</span></div>
             <h1 className="page-title">{r.title}</h1>
-            <p className="piece-deadline">{phase >= 2 || now >= r.salesEnd ? "Sales ended" : "Sales end"} {formatDate(r.salesEnd)} UTC · {r.escrowed ? "Prize locked" : "Prize not locked yet"}</p>
+            <p className="piece-deadline">{phase >= 2 || now >= r.salesEnd ? "Sales ended" : "Sales end"} <LocalTime at={r.salesEnd} /> · {r.escrowed ? "Prize locked" : "Prize not locked yet"}</p>
             {fromPrice ? <p className="piece-price">{fromPrice}</p> : null}
             <div className="piece-links"><Link className="guide-link" href="/fairness">Draw protections</Link>{mode === "seller" && phase >= 1 ? <Link className="guide-link" href={`/piece/${snapshot.id.toString()}`}>View public page</Link> : null}</div>
           </header>
@@ -308,7 +314,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
             ? <SellerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
-            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />}
+            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
           {mode === "seller" && phase >= 1 ? <SellerProgress snapshot={snapshot} /> : null}
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Earnings</summary><SellerEarnings snapshot={snapshot} /></details> : null}
           {phase >= 1 ? <DrawProgress service={browser.service} snapshot={snapshot} /> : null}
@@ -335,18 +341,18 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
 /** Seller's main-path progress: four steps and what sold. */
 function SellerProgress({ snapshot }: { snapshot: RaffleSnapshot }) {
   const r = snapshot.raffle, phase = Number(r.phase);
-  const steps = [
-    { label: "Listed", done: phase >= 1 },
-    { label: `${phase >= 2 ? "Sales closed" : "Sales close"} ${formatShortDate(r.salesEnd)}`, done: phase >= 2 },
+  const steps: { key: string; label: ReactNode; done: boolean }[] = [
+    { key: "listed", label: "Listed", done: phase >= 1 },
+    { key: "closed", label: <>{phase >= 2 ? "Sales closed" : "Sales close"} <LocalTime at={r.salesEnd} short /></>, done: phase >= 2 },
     ...(phase === 6
-      ? [{ label: "Cancelled", done: true }]
-      : [{ label: "Winner drawn", done: phase >= 4 }, { label: "Paid", done: phase === 5 && r.principalEscrow === 0n }])
+      ? [{ key: "cancelled", label: "Cancelled", done: true }]
+      : [{ key: "drawn", label: "Winner drawn", done: phase >= 4 }, { key: "paid", label: "Paid", done: phase === 5 && r.principalEscrow === 0n }])
   ];
   const current = steps.findIndex(step => !step.done);
   const sold = snapshot.packs.filter(pack => pack.sold > 0);
   return (
     <section className="seller-progress stack" aria-label="Raffle progress">
-      <ol className="raffle-timeline">{steps.map((step, index) => <li key={step.label} data-state={step.done ? "done" : index === current ? "current" : "upcoming"} aria-current={index === current ? "step" : undefined}><span className="raffle-timeline-dot" aria-hidden="true">{step.done ? "✓" : ""}</span><span>{step.label}</span>{step.done ? <span className="sr"> (done)</span> : null}</li>)}</ol>
+      <ol className="raffle-timeline">{steps.map((step, index) => <li key={step.key} data-state={step.done ? "done" : index === current ? "current" : "upcoming"} aria-current={index === current ? "step" : undefined}><span className="raffle-timeline-dot" aria-hidden="true">{step.done ? "✓" : ""}</span><span>{step.label}</span>{step.done ? <span className="sr"> (done)</span> : null}</li>)}</ol>
       <ul className="seller-sales">{sold.length
         ? sold.map((pack, index) => <li key={`${index}-${pack.name}`}><span>{pack.sold} × {pack.name} sold</span><strong>{formatUsdcAmount(pack.priceUsdc * BigInt(pack.sold))} USDC</strong></li>)
         : <li><span>No sales yet</span></li>}</ul>
@@ -359,7 +365,7 @@ function SellerEarnings({ snapshot }: { snapshot: RaffleSnapshot }) {
   const accounting = sellerAccounting(snapshot);
   const phase = Number(snapshot.raffle.phase);
   if (phase === 6) {
-    return <dl className="review-list"><div><dt>Sales</dt><dd>{formatUsdcAmount(accounting.grossPrincipal)} USDC</dd></div><div><dt>Refunded to buyers</dt><dd>{formatUsdcAmount(accounting.refundedPrincipal)} USDC</dd></div><div><dt>Refunds not yet claimed</dt><dd>{formatUsdcAmount(accounting.refundLiability)} USDC</dd></div></dl>;
+    return <dl className="review-list"><div><dt>Sales</dt><dd>{formatUsdcAmount(accounting.grossPrincipal)} USDC</dd></div><div><dt>Refunded to buyers</dt><dd>{formatUsdcAmount(accounting.refundedPrincipal)} USDC</dd></div><div><dt>Owed to buyers</dt><dd>{formatUsdcAmount(accounting.refundLiability)} USDC</dd></div></dl>;
   }
   const share = phase === 5 ? accounting.netProceeds : accounting.grossPrincipal - accounting.grossPrincipal * BigInt(snapshot.policy.sellerFeeBps) / FEE_DENOMINATOR;
   return (
@@ -454,7 +460,7 @@ function purchaseRecap(snapshot: RaffleSnapshot, submitted: SubmittedAction) {
 type Consent = { order: string | null; account: string | null; terms: boolean; rules: boolean; age: boolean };
 const NO_CONSENT: Consent = { order: null, account: null, terms: false, rules: false, age: false };
 
-function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed, writesEnabled, writeDisabledReason }: {
+function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed, writesEnabled, writeDisabledReason, updating }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   account: AccountRaffleState | null;
@@ -464,6 +470,8 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   onConfirmed: () => Promise<void>;
   writesEnabled: boolean;
   writeDisabledReason?: string;
+  /** The raffle or this wallet's account is being re-read. */
+  updating: boolean;
 }) {
   const [packId, setPackId] = useState(() => Math.max(0, snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply)));
   const [quantity, setQuantity] = useState(1);
@@ -615,7 +623,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   const status = !salesOpen && mainActions.length === 0 ? buyerStatus(snapshot, account, buyerAccount) : null;
   return (
     <div className="stack buyer-flow">
-      {purchaseConfirmation && phase === 1 ? <div className="transaction-state notice ok stack" role="status"><strong>You’re in</strong><span>{purchaseOutcome?.kind === "terminal" ? purchaseRecap(snapshot, purchaseOutcome.submitted) ?? "Your purchase is confirmed." : "Your purchase is confirmed."} The draw runs after {formatDate(snapshot.raffle.salesEnd)} UTC.</span><details><summary>Transaction details</summary><p>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</p><p className="hash">{purchaseConfirmation.hash}</p></details>{purchasesEnded ? <button className="text-link" type="button" disabled={!canArchivePurchase} onClick={buyAgain}>Dismiss</button> : salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain ? <p>Updating… Buy again will be ready in a moment.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null}
+      {purchaseConfirmation && phase === 1 ? <div className="transaction-state notice ok stack" role="status"><strong>You’re in</strong><span>{purchaseOutcome?.kind === "terminal" ? purchaseRecap(snapshot, purchaseOutcome.submitted) ?? "Your purchase is confirmed." : "Your purchase is confirmed."} The draw runs after <LocalTime at={snapshot.raffle.salesEnd} />.</span><details><summary>Transaction details</summary><p>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</p><p className="hash">{purchaseConfirmation.hash}</p></details>{purchasesEnded ? <button className="text-link" type="button" disabled={!canArchivePurchase} onClick={buyAgain}>Dismiss</button> : salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain && (updating || quoteState === "loading") ? <p>Updating… Buy again will be ready in a moment.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null}
       {salesOpen && !purchaseConfirmation ? (
         <>
           {selectionNotice ? <p className="notice warning" role="status">{selectionNotice}</p> : null}
@@ -647,7 +655,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
           {!quantityValid ? <p id="membership-qty-error" className="notice error" role="alert">Quantity must be a whole number from 1 to 20.</p> : null}
           {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
           {payment === "eth" && quote?.eth.kind === "unavailable" ? <div className="notice warning stack" role="status"><p>ETH payment is no longer available for this quote. Choose USDC and review the total again.</p><button className="btn" type="button" onClick={() => { setPayment("usdc"); setConsent(NO_CONSENT); setAgreementState("idle"); agreementGeneration.current += 1; }}>Use USDC</button></div> : null}
-          {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd>{formatDate(quote.eth.deadline)} UTC</dd></div></dl> : null}</> : null}
+          {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd><LocalTime at={quote.eth.deadline} /></dd></div></dl> : null}</> : null}
           {!termsMatch ? <p className="notice error" role="alert">The raffle’s published terms do not match this website version. Purchasing is blocked.</p> : (
             <fieldset className={`agreements ${checkout.agreements}`}>
               <legend>Before you buy</legend>
@@ -660,7 +668,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
           {steps ? <ol className={checkout.steps} aria-label="Purchase steps">{steps.map((step, index) => <li key={step.label} data-state={step.done ? "done" : index === currentStep ? "current" : "upcoming"} aria-current={index === currentStep ? "step" : undefined}><span aria-hidden="true">{step.done ? "✓" : index + 1}</span><span>{step.label}</span>{step.done ? <span className="sr"> (done)</span> : null}</li>)}</ol> : null}
           <div className={`${checkout.action} checkout-bar`}>
           {total && selected ? <p className={checkout.barTotal}><span>{selected.name} × {quantity}</span><strong>{total} USDC</strong></p> : null}
-          <WalletGate wallet={browser.wallet}>
+          <WalletGate wallet={browser.wallet} goal="buy">
             {!account ? <p className="notice" role="status">Checking your USDC balance…</p> : !quote ? <p className="notice" role="status">{quoteState === "loading" ? "Updating total…" : "Choose an available membership."}</p> : insufficientUsdc ? <p className="notice warning" role="status">Not enough USDC. You need {total} USDC.</p> : needsApproval && payment === "usdc" ? (
               approval?.enabled ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label={`Approve ${total} USDC`} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
             ) : !allAgreed ? <p className="notice warning" role="status">Tick the three boxes to continue.</p>
@@ -677,8 +685,8 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
         const copy = buyerActionCopy(snapshot, item, account);
         return <section key={item.kind} className="workflow-next stack"><div><h2>{copy.title}</h2>{copy.text ? <p>{copy.text}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction(snapshot, item.kind)} label={copy.label} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
       })}
-      {account && account.principal > 0n && phase !== 6 ? <div className="account-balance"><span>Membership price paid</span><strong>{formatUsdcAmount(account.principal)} USDC</strong><small>{phase === 5 ? `Plus the ${formatUsdcAmount(account.fee)} USDC processing fee.` : `Plus the ${formatUsdcAmount(account.fee)} USDC processing fee. If this raffle is cancelled, you get ${formatUsdcAmount(account.principal)} USDC back. The processing fee is not refunded.`}</small></div> : null}
-      {helpActions.length ? <details className="workflow-details help-finish"><summary>Help finish this raffle</summary><div className="stack"><p>Optional. Anyone can run these steps for a network fee. They pay you nothing.</p>{helpActions.map(item => <TransactionFlow key={item.kind} service={browser.service} wallet={browser.wallet} action={recoveryAction(snapshot, item.kind)} label={item.label} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} />)}</div></details> : null}
+      {account && account.principal > 0n && phase !== 6 ? <div className="account-balance"><span>Membership price paid</span><strong>{formatUsdcAmount(account.principal)} USDC</strong><small>{phase <= 3 ? `Plus the ${formatUsdcAmount(account.fee)} USDC processing fee. If this raffle is cancelled, you get ${formatUsdcAmount(account.principal)} USDC back. The processing fee is not refunded.` : `Plus the ${formatUsdcAmount(account.fee)} USDC processing fee.`}</small></div> : null}
+      {helpActions.length ? <details className="workflow-details help-finish"><summary>Other actions</summary><div className="stack"><p>Optional. Anyone can run these steps for a network fee. They pay you nothing.</p>{helpActions.map(item => <TransactionFlow key={item.kind} service={browser.service} wallet={browser.wallet} action={recoveryAction(snapshot, item.kind)} label={item.label} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} />)}</div></details> : null}
     </div>
   );
 }
@@ -728,7 +736,8 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   const control = (item: SellerActionAvailability) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />;
   const paid = Number(snapshot.raffle.phase) === 5 && snapshot.raffle.principalEscrow === 0n ? sellerAccounting(snapshot).paidProceeds : null;
   return (
-    <div className="stack">
+    // aria-busy holds the page's background re-read until Reclaim NFT has started after its cancellation.
+    <div className="stack" aria-busy={reclaimAfter !== null || undefined}>
       {primary ? <SellerActionControl key={primary.kind} primary description={next.kind === "action" ? next.message : undefined} browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} onCancelled={block => setReclaimAfter({ id: snapshot.id, block })} submitOnMount={reclaimNow} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
         : next.kind === "automatic" ? <><section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section><details className="workflow-details"><summary>Run it yourself</summary>{control(next.action)}</details></>
         : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p>{paid !== null ? <p className="workflow-fact">Paid to you: {formatUsdcAmount(paid)} USDC</p> : null}</section> : null}
@@ -783,7 +792,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   if (availability.kind === "reveal") {
     if (!recoverCommitment) return <p className="notice warning" role="status">Draw setup recovery is not configured, so the draw cannot be confirmed here.</p>;
     const heading = <div><h2>{availability.label}</h2><p>{sellerStepText(snapshot, "reveal")}</p></div>;
-    if (!recovered) return <section className="workflow-next stack">{heading}<button className="btn" type="button" disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Waiting for signature…" : availability.label}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    if (!recovered) return <section className="workflow-next stack">{heading}<button className="btn" type="button" aria-busy={preflight === "loading" || undefined} disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Waiting for signature…" : availability.label}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
     // One click: the signature above loaded the draw setup, so the confirmation goes straight to the wallet once. A retry needs a click.
     return <section className="workflow-next stack">{heading}<TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label={availability.label} submitOnClick submitOnMount formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
   }

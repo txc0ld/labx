@@ -16,3 +16,9 @@ export function createStepMessage(step: string, tokenId: bigint | string): strin
     default: return step;
   }
 }
+
+/** The same text without "Step N of 4: ", for finishing a raffle that already exists, which needs fewer wallet prompts. */
+export function unnumberedStep(message: string): string {
+  const text = message.replace(/^Step \d of 4: /, "");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

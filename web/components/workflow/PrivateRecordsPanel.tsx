@@ -7,7 +7,7 @@ import type { BrowserService } from "@/lib/chain/ports";
 import { loadPrivateRecordBatches } from "./record-batches";
 import type { BlockRef, HistoryItem, WalletSnapshot } from "@/lib/chain/types";
 import { sameAddress } from "@/lib/chain/validation";
-import { formatUsdcAmount } from "./usdc-amount";
+import { formatUsdcAmount } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type PrivateRecords = {

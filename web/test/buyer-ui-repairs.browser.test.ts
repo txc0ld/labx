@@ -1,6 +1,7 @@
 import { openWalletActivity } from "./fixtures/wallet-activity";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { erc20Abi, keccak256, toBytes, type Address } from "viem";
+import type { Locator } from "playwright";
+import { encodeFunctionData, erc20Abi, keccak256, toBytes, type Address } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
@@ -56,6 +57,21 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await expect.poll(async () => await connect.isVisible().catch(() => false) || await identity.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
     if (await connect.isVisible().catch(() => false)) await connect.click();
     await identity.waitFor({ state: "visible", timeout: 15_000 });
+  }
+
+  /** The button is inside the viewport, on top, and no element between it and the page scrolls on its own. */
+  async function expectFullyOnScreen(button: Locator) {
+    await button.waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => button.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      const inside = box.top >= 0 && box.left >= 0 && box.bottom <= window.innerHeight && box.right <= document.documentElement.clientWidth;
+      let innerScroll = false;
+      for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+        if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) innerScroll = true;
+      }
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return { inside, innerScroll, onTop: top !== null && element.contains(top) };
+    }), { timeout: 5_000 }).toEqual({ inside: true, innerScroll: false, onTop: true });
   }
 
   beforeAll(async () => {
@@ -338,9 +354,9 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(await quantity.inputValue()).toBe("2");
   }, 45_000);
   it("keeps expanded seller actions open when an older saved receipt finishes verification", async () => {
-    const snapshot = await service.readRaffle({ id: 3n });
     const historical = await chain.write(chain.usdc, "approve", [chain.raffle.address, 100n], chain.seller);
-    await chain.warp(snapshot.raffle.salesEnd);
+    await chain.mine();
+    await chain.mine();
     const hint = historical.transactionHash;
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
       key: `labx:outcome:v1:31337:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.seller.toLowerCase()}:${hint}`, value: hint
@@ -353,10 +369,11 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await route.continue();
     });
     try {
+      // Raffle 2 is live with no sales, so Advanced holds Cancel raffle. Confirm the draw waits for a drawn winner.
       await fixture.switchAccount(chain.seller);
-      await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
+      await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
       const connect = fixture.page.getByRole("button", { name: "Connect wallet", exact: true });
-      const heading = fixture.page.getByRole("heading", { name: "Refreshing selection raffle", exact: true });
+      const heading = fixture.page.getByRole("heading", { name: "Recovery account raffle", exact: true });
       await expect.poll(async () => await connect.isVisible().catch(() => false) || await heading.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
       if (await connect.isVisible().catch(() => false)) await connect.click();
       await heading.waitFor({ state: "visible", timeout: 15_000 });
@@ -364,15 +381,91 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await details.locator("summary").waitFor({ state: "visible", timeout: 15_000 });
       await details.locator("summary").click();
       expect(await details.getAttribute("open")).not.toBeNull();
+      expect(await details.getByRole("button", { name: "Confirm the draw", exact: true }).count()).toBe(0);
       release();
       await openWalletActivity(fixture.page);
       const outcome = fixture.page.locator(".transaction-outcome").filter({ hasText: hint });
       await expect.poll(() => outcome.innerText(), { timeout: 10_000 }).toContain("Transaction confirmed");
       await fixture.page.waitForTimeout(300);
       expect(await details.getAttribute("open")).not.toBeNull();
-      expect(await fixture.page.getByRole("button", { name: "Confirm the draw", exact: true }).isVisible()).toBe(true);
-      expect(await fixture.page.getByRole("button", { name: "Confirm the draw", exact: true }).isEnabled()).toBe(true);
+      const cancel = details.getByRole("button", { name: "Cancel raffle", exact: true });
+      expect(await cancel.isVisible()).toBe(true);
+      expect(await cancel.isEnabled()).toBe(true);
     } finally { release(); await fixture.page.unroute(`${chain.url}/`); }
   }, 30_000);
 
+  it("keeps Confirm approval, Confirm purchase and Back fully on screen at 320x700 and 390x844 without inner scrolling", async () => {
+    const sizes = [{ width: 320, height: 700 }, { width: 390, height: 844 }];
+    const review = fixture.page.locator(".transaction-review");
+    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
+    for (const size of sizes) {
+      await fixture.page.setViewportSize(size);
+      await openPiece(2n, chain.buyer);
+      await approve.click();
+      await expectFullyOnScreen(review.getByRole("button", { name: "Confirm approval", exact: true }));
+      await expectFullyOnScreen(review.getByRole("button", { name: "Back", exact: true }));
+      await review.getByRole("button", { name: "Back", exact: true }).click();
+      await review.waitFor({ state: "detached", timeout: 10_000 });
+    }
+
+    await approve.click();
+    await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
+    await fixture.page.getByText("Done.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBeGreaterThan(0n);
+    for (const size of sizes) {
+      await fixture.page.setViewportSize(size);
+      await openPiece(2n, chain.buyer);
+      const agreements = fixture.page.locator(".agreements input[type=checkbox]");
+      const sign = fixture.page.getByRole("button", { name: "Sign agreement", exact: true });
+      await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(async () => {
+        for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
+        return await sign.isVisible() && await sign.isEnabled();
+      }, { timeout: 10_000 }).toBe(true);
+      await sign.click();
+      const purchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
+      await purchase.waitFor({ state: "visible", timeout: 10_000 });
+      await purchase.click();
+      await expectFullyOnScreen(review.getByRole("button", { name: "Confirm purchase", exact: true }));
+      await expectFullyOnScreen(review.getByRole("button", { name: "Back", exact: true }));
+      await review.getByRole("button", { name: "Back", exact: true }).click();
+      await review.waitFor({ state: "detached", timeout: 10_000 });
+    }
+    expect((await service.readAccount({ id: 2n, account: chain.buyer })).principal).toBe(0n);
+  }, 90_000);
+
+  it("re-reads a raffle with nothing to buy only in the last 15 minutes before its deadline", async () => {
+    await chain.write(chain.raffle, "setPaused", [true]);
+    const selector = encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [2n] }).slice(0, 10);
+    let reads = 0;
+    try {
+      await fixture.page.setViewportSize({ width: 1280, height: 900 });
+      await fixture.switchAccount(chain.stranger);
+      await fixture.page.goto(`${fixture.baseUrl}/piece/2`, { waitUntil: "domcontentloaded" });
+      await fixture.page.getByRole("heading", { name: "Sales are paused", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+      await fixture.page.waitForLoadState("networkidle");
+      await fixture.page.route(`${chain.url}/`, async route => {
+        const body: unknown = route.request().postDataJSON();
+        for (const request of Array.isArray(body) ? body : [body]) {
+          if (!request || typeof request !== "object" || !("method" in request) || request.method !== "eth_call" || !("params" in request) || !Array.isArray(request.params)) continue;
+          const call: unknown = request.params[0];
+          if (call && typeof call === "object" && "data" in call && typeof call.data === "string" && call.data.startsWith(selector)) reads++;
+        }
+        await route.continue();
+      });
+      // More than 15 minutes before the deadline the page stays still.
+      await fixture.page.waitForTimeout(20_000);
+      expect(reads).toBe(0);
+
+      const { raffle } = await service.readRaffle({ id: 2n });
+      await chain.warp(raffle.salesEnd - 600n);
+      await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect.poll(() => fixture.page.getByRole("button", { name: "Updating…", exact: true }).count(), { timeout: 15_000 }).toBe(0);
+      reads = 0;
+      await expect.poll(() => reads, { timeout: 25_000 }).toBeGreaterThan(0);
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+      await chain.write(chain.raffle, "setPaused", [false]);
+    }
+  }, 90_000);
 });

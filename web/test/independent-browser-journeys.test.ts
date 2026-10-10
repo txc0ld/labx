@@ -68,7 +68,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
         ? fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true })
         : path.startsWith("/seller/")
           ? fixture.page.locator("details.workflow-details > summary").first()
-          : fixture.page.getByRole("button", { name: /^(Approve [\d.,]+ USDC|Claim your NFT|Claim [\d.,]+ USDC refund)$/ }).or(fixture.page.locator("summary").filter({ hasText: "Help finish this raffle" })).first();
+          : fixture.page.getByRole("button", { name: /^(Approve [\d.,]+ USDC|Claim your NFT|Claim [\d.,]+ USDC refund)$/ }).or(fixture.page.locator("summary").filter({ hasText: "Other actions" })).first();
     await connectWallet(fixture.page, ready);
     await expect.poll(async () => fixture.page.evaluate(async () => {
       const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
@@ -78,7 +78,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
 
   async function revealTrigger(label: string) {
     const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
-    const secondary = fixture.page.locator("summary").filter({ hasText: /^(Advanced \(|Help finish this raffle)/ });
+    const secondary = fixture.page.locator("summary").filter({ hasText: /^(Advanced \(|Other actions)/ });
     await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
     if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
     return trigger;

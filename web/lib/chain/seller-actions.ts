@@ -84,11 +84,11 @@ const RUNNER_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) 
 /** What a seller step does, in the words its card uses. */
 export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind): string {
   switch (kind) {
-    case "close": return "Sales have ended. Close sales to start the draw.";
+    case "close": return "Sales have ended. Close sales so entries can be counted.";
     case "snapshot": return "Locks in every purchase for the draw.";
     case "requestRandomness": return "Picks a random winner. The result usually takes a few minutes.";
     case "reveal": return "Sign to load your saved draw setup, then confirm it. This lets you finish now instead of waiting 7 days.";
-    case "settle": return "Pays out the sales and lets the winner claim the NFT.";
+    case "settle": return "Finishes the raffle so you can claim your sales and the winner can claim the NFT.";
     case "claimProceeds": return "The raffle is complete. Your share of the sales is ready.";
     case "cancel":
       if (snapshot.raffle.phase === 0) return snapshot.raffle.escrowed ? "Cancels this draft. You can then reclaim your NFT." : "Cancels this draft.";
@@ -160,12 +160,13 @@ function manualNextStep(snapshot: RaffleSnapshot, actions: readonly SellerAction
   }
 }
 
-/** Enabled seller actions other than the next step, in portal order. Draw controls are dropped once no draw can happen. */
+/** Enabled seller actions other than the next step, in portal order. Draw controls are dropped once no draw can happen, and Confirm the draw waits until a winner is drawn. */
 export function sellerSecondaryActions(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], next: SellerNextStep): readonly SellerActionAvailability[] {
   const primary = next.kind === "waiting" ? null : next.action.kind;
   const blocked = drawBlocker(snapshot) !== null;
+  const beforeDraw = snapshot.raffle.phase < 4;
   return SELLER_ACTION_KINDS.flatMap(kind => {
     const item = actions.find(candidate => candidate.kind === kind && candidate.enabled);
-    return item && kind !== "updateDraft" && kind !== primary && !(blocked && DRAW_KINDS.has(kind)) ? [item] : [];
+    return item && kind !== "updateDraft" && kind !== primary && !(blocked && DRAW_KINDS.has(kind)) && !(beforeDraw && kind === "reveal") ? [item] : [];
   });
 }
