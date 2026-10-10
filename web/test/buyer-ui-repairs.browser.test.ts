@@ -111,12 +111,13 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
     const approvalReview = fixture.page.locator(".transaction-review");
     await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
+    await approvalReview.locator("summary", { hasText: "Transaction details" }).click();
     const approvalText = await approvalReview.innerText();
     expect(approvalText).toMatch(/Raffle\s+#?1/i);
     expect(approvalText).toMatch(/Pack ID\s+3/i);
     expect(approvalText).toMatch(/Quantity\s+3/i);
     expect(approvalText).toContain("153 USDC");
-    await approvalReview.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
+    await approvalReview.getByRole("button", { name: "Confirm approval", exact: true }).click();
 
     await expect.poll(() => gold.isChecked(), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => quantity.inputValue(), { timeout: 15_000 }).toBe("3");
@@ -136,11 +137,12 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).click();
     const purchaseReview = fixture.page.locator(".transaction-review");
     await purchaseReview.waitFor({ state: "visible", timeout: 10_000 });
+    await purchaseReview.locator("summary", { hasText: "Transaction details" }).click();
     const purchaseText = await purchaseReview.innerText();
     expect(purchaseText).toMatch(/Raffle\s+#?1/i);
     expect(purchaseText).toMatch(/Pack ID\s+3/i);
     expect(purchaseText).toMatch(/Quantity\s+3/i);
-    await purchaseReview.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+    await purchaseReview.getByRole("button", { name: "Confirm purchase", exact: true }).click();
 
     const confirmed = fixture.page.locator(".transaction-state", { hasText: "Confirmed" });
     await confirmed.waitFor({ state: "visible", timeout: 15_000 });
@@ -196,12 +198,12 @@ run("buyer UI repair invariants in a rendered browser", () => {
       localStorage.setItem(key, JSON.stringify({ id: "buyer-ui-recovery", intentHash, nonce: 9, startedBlock: "1", hash: null }));
     }, { key: journalKey, intentHash: keccak256(toBytes("unresolved-buyer-action")) });
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.locator(".buyer-flow").getByText("Reconcile pending wallet activity", { exact: true }).waitFor({ state: "visible", timeout: 10_000 }).catch(async (error: unknown) => {
+    await fixture.page.locator(".buyer-flow").getByText("Your last transaction needs a check", { exact: true }).waitFor({ state: "visible", timeout: 10_000 }).catch(async (error: unknown) => {
       throw new Error(`${error instanceof Error ? error.message : "Recovery action did not appear."}\nRendered page:\n${await fixture.page.locator("#content").innerText()}`);
     });
 
     await fixture.switchAccount(chain.stranger);
-    await expect.poll(async () => fixture.page.locator(".buyer-flow").getByText("Reconcile pending wallet activity", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+    await expect.poll(async () => fixture.page.locator(".buyer-flow").getByText("Your last transaction needs a check", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), journalKey)).not.toBeNull();
     await fixture.page.evaluate((key: string) => localStorage.removeItem(key), journalKey);
@@ -307,8 +309,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     });
 
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
-    await fixture.page.getByText("Wallet request rejected", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await fixture.page.getByText("The wallet request was rejected. No transaction was submitted.", { exact: true }).waitFor({ state: "visible" });
+    await fixture.page.getByText("Cancelled in your wallet. Nothing was sent.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).click();
     await fixture.page.locator(".transaction-review").waitFor({ state: "visible", timeout: 10_000 });

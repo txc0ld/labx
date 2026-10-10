@@ -6,7 +6,7 @@ import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import { transactionMeaning, type TransactionOutcome } from "@/lib/chain/transaction-outcomes";
 import { useWalletSnapshot } from "./WalletGate";
-import { useTransactionOutcomes } from "./useTransactionOutcomes";
+import { useSavedHashCheck, useTransactionOutcomes } from "./useTransactionOutcomes";
 
 export function isTransactionHistory(outcome: TransactionOutcome, journalClear: boolean): boolean {
   return outcome.kind === "terminal" || outcome.kind === "rejected"
@@ -34,6 +34,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const editedHash = useRef(false);
   const journalActivity = outcomes.filter(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending").map(item => `${item.id}:${item.kind}`).join("|");
   const connected = wallet.kind === "connected" && wallet.chainId === browser.service.manifest.chainId;
+  const savedCheck = useSavedHashCheck(browser.service, browser.wallet, pending?.hash ?? null);
 
   useEffect(() => {
     const version = ++generation.current;
@@ -57,7 +58,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
       if (active && version === generation.current) setError(reason instanceof Error ? reason.message : "Pending wallet activity could not be read.");
     });
     return () => { active = false; };
-  }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking]);
+  }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck]);
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;
@@ -113,18 +114,29 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const journalClear = clearJournal?.service === browser.service && clearJournal.wallet === browser.wallet && clearJournal.revision === wallet.revision && clearJournal.activity === journalActivity;
   const history = outcomes.filter(outcome => isTransactionHistory(outcome, journalClear));
   const unresolved = outcomes.filter(outcome => !isTransactionHistory(outcome, journalClear));
+  // A normal wait: this tab's wallet request is open, or the saved hash is being checked automatically. Its outcome
+  // rows and the manual form stay one click away instead of filling the page.
+  const normalWait = pending !== null && !error && (pending.hash ? savedCheck !== null && savedCheck !== "attention" : unresolved.some(outcome => outcome.kind === "submitting"));
+  const waiting = (outcome: TransactionOutcome) => normalWait && (outcome.kind === "submitting"
+    || pending?.hash != null && outcomeTransactionHash(outcome)?.toLowerCase() === pending.hash.toLowerCase());
   if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error) return null;
+  const form = pending || !pendingOnly ? <form className="well pad stack" onSubmit={submit}>
+    {pending ? <div><h2>Your last transaction needs a check</h2><p>Open your wallet’s activity. When it shows that transaction as done, failed or replaced, check its hash here. New actions stay paused until then.</p></div>
+      : <div><h2>Resume after reload</h2><p>Use a transaction hash from this connected wallet to check its on-chain result. A submitted hash is not treated as success.</p></div>}
+    <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => { editedHash.current = true; setHash(event.target.value.trim()); }} placeholder="0x…" /></label>
+    <button className="btn btn-dark" type="submit" disabled={checking}>{checking ? "Checking confirmation…" : "Check transaction"}</button>
+    {pending ? <details><summary>Details</summary><p>Unresolved transaction at nonce {pending.nonce}. {pending.hash ? "Its saved hash is filled in above." : "Check wallet activity for the actual transaction or a same-nonce replacement or cancellation hash."}</p></details> : null}
+  </form> : null;
   return (
     <section className="stack resume-transaction" aria-label="Wallet transaction outcomes">
-      {unresolved.map(renderOutcome)}
+      {unresolved.filter(outcome => !waiting(outcome)).map(renderOutcome)}
       {history.length ? <details className="workflow-details"><summary>Activity ({history.length})</summary><div className="stack">{history.map(renderOutcome)}</div></details> : null}
-      {pending || !pendingOnly ? <form className="well pad stack" onSubmit={submit}>
-        <div><h2>{pending ? "Pending wallet activity" : "Resume after reload"}</h2><p>Use a transaction hash from this connected wallet to check its on-chain result. A submitted hash is not treated as success.</p></div>
-        {pending ? <p className="notice warning" role="status">Reconcile this wallet’s unresolved transaction at nonce {pending.nonce} before submitting another action. {pending.hash ? "Its saved hash is filled in below." : "Check wallet activity for the actual transaction or a same-nonce replacement/cancellation hash."}</p> : null}
-        <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => { editedHash.current = true; setHash(event.target.value.trim()); }} placeholder="0x…" /></label>
-        <button className="btn btn-dark" type="submit" disabled={checking}>{checking ? "Checking confirmation…" : "Check transaction"}</button>
-      </form> : null}
+      {normalWait ? <details className="workflow-details"><summary>Transaction details</summary><div className="stack">{unresolved.filter(waiting).map(renderOutcome)}{form}</div></details> : form}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </section>
   );
+}
+
+function outcomeTransactionHash(outcome: TransactionOutcome) {
+  return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
 }

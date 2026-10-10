@@ -79,7 +79,7 @@ run("independent seller simplification boundaries", () => {
     const advanced = fixture.page.locator("details.workflow-details > summary").filter({ hasText: /^Advanced \(/ });
     await connectWallet(fixture.page, advanced);
     await advanced.click();
-    await fixture.page.getByText("Reconcile pending wallet activity", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByText("Your last transaction needs a check", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction" || method === "personal_sign" || method === "eth_sign")).toEqual([]);
 
     await fixture.page.evaluate(key => localStorage.removeItem(key), pendingKey(chain.seller));
