@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
-  createPublicClient, encodeFunctionData, EstimateGasExecutionError, ExecutionRevertedError, http, HttpRequestError, InsufficientFundsError, pad, parseEther,
-  parseGwei, TimeoutError, toHex, WaitForTransactionReceiptTimeoutError, zeroAddress, zeroHash, type Address, type Hex
+  createPublicClient, decodeFunctionData, encodeAbiParameters, encodeFunctionData, encodeFunctionResult, EstimateGasExecutionError, ExecutionRevertedError, http, HttpRequestError, InsufficientFundsError, pad, parseEther,
+  parseAbi, parseGwei, TimeoutError, toHex, WaitForTransactionReceiptTimeoutError, zeroAddress, zeroHash, type Address, type Hex
 } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { raffleAbi } from "../lib/chain/abi";
 import type { PreparedAction, Raffle, RaffleSnapshot } from "../lib/chain/types";
 import { MemoryStore } from "../lib/store";
 import type { Store } from "../lib/points";
-import { assertRunnerCall, mayNeedRunner, nextRunnerAction, scanWindow, type RunnerAction } from "../lib/draw-runner/decide";
+import { assertRunnerCall, mayNeedRunner, nextRunnerAction, SCAN_CONCURRENCY, scanRaffles, scanWindow, type RunnerAction } from "../lib/draw-runner/decide";
 import { createDrawChain, privilegedAddresses } from "../lib/draw-runner/chain";
 import { errorCategory, RunnerTimeoutError, within } from "../lib/draw-runner/errors";
 import { createDrawCronHandler, runnerAccount } from "../lib/draw-runner/http";
 import {
-  GAS_CAP, LEASE_BUCKET_MS, leaseKeys, MAX_FEE_PER_GAS, MIN_BALANCE, requiredBalance, RUN_MS, type DrawChain, type Quote, type RunItem, type SendResult
+  GAS_CAP, LEASE_BUCKET_MS, leaseKeys, MAX_FEE_PER_GAS, MIN_BALANCE, requiredBalance, RUN_MS, SCAN_LIMIT, SCAN_MS, type DrawChain, type Quote, type RunItem, type SendResult
 } from "../lib/draw-runner/run";
 
 // Anvil's public test mnemonic. These keys hold nothing outside a local test chain.
@@ -112,6 +112,39 @@ describe("draw runner scan window", () => {
   });
 });
 
+describe("draw runner scan reads", () => {
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => BigInt(index + 1));
+  const even = (id: bigint) => id % 2n === 0n;
+
+  it("reads the window at most SCAN_CONCURRENCY at a time and keeps the raffles that pass", async () => {
+    let active = 0, peak = 0;
+    const read = async (id: bigint) => { active++; peak = Math.max(peak, active); await new Promise(done => setTimeout(done, 1)); active--; return id; };
+    const result = await scanRaffles({ cursor: 991n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 10_000, read, keep: even });
+    expect(peak).toBe(SCAN_CONCURRENCY);
+    expect(result).toEqual({ candidates: [...ids(1000).slice(990), ...ids(490)].filter(even), nextCursor: 491n, stop: null });
+  });
+
+  it("keeps the raffles before a failed read and resumes after it", async () => {
+    const read = async (id: bigint) => { if (id === 7n) throw new Error("rpc failed"); return id; };
+    expect(await scanRaffles({ cursor: 1n, nextId: 21n, limit: 20, timeoutMs: 10_000, read, keep: () => true }))
+      .toEqual({ candidates: ids(6), nextCursor: 8n, stop: "interrupted" });
+    expect(await scanRaffles({ cursor: 1n, nextId: 21n, limit: 7, timeoutMs: 10_000, read, keep: () => true }))
+      .toEqual({ candidates: ids(6), nextCursor: 8n, stop: "interrupted" });
+  });
+
+  it("keeps the raffles read before the time ran out, resumes at the first unread raffle and starts no read after that", async () => {
+    const reads: bigint[] = [];
+    const read = (id: bigint) => { reads.push(id); return id === 5n ? new Promise<bigint>(() => {}) : new Promise<bigint>(done => setTimeout(() => done(id), 2)); };
+    expect(await scanRaffles({ cursor: 1n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 30, read, keep: () => true }))
+      .toEqual({ candidates: ids(4), nextCursor: 5n, stop: "deadline" });
+    const count = reads.length;
+    expect(count).toBeGreaterThan(SCAN_CONCURRENCY);
+    expect(count).toBeLessThan(SCAN_LIMIT);
+    await new Promise(done => setTimeout(done, 30));
+    expect(reads).toHaveLength(count);
+  });
+});
+
 function prepared(action: RunnerAction, changes: Partial<PreparedAction> = {}): PreparedAction {
   const data = action.kind === "snapshot"
     ? encodeFunctionData({ abi: raffleAbi, functionName: "snapshot", args: [action.id, action.maxSteps] })
@@ -138,14 +171,18 @@ describe("draw runner call allowlist", () => {
 
 describe("draw runner key", () => {
   it.each([
-    ["missing", undefined], ["empty", ""], ["without 0x", runnerKey.slice(2)], ["short", runnerKey.slice(0, 64)],
-    ["with whitespace", `${runnerKey} `], ["not hex", `0x${"zz".repeat(32)}`], ["zero", `0x${"00".repeat(32)}`],
-    ["above the curve order", `0x${"ff".repeat(32)}`]
+    ["missing", undefined], ["empty", ""], ["short", runnerKey.slice(0, 64)], ["short without 0x", runnerKey.slice(3)],
+    ["long without 0x", `${runnerKey.slice(2)}0`], ["with an uppercase 0X", `0X${runnerKey.slice(2)}`], ["with a doubled prefix", `0x${runnerKey}`],
+    ["with whitespace", `${runnerKey} `], ["without 0x and with whitespace", ` ${runnerKey.slice(2)}`], ["not hex", `0x${"zz".repeat(32)}`],
+    ["zero", `0x${"00".repeat(32)}`], ["zero without 0x", "00".repeat(32)], ["above the curve order", `0x${"ff".repeat(32)}`]
   ])("rejects a %s key", (_, value) => {
     expect(runnerAccount(value)).toBeNull();
   });
-  it("derives the runner address from a valid key", () => {
+  it("derives the runner address from a valid key with or without the 0x prefix", () => {
     expect(runnerAccount(runnerKey)?.address).toBe(runner);
+    expect(runnerKey.slice(2)).toMatch(/^[0-9a-f]{64}$/);
+    expect(runnerAccount(runnerKey.slice(2))?.address).toBe(runner);
+    expect(runnerAccount(runnerKey.slice(2).toUpperCase())?.address).toBe(runner);
   });
 });
 
@@ -158,28 +195,51 @@ describe("privileged address discovery", () => {
   const signer: Address = "0x6666666666666666666666666666666666666666";
   const nested: Address = "0x7777777777777777777777777777777777777777";
   const deep: Address = "0x8888888888888888888888888888888888888888";
-  type Safe = { owners: readonly Address[]; modules?: readonly Address[]; next?: Address; fail?: "getOwners" | "getModulesPaginated" };
+  const safeAbi = parseAbi([
+    "function getOwners() view returns (address[])",
+    "function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)"
+  ]);
+  type SafeCall = "getOwners" | "getModulesPaginated";
+  type Answer = { result: Hex } | { error: { code: number; message: string; data?: Hex } } | "network";
+  const reverted: Answer = { error: { code: 3, message: "execution reverted" } };
+  type Safe = { owners: readonly Address[]; modules?: readonly Address[]; next?: Address; fail?: SafeCall; answer?: Partial<Record<SafeCall, Answer>> };
+  /** A fake JSON-RPC node behind a real viem client, so call errors are classified the way a live node's would be. */
   function world(state: { owner?: Address; pendingOwner?: Address; treasury?: Address; safes?: Record<Address, Safe>; delegated?: readonly Address[]; failCode?: Address; failRead?: string }) {
     const safes = new Map(Object.entries(state.safes ?? {}).map(([address, safe]) => [address.toLowerCase(), safe]));
     const calls: string[] = [];
-    const client = {
-      getCode: vi.fn(async ({ address }: { address: Address }) => {
+    const same = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
+    function answer(method: string, params: readonly unknown[]): Answer {
+      if (method === "eth_getCode") {
+        const address = params[0] as Address;
         calls.push(`getCode:${address}`);
-        if (state.failCode && address.toLowerCase() === state.failCode.toLowerCase()) throw new Error("rpc failed");
-        if (state.delegated?.some(item => item.toLowerCase() === address.toLowerCase())) return `0xef0100${"ab".repeat(20)}` as Hex;
-        return safes.has(address.toLowerCase()) ? "0x6080" as Hex : undefined;
-      }),
-      readContract: vi.fn(async ({ address, functionName, args }: { address: Address; functionName: string; args?: readonly unknown[] }) => {
-        calls.push(`${functionName}:${address}`);
-        if (state.failRead === functionName) throw new Error("execution reverted");
-        if (address === contract) return functionName === "owner" ? state.owner ?? owner : functionName === "pendingOwner" ? state.pendingOwner ?? zeroAddress : state.treasury ?? owner;
-        const safe = safes.get(address.toLowerCase());
-        if (!safe || safe.fail === functionName) throw new Error("execution reverted");
-        if (functionName === "getOwners") return safe.owners;
-        expect(args).toEqual(["0x0000000000000000000000000000000000000001", 50n]);
-        return [safe.modules ?? [], safe.next ?? "0x0000000000000000000000000000000000000001"];
-      })
-    } as unknown as Parameters<typeof privilegedAddresses>[0];
+        if (state.failCode && same(address, state.failCode)) return "network";
+        if (state.delegated?.some(item => same(item, address))) return { result: `0xef0100${"ab".repeat(20)}` };
+        return { result: safes.has(address.toLowerCase()) ? "0x6080" : "0x" };
+      }
+      if (method !== "eth_call") throw new Error(`Unexpected ${method}.`);
+      const { to, data } = params[0] as { to: Address; data: Hex };
+      const call = decodeFunctionData({ abi: [...raffleAbi, ...safeAbi], data });
+      calls.push(`${call.functionName}:${to}`);
+      if (same(to, contract)) {
+        if (state.failRead === call.functionName) return reverted;
+        const value = call.functionName === "owner" ? state.owner ?? owner : call.functionName === "pendingOwner" ? state.pendingOwner ?? zeroAddress : state.treasury ?? owner;
+        return { result: encodeAbiParameters([{ type: "address" }], [value]) };
+      }
+      const safe = safes.get(to.toLowerCase());
+      if (!safe || safe.fail === call.functionName) return reverted;
+      const override = safe.answer?.[call.functionName as SafeCall];
+      if (override) return override;
+      if (call.functionName === "getOwners") return { result: encodeFunctionResult({ abi: safeAbi, functionName: "getOwners", result: safe.owners }) };
+      expect(call.args).toEqual(["0x0000000000000000000000000000000000000001", 50n]);
+      return { result: encodeFunctionResult({ abi: safeAbi, functionName: "getModulesPaginated", result: [safe.modules ?? [], safe.next ?? "0x0000000000000000000000000000000000000001"] }) };
+    }
+    const fetchFn = async (_: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: readonly unknown[] };
+      const reply = answer(body.method, body.params);
+      if (reply === "network") throw new TypeError("fetch failed");
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, ...reply }), { headers: { "Content-Type": "application/json" } });
+    };
+    const client = createPublicClient({ transport: http("http://127.0.0.1:1/rpc", { fetchFn: fetchFn as typeof fetch, retryCount: 0 }) });
     return { client, calls };
   }
   const list = (state: Parameters<typeof world>[0]) => privilegedAddresses(world(state).client, manifest, 1n);
@@ -196,12 +256,30 @@ describe("privileged address discovery", () => {
     await expect(list({ safes: { [owner]: { owners: [signer, runner] } } })).resolves.toEqual([owner, signer, runner]);
     await expect(list({ safes: { [owner]: { owners: [signer], modules: [runner] } } })).resolves.toEqual([owner, signer, runner]);
   });
-  it("treats an EIP-7702 delegated signer as a wallet instead of reading it as a Safe", async () => {
+  it("treats an EIP-7702 account whose delegate reverts the Safe calls as a wallet", async () => {
     const { client, calls } = world({ safes: { [owner]: { owners: [signer, runner] } }, delegated: [signer] });
     await expect(privilegedAddresses(client, manifest, 1n)).resolves.toEqual([owner, signer, runner]);
     expect(calls).toContain(`getCode:${signer}`);
-    expect(calls).not.toContain(`getOwners:${signer}`);
+    expect(calls).toContain(`getOwners:${signer}`);
     await expect(list({ pendingOwner: runner, delegated: [runner] })).resolves.toEqual([owner, runner]);
+  });
+  it.each([
+    ["returns no data", { result: "0x" }],
+    ["returns data that does not decode", { result: "0x1234" }],
+    ["reverts with a reason", { error: { code: 3, message: "execution reverted: not a Safe", data: "0x08c379a0" } }]
+  ] as const)("treats an EIP-7702 account whose delegate %s for both Safe calls as a wallet", async (_, reply) => {
+    const answer = { getOwners: reply, getModulesPaginated: reply };
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [runner], modules: [runner], answer } } })).resolves.toEqual([owner, treasury]);
+  });
+  it("adds and expands the signers and modules of an EIP-7702 account whose delegate answers like a Safe", async () => {
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [signer], modules: [runner] } } })).resolves.toEqual([owner, treasury, signer, runner]);
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [nested] }, [nested]: { owners: [signer], modules: [runner] } } }))
+      .resolves.toEqual([owner, treasury, nested, signer, runner]);
+    await expect(list({ delegated: [signer], safes: { [owner]: { owners: [signer] }, [signer]: { owners: [deep], modules: [runner] } } })).resolves.toEqual([owner, signer, deep, runner]);
+  });
+  it("adds the list from an EIP-7702 delegate that answers only one of the Safe calls", async () => {
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [], modules: [runner], fail: "getOwners" } } })).resolves.toEqual([owner, treasury, runner]);
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [runner], fail: "getModulesPaginated" } } })).resolves.toEqual([owner, treasury, runner]);
   });
   it("adds the signers of a treasury Safe that differs from the owner", async () => {
     await expect(list({ treasury, safes: { [treasury]: { owners: [runner] } } })).resolves.toEqual([owner, treasury, runner]);
@@ -223,12 +301,21 @@ describe("privileged address discovery", () => {
     ["the Safe signer list", { safes: { [owner]: { owners: [signer], fail: "getOwners" as const } } }],
     ["the Safe module list", { safes: { [owner]: { owners: [signer], fail: "getModulesPaginated" as const } } }],
     ["a nested Safe module list", { safes: { [owner]: { owners: [nested] }, [nested]: { owners: [signer], fail: "getModulesPaginated" as const } } }],
-    ["a treasury contract that is not a Safe", { treasury, safes: { [treasury]: { owners: [], fail: "getOwners" as const } } }]
+    ["a treasury contract that is not a Safe", { treasury, safes: { [treasury]: { owners: [], fail: "getOwners" as const } } }],
+    ["a treasury contract whose module call returns no data", { treasury, safes: { [treasury]: { owners: [], answer: { getModulesPaginated: { result: "0x" as Hex } } } } }]
   ])("fails when %s cannot be read", async (_, state) => {
     await expect(list(state)).rejects.toThrow();
   });
+  it.each([
+    ["the connection drops", { getOwners: "network" as const }],
+    ["the node answers with an internal error", { getModulesPaginated: { error: { code: -32603, message: "internal error" } } }],
+    ["the node answers with another error", { getOwners: { error: { code: -32000, message: "header not found" } } }]
+  ])("fails instead of assuming a wallet when an EIP-7702 account's Safe call gets no answer because %s", async (_, answer) => {
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [], answer } } })).rejects.toThrow();
+  });
   it("fails when a Safe has more modules than one page", async () => {
     await expect(list({ safes: { [owner]: { owners: [signer], modules: [nested], next: nested } } })).rejects.toThrow("A Safe has more modules than the runner reads.");
+    await expect(list({ treasury, delegated: [treasury], safes: { [treasury]: { owners: [], modules: [nested], next: nested } } })).rejects.toThrow("A Safe has more modules than the runner reads.");
   });
 });
 
@@ -238,7 +325,11 @@ type FakeOptions = {
   balance?: bigint;
   pending?: number;
   prepareFails?: Set<string>;
+  /** Changes to raffle 1's prepared call, so it differs from the step the runner chose. */
+  prepareWrong?: Partial<PreparedAction>;
   read?: (id: bigint) => Promise<never> | undefined;
+  /** Replaces the scan's read of one raffle, for example with one that fails or never returns. */
+  scanRead?: (id: bigint) => Promise<never> | undefined;
   quote?: (action: RunnerAction) => Quote | Error | undefined;
   send?: (action: RunnerAction) => SendResult | undefined;
   wait?: "succeeded" | "reverted" | Error | "hang";
@@ -249,24 +340,30 @@ const cheap: Quote = { gasLimit: 100_000n, maxFeePerGas: parseGwei("2"), maxPrio
 function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {}) {
   const sent: { id: string; action: RunnerAction["kind"]; nonce: number }[] = [];
   const attempts: string[] = [];
+  const scanned: bigint[] = [];
   let nonce = 0;
+  function current(id: bigint): RaffleSnapshot {
+    const r = raffles[id.toString()];
+    return { ...snapshot({ phase: r.phase, snapshotted: r.snapshotted, snapshotTotal: r.snapshotted ? r.lots : 0n, lotCursor: r.cursor, revealed: r.revealed, drawnAt: SALES_END }, { now: SALES_END + 1n, lotCount: r.lots }), id };
+  }
   const chain: DrawChain = {
     runner, contract,
     async privilegedAddresses() { if (options.privileged instanceof Error) throw options.privileged; return options.privileged ?? [owner]; },
-    async scan(cursor, limit) {
-      const ids = Object.keys(raffles).map(BigInt);
-      const window = scanWindow(cursor, BigInt(ids.length + 1), limit);
-      return { candidates: window.ids.filter(id => [1, 2, 4].includes(raffles[id.toString()].phase)), nextCursor: window.nextCursor };
+    scan(cursor, limit, timeoutMs) {
+      return scanRaffles({
+        cursor, nextId: BigInt(Object.keys(raffles).length + 1), limit, timeoutMs,
+        async read(id) { scanned.push(id); return options.scanRead?.(id) ?? current(id).raffle; },
+        keep: raffle => mayNeedRunner(raffle, { now: SALES_END + 1n, drawStartGrace: GRACE, revealGrace: GRACE })
+      });
     },
     async read(id) {
       const override = options.read?.(id);
       if (override) return override;
-      const r = raffles[id.toString()];
-      return { ...snapshot({ phase: r.phase, snapshotted: r.snapshotted, snapshotTotal: r.snapshotted ? r.lots : 0n, lotCursor: r.cursor, revealed: r.revealed, drawnAt: SALES_END }, { now: SALES_END + 1n, lotCount: r.lots }), id };
+      return current(id);
     },
     async prepare(action) {
       if (options.prepareFails?.has(action.id.toString())) throw new Error("execution reverted: BadPhase()");
-      return prepared(action);
+      return prepared(action, action.id === 1n ? options.prepareWrong : {});
     },
     async balance() { return options.balance ?? parseEther("1"); },
     async nonces() { options.onNonces?.(); return { latest: nonce, pending: nonce + (options.pending ?? 0) }; },
@@ -299,7 +396,7 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
       return wait;
     }
   };
-  return { chain, sent, attempts };
+  return { chain, sent, attempts, scanned };
 }
 function open(lots = 2n): FakeRaffle { return { phase: 1, lots, cursor: 0n, snapshotted: false, revealed: false }; }
 function closed(lots = 2n): FakeRaffle { return { phase: 2, lots, cursor: 0n, snapshotted: false, revealed: false }; }
@@ -481,6 +578,32 @@ describe("draw runner cron handler", () => {
     expect(sent).toEqual([]);
   });
 
+  it("acts on the raffles read before a failed scan read, reports interrupted and resumes after that raffle", async () => {
+    const store = new MemoryStore();
+    const { chain, sent } = fakeChain({ 1: drawn(), 2: drawn(), 3: drawn(), 4: drawn() }, { scanRead: id => id === 3n ? Promise.reject(new Error("rpc failed")) : undefined });
+    const { response, body } = await call(chain, store);
+    expect(response.status).toBe(200);
+    expect(outcomes(body)).toEqual(["1:settle:succeeded:null", "2:settle:succeeded:null"]);
+    expect(body).toMatchObject({ ok: false, status: "interrupted", sends: 2, nextCursor: "4" });
+    expect(sent.map(item => item.id)).toEqual(["1", "2"]);
+    expect(await store.get("draw-runner:cursor")).toBe("4");
+  });
+
+  it("stops reading raffles after the scan time, acts on what it read and resumes at the first unread raffle", async () => {
+    vi.useFakeTimers({ now: START });
+    const store = new MemoryStore();
+    const { chain, sent } = fakeChain({ 1: drawn(), 2: drawn(), 3: drawn(), 4: drawn() }, { scanRead: id => id === 3n ? new Promise<never>(() => {}) : undefined });
+    let finished = 0;
+    const pending = call(chain, store, () => Date.now()).then(result => { finished = Date.now(); return result; });
+    await vi.advanceTimersByTimeAsync(56_000);
+    const { body } = await pending;
+    expect(finished - START).toBe(SCAN_MS);
+    expect(outcomes(body)).toEqual(["1:settle:succeeded:null", "2:settle:succeeded:null"]);
+    expect(body).toMatchObject({ ok: true, status: "deadline", sends: 2, nextCursor: "3" });
+    expect(sent.map(item => item.id)).toEqual(["1", "2"]);
+    expect(await store.get("draw-runner:cursor")).toBe("3");
+  });
+
   it("reports low funds and sends nothing", async () => {
     const { chain, sent } = fakeChain({ 1: open() }, { balance: MIN_BALANCE - 1n });
     const scan = vi.spyOn(chain, "scan");
@@ -548,6 +671,29 @@ describe("draw runner cron handler", () => {
     expect(body.items[0]).toEqual({ id: "1", action: "close", hash: null, outcome: "skipped", error: null });
     expect(sent.map(item => item.id)).toEqual(["2", "2", "2"]);
     expect(body).toMatchObject({ ok: true, status: "complete", sends: 3 });
+  });
+
+  it.each([
+    ["to another contract", { to: seller }],
+    ["with a nonzero value", { value: 1n }],
+    ["to another function", { data: encodeFunctionData({ abi: raffleAbi, functionName: "cancel", args: [1n] }) }],
+    ["with data that is not a raffle call", { data: "0xdeadbeef" as Hex }]
+  ])("reports a prepared call %s as failed and refused, sends nothing for it and goes on", async (_, prepareWrong) => {
+    const { chain, attempts } = fakeChain({ 1: open(), 2: drawn() }, { prepareWrong });
+    const { body } = await call(chain);
+    expect(outcomes(body)).toEqual(["1:close:failed:Refused", "2:settle:succeeded:null"]);
+    expect(body).toMatchObject({ ok: false, status: "complete", sends: 1 });
+    expect(attempts).toEqual(["2:settle"]);
+  });
+
+  it("runs with a key pasted without the 0x prefix", async () => {
+    vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", runnerKey.slice(2));
+    const { chain, sent } = fakeChain({ 1: drawn() });
+    const { response, body, factory } = await call(chain);
+    expect(response.status).toBe(200);
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ address: runner }));
+    expect(body).toMatchObject({ ok: true, status: "complete", runner, sends: 1 });
+    expect(sent.map(item => item.action)).toEqual(["settle"]);
   });
 
   it("skips without counting a step another caller took after the pinned simulation, and goes on to the next raffle", async () => {
@@ -637,6 +783,36 @@ describe("draw runner cron handler", () => {
     expect(everything).not.toContain(runnerKey.slice(2, 34).toLowerCase());
     expect(everything).not.toContain(secret.toLowerCase());
     errors.mockRestore();
+  });
+});
+
+describe("draw runner scan cadence", () => {
+  beforeEach(() => {
+    vi.stubEnv("CRON_SECRET", secret);
+    vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", runnerKey);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  it("reads every one of 1,000 raffles and acts on a given non-terminal raffle within two runs", async () => {
+    // Drafts, draws waiting for randomness, settled and cancelled raffles need nothing. One drawn raffle needs a settle.
+    const idle = [0, 3, 5, 6];
+    for (const target of [1, 2, 499, 500, 501, 999, 1000]) {
+      for (const start of ["1", "2", "500", "501", "1000"]) {
+        const raffles: Record<string, FakeRaffle> = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [String(index + 1), index + 1 === target ? drawn() : { ...drawn(), phase: idle[index % 4] }]));
+        const store = new MemoryStore();
+        await store.set("draw-runner:cursor", start);
+        const { chain, sent, scanned } = fakeChain(raffles);
+        for (const at of [START, START + LEASE_BUCKET_MS]) {
+          const before = scanned.length;
+          const { body } = await call(chain, store, () => at);
+          expect(body).toMatchObject({ ok: true, status: "complete" });
+          expect(scanned.length - before).toBeLessThanOrEqual(SCAN_LIMIT);
+        }
+        expect(sent.map(item => `${item.id}:${item.action}`)).toEqual([`${target}:settle`]);
+        expect(new Set(scanned).size).toBe(1000);
+      }
+    }
   });
 });
 

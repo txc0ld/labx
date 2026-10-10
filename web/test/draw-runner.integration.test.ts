@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { decodeFunctionData, encodeAbiParameters, encodeFunctionData, maxUint256, parseEther, parseGwei, toHex, type Address, type Hex } from "viem";
+import { concat, decodeFunctionData, encodeAbiParameters, encodeFunctionData, maxUint256, parseEther, parseGwei, toHex, type Address, type Hex } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { raffleAbi } from "../lib/chain/abi";
@@ -270,6 +270,7 @@ run("draw runner on a local chain", () => {
   }, 60_000);
 
   const nested: Address = "0x00000000000000000000000000000000000d0e01";
+  const delegate: Address = "0x00000000000000000000000000000000000d0e02";
   it.each([
     ["the pending owner", PRIVILEGED, async () => { await chain.write(chain.raffle, "transferOwnership", [runner]); }],
     ["an enabled module of the treasury Safe", PRIVILEGED, async () => { await chain.rpc("anvil_setCode", [chain.treasury, safeStub([chain.stranger], [runner])]); }],
@@ -277,6 +278,14 @@ run("draw runner on a local chain", () => {
     ["a module of a Safe that signs for the treasury Safe", PRIVILEGED, async () => {
       await chain.rpc("anvil_setCode", [chain.treasury, safeStub([nested])]);
       await chain.rpc("anvil_setCode", [nested, safeStub([chain.stranger], [runner])]);
+    }],
+    ["an enabled module of a treasury that is an EIP-7702 account delegated to a Safe", PRIVILEGED, async () => {
+      await chain.rpc("anvil_setCode", [delegate, safeStub([chain.stranger], [runner])]);
+      await chain.rpc("anvil_setCode", [chain.treasury, concat(["0xef0100", delegate])]);
+    }],
+    ["a signer of a treasury that is an EIP-7702 account delegated to a Safe", PRIVILEGED, async () => {
+      await chain.rpc("anvil_setCode", [delegate, safeStub([chain.stranger, runner])]);
+      await chain.rpc("anvil_setCode", [chain.treasury, concat(["0xef0100", delegate])]);
     }],
     ["unknown, because the treasury Safe has more modules than one page", UNCHECKED, async () => { await chain.rpc("anvil_setCode", [chain.treasury, safeStub([chain.stranger], [chain.buyer], chain.buyer)]); }]
   ] as const)("refuses with 503 and sends nothing when the runner is %s", async (_, error, setup) => {
@@ -288,6 +297,22 @@ run("draw runner on a local chain", () => {
       expect(refused).toEqual({ status: 503, body: { ok: false, error } });
       expect(await runnerNonce()).toBe(before);
       expect(await phase(pending.id)).toBe(1);
+    });
+  }, 60_000);
+
+  it.each([
+    ["code that reverts every call", "0x60006000fd"],
+    ["an address without code", "0x"]
+  ] as const)("treats a treasury that is an EIP-7702 account delegated to %s as a wallet and runs", async (_, code) => {
+    await isolated(async () => {
+      await chain.rpc("anvil_setCode", [delegate, code]);
+      await chain.rpc("anvil_setCode", [chain.treasury, concat(["0xef0100", delegate])]);
+      expect(await chain.client.getCode({ address: chain.treasury })).toBe(concat(["0xef0100", delegate]).toLowerCase());
+      expect(await phase(pending.id)).toBe(1);
+      const result = await invoke();
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ ok: true, status: "complete" });
+      expect(outcomes(result.body.items!, [pending.id])).toEqual([`${pending.id}:close:succeeded:null`, `${pending.id}:snapshot:succeeded:null`, `${pending.id}:requestRandomness:succeeded:null`]);
     });
   }, 60_000);
 

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createPublicClient, decodeFunctionResult, encodeFunctionData, getAddress, http, parseAbi, parseEther, toHex, zeroAddress, type Address, type Hex } from "viem";
+import { concat, createPublicClient, decodeFunctionResult, encodeFunctionData, getAddress, http, parseAbi, parseEther, toHex, zeroAddress, type Address, type Hex } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { APPROVED_DEPLOYMENTS } from "../lib/chain/deployment";
 import { GET } from "../app/api/cron/draw/route";
@@ -146,6 +146,16 @@ run("draw runner on a loopback fork of Sepolia", () => {
       expect(delegation.startsWith("0xef0100")).toBe(true);
       await rpc("anvil_setCode", [runner, delegation]);
       await sendAs(owner, deployment.address, encodeFunctionData({ abi: ownerAbi, functionName: "transferOwnership", args: [runner] }));
+    }],
+    ["an enabled module of a treasury that is an EIP-7702 account delegated to the Safe singleton", PRIVILEGED, async () => {
+      const account: Address = "0x7702000000000000000000000000000000007702";
+      const signer = mnemonicToAccount(anvilMnemonic, { addressIndex: 1 }).address;
+      await rpc("anvil_setCode", [account, concat(["0xef0100", SAFE_L2_SINGLETON])]);
+      await sendAs(signer, account, encodeFunctionData({ abi: safeAbi, functionName: "setup", args: [[signer], 1n, zeroAddress, "0x", SAFE_FALLBACK, zeroAddress, 0n, zeroAddress] }));
+      await sendAs(account, account, encodeFunctionData({ abi: safeAbi, functionName: "enableModule", args: [runner] }));
+      expect(await client.getCode({ address: account })).toBe(concat(["0xef0100", SAFE_L2_SINGLETON]).toLowerCase());
+      expect(await client.readContract({ address: account, abi: safeAbi, functionName: "getOwners" })).toEqual([signer]);
+      await sendAs(owner, deployment.address, encodeFunctionData({ abi: ownerAbi, functionName: "setTreasury", args: [account] }));
     }],
     ["unknown, because the treasury is a contract that is not a Safe", UNCHECKED, async () => {
       await sendAs(owner, deployment.address, encodeFunctionData({ abi: ownerAbi, functionName: "setTreasury", args: [deployment.usdc] }));
