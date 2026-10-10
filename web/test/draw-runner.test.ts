@@ -400,6 +400,8 @@ type FakeOptions = {
   /** Changes to raffle 1's prepared call, so it differs from the step the runner chose. */
   prepareWrong?: Partial<PreparedAction>;
   read?: (id: bigint) => Promise<never> | undefined;
+  /** Delays the runner's full read of every raffle, as a slow node would. */
+  readDelayMs?: number;
   /** Replaces the scan's read of one raffle, for example with one that fails, is slow or never returns. */
   scanRead?: (id: bigint, raffle: Raffle) => Promise<Raffle> | undefined;
   quote?: (action: RunnerAction) => Quote | Error | undefined;
@@ -430,6 +432,7 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
       });
     },
     async read(id) {
+      if (options.readDelayMs) await new Promise(done => setTimeout(done, options.readDelayMs));
       const override = options.read?.(id);
       if (override) return override;
       return current(id);
@@ -603,7 +606,8 @@ describe("draw runner cron handler", () => {
     const short = fakeChain({ 1: open() }, { onNonces: () => { clock = START + 31_001; } });
     const { body } = await call(short.chain, new MemoryStore(), () => clock);
     expect(short.attempts).toEqual([]);
-    expect(body).toMatchObject({ ok: true, status: "deadline", sends: 0, items: [], nextCursor: "1" });
+    // Nothing was sent and no check finished, so the run reports a stall.
+    expect(body).toMatchObject({ ok: false, status: "deadline", sends: 0, items: [], nextCursor: "1" });
   });
 
   it("reports, saves the cursor and logs before 56 seconds when a receipt never arrives", async () => {
@@ -704,6 +708,33 @@ describe("draw runner cron handler", () => {
     expect(body).toMatchObject({ ok: false, status: "deadline", sends: 0, items: [], nextCursor: "1" });
     expect(sent).toEqual([]);
     expect(await store.get("draw-runner:cursor")).toBe("1");
+  });
+
+  it("reports not ok when checking the first raffle the scan found uses up the send window", async () => {
+    vi.useFakeTimers({ now: START });
+    const store = new MemoryStore();
+    const { chain, sent } = fakeChain({ 1: drawn() }, {
+      scanRead: (_, raffle) => new Promise(done => setTimeout(() => done(raffle), 19_000)),
+      readDelayMs: 13_000
+    });
+    const pending = call(chain, store, () => Date.now());
+    await vi.advanceTimersByTimeAsync(56_000);
+    const { body } = await pending;
+    expect(sent).toEqual([]);
+    expect(body).toMatchObject({ ok: false, status: "deadline", sends: 0, items: [], nextCursor: "1" });
+  });
+
+  it("stays ok when a slow scan finds nothing to do but moves the cursor on", async () => {
+    vi.useFakeTimers({ now: START });
+    const store = new MemoryStore();
+    const settled: FakeRaffle = { phase: 5, lots: 2n, cursor: 2n, snapshotted: true, revealed: true };
+    const raffles = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [String(index + 1), { ...settled }]));
+    const { chain, sent } = fakeChain(raffles, { scanRead: (_, raffle) => new Promise(done => setTimeout(() => done(raffle), 15_000)) });
+    const pending = call(chain, store, () => Date.now());
+    await vi.advanceTimersByTimeAsync(56_000);
+    const { body } = await pending;
+    expect(sent).toEqual([]);
+    expect(body).toMatchObject({ ok: true, status: "deadline", sends: 0, items: [], nextCursor: "9" });
   });
 
   it("gives the scan a short floor after a very slow start, then reports not ok", async () => {

@@ -97,11 +97,12 @@ describe("draw confirmation time", () => {
     expect(ranges(missing.filters)).toEqual([[3_001n, 5_000n], [1_500n, 3_000n]]);
   });
 
-  it("stops after 20,000 blocks and treats an event it did not find as a failed read", async () => {
+  it("stops after 20,000 blocks and answers with the oldest searched block's time, which is never before the reveal", async () => {
     const { reader, filters } = fakeNode({ deploymentBlock: 1n, head: 30_000n, reveals: [{ id: 7n, block: 9_000n }] });
-    await expect(reader.readRevealTime({ id: 7n, block: blockAt(30_000n) })).rejects.toThrow("The draw confirmation was not found.");
+    await expect(reader.readRevealTime({ id: 7n, block: blockAt(30_000n) })).resolves.toBe(blockTime(10_001n));
     expect(filters).toHaveLength(10);
     expect(ranges(filters).at(-1)).toEqual([10_001n, 12_000n]);
+    expect(blockTime(10_001n)).toBeGreaterThan(blockTime(9_000n));
   });
 
   it("rejects a failed log read, a removed event, an event from a replaced block and an event after the raffle's block", async () => {

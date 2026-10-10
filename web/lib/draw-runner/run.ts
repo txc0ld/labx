@@ -102,20 +102,21 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   const scanMs = Math.max(SCAN_FLOOR_MS, Math.min(SCAN_MS, deadline - SEND_MIN_REMAINING_MS - SCAN_MARGIN_MS - now()));
   const scan = await bounded(chain.scan(savedId(savedCursor), lowWater, SCAN_LIMIT, scanMs));
   let nextCursor = scan.nextCursor;
-  let attempted = false;
+  // Progress means a raffle's check finished, or a scan that found nothing still moved the cursor on.
+  let progressed = scan.candidates.length === 0 && scan.nextCursor !== savedId(savedCursor);
   // A scan that ran out of time or hit a failed read still hands over the raffles it read; the cursor resumes after them.
   if (scan.stop) report.status = scan.stop;
   const stop = (status: RunStatus, id: bigint) => { report.status = status; nextCursor = id; };
   raffles: for (const id of scan.candidates) {
     const record = (action: RunnerAction, hash: Hex | null, outcome: RunOutcome, error: RunItem["error"]) => {
+      progressed = true;
       report.items.push({ id: id.toString(), action: action.kind, hash, outcome, error });
     };
     try {
       for (;;) {
         if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
-        attempted = true;
         const action = nextRunnerAction(await bounded(chain.read(id)), chain.runner);
-        if (!action) break;
+        if (!action) { progressed = true; break; }
         if (report.sends >= MAX_SENDS) { stop("send-cap", id); break raffles; }
         let prepared: PreparedAction;
         try {
@@ -180,8 +181,8 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   try {
     await within(Promise.all([store.set(CURSOR_KEY, nextCursor.toString()), store.set(LOW_WATER_KEY, `${markPrefix}${scan.lowWater}`)]), CURSOR_WRITE_MS);
   } catch { report.status = "interrupted"; }
-  // A run that hit its deadline before it tried any raffle the scan found has stalled, so it is not ok.
-  report.ok = HEALTHY.has(report.status) && (report.status !== "deadline" || attempted)
+  // A run that hit its deadline without finishing a single check has stalled, so it is not ok.
+  report.ok = HEALTHY.has(report.status) && (report.status !== "deadline" || progressed)
     && report.items.every(item => item.outcome === "succeeded" || (item.outcome === "skipped" && (item.error === null || item.error === "EstimateGasRevert")));
   return { ...report, nextCursor: nextCursor.toString() };
 }
