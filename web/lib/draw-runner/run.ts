@@ -16,6 +16,10 @@ export const MAX_SENDS = 6;
 export const SCAN_LIMIT = 500;
 /** The scan stops reading raffles after this long, so the steps it finds still have time to run. */
 export const SCAN_MS = 20_000;
+/** The scan, with its block and count reads, also ends this long before a send would have too little time, which leaves time to check the first step it finds. */
+export const SCAN_MARGIN_MS = 5_000;
+/** The scan always gets at least this long, so a run that started slowly still reads some raffles. */
+export const SCAN_FLOOR_MS = 2_000;
 export const MIN_BALANCE = parseEther("0.01");
 export const MAX_FEE_PER_GAS = parseGwei("50");
 /** Largest gas limit the runner signs for each call. snapshot(100) measured about 4.9M gas; the others under 200k. */
@@ -38,7 +42,7 @@ export type DrawChain = {
   contract: Address;
   /** Owner, pending owner, treasuries, and the Safe owners and modules of any of them with code, two levels down. Throws when any of them cannot be read. */
   privilegedAddresses(): Promise<readonly Address[]>;
-  /** Reads up to `limit` raffles from `cursor` at one block and returns those that may need a step. Stops reading after `timeoutMs`. */
+  /** Pins a block, reads the raffle count and up to `limit` raffles from `cursor`, and returns those that may need a step. Everything before the final block check stops after `timeoutMs`. */
   scan(cursor: bigint, limit: number, timeoutMs: number): Promise<ScanResult>;
   read(id: bigint): Promise<RaffleSnapshot>;
   /** Builds and simulates at a pinned block. Throws when the step no longer applies. */
@@ -57,7 +61,8 @@ export type RunOutcome = "succeeded" | "reverted" | "unknown" | "failed" | "skip
 /** "Refused" marks a prepared call that the runner's own allowlist rejected. */
 export type RunItem = { id: string; action: RunnerAction["kind"]; hash: Hex | null; outcome: RunOutcome; error: ErrorCategory | "Refused" | null };
 export type RunStatus = "complete" | "busy" | "send-cap" | "deadline" | "low-funds" | "fee-cap" | "pending-transaction" | "send-failed" | "interrupted";
-export type RunReport = { status: RunStatus; runner: Address; sends: number; items: RunItem[]; nextCursor: string | null };
+export type RunReport = { ok: boolean; status: RunStatus; runner: Address; sends: number; items: RunItem[]; nextCursor: string | null };
+const HEALTHY: ReadonlySet<RunStatus> = new Set(["complete", "busy", "send-cap", "deadline"]);
 
 /**
  * Lease keys for every five-minute bucket that [start, deadline] touches. Two runs whose intervals share an instant
@@ -79,13 +84,16 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   const bounded = <T>(work: Promise<T>) => within(work, workEnd - now());
   const started = now();
   const leased = await bounded(store.setIfAbsent(Object.fromEntries(leaseKeys(started, deadline).map(key => [key, new Date(started).toISOString()]))));
-  const report: RunReport = { status: "complete", runner: chain.runner, sends: 0, items: [], nextCursor: null };
+  const report: RunReport = { ok: true, status: "complete", runner: chain.runner, sends: 0, items: [], nextCursor: null };
   if (!leased) return { ...report, status: "busy" };
-  if (await bounded(chain.balance()) < MIN_BALANCE) return { ...report, status: "low-funds" };
+  if (await bounded(chain.balance()) < MIN_BALANCE) return { ...report, ok: false, status: "low-funds" };
 
   const saved = await bounded(store.get(CURSOR_KEY));
-  const scan = await bounded(chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT, Math.min(SCAN_MS, workEnd - now())));
+  // The scan, including its block and count reads, ends early enough that the first step it finds can still be sent.
+  const scanMs = Math.max(SCAN_FLOOR_MS, Math.min(SCAN_MS, deadline - SEND_MIN_REMAINING_MS - SCAN_MARGIN_MS - now()));
+  const scan = await bounded(chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT, scanMs));
   let nextCursor = scan.nextCursor;
+  let attempted = false;
   // A scan that ran out of time or hit a failed read still hands over the raffles it read; the cursor resumes after them.
   if (scan.stop) report.status = scan.stop;
   const stop = (status: RunStatus, id: bigint) => { report.status = status; nextCursor = id; };
@@ -96,6 +104,7 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
     try {
       for (;;) {
         if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
+        attempted = true;
         const action = nextRunnerAction(await bounded(chain.read(id)), chain.runner);
         if (!action) break;
         if (report.sends >= MAX_SENDS) { stop("send-cap", id); break raffles; }
@@ -160,5 +169,8 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
     }
   }
   try { await within(store.set(CURSOR_KEY, nextCursor.toString()), CURSOR_WRITE_MS); } catch { report.status = "interrupted"; }
+  // A run that hit its deadline before it tried any raffle the scan found has stalled, so it is not ok.
+  report.ok = HEALTHY.has(report.status) && (report.status !== "deadline" || attempted)
+    && report.items.every(item => item.outcome === "succeeded" || (item.outcome === "skipped" && (item.error === null || item.error === "EstimateGasRevert")));
   return { ...report, nextCursor: nextCursor.toString() };
 }

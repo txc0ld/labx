@@ -103,7 +103,7 @@ run("draw runner on a loopback fork of Sepolia", () => {
     expect(await client.getChainId()).toBe(11155111);
     owner = await client.readContract({ address: deployment.address, abi: ownerAbi, functionName: "owner" });
     // Every public anvil test address carries an EIP-7702 delegation on Sepolia. A production runner is a fresh wallet
-    // without code, so the fork clears it. With the delegation in place, the runner still counts as the privileged wallet.
+    // without code, so the fork clears it. With the delegation back in place, a privileged runner is refused as unchecked.
     delegation = await client.getCode({ address: runner }) ?? "0x";
     await rpc("anvil_setCode", [runner, "0x"]);
     vi.stubEnv("LABX_STORE", "memory");
@@ -142,8 +142,15 @@ run("draw runner on a loopback fork of Sepolia", () => {
       const signer = await newSafe([runner]);
       await sendAs(owner, owner, encodeFunctionData({ abi: safeAbi, functionName: "addOwnerWithThreshold", args: [signer, 1n] }));
     }],
-    ["a pending owner with an EIP-7702 delegation, which counts as the wallet itself", PRIVILEGED, async () => {
+    ["a pending owner with an EIP-7702 delegation to an address without code, which counts as the wallet itself", PRIVILEGED, async () => {
+      const empty: Address = "0x00000000000000000000000000000000000d0e03";
+      expect(await client.getCode({ address: empty })).toBeUndefined();
+      await rpc("anvil_setCode", [runner, concat(["0xef0100", empty])]);
+      await sendAs(owner, deployment.address, encodeFunctionData({ abi: ownerAbi, functionName: "transferOwnership", args: [runner] }));
+    }],
+    ["unknown, because the runner is a pending owner delegated to code that is not a Safe", UNCHECKED, async () => {
       expect(delegation.startsWith("0xef0100")).toBe(true);
+      expect((await client.getCode({ address: `0x${delegation.slice(8)}` }))?.length).toBeGreaterThan(2);
       await rpc("anvil_setCode", [runner, delegation]);
       await sendAs(owner, deployment.address, encodeFunctionData({ abi: ownerAbi, functionName: "transferOwnership", args: [runner] }));
     }],

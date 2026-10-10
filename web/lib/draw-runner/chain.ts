@@ -1,5 +1,5 @@
 import {
-  BaseError, decodeFunctionResult, encodeFunctionData, ExecutionRevertedError, keccak256, parseAbi, zeroAddress,
+  decodeFunctionResult, encodeFunctionData, keccak256, parseAbi, toHex, zeroAddress,
   type Address, type Hex, type PrivateKeyAccount, type PublicClient
 } from "viem";
 import { raffleAbi } from "../chain/abi";
@@ -21,13 +21,13 @@ const safeAbi = parseAbi([
   "function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)"
 ]);
 
-type Client = Pick<PublicClient, "readContract" | "getCode" | "call">;
-const EIP7702_MARKER = /^0xef0100[0-9a-f]{40}$/i;
+type Client = Pick<PublicClient, "readContract" | "getCode" | "request">;
+const EIP7702_MARKER = /^0xef0100([0-9a-f]{40})$/i;
 
 /**
  * Addresses the runner key must never belong to: the owner, pending owner, expected owner, current and pinned treasury,
  * and the Safe owners and modules of any of them that has code, two levels down. Throws when a read gets no answer,
- * when a contract without an EIP-7702 marker is not a readable Safe, or when a module list does not fit in one page.
+ * when code is not a readable Safe, or when a module list does not fit in one page.
  */
 export async function privilegedAddresses(client: Client, manifest: DeploymentManifest, blockNumber: bigint): Promise<Address[]> {
   const base = { address: manifest.address, abi: raffleAbi, blockNumber } as const;
@@ -50,42 +50,34 @@ export async function privilegedAddresses(client: Client, manifest: DeploymentMa
 }
 
 /**
- * Owners and modules of an address with code. A plain contract must answer both Safe calls. An account with an
- * EIP-7702 delegation marker runs its delegate's code, which may be a multisig or a module-enabled account, so it is
- * asked too: every list it answers is added, and it counts as a wallet controlled by its own key only when neither
- * call answers with data that decodes. An address without code has no controllers to add.
+ * Owners and modules of an address with code, which must answer both Safe calls. An account with an EIP-7702
+ * delegation marker runs its delegate's code: it is a wallet with nothing to add when the delegate has no code, and is
+ * read like any other contract otherwise. An address without code has no controllers to add.
  */
 async function safeControllers(client: Client, address: Address, blockNumber: bigint): Promise<readonly Address[]> {
   const code = await client.getCode({ address, blockNumber });
   if (!code || code === "0x") return [];
-  const [owners, modules] = await Promise.all([
+  const delegate = code.match(EIP7702_MARKER)?.[1];
+  if (delegate) {
+    const delegateCode = await client.getCode({ address: `0x${delegate}`, blockNumber });
+    if (!delegateCode || delegateCode === "0x") return [];
+  }
+  const [owners, [modules, next]] = await Promise.all([
     safeCall(client, address, blockNumber, encodeFunctionData({ abi: safeAbi, functionName: "getOwners" }),
       data => decodeFunctionResult({ abi: safeAbi, functionName: "getOwners", data })),
     safeCall(client, address, blockNumber, encodeFunctionData({ abi: safeAbi, functionName: "getModulesPaginated", args: [SAFE_SENTINEL, SAFE_MODULE_PAGE] }),
       data => decodeFunctionResult({ abi: safeAbi, functionName: "getModulesPaginated", data }))
   ]);
-  if ((!owners || !modules) && !EIP7702_MARKER.test(code)) throw new Error("A contract is not a readable Safe.");
-  if (modules && !sameAddress(modules[1], SAFE_SENTINEL) && !sameAddress(modules[1], zeroAddress)) throw new Error("A Safe has more modules than the runner reads.");
-  return [...owners ?? [], ...modules?.[0] ?? []];
+  if (!sameAddress(next, SAFE_SENTINEL) && !sameAddress(next, zeroAddress)) throw new Error("A Safe has more modules than the runner reads.");
+  return [...owners, ...modules];
 }
 
 /**
- * One Safe read. Null when the node says the call reverted, or its result is empty or does not decode. Throws when
- * the node gives no answer or another error, so a failed read never makes an account look like a wallet.
+ * One Safe read as a raw eth_call at the pinned block, so a revert that asks for an off-chain lookup (CCIP-Read) is
+ * never followed. Throws when the call reverts, the node gives no answer or another error, or the result does not decode.
  */
-async function safeCall<T>(client: Client, address: Address, blockNumber: bigint, data: Hex, decode: (result: Hex) => T): Promise<T | null> {
-  let result: Hex | undefined;
-  try {
-    ({ data: result } = await client.call({ to: address, data, blockNumber }));
-  } catch (error) {
-    if (error instanceof BaseError && error.walk(cause => cause instanceof ExecutionRevertedError)) return null;
-    throw error;
-  }
-  try {
-    return decode(result ?? "0x");
-  } catch {
-    return null;
-  }
+async function safeCall<T>(client: Client, address: Address, blockNumber: bigint, data: Hex, decode: (result: Hex) => T): Promise<T> {
+  return decode(await client.request({ method: "eth_call", params: [{ to: address, data }, toHex(blockNumber)] }));
 }
 
 export function createDrawChain({ client, manifest, account }: { client: PublicClient; manifest: DeploymentManifest; account: PrivateKeyAccount }): DrawChain {
@@ -102,15 +94,16 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
       return result;
     },
     async scan(cursor, limit, timeoutMs) {
-      const at = await reader.checkedBlock();
+      const end = Date.now() + timeoutMs;
+      const at = await within(reader.checkedBlock(), timeoutMs);
       const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number } as const;
-      const [nextId, drawStartGrace, revealGrace] = await Promise.all([
+      const [nextId, drawStartGrace, revealGrace] = await within(Promise.all([
         client.readContract({ ...base, functionName: "nextId" }),
         client.readContract({ ...base, functionName: "DRAW_START_GRACE" }),
         client.readContract({ ...base, functionName: "REVEAL_GRACE" })
-      ]);
+      ]), end - Date.now());
       const result = await scanRaffles({
-        cursor, nextId, limit, timeoutMs,
+        cursor, nextId, limit, timeoutMs: end - Date.now(),
         read: id => client.readContract({ ...base, functionName: "getRaffle", args: [id] }),
         keep: raffle => mayNeedRunner(raffle, { now: at.timestamp, drawStartGrace, revealGrace })
       });
