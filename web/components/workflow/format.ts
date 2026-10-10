@@ -36,6 +36,10 @@ export function formatDate(timestamp: bigint) {
 
 export const PHASE_LABELS = ["Draft", "Open", "Closed", "Drawing", "Drawn", "Settled", "Cancelled"] as const;
 
+export function lowerFirst(label: string) {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
 export function phaseLabel(phase: number) {
   return PHASE_LABELS[phase] ?? "Unknown";
 }

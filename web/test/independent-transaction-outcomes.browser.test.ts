@@ -662,7 +662,7 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
     try {
-      await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+      await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
       const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
       await recovery.waitFor({ state: "visible", timeout: 15_000 });
       const freshHash = await recovery.getByLabel("Transaction hash").inputValue();
@@ -719,7 +719,7 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
     try {
-      await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+      await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
       const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
       await recovery.waitFor({ state: "visible", timeout: 15_000 });
       const originalHash = await recovery.getByLabel("Transaction hash").inputValue() as Hex;
@@ -791,7 +791,7 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
     try {
-      await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+      await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
       const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
       await recovery.waitFor({ state: "visible", timeout: 15_000 });
       const originalHash = await recovery.getByLabel("Transaction hash").inputValue() as Hex;

@@ -37,20 +37,46 @@ export function sellerOwnsRaffle(account: Address, snapshot: RaffleSnapshot): bo
 }
 
 export type SellerNextStep =
-  | { kind: "action"; action: SellerActionAvailability }
+  | { kind: "action"; action: SellerActionAvailability; message?: string }
   | { kind: "waiting"; title: string; message: string };
+
+const DRAW_KINDS = new Set<SellerActionKind>(["close", "snapshot", "requestRandomness", "reveal"]);
+
+/** Why sales ended without any possible draw, or null while a draw can still happen. */
+export function drawBlocker(snapshot: RaffleSnapshot): string | null {
+  const { raffle, block } = snapshot;
+  if (raffle.phase !== 1 && raffle.phase !== 2 || block.timestamp < raffle.salesEnd) return null;
+  if (snapshot.lotCount === 0n) return "No memberships were sold.";
+  if (raffle.snapshotted && raffle.snapshotTotal === 0n) return "No entries were frozen.";
+  if (block.timestamp >= raffle.salesEnd + snapshot.drawStartGrace) return "The draw-start deadline has passed.";
+  return null;
+}
+
+const REFUNDS = "Enable refunds so buyers can claim their principal.";
+
+export function cancelGuidance(snapshot: RaffleSnapshot, blocker: string) {
+  return `${blocker} ${snapshot.lotCount === 0n ? "Cancel the raffle, then reclaim your NFT." : REFUNDS}`;
+}
+
+export const RECLAIM_GUIDANCE = "The raffle is cancelled. Reclaim your NFT.";
 
 export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[]): SellerNextStep {
   const { raffle, block } = snapshot;
   const waiting = (title: string, message: string): SellerNextStep => ({ kind: "waiting", title, message });
+  const enabled = (kind: SellerActionKind) => actions.find(item => item.kind === kind && item.enabled);
   const next = (kinds: readonly SellerActionKind[], title: string, message: string): SellerNextStep => {
     for (const kind of kinds) {
-      const action = actions.find(item => item.kind === kind && item.enabled);
+      const action = enabled(kind);
       if (action) return { kind: "action", action };
     }
     const reason = kinds.map(kind => actions.find(item => item.kind === kind)?.reason).find(Boolean);
     return waiting(title, reason || message);
   };
+  const blocker = drawBlocker(snapshot);
+  if (blocker) {
+    const cancel = enabled("cancel");
+    return cancel ? { kind: "action", action: cancel, message: cancelGuidance(snapshot, blocker) } : waiting("Draw cannot start", blocker);
+  }
   switch (raffle.phase) {
     case 0:
       if (block.timestamp >= raffle.salesEnd) return waiting("Sales deadline passed", "Edit the draft deadline before continuing. LABx must review the updated draft.");
@@ -61,23 +87,35 @@ export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly Selle
     case 1:
       if (block.timestamp < raffle.salesEnd) return waiting(snapshot.paused ? "Membership sales paused" : "Memberships are open", "Sales can close at the published deadline. Refresh the raffle then to continue the draw.");
       return next(["close"], "Sales deadline reached", "Refresh the raffle to close sales.");
-    case 2: {
-      const blocker = raffle.snapshotted && raffle.snapshotTotal === 0n
-        ? "No entries were frozen."
-        : block.timestamp >= raffle.salesEnd + snapshot.drawStartGrace ? "The draw-start deadline has passed." : null;
-      if (blocker) return waiting("Draw cannot start", `${blocker}${actions.some(item => item.kind === "cancel" && item.enabled) ? " Use Enable refunds under Advanced." : ""}`);
+    case 2:
       return next(raffle.snapshotted ? ["requestRandomness"] : ["snapshot"], "Draw not ready", "Review the draw status. Available recovery actions are under Advanced.");
+    case 3: {
+      const abort = block.timestamp >= raffle.vrfRequestedAt + snapshot.randomnessGrace ? enabled("abortDrawing") : undefined;
+      if (abort) return { kind: "action", action: abort, message: `The randomness deadline passed without a result. ${REFUNDS}` };
+      return waiting("Waiting for the draw", "The randomness request is pending. Refresh after fulfillment.");
     }
-    case 3:
-      return waiting("Waiting for the draw", `The randomness request is pending. Refresh after fulfillment.${actions.some(item => item.kind === "abortDrawing" && item.enabled) ? " Use Enable refunds under Advanced." : ""}`);
     case 4:
       return next(["settle", "reveal"], "Waiting for settlement", "Settlement becomes available after reveal or the published grace period.");
     case 5:
       if (raffle.principalEscrow === 0n) return waiting("Raffle settled", "There are no seller proceeds left to claim.");
       return next(["claimProceeds"], "Raffle settled", "There are no seller proceeds left to claim.");
-    case 6:
-      return waiting("Raffle cancelled", `${raffle.escrowed && actions.some(item => item.kind === "reclaimPrize" && item.enabled) ? "Reclaim the NFT under Advanced. " : ""}${snapshot.lotCount > 0n ? "Buyers can claim any remaining refundable principal." : "No memberships were purchased."}`);
+    case 6: {
+      const refundNote = snapshot.lotCount > 0n ? "Buyers can claim any remaining refundable principal." : "No memberships were purchased.";
+      const reclaim = raffle.escrowed ? enabled("reclaimPrize") : undefined;
+      if (reclaim) return { kind: "action", action: reclaim, message: snapshot.lotCount > 0n ? `${RECLAIM_GUIDANCE} ${refundNote}` : RECLAIM_GUIDANCE };
+      return waiting("Raffle cancelled", refundNote);
+    }
     default:
       return waiting("Raffle state unavailable", "Refresh the verified contract state before continuing.");
   }
+}
+
+/** Enabled seller actions other than the next step, in portal order. Draw controls are dropped once no draw can happen. */
+export function sellerSecondaryActions(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], next: SellerNextStep): readonly SellerActionAvailability[] {
+  const primary = next.kind === "action" ? next.action.kind : null;
+  const blocked = drawBlocker(snapshot) !== null;
+  return SELLER_ACTION_KINDS.flatMap(kind => {
+    const item = actions.find(candidate => candidate.kind === kind && candidate.enabled);
+    return item && kind !== "updateDraft" && kind !== primary && !(blocked && DRAW_KINDS.has(kind)) ? [item] : [];
+  });
 }

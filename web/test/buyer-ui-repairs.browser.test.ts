@@ -116,7 +116,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(approvalText).toMatch(/Pack ID\s+3/i);
     expect(approvalText).toMatch(/Quantity\s+3/i);
     expect(approvalText).toContain("153 USDC");
-    await approvalReview.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+    await approvalReview.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
 
     await expect.poll(() => gold.isChecked(), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => quantity.inputValue(), { timeout: 15_000 }).toBe("3");
@@ -336,7 +336,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
   it("keeps expanded seller actions open when an older saved receipt finishes verification", async () => {
     const snapshot = await service.readRaffle({ id: 3n });
     const historical = await chain.write(chain.usdc, "approve", [chain.raffle.address, 100n], chain.seller);
-    await chain.warp(snapshot.raffle.salesEnd + snapshot.drawStartGrace);
+    await chain.warp(snapshot.raffle.salesEnd);
     const hint = historical.transactionHash;
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
       key: `labx:outcome:v1:31337:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.seller.toLowerCase()}:${hint}`, value: hint
@@ -366,8 +366,8 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await expect.poll(() => outcome.innerText(), { timeout: 10_000 }).toContain("Transaction confirmed");
       await fixture.page.waitForTimeout(300);
       expect(await details.getAttribute("open")).not.toBeNull();
-      expect(await fixture.page.getByRole("button", { name: "Enable refunds", exact: true }).isVisible()).toBe(true);
-      expect(await fixture.page.getByRole("button", { name: "Enable refunds", exact: true }).isEnabled()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true }).isVisible()).toBe(true);
+      expect(await fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true }).isEnabled()).toBe(true);
     } finally { release(); await fixture.page.unroute(`${chain.url}/`); }
   }, 30_000);
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatUsdc, parseUsdc, phaseLabel } from "../components/workflow/format";
+import { formatDate, formatUsdc, lowerFirst, parseUsdc, phaseLabel } from "../components/workflow/format";
 
 describe("workflow value presentation", () => {
   it("formats atomic USDC exactly without floating-point rounding", () => {
@@ -22,6 +22,12 @@ describe("workflow value presentation", () => {
       "Draft", "Open", "Closed", "Drawing", "Drawn", "Settled", "Cancelled"
     ]);
     expect(phaseLabel(99)).toBe("Unknown");
+  });
+
+  it("lowers only the first letter of an action label so acronyms survive", () => {
+    expect(`Confirm ${lowerFirst("Approve exact USDC")}`).toBe("Confirm approve exact USDC");
+    expect(`Confirm ${lowerFirst("Reclaim NFT")}`).toBe("Confirm reclaim NFT");
+    expect(lowerFirst("")).toBe("");
   });
 
   it("renders contract timestamps explicitly in UTC", () => {

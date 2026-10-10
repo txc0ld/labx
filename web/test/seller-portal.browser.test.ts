@@ -171,7 +171,7 @@ run("rendered seller portal on isolated Anvil", () => {
     const review = fixture.page.locator(".transaction-review").first();
     await review.waitFor({ state: "visible", timeout: 10_000 });
     const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });
-    await review.getByRole("button", { name: `Confirm ${label.toLowerCase()}`, exact: true }).click();
+    await review.getByRole("button", { name: `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`, exact: true }).click();
     await expect.poll(async () => chain.client.getBlockNumber({ cacheTime: 0 }), { timeout: 15_000 }).toBeGreaterThan(blockBeforeSubmit);
     await expect.poll(async () => fixture.page.locator(".transaction-review").count(), { timeout: 15_000 }).toBe(0);
   }
