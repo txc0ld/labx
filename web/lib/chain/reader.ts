@@ -164,14 +164,11 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
   }
   /**
    * Block time of raffle `id`'s Revealed event at or before `block`. The contract records no reveal time or draw block, so this
-   * searches back from `block` in 2,000-block windows, no further than the deployment block or 10 windows. When the windows run out
-   * first, it returns the oldest searched block's time, which is never earlier than the reveal. Finding no event back to the
-   * deployment block is an error.
+   * searches back from `block` in 2,000-block windows, no further than the deployment block or 10 windows. Finding no event is an error.
    */
   async function readRevealTime({ id, block }: { id: bigint; block: BlockRef }): Promise<bigint> {
     positiveId(id); const at = await checkedBlock(block);
-    let toBlock = at.number;
-    for (let queries = 0; queries < REVEAL_LOG_WINDOWS && toBlock >= manifest.deploymentBlock; queries++) {
+    for (let toBlock = at.number, queries = 0; queries < REVEAL_LOG_WINDOWS && toBlock >= manifest.deploymentBlock; queries++) {
       const fromBlock = toBlock - REVEAL_LOG_WINDOW + 1n > manifest.deploymentBlock ? toBlock - REVEAL_LOG_WINDOW + 1n : manifest.deploymentBlock;
       const logs = await client.getLogs({ address: manifest.address, event: REVEALED, args: { id }, fromBlock, toBlock, strict: true });
       const log = logs.at(-1);
@@ -183,13 +180,6 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
         return revealed.timestamp;
       }
       toBlock = fromBlock - 1n;
-    }
-    // The raffle is revealed, so an event older than the search window happened before the oldest searched block.
-    // That block's time is a safe stand-in: it is never earlier than the real reveal.
-    if (toBlock >= manifest.deploymentBlock) {
-      const oldest = await client.getBlock({ blockNumber: toBlock + 1n });
-      await checkedBlock(at);
-      return oldest.timestamp;
     }
     throw new Error("The draw confirmation was not found.");
   }

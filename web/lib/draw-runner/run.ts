@@ -102,8 +102,8 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   const scanMs = Math.max(SCAN_FLOOR_MS, Math.min(SCAN_MS, deadline - SEND_MIN_REMAINING_MS - SCAN_MARGIN_MS - now()));
   const scan = await bounded(chain.scan(savedId(savedCursor), lowWater, SCAN_LIMIT, scanMs));
   let nextCursor = scan.nextCursor;
-  // Progress means a raffle's check finished, or a scan that found nothing still moved the cursor on.
-  let progressed = scan.candidates.length === 0 && scan.nextCursor !== savedId(savedCursor);
+  // Progress means a raffle's check finished, or a scan that found nothing to do still read some raffles.
+  let progressed = scan.candidates.length === 0 && scan.readCount > 0;
   // A scan that ran out of time or hit a failed read still hands over the raffles it read; the cursor resumes after them.
   if (scan.stop) report.status = scan.stop;
   const stop = (status: RunStatus, id: bigint) => { report.status = status; nextCursor = id; };

@@ -52,7 +52,7 @@ export function scanWindow(cursor: bigint, lowWater: bigint, nextId: bigint, lim
 /** Raffle reads the scan keeps in flight at once. */
 export const SCAN_CONCURRENCY = 8;
 
-export type ScanResult = { candidates: bigint[]; nextCursor: bigint; lowWater: bigint; stop: "deadline" | "interrupted" | null };
+export type ScanResult = { candidates: bigint[]; nextCursor: bigint; lowWater: bigint; stop: "deadline" | "interrupted" | null; readCount: number };
 
 /**
  * Reads up to `limit` raffles from `cursor` in scanWindow order, at most SCAN_CONCURRENCY at a time, and keeps the ids
@@ -85,9 +85,9 @@ export async function scanRaffles<T>({ cursor, lowWater, nextId, limit, timeoutM
   const isFinal = new Map(counted.map(item => [item.id, final(item.raffle)]));
   let mark = from;
   while (isFinal.get(mark)) mark++;
-  if (done === ids.length) return { candidates, nextCursor, lowWater: mark, stop: null };
-  if (results[done] === "failed") return { candidates, nextCursor: ids[done + 1] ?? nextCursor, lowWater: mark, stop: "interrupted" };
-  return { candidates, nextCursor: ids[done], lowWater: mark, stop: "deadline" };
+  if (done === ids.length) return { candidates, nextCursor, lowWater: mark, stop: null, readCount: done };
+  if (results[done] === "failed") return { candidates, nextCursor: ids[done + 1] ?? nextCursor, lowWater: mark, stop: "interrupted", readCount: done };
+  return { candidates, nextCursor: ids[done], lowWater: mark, stop: "deadline", readCount: done };
 }
 
 /** Rejects any prepared transaction other than the expected zero-value draw call on the raffle contract. */

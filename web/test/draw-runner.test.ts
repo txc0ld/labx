@@ -162,22 +162,22 @@ describe("draw runner scan reads", () => {
     const read = async (id: bigint) => { active++; peak = Math.max(peak, active); await new Promise(done => setTimeout(done, 1)); active--; return id; };
     const result = await scanRaffles({ cursor: 991n, lowWater: 1n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 10_000, read, keep: even, final: never });
     expect(peak).toBe(SCAN_CONCURRENCY);
-    expect(result).toEqual({ candidates: [...ids(1000).slice(990), ...ids(490)].filter(even), nextCursor: 491n, lowWater: 1n, stop: null });
+    expect(result).toEqual({ candidates: [...ids(1000).slice(990), ...ids(490)].filter(even), nextCursor: 491n, lowWater: 1n, stop: null, readCount: 500 });
   });
 
   it("keeps the raffles before a failed read and resumes after it", async () => {
     const read = async (id: bigint) => { if (id === 7n) throw new Error("rpc failed"); return id; };
     expect(await scanRaffles({ cursor: 1n, lowWater: 1n, nextId: 21n, limit: 20, timeoutMs: 10_000, read, keep: () => true, final: never }))
-      .toEqual({ candidates: ids(6), nextCursor: 8n, lowWater: 1n, stop: "interrupted" });
+      .toEqual({ candidates: ids(6), nextCursor: 8n, lowWater: 1n, stop: "interrupted", readCount: 6 });
     expect(await scanRaffles({ cursor: 1n, lowWater: 1n, nextId: 21n, limit: 7, timeoutMs: 10_000, read, keep: () => true, final: never }))
-      .toEqual({ candidates: ids(6), nextCursor: 8n, lowWater: 1n, stop: "interrupted" });
+      .toEqual({ candidates: ids(6), nextCursor: 8n, lowWater: 1n, stop: "interrupted", readCount: 6 });
   });
 
   it("keeps the raffles read before the time ran out, resumes at the first unread raffle and starts no read after that", async () => {
     const reads: bigint[] = [];
     const read = (id: bigint) => { reads.push(id); return id === 5n ? new Promise<bigint>(() => {}) : new Promise<bigint>(done => setTimeout(() => done(id), 2)); };
     expect(await scanRaffles({ cursor: 1n, lowWater: 1n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 30, read, keep: () => true, final: never }))
-      .toEqual({ candidates: ids(4), nextCursor: 5n, lowWater: 1n, stop: "deadline" });
+      .toEqual({ candidates: ids(4), nextCursor: 5n, lowWater: 1n, stop: "deadline", readCount: 4 });
     const count = reads.length;
     expect(count).toBeGreaterThan(SCAN_CONCURRENCY);
     expect(count).toBeLessThan(SCAN_LIMIT);
@@ -724,6 +724,21 @@ describe("draw runner cron handler", () => {
     expect(body).toMatchObject({ ok: false, status: "deadline", sends: 0, items: [], nextCursor: "1" });
   });
 
+  it("reports not ok when the scan reads nothing, even when the saved cursor sits below the low-water mark", async () => {
+    vi.useFakeTimers({ now: START });
+    const store = new MemoryStore();
+    const settled: FakeRaffle = { phase: 5, lots: 2n, cursor: 2n, snapshotted: true, revealed: true };
+    const raffles: Record<string, FakeRaffle> = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [String(index + 1), index < 5 ? { ...settled } : drawn()]));
+    await store.set("draw-runner:cursor", "1");
+    await store.set("draw-runner:low-water", `${contract.toLowerCase()}:6`);
+    const { chain, sent } = fakeChain(raffles, { scanRead: () => new Promise<never>(() => {}) });
+    const pending = call(chain, store, () => Date.now());
+    await vi.advanceTimersByTimeAsync(56_000);
+    const { body } = await pending;
+    expect(sent).toEqual([]);
+    expect(body).toMatchObject({ ok: false, status: "deadline", sends: 0, items: [] });
+  });
+
   it("stays ok when a slow scan finds nothing to do but moves the cursor on", async () => {
     vi.useFakeTimers({ now: START });
     const store = new MemoryStore();
@@ -1178,12 +1193,12 @@ describe("draw runner chain scan", () => {
     void chain.scan(1n, 1n, SCAN_LIMIT, 10_500).then(value => { result = value; });
     await vi.advanceTimersByTimeAsync(10_500);
     // Six seconds of block reads leave four and a half seconds: four rounds of raffle reads.
-    expect(result).toEqual({ candidates: Array.from({ length: 4 * SCAN_CONCURRENCY }, (_, index) => BigInt(index + 1)), nextCursor: BigInt(4 * SCAN_CONCURRENCY + 1), lowWater: 1n, stop: "deadline" });
+    expect(result).toEqual({ candidates: Array.from({ length: 4 * SCAN_CONCURRENCY }, (_, index) => BigInt(index + 1)), nextCursor: BigInt(4 * SCAN_CONCURRENCY + 1), lowWater: 1n, stop: "deadline", readCount: 4 * SCAN_CONCURRENCY });
   });
 
   it("moves the low-water mark over raffles settled or cancelled at the pinned block", async () => {
     const chain = scanChain([5, 6, 5, 4, 5], { firstBlockMs: 0, readMs: 0 });
-    expect(await chain.scan(2n, 1n, SCAN_LIMIT, 10_000)).toEqual({ candidates: [4n], nextCursor: 2n, lowWater: 4n, stop: null });
+    expect(await chain.scan(2n, 1n, SCAN_LIMIT, 10_000)).toEqual({ candidates: [4n], nextCursor: 2n, lowWater: 4n, stop: null, readCount: 5 });
   });
 });
 

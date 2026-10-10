@@ -84,8 +84,11 @@ const RUNNER_LATE_AFTER = 30n * 60n;
  */
 function runnerDueAt({ raffle, revealGrace }: RaffleSnapshot, kind: SellerActionKind, revealedAt = 0n): bigint {
   if (kind !== "settle") return raffle.salesEnd;
-  if (!raffle.revealed) return raffle.drawnAt + revealGrace;
-  return revealedAt > raffle.drawnAt ? revealedAt : raffle.drawnAt;
+  const graceEnd = raffle.drawnAt + revealGrace;
+  if (!raffle.revealed) return graceEnd;
+  // The runner settles a confirmed draw at once, and any drawn raffle once the reveal grace ends, so it is never due later than that.
+  const confirmed = revealedAt > raffle.drawnAt ? revealedAt : raffle.drawnAt;
+  return confirmed < graceEnd ? confirmed : graceEnd;
 }
 
 /** Block times at which a pending runner step goes back to the seller, so a page that stays open can tell when its view changes. */
