@@ -506,24 +506,63 @@ describe("seller next step with the draw runner", () => {
     expect(sellerNextStep(value, currentSellerActions(value), true, value.block.timestamp)).toMatchObject({ kind: "action", action: { kind: "settle" }, message: LATE });
   });
 
-  it("times a confirmed draw's finish from when the page first saw it confirmed, if that is after the draw", () => {
+  it("times a confirmed draw's finish from the draw confirmation, if that is after the draw", () => {
     const value = drawn(true);
     const drawnAt = value.raffle.drawnAt;
     // The seller confirms the draw a day after it, long past the draw's own 30 minutes.
-    const seen = drawnAt + 86_400n;
-    value.block.timestamp = seen;
-    expect(sellerNextStep(value, currentSellerActions(value), true, seen)).toEqual({ kind: "automatic", action: currentSellerActions(value).find(item => item.kind === "settle"), title: "Draw confirmed", message: SETTLE });
-    value.block.timestamp = seen + 1_799n;
-    expect(sellerNextStep(value, currentSellerActions(value), true, seen)).toMatchObject({ kind: "automatic", action: { kind: "settle" } });
-    value.block.timestamp = seen + 1_800n;
-    expect(sellerNextStep(value, currentSellerActions(value), true, seen)).toEqual({ kind: "action", action: currentSellerActions(value).find(item => item.kind === "settle"), message: LATE });
-    // The later of the two counts: a time before the draw leaves it timed from the draw.
+    const revealedAt = drawnAt + 86_400n;
+    value.block.timestamp = revealedAt;
+    expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toEqual({ kind: "automatic", action: currentSellerActions(value).find(item => item.kind === "settle"), title: "Draw confirmed", message: SETTLE });
+    value.block.timestamp = revealedAt + 1_799n;
+    expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toMatchObject({ kind: "automatic", action: { kind: "settle" } });
+    value.block.timestamp = revealedAt + 1_800n;
+    expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toEqual({ kind: "action", action: currentSellerActions(value).find(item => item.kind === "settle"), message: LATE });
+    // The later of the two counts: a draw confirmed before the draw leaves it timed from the draw.
     value.block.timestamp = drawnAt + 1_799n;
     expect(sellerNextStep(value, currentSellerActions(value), true, drawnAt - 60n)).toMatchObject({ kind: "automatic", action: { kind: "settle" } });
     value.block.timestamp = drawnAt + 1_800n;
     expect(sellerNextStep(value, currentSellerActions(value), true, drawnAt - 60n)).toMatchObject({ kind: "action", action: { kind: "settle" }, message: LATE });
-    // The Studio card has no page history, so it times the step from the draw.
+    // Without a confirmation time, the step is timed from the draw.
     expect(sellerNextStep(value, currentSellerActions(value), true)).toMatchObject({ kind: "action", action: { kind: "settle" }, message: LATE });
+  });
+
+  describe("on a fresh load of a confirmed draw", () => {
+    // The page loads a day after the draw. Its first read is at `loaded`, which is also the fallback time when the event can't be read.
+    function loadedDraw() {
+      const value = drawn(true);
+      value.raffle.drawnAt -= 86_400n;
+      return value;
+    }
+
+    it("gives finishing back at once when the Revealed event is more than 30 minutes old", () => {
+      const value = loadedDraw();
+      const revealedAt = value.block.timestamp - 1_800n;
+      expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toEqual({ kind: "action", action: currentSellerActions(value).find(item => item.kind === "settle"), message: LATE });
+      expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt + 1n)).toMatchObject({ kind: "automatic", action: { kind: "settle" }, message: SETTLE });
+    });
+
+    it("leaves finishing to LABx for 30 minutes after a fresh Revealed event", () => {
+      const value = loadedDraw();
+      const revealedAt = value.block.timestamp - 600n;
+      expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toMatchObject({ kind: "automatic", action: { kind: "settle" }, title: "Draw confirmed", message: SETTLE });
+      value.block.timestamp = revealedAt + 1_799n;
+      expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toMatchObject({ kind: "automatic", action: { kind: "settle" } });
+      value.block.timestamp = revealedAt + 1_800n;
+      expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toMatchObject({ kind: "action", action: { kind: "settle" }, message: LATE });
+    });
+
+    it("waits 30 minutes from the first read when the event can't be read, never less than the event allows", () => {
+      const value = loadedDraw();
+      const loaded = value.block.timestamp;
+      for (const revealedAt of [value.raffle.drawnAt - 60n, value.raffle.drawnAt, loaded - 7_200n, loaded - 600n, loaded]) {
+        for (const at of [loaded, loaded + 1_799n, loaded + 1_800n]) {
+          value.block.timestamp = at;
+          const fallback = sellerNextStep(value, currentSellerActions(value), true, loaded);
+          expect(fallback.kind).toBe(at < loaded + 1_800n ? "automatic" : "action");
+          if (fallback.kind === "action") expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toEqual(fallback);
+        }
+      }
+    });
   });
 
   it("leaves waiting states unchanged", () => {

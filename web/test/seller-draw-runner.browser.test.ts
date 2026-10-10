@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeFunctionData, encodeFunctionData, erc20Abi, toHex, zeroHash, type Hex } from "viem";
+import { decodeFunctionData, encodeEventTopics, encodeFunctionData, erc20Abi, getAbiItem, toHex, zeroHash, type Hex } from "viem";
 import type { Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
 import { workflowMessage } from "../lib/chain/messages";
@@ -532,4 +532,78 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     expect((await chain.service.readRaffle({ id: raffleId })).raffle.phase).toBe(4);
     expect(pageErrors).toEqual([]);
   }, 150_000);
+
+  /** Answers the page's reads of Revealed events with a node error until release(). Other reads pass through. */
+  async function failRevealReads() {
+    const revealed = encodeEventTopics({ abi: raffleAbi, eventName: "Revealed" })[0].toLowerCase();
+    let failed = 0;
+    const handler = async (route: Route) => {
+      const body: unknown = route.request().postDataJSON();
+      const reveal = !!body && typeof body === "object" && "method" in body && body.method === "eth_getLogs" && "params" in body && Array.isArray(body.params)
+        && JSON.stringify(body.params).toLowerCase().includes(revealed);
+      if (!reveal) return route.continue();
+      failed += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", json: { jsonrpc: "2.0", id: "id" in body ? body.id : null, error: { code: -32005, message: "query exceeds max block range" } } });
+    };
+    await fixture.page.route(`${chain.url}/`, handler);
+    return { failed: () => failed, release: () => fixture.page.unroute(`${chain.url}/`, handler) };
+  }
+
+  it("times finishing from the draw confirmation's block on a fresh load of the raffle page and the Studio card", async () => {
+    const title = "Confirmed earlier raffle";
+    // The buyer's 200 USDC from setup covers only the seven raffles listed before this one.
+    await chain.write(chain.nft, "mint", [chain.seller, 508n]);
+    await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
+    const raffleId = await drawnRaffle(508n, title);
+    const drawn = await chain.service.readRaffle({ id: raffleId });
+    // The seller confirms the draw a day after it, long past the draw's own 30 minutes.
+    await chain.warp(drawn.raffle.drawnAt + 86_400n);
+    await open(`/seller/${raffleId.toString()}`, "Confirm the draw");
+    await stepCard("Confirm the draw").getByRole("button", { name: "Confirm the draw", exact: true }).click();
+    await automaticCard("Draw confirmed").waitFor({ state: "visible", timeout: 30_000 });
+    expect((await chain.service.readRaffle({ id: raffleId })).raffle.revealed).toBe(true);
+    const [reveal] = await chain.client.getLogs({ address: chain.raffle.address, event: getAbiItem({ abi: raffleAbi, name: "Revealed" }), args: { id: raffleId }, fromBlock: 0n, strict: true });
+    const revealedAt = (await chain.client.getBlock({ blockHash: reveal.blockHash })).timestamp;
+
+    // Right after the confirmation the Studio card also leaves finishing to LABx, though the draw is a day old.
+    const card = fixture.page.locator("section[aria-labelledby='seller-raffles-title'] li").filter({ hasText: title });
+    await open("/seller", title);
+    await card.getByText(SETTLE, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.waitForTimeout(2_000);
+    expect(await card.getByRole("link").getAttribute("aria-label")).toBe(`View: ${title}`);
+
+    // 30 minutes after the confirmation's block, nobody has finished the raffle.
+    await chain.warp(revealedAt + 1_800n);
+
+    // When the Revealed event can't be read, a fresh load waits 30 minutes from its own first read instead.
+    const reads = await failRevealReads();
+    try {
+      await open(`/seller/${raffleId.toString()}`, SETTLE);
+      await expect.poll(() => reads.failed(), { timeout: 15_000 }).toBeGreaterThan(0);
+      await fixture.page.waitForTimeout(2_000);
+      expect(await automaticCard("Draw confirmed").getByText(SETTLE, { exact: true }).isVisible()).toBe(true);
+      expect(await fixture.page.getByText(LATE, { exact: true }).count()).toBe(0);
+      expect(await visibleButton("Finish raffle").count()).toBe(0);
+      const failedOnPage = reads.failed();
+      await open("/seller", title);
+      await expect.poll(() => reads.failed(), { timeout: 15_000 }).toBeGreaterThan(failedOnPage);
+      await fixture.page.waitForTimeout(2_000);
+      expect(await card.getByText(SETTLE, { exact: true }).isVisible()).toBe(true);
+      expect(await card.getByRole("link").getAttribute("aria-label")).toBe(`View: ${title}`);
+    } finally { await reads.release(); }
+
+    // A fresh load that reads the event gives finishing back at once, on the raffle page and the Studio card.
+    await open(`/seller/${raffleId.toString()}`, LATE);
+    expect(await stepCard("Finish raffle").getByText(LATE, { exact: true }).isVisible()).toBe(true);
+    expect(await visibleButton("Finish raffle").count()).toBe(1);
+    expect(await fixture.page.getByText(SETTLE, { exact: true }).count()).toBe(0);
+    expect(await fixture.page.locator("summary", { hasText: /^Run it yourself$/ }).count()).toBe(0);
+    await evidence("finish-late-fresh-load-1280");
+    await open("/seller", title);
+    await expect.poll(() => card.getByRole("link").getAttribute("aria-label"), { timeout: 15_000 }).toBe(`Finish raffle: ${title}`);
+    expect(await card.getByText("Draw confirmed", { exact: true }).isVisible()).toBe(true);
+    expect(await card.getByText(SETTLE, { exact: true }).count()).toBe(0);
+    expect((await chain.service.readRaffle({ id: raffleId })).raffle.phase).toBe(4);
+    expect(pageErrors).toEqual([]);
+  }, 180_000);
 });

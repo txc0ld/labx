@@ -4,14 +4,16 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import { SELLER_FEE_BPS, sellerAccounting } from "@/lib/chain/fees";
-import type { BrowserService } from "@/lib/chain/ports";
+import type { BrowserService, RaffleService } from "@/lib/chain/ports";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "@/lib/chain/seller-portfolio";
 import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
+import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import styles from "./SellerPortal.module.css";
 import { ResumeTransaction } from "./ResumeTransaction";
 import { catalogAvailability, formatUsdcAmount, networkName } from "./format";
 import { LocalTime } from "./LocalTime";
 import { cardNextStep } from "./seller-card";
+import { useRevealTime } from "./useRevealTime";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type SellerState =
@@ -93,7 +95,7 @@ export function SellerDashboard({ browser, draftForm, revision = 0, loading = fa
           {state.kind === "ready" && state.raffles.length === 0 && !creating ? (
             <div className={styles.emptyState}><span className={styles.emptyMark} aria-hidden="true">＋</span><div><strong>No raffles yet</strong><p>Your raffles appear here after you create one.</p></div></div>
           ) : null}
-          {raffles.length > 0 && seller ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} snapshot={snapshot} seller={seller} />)}</ol> : null}
+          {raffles.length > 0 && seller ? <ol className={styles.raffleList}>{raffles.map((snapshot) => <SellerRaffleCard key={snapshot.id.toString()} service={browser.service} snapshot={snapshot} seller={seller} />)}</ol> : null}
           {state.kind === "incomplete" ? <div className={`${styles.inlineWarning} notice warning`} role="alert"><p>{raffles.length > 0 ? "Some raffles couldn't be loaded." : "Your raffles couldn't be loaded."}</p><button className="btn btn-dark" type="button" onClick={() => void load()}>Reload raffles</button></div> : null}
         </section>
         <details className={styles.revenueDisclosure}>
@@ -130,9 +132,11 @@ function Amount({ label, value }: { label: string; value: bigint }) {
   return <div><dt>{label}</dt><dd>{formatUsdcAmount(value)} <small>USDC</small></dd></div>;
 }
 
-function SellerRaffleCard({ snapshot, seller }: { snapshot: RaffleSnapshot; seller: Address }) {
+function SellerRaffleCard({ service, snapshot, seller }: { service: RaffleService; snapshot: RaffleSnapshot; seller: Address }) {
   const accounting = sellerAccounting(snapshot);
-  const next = cardNextStep(snapshot, seller);
+  const runner = drawRunnerEnabled();
+  const revealedAt = useRevealTime(service, snapshot, runner);
+  const next = cardNextStep(snapshot, seller, runner, revealedAt);
   return (
     <li>
       <div className={styles.cardTopline}><span>Raffle #{snapshot.id.toString()}</span><span className={styles.phase}>{catalogAvailability(snapshot).label}</span></div>
