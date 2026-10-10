@@ -4,48 +4,17 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
-import type { AccountRaffleState, BlockRef, HistoryItem } from "@/lib/chain/types";
-import { sameAddress } from "@/lib/chain/validation";
-import { availableActions } from "@/lib/chain/workflow";
-import { catalogAvailability } from "./format";
-import { formatUsdcAmount } from "./usdc-amount";
+import type { BlockRef, HistoryItem } from "@/lib/chain/types";
+import { buyerRaffleRow, type BuyerRaffleRow } from "./buyer-raffles";
 import { useWalletSnapshot } from "./WalletGate";
 
 type Continuation = { cursor: bigint; block: BlockRef };
-type Row = { id: bigint; title: string; status: string; memberships: string; entries: number; action: string | null };
 type State =
   | { kind: "idle" | "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; purchases: readonly HistoryItem[]; rows: readonly Row[]; continuation: Continuation | null; loadingMore: boolean };
+  | { kind: "ready"; purchases: readonly HistoryItem[]; rows: readonly BuyerRaffleRow[]; continuation: Continuation | null; loadingMore: boolean };
 
 const HISTORY_PAGES_PER_LOAD = 10;
-
-/** "Gold × 2 · Entry × 1". A purchase names its tier only when exactly one pack has its price and bonus entries. */
-function membershipSummary(purchases: readonly HistoryItem[], account: AccountRaffleState) {
-  const counts = new Map<string, number>();
-  for (const purchase of purchases) {
-    const quantity = BigInt(purchase.quantity);
-    const matches = account.snapshot.packs.filter(pack => pack.priceUsdc * quantity === purchase.principal && BigInt(pack.bonusEntries) * quantity === BigInt(purchase.bonusEntries));
-    const name = matches.length === 1 ? matches[0].name : "Membership";
-    counts.set(name, (counts.get(name) ?? 0) + purchase.quantity);
-  }
-  return [...counts].map(([name, quantity]) => `${name} × ${quantity}`).join(" · ");
-}
-
-function row(purchases: readonly HistoryItem[], account: AccountRaffleState): Row {
-  const { snapshot } = account;
-  const actions = availableActions(snapshot, account);
-  const enabled = (kind: "claimPrize" | "refund") => actions.some(action => action.kind === kind && action.enabled);
-  const won = snapshot.raffle.phase >= 4 && sameAddress(snapshot.raffle.winner, account.account);
-  return {
-    id: snapshot.id,
-    title: snapshot.raffle.title,
-    status: won ? "You won" : catalogAvailability(snapshot).label,
-    memberships: membershipSummary(purchases, account),
-    entries: purchases.reduce((sum, purchase) => sum + purchase.bonusEntries, 0),
-    action: enabled("claimPrize") ? "Claim your NFT" : enabled("refund") ? `Claim ${formatUsdcAmount(account.principal)} USDC refund` : null
-  };
-}
 
 /** The connected wallet's raffles, from its confirmed purchases and current raffle reads. No signature is requested. */
 export function BuyerRaffles({ browser }: { browser: BrowserService }) {
@@ -77,7 +46,7 @@ export function BuyerRaffles({ browser }: { browser: BrowserService }) {
       const accounts = await Promise.all([...byRaffle.keys()].map(id => browser.service.readAccount({ id, account, block })));
       if (version !== request.current) return;
       const latest = (id: bigint) => Math.max(...(byRaffle.get(id) ?? []).map(purchase => Number(purchase.blockNumber)));
-      const rows = accounts.map(item => row(byRaffle.get(item.snapshot.id) ?? [], item)).sort((a, b) => latest(b.id) - latest(a.id));
+      const rows = accounts.map(item => buyerRaffleRow(byRaffle.get(item.snapshot.id) ?? [], item)).sort((a, b) => latest(b.id) - latest(a.id));
       setState({ kind: "ready", purchases, rows, continuation, loadingMore: false });
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Your raffles couldn't be loaded." });

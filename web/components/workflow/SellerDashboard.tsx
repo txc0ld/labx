@@ -5,13 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import { SELLER_FEE_BPS, sellerAccounting } from "@/lib/chain/fees";
 import type { BrowserService } from "@/lib/chain/ports";
-import { drawBlocker, sellerNextStep, sellerPortalActions, type SellerActionKind } from "@/lib/chain/seller-actions";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "@/lib/chain/seller-portfolio";
 import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
-import { availableActions } from "@/lib/chain/workflow";
 import styles from "./SellerPortal.module.css";
 import { ResumeTransaction } from "./ResumeTransaction";
 import { catalogAvailability, formatDate } from "./format";
+import { cardNextStep } from "./seller-card";
 import { formatUsdcAmount } from "./usdc-amount";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
@@ -126,33 +125,6 @@ function shareLabel(raffles: readonly RaffleSnapshot[]) {
 
 function Amount({ label, value }: { label: string; value: bigint }) {
   return <div><dt>{label}</dt><dd>{formatUsdcAmount(value)} <small>USDC</small></dd></div>;
-}
-
-type CardStep = { label: string; status: string };
-
-const CARD_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) => CardStep>> = {
-  open: () => ({ label: "List", status: "Approved by LABx" }),
-  close: () => ({ label: "Close sales", status: "Sales ended" }),
-  snapshot: () => ({ label: "Count entries", status: "Sales closed" }),
-  requestRandomness: () => ({ label: "Start draw", status: "Entries counted" }),
-  reveal: () => ({ label: "Confirm the draw", status: "Winner drawn" }),
-  settle: ({ raffle }) => ({ label: "Finish raffle", status: raffle.revealed ? "Draw confirmed" : "Winner drawn" }),
-  claimProceeds: ({ raffle }) => ({ label: `Claim ${formatUsdcAmount(raffle.principalEscrow)} USDC`, status: "Raffle finished" }),
-  cancel: snapshot => ({ label: snapshot.lotCount === 0n ? "Cancel raffle" : "Enable refunds", status: drawBlocker(snapshot) ?? "Sales ended" }),
-  abortDrawing: () => ({ label: "Enable refunds", status: "The draw timed out" }),
-  reclaimPrize: () => ({ label: "Reclaim NFT", status: "Raffle cancelled" })
-};
-
-/** The card's button and one-line status, from the same next step the raffle page shows. */
-function cardNextStep(snapshot: RaffleSnapshot, seller: Address): CardStep {
-  const { raffle, block } = snapshot;
-  // Same order as sellerNextStep: an expired draft needs a new deadline before its NFT can be locked.
-  if (raffle.phase === 0 && !raffle.escrowed && block.timestamp < raffle.salesEnd) return { label: "Finish creating", status: "Prize not locked yet" };
-  // Portfolio reads carry no NFT ownership or approval; the raffle page reads both before any NFT step.
-  const account = { account: seller, snapshot, principal: 0n, fee: 0n, usdcBalance: 0n, usdcAllowance: 0n, nftOwner: null, nftApproved: false };
-  const next = sellerNextStep(snapshot, sellerPortalActions(availableActions(snapshot, account)));
-  if (next.kind === "waiting") return { label: "View", status: next.title };
-  return CARD_STEPS[next.action.kind]?.(snapshot) ?? { label: "View", status: next.action.label };
 }
 
 function SellerRaffleCard({ snapshot, seller }: { snapshot: RaffleSnapshot; seller: Address }) {

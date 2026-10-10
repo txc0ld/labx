@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { encodeFunctionData, erc721Abi, keccak256, toBytes, type Address, type Hex } from "viem";
+import { encodeFunctionData, erc721Abi, keccak256, toBytes, zeroAddress, zeroHash, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { encodeDraft, finishCreate, type CreateRecord } from "../lib/chain/create-flow";
 import { transactionIntent } from "../lib/chain/pending-journal";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
-import type { CanonicalReceipt, DraftInput, RaffleSnapshot, WorkflowAction } from "../lib/chain/types";
+import type { AccountRaffleState, CanonicalReceipt, DraftInput, HistoryItem, RaffleSnapshot, WorkflowAction } from "../lib/chain/types";
+import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
+import { buyerRaffleRow } from "../components/workflow/buyer-raffles";
+import { cardNextStep } from "../components/workflow/seller-card";
 import { createStepMessage, CREATE_STEPS } from "../components/workflow/create-progress";
 import { localDeadlineInput, localDeadlineSeconds } from "../components/workflow/deadline";
 import { formatDate } from "../components/workflow/format";
@@ -140,5 +143,85 @@ describe("Create progress", () => {
 
   it("passes unknown steps through unchanged", () => {
     expect(createStepMessage("Checking the saved creation transaction…", 1n)).toBe("Checking the saved creation transaction…");
+  });
+});
+
+const SELLER = "0x1111111111111111111111111111111111111111" as Address;
+const BUYER = "0x4444444444444444444444444444444444444444" as Address;
+const NOW = 1_800_000_000n;
+const TIER_PACKS = [
+  { name: "Entry", priceUsdc: 12_500_000n, bonusEntries: 1, maxSupply: 100, sold: 0, active: true },
+  { name: "Gold", priceUsdc: 100_000_000n, bonusEntries: 10, maxSupply: 10, sold: 0, active: true }
+];
+
+function raffleSnapshot(input: { phase: number; escrowed?: boolean; salesEnd?: bigint; admission?: "pending" | "approved" | "opened"; lotCount?: bigint; principalEscrow?: bigint; winner?: Address; revealed?: boolean; snapshotted?: boolean; snapshotTotal?: bigint; packs?: typeof TIER_PACKS }): RaffleSnapshot {
+  return {
+    id: 7n,
+    block: { number: 50n, hash: zeroHash, timestamp: NOW },
+    raffle: {
+      seller: SELLER, nft: zeroAddress, tokenId: 7n, salesEnd: input.salesEnd ?? NOW + 3_600n, createdAt: 1n, drawnAt: 0n, vrfRequestedAt: 0n,
+      phase: input.phase, escrowed: input.escrowed ?? true, snapshotted: input.snapshotted ?? false, revealed: input.revealed ?? false,
+      reserveNonce: zeroHash, reserveCommit: zeroHash, publicHash: zeroHash, lotCursor: 0n, snapshotTotal: input.snapshotTotal ?? 0n,
+      principalEscrow: input.principalEscrow ?? 0n, feeEscrow: 0n, vrfRequestId: 0n, randomWord: 0n, winner: input.winner ?? zeroAddress, packCount: 2, title: "Copper Moon"
+    },
+    admission: { status: input.admission ?? "opened", reviewHash: zeroHash, record: { reviewRevision: 1n, approvedReviewHash: zeroHash, approvedBy: zeroAddress, approvedAtOpening: true } },
+    packs: input.packs ?? TIER_PACKS,
+    policy: { treasury: zeroAddress, termsHash: PUBLISHED_TERMS_HASH, coordinator: zeroAddress, keyHash: zeroHash, subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3, nativePayment: true, buyerFeeBps: 200, sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n },
+    accounting: { grossPrincipal: 0n, buyerFees: 0n },
+    lotCount: input.lotCount ?? 0n,
+    paused: false,
+    owner: zeroAddress,
+    ethEnabled: false,
+    drawStartGrace: 604_800n,
+    randomnessGrace: 604_800n,
+    revealGrace: 604_800n
+  } as unknown as RaffleSnapshot;
+}
+
+describe("Studio card next step", () => {
+  it("names the step the raffle page will offer", () => {
+    expect(cardNextStep(raffleSnapshot({ phase: 0, escrowed: false }), SELLER)).toEqual({ label: "Finish creating", status: "Prize not locked yet" });
+    expect(cardNextStep(raffleSnapshot({ phase: 0, admission: "pending" }), SELLER)).toMatchObject({ label: "View" });
+    expect(cardNextStep(raffleSnapshot({ phase: 0, admission: "approved" }), SELLER)).toEqual({ label: "List", status: "Approved by LABx" });
+    expect(cardNextStep(raffleSnapshot({ phase: 1 }), SELLER)).toMatchObject({ label: "View" });
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: NOW, lotCount: 3n }), SELLER)).toEqual({ label: "Close sales", status: "Sales ended" });
+    expect(cardNextStep(raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n }), SELLER)).toEqual({ label: "Count entries", status: "Sales closed" });
+    expect(cardNextStep(raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n, snapshotted: true, snapshotTotal: 3n }), SELLER)).toEqual({ label: "Start draw", status: "Entries counted" });
+    expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle finished" });
+    expect(cardNextStep(raffleSnapshot({ phase: 5 }), SELLER)).toMatchObject({ label: "View" });
+  });
+
+  it("offers Cancel raffle for an unsold raffle and Enable refunds once memberships sold", () => {
+    const expired = NOW - 604_800n;
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: expired }), SELLER)).toMatchObject({ label: "Cancel raffle" });
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: expired, lotCount: 2n }), SELLER)).toMatchObject({ label: "Enable refunds" });
+    expect(cardNextStep(raffleSnapshot({ phase: 6 }), SELLER)).toEqual({ label: "Reclaim NFT", status: "Raffle cancelled" });
+  });
+
+  it("does not offer Finish creating for an expired draft", () => {
+    expect(cardNextStep(raffleSnapshot({ phase: 0, escrowed: false, salesEnd: NOW }), SELLER)).toMatchObject({ label: "View" });
+  });
+});
+
+describe("Profile raffle rows", () => {
+  const purchase = (quantity: number, principal: bigint, bonusEntries: number, blockNumber = 10n): HistoryItem => ({
+    raffleId: 7n, event: "PackPurchased", transactionHash: zeroHash, logIndex: 0, blockNumber, account: BUYER, principal, fee: 2_500_000n, quantity, bonusEntries
+  });
+  const account = (snapshot: RaffleSnapshot, principal = 0n): AccountRaffleState => ({ account: BUYER, snapshot, principal, fee: 0n, usdcBalance: 0n, usdcAllowance: 0n, nftOwner: null, nftApproved: false });
+
+  it("names tiers from the published packs and offers the winner's claim", () => {
+    const row = buyerRaffleRow([purchase(1, 100_000_000n, 10), purchase(4, 50_000_000n, 4, 11n)], account(raffleSnapshot({ phase: 5, winner: BUYER })));
+    expect(row).toEqual({ id: 7n, title: "Copper Moon", status: "You won", memberships: "Gold × 1 · Entry × 4", entries: 14, action: "Claim your NFT" });
+  });
+
+  it("offers the refund amount for a cancelled raffle and no action once refunded", () => {
+    const cancelled = raffleSnapshot({ phase: 6, escrowed: false });
+    expect(buyerRaffleRow([purchase(2, 25_000_000n, 2)], account(cancelled, 25_000_000n))).toMatchObject({ status: "Cancelled", memberships: "Entry × 2", action: "Claim 25.00 USDC refund" });
+    expect(buyerRaffleRow([purchase(2, 25_000_000n, 2)], account(cancelled, 0n))).toMatchObject({ action: null });
+  });
+
+  it("does not guess a tier when two packs share a price and bonus entries", () => {
+    const twins = [TIER_PACKS[0], { ...TIER_PACKS[0], name: "Bronze" }];
+    expect(buyerRaffleRow([purchase(1, 12_500_000n, 1)], account(raffleSnapshot({ phase: 1, packs: twins }))).memberships).toBe("Membership × 1");
   });
 });
