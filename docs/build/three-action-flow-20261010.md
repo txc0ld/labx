@@ -8,6 +8,8 @@ The candidate simplifies the normal seller journey to one website activation per
 
 Final production source is `3628e0fadc1b826be61282f9d2adfbd13372e58b`; independent tests are integrated through `5383df137ffd1af4c28ef67470bcce7d470e122f`. This snapshot records verification before final publication. The chronological builder notes below retain earlier failures and intermediate checks.
 
+The passing baseline browser CI job took 19 minutes 26 seconds, including setup, against its former 20-minute limit. Its job budget is now 25 minutes to allow normal runner variation. Test files, assertions, per-test timeouts and serialized execution are unchanged.
+
 The last wallet repair closes three independently reproduced failures: SDK-initiated disconnect could permanently block reconnect; local WalletConnect release could retain an old-topic cleanup record; and a delayed explicit chooser could perform remote cleanup after local retirement. The repair binds terminal proof to the exact provider/topic, preserves active or failed deletion records, and gives pending explicit and restored choosers the same serialized retirement ownership. Unknown or replaced sessions remain blocked.
 
 Observed evidence under the workspace artifact directory `artifacts/three-action-flow-20261010/`:
