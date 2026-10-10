@@ -54,7 +54,7 @@ export class BrowserWalletSession extends WalletSession {
   private attempt = 0;
   private abort: AbortController | undefined;
   private chooser: WalletChooser | undefined;
-  private restoringLoad: Promise<WalletChooser> | undefined;
+  private chooserLoad: Promise<WalletChooser> | undefined;
   private cleanup: Promise<void> = Promise.resolve();
   private cleanupFailed = false;
   private inFlight: Promise<WalletSnapshot> | undefined;
@@ -109,9 +109,9 @@ export class BrowserWalletSession extends WalletSession {
   private retire(mode: "disconnect" | "release") {
     this.abort?.abort(mode);
     this.abort = undefined;
-    const chooser = this.chooser ?? this.restoringLoad;
+    const chooser = this.chooser ?? this.chooserLoad;
     this.chooser = undefined;
-    this.restoringLoad = undefined;
+    this.chooserLoad = undefined;
     if (!chooser) return;
     this.queueCleanup(chooser, mode, this.attempt);
   }
@@ -172,10 +172,10 @@ export class BrowserWalletSession extends WalletSession {
         const project = this.projectId;
         if (this.chainId !== 31337 && !project) return this.getSnapshot();
         const loading = this.chainId === 31337 || !project ? undefined : this.loadChooser(project, this.restoreScope);
-        this.restoringLoad = loading;
+        this.chooserLoad = loading;
         const chooser = loading ? await bounded(loading, 20_000) : undefined;
         this.active(attempt, abort);
-        if (this.restoringLoad === loading) this.restoringLoad = undefined;
+        if (this.chooserLoad === loading) this.chooserLoad = undefined;
         this.chooser = chooser;
         const provider = this.chainId === 31337 ? this.localInjected : await chooser?.restore?.(abort.signal);
         this.active(attempt, abort);
@@ -312,11 +312,10 @@ export class BrowserWalletSession extends WalletSession {
       }
       if (!this.projectId) throw new Error("Wallet connection is not configured.");
       const loading = this.loadChooser(this.projectId, this.restoreScope);
-      void loading.then(chooser => {
-        if (attempt !== this.attempt || abort.signal.aborted) void bounded(chooser.disconnect(), 8_000).catch(() => {});
-      }, () => {});
+      this.chooserLoad = loading;
       const chooser = await bounded(loading, 20_000);
       this.active(attempt, abort);
+      if (this.chooserLoad === loading) this.chooserLoad = undefined;
       this.chooser = chooser;
       const provider = await bounded(chooser.connect(abort.signal), 120_000);
       this.active(attempt, abort);

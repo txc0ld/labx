@@ -27,6 +27,7 @@ type WalletConnectCleanup = {
   provider: object;
   topic: string;
   completed: boolean;
+  deleting: boolean;
   failure?: unknown;
   promise: Promise<void>;
   complete: () => void;
@@ -132,8 +133,8 @@ class LabxEthersAdapter extends EthersAdapter {
   }
 
   override async connectWalletConnect(chainId?: number | string) {
-    this.releasedWalletConnectProvider = undefined;
     return this.track("walletConnect", async () => {
+      this.releasedWalletConnectProvider = undefined;
       const result = await super.connectWalletConnect(chainId);
       this.observeWalletConnectSession(this.getWalletConnectProvider());
       return result;
@@ -143,6 +144,7 @@ class LabxEthersAdapter extends EthersAdapter {
   override async setUniversalProvider(provider: Parameters<EthersAdapter["setUniversalProvider"]>[0]) {
     const walletProvider = provider as unknown as WalletConnectEventProvider;
     walletProvider.on?.("connect", () => {
+      if (this.releasedWalletConnectProvider === walletProvider) return;
       try { this.observeWalletConnectSession(walletProvider); }
       catch { cleanupFailed = true; }
     });
@@ -163,11 +165,12 @@ class LabxEthersAdapter extends EthersAdapter {
     return this.disconnectInjected(connector.id, connector.provider);
   }
 
-  releaseConnection(connectorId: string, provider: unknown) {
+  releaseConnection(connectorId: string, provider: unknown, walletConnectTopic?: string) {
     const connector = this.connectors.find(candidate => candidate.id === connectorId);
     if (!connector || connector.provider !== provider) throw new Error("The restored wallet connection changed before cleanup.");
     if (connector.type === "WALLET_CONNECT" && provider && typeof provider === "object") {
-      this.releasedWalletConnectProvider = provider;
+      if (!walletConnectTopic) throw new Error("The WalletConnect session could not be identified.");
+      this.releaseWalletConnectSession(provider, walletConnectTopic);
     }
     this.removeProviderListeners(connectorId);
     this.deleteConnection(connectorId);
@@ -251,6 +254,29 @@ class LabxEthersAdapter extends EthersAdapter {
     await this.disconnect({ id: connectorId });
   }
 
+  captureWalletConnectSession(provider: object, topic: string) {
+    if (!isWalletConnectEventProvider(provider) || this.getWalletConnectProvider() !== provider || sessionTopic(provider) !== topic) throw new Error("The WalletConnect session changed before acquisition.");
+    this.observeWalletConnectSession(provider);
+  }
+
+  hasDeletedWalletConnectSession(provider: object, topic: string) {
+    const cleanup = this.walletConnectCleanup;
+    return isWalletConnectEventProvider(provider) && this.getWalletConnectProvider() === provider && provider.session == null
+      && cleanup?.provider === provider && cleanup.topic === topic && cleanup.completed && !cleanup.deleting && cleanup.failure === undefined;
+  }
+
+  releaseWalletConnectSession(provider: object, topic: string) {
+    const cleanup = this.walletConnectCleanup;
+    if (!isWalletConnectEventProvider(provider) || this.getWalletConnectProvider() !== provider
+      || !cleanup || cleanup.provider !== provider || cleanup.topic !== topic || cleanup.deleting || cleanup.failure !== undefined
+      || sessionTopic(provider) !== topic && !this.hasDeletedWalletConnectSession(provider, topic)) {
+      throw new Error("The WalletConnect session cannot be released safely.");
+    }
+    // Relinquishing local ownership is not evidence of remote session deletion.
+    this.walletConnectCleanup = undefined;
+    this.releasedWalletConnectProvider = provider;
+  }
+
   async disconnectWalletConnectSession(expectedProvider?: object, expectedTopic?: string) {
     const candidate: unknown = expectedProvider ?? this.getWalletConnectProvider();
     if (!isWalletConnectEventProvider(candidate)) {
@@ -258,31 +284,31 @@ class LabxEthersAdapter extends EthersAdapter {
     }
     const activeTopic = sessionTopic(candidate);
     if (expectedProvider && this.getWalletConnectProvider() !== expectedProvider) throw new Error("The WalletConnect provider changed before cleanup.");
-    if (expectedTopic && activeTopic !== expectedTopic) throw new Error("The WalletConnect session changed before cleanup.");
+    if (expectedTopic && activeTopic !== expectedTopic && !this.hasDeletedWalletConnectSession(candidate, expectedTopic)) throw new Error("The WalletConnect session changed before cleanup.");
     const cleanup = activeTopic
       ? this.observeWalletConnectSession(candidate)
       : this.walletConnectCleanup;
     if (!cleanup || cleanup.provider !== candidate || (activeTopic && cleanup.topic !== activeTopic)) {
       throw new Error("WalletConnect session could not be identified.");
     }
+    if (cleanup.failure !== undefined) throw cleanup.failure;
+    if (cleanup.deleting) throw new Error("WalletConnect session cleanup is already running.");
     if (!activeTopic) {
-      if (cleanup.failure) throw cleanup.failure;
       await cleanup.promise;
       return;
     }
+    cleanup.deleting = true;
     try {
       await candidate.disconnect();
+      if (candidate.session != null) throw new Error("WalletConnect session cleanup did not finish.");
+      this.completeWalletConnectSession(candidate, activeTopic);
+      await cleanup.promise;
     } catch (error) {
       cleanup.failure = error;
       throw error;
+    } finally {
+      cleanup.deleting = false;
     }
-    if (sessionTopic(candidate) != null) {
-      const error = new Error("WalletConnect session cleanup did not finish.");
-      cleanup.failure = error;
-      throw error;
-    }
-    this.completeWalletConnectSession(candidate, activeTopic);
-    await cleanup.promise;
   }
 
   private observeWalletConnectSession(provider: unknown, required = true) {
@@ -297,7 +323,7 @@ class LabxEthersAdapter extends EthersAdapter {
     }
     const current = this.walletConnectCleanup;
     if (current?.provider === provider && current.topic === topic && !current.completed) return current;
-    if (current && !current.completed) {
+    if (current && (!current.completed || current.deleting || current.failure !== undefined)) {
       throw new Error("Another WalletConnect session cleanup is still pending.");
     }
     let complete = () => {};
@@ -305,6 +331,7 @@ class LabxEthersAdapter extends EthersAdapter {
       provider,
       topic,
       completed: false,
+      deleting: false,
       failure: undefined,
       promise: new Promise<void>(resolve => { complete = resolve; }),
       complete
@@ -312,7 +339,6 @@ class LabxEthersAdapter extends EthersAdapter {
     cleanup.complete = () => {
       if (cleanup.completed) return;
       cleanup.completed = true;
-      cleanup.failure = undefined;
       complete();
     };
     this.walletConnectCleanup = cleanup;
@@ -442,6 +468,7 @@ function captureConnection(current: AppKitRuntime, provider: object, connectorId
   }
   const walletConnectTopic = walletConnectProvider ? candidateTopic : undefined;
   if (walletConnect && !walletConnectTopic) throw new WalletChooserReloadError();
+  if (walletConnectProvider && typeof walletConnectProvider === "object" && walletConnectTopic) current.adapter.captureWalletConnectSession(walletConnectProvider, walletConnectTopic);
   return {
     runtimeGeneration: current.generation,
     provider,
@@ -469,9 +496,10 @@ function clearConnection(current: AppKitRuntime, connection: OwnedConnection) {
 }
 
 function isDisconnected(current: AppKitRuntime) {
+  const account = current.appKit.getAccount("eip155");
   return current.appKit.getProvider("eip155") == null
     && ConnectorController.getConnectorId("eip155") == null
-    && current.appKit.getAccount("eip155")?.isConnected !== true;
+    && account?.isConnected !== true && account?.address == null;
 }
 
 export function hasAuthorizedRestoreSession(provider: unknown, consent: WalletConsent): boolean {
@@ -631,10 +659,22 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
       if (captured) {
         try {
           if (!matchesConnection(current, captured)) {
-            if (current.active === captured) throw new Error("The captured wallet connection changed before cleanup.");
+            if (current.active === captured) {
+              if (captured.runtimeGeneration !== current.generation || !isDisconnected(current)) throw new Error("The captured wallet connection changed before cleanup.");
+              if (captured.walletConnectProvider) {
+                if (!captured.walletConnectTopic) throw new Error("The WalletConnect session could not be identified.");
+                if (mode === "release") adapter.releaseWalletConnectSession(captured.walletConnectProvider, captured.walletConnectTopic);
+                else {
+                  await adapter.disconnectWalletConnectSession(captured.walletConnectProvider, captured.walletConnectTopic);
+                  if (current.active === captured && (captured.runtimeGeneration !== current.generation || !isDisconnected(current)
+                    || !adapter.hasDeletedWalletConnectSession(captured.walletConnectProvider, captured.walletConnectTopic))) throw new Error("The captured wallet connection changed during cleanup.");
+                }
+              }
+              if (current.active === captured) clearConnection(current, captured);
+            }
           } else if (mode === "release") {
             if (!captured.connectorId) throw new Error("The restored wallet connector could not be identified.");
-            adapter.releaseConnection(captured.connectorId, captured.provider);
+            adapter.releaseConnection(captured.connectorId, captured.provider, captured.walletConnectTopic);
             clearConnection(current, captured);
           } else {
             let disconnectAppKit = true;
@@ -645,7 +685,7 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
                 ownedConnection = undefined;
                 disconnectAppKit = false;
               } else {
-                if (captured.runtimeGeneration !== current.generation || adapter.getWalletConnectProvider() !== captured.walletConnectProvider) {
+                if (captured.runtimeGeneration !== current.generation || !adapter.hasDeletedWalletConnectSession(captured.walletConnectProvider, captured.walletConnectTopic)) {
                   throw new Error("The captured wallet connection changed during cleanup.");
                 }
                 const sameProvider = appKit.getProvider("eip155") === captured.provider;
