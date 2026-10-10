@@ -157,6 +157,8 @@ run("draw runner on a loopback fork of Sepolia", () => {
     ["an enabled module of a treasury that is an EIP-7702 account delegated to the Safe singleton", PRIVILEGED, async () => {
       const account: Address = "0x7702000000000000000000000000000000007702";
       const signer = mnemonicToAccount(anvilMnemonic, { addressIndex: 1 }).address;
+      // Like the runner, this test address carries a delegation on Sepolia. Cleared, it is a plain wallet signer.
+      await rpc("anvil_setCode", [signer, "0x"]);
       await rpc("anvil_setCode", [account, concat(["0xef0100", SAFE_L2_SINGLETON])]);
       await sendAs(signer, account, encodeFunctionData({ abi: safeAbi, functionName: "setup", args: [[signer], 1n, zeroAddress, "0x", SAFE_FALLBACK, zeroAddress, 0n, zeroAddress] }));
       await sendAs(account, account, encodeFunctionData({ abi: safeAbi, functionName: "enableModule", args: [runner] }));
