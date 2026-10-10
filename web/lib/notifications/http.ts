@@ -133,7 +133,7 @@ function cronConfiguration(request: Request): { apiKey: string; from: string } |
   return { apiKey, from };
 }
 
-function validBearer(header: string | null, expected: string): boolean {
+export function validBearer(header: string | null, expected: string): boolean {
   if (!header?.startsWith("Bearer ") || expected.length < 16) return false;
   const supplied = header.slice(7);
   const left = Buffer.from(supplied);
