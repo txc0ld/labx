@@ -129,30 +129,30 @@ run("wallet-scoped private-record feedback", () => {
     expect(response?.status()).toBe(200);
     await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: short(account) }));
     await waitForAccount(account);
-    const load = fixture.page.getByRole("button", { name: "Sign to load records", exact: true });
+    const load = fixture.page.getByRole("button", { name: "Sign to see receipts", exact: true });
     await load.waitFor({ state: "visible", timeout: 10_000 });
     await load.click();
-    await fixture.page.getByRole("heading", { name: "Receipts", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Your purchases", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }
 
   async function reloadRecords(account: Address) {
     await expect.poll(async () => (await fixture.page.locator(".wallet-identity").allInnerTexts()).join(" "), { timeout: 10_000 }).toContain(short(account));
-    const load = fixture.page.getByRole("button", { name: "Sign to load records", exact: true });
+    const load = fixture.page.getByRole("button", { name: "Sign to see receipts", exact: true });
     await load.waitFor({ state: "visible", timeout: 10_000 });
     await load.click();
-    await fixture.page.getByRole("heading", { name: "Receipts", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("heading", { name: "Your purchases", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }
 
   async function startDelivery() {
     const before = pendingReceipts.length;
-    await fixture.page.getByRole("button", { name: "Sign and send receipt", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Email receipt", exact: true }).click();
     await expect.poll(() => pendingReceipts.length, { timeout: 10_000 }).toBe(before + 1);
     return pendingReceipts[before];
   }
 
   async function startRecordLoad() {
     const before = pendingRecords.length;
-    const load = fixture.page.getByRole("button", { name: "Sign to load records", exact: true });
+    const load = fixture.page.getByRole("button", { name: "Sign to see receipts", exact: true });
     await load.waitFor({ state: "visible", timeout: 10_000 });
     await load.click();
     await expect.poll(() => pendingRecords.length, { timeout: 10_000 }).toBe(before + 1);
@@ -194,8 +194,8 @@ run("wallet-scoped private-record feedback", () => {
     const currentSuccess = await startDelivery();
     const requestCount = pendingReceipts.length;
     await oldSuccess.respond({ delivered: true });
-    await expect.poll(async () => fixture.page.getByText("Delivered", { exact: true }).count()).toBe(0);
-    await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);
+    await expect.poll(async () => fixture.page.getByText("Sent", { exact: true }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.getByText("Not sent", { exact: true }).count()).toBe(1);
     await expect.poll(async () => (await fixture.page.locator('[role="alert"]').allInnerTexts()).join(" ")).not.toMatch(/wallet or network changed/i);
     const sending = fixture.page.getByRole("button", { name: "Sending…", exact: true });
     await expect.poll(async () => sending.isDisabled()).toBe(true);
@@ -203,10 +203,10 @@ run("wallet-scoped private-record feedback", () => {
     await fixture.page.waitForTimeout(100);
     expect(pendingReceipts).toHaveLength(requestCount);
     await currentSuccess.respond({ delivered: true });
-    await fixture.page.getByText("Delivered", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByText("Sent", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
 
     await switchAccount(chain.buyer);
-    await expect.poll(async () => fixture.page.getByRole("button", { name: "Sign to load records", exact: true }).count()).toBe(1);
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Sign to see receipts", exact: true }).count()).toBe(1);
     holdNextRecords = true;
     const staleRecords = await startRecordLoad();
     await switchAccount(chain.stranger);
@@ -214,7 +214,7 @@ run("wallet-scoped private-record feedback", () => {
     await switchAccount(chain.buyer);
     await reloadRecords(chain.buyer);
     await staleRecords.respond({ receiptStatus: "delivered", raffleId: "999" });
-    await expect.poll(async () => fixture.page.getByText("Delivered", { exact: true }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.getByText("Sent", { exact: true }).count()).toBe(0);
     await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
 
     const oldError = await startDelivery();
@@ -233,7 +233,7 @@ run("wallet-scoped private-record feedback", () => {
     await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: short(chain.buyer) }));
     await reloadRecords(chain.buyer);
     await disconnected.respond({ delivered: true });
-    await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);
+    await expect.poll(async () => fixture.page.getByText("Not sent", { exact: true }).count()).toBe(1);
     await expect.poll(async () => (await fixture.page.locator('[role="alert"]').allInnerTexts()).join(" ")).not.toMatch(/wallet or network changed/i);
 
     const wrongNetwork = await startDelivery();
@@ -248,14 +248,14 @@ run("wallet-scoped private-record feedback", () => {
     await fixture.page.goto(`${fixture.baseUrl}/profile`, { waitUntil: "domcontentloaded" });
     await openRecords(chain.buyer);
     await unmounted.respond({ delivered: true });
-    await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);
+    await expect.poll(async () => fixture.page.getByText("Not sent", { exact: true }).count()).toBe(1);
   }, 90_000);
 
   it("shows the saved recipient and prevents duplicate sends in the current wallet session", async () => {
     await setFixtureSession({ chainId: 31337, account: chain.buyer });
     await openRecords(chain.buyer);
     await expect.poll(async () => fixture.page.getByText(savedEmail, { exact: false }).count()).toBe(1);
-    await expect.poll(async () => fixture.page.getByText(/saved browser preference.*not a verified wallet identity/i).count()).toBe(1);
+    await expect.poll(async () => fixture.page.getByText(`Receipts go to ${savedEmail}.`).count()).toBe(1);
 
     const before = pendingReceipts.length;
     const delivery = await startDelivery();
@@ -266,7 +266,7 @@ run("wallet-scoped private-record feedback", () => {
     await fixture.page.waitForTimeout(100);
     expect(pendingReceipts).toHaveLength(before + 1);
     await delivery.respond({ delivered: true });
-    await fixture.page.getByText("Delivered", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByText("Sent", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }, 45_000);
 
   it("does not let an old completion release the same receipt in a newer session or component lifetime", async () => {
@@ -295,10 +295,10 @@ run("wallet-scoped private-record feedback", () => {
     await openRecords(chain.buyer);
     const currentLifetime = await startDelivery();
     await priorLifetime.respond({ delivered: true });
-    await expect.poll(async () => fixture.page.getByText("Delivered", { exact: true }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.getByText("Sent", { exact: true }).count()).toBe(0);
     await expect.poll(async () => fixture.page.getByRole("button", { name: "Sending…", exact: true }).isDisabled()).toBe(true);
     await currentLifetime.respond({ delivered: true });
-    await fixture.page.getByText("Delivered", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByText("Sent", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }, 60_000);
 
   it("does not let delayed records release or overwrite a new load after a chain round trip", async () => {
@@ -316,12 +316,12 @@ run("wallet-scoped private-record feedback", () => {
 
     await stale.respond({ receiptStatus: "delivered", raffleId: "999" });
     await expect.poll(async () => fixture.page.getByRole("button", { name: "Opening wallet…", exact: true }).isDisabled()).toBe(true);
-    await expect.poll(async () => fixture.page.getByText("Delivered", { exact: true }).count()).toBe(0);
+    await expect.poll(async () => fixture.page.getByText("Sent", { exact: true }).count()).toBe(0);
     await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
 
     await current.respond({ receiptStatus: "missing", raffleId: "1" });
-    await fixture.page.getByRole("heading", { name: "Receipts", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    await expect.poll(async () => fixture.page.getByText("Not delivered", { exact: true }).count()).toBe(1);
+    await fixture.page.getByRole("heading", { name: "Your purchases", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(async () => fixture.page.getByText("Not sent", { exact: true }).count()).toBe(1);
     await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
   }, 60_000);
 });

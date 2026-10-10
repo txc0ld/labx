@@ -13,32 +13,32 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     add("updateDraft", "Edit draft", seller, "Only the seller can edit this draft.");
     if (!r.escrowed) {
       add("approvePrize", "Approve NFT", seller && !!account?.nftOwner && sameAddress(account.nftOwner, r.seller) && !account.nftApproved, "The seller must own this NFT; an existing approval needs no repeat.");
-      add("escrow", "Escrow NFT", seller && !!account?.nftApproved, "Approve the NFT before escrow.");
-    } else add("open", "Open memberships", seller && snapshot.admission.status === "approved" && !snapshot.paused && now < r.salesEnd, "LABx must approve the current draft before the seller opens sales.");
+      add("escrow", "Lock NFT", seller && !!account?.nftApproved, "Approve the NFT before locking it.");
+    } else add("open", "List", seller && snapshot.admission.status === "approved" && !snapshot.paused && now < r.salesEnd, "LABx must approve this draft before you can list it.");
     add("cancel", "Cancel draft", seller || operator, "Only the seller or operator can cancel a draft.");
   }
   if (r.phase === 1) {
     add("approveUsdc", "Approve exact USDC", !snapshot.paused && now < r.salesEnd && snapshot.packs.some(p => p.active && p.sold < p.maxSupply), "Membership sales are paused, ended or sold out.");
     add("buyMembership", "Choose membership", !snapshot.paused && now < r.salesEnd && snapshot.packs.some(p => p.active && p.sold < p.maxSupply), "Membership sales are paused, ended or sold out.");
-    add("close", "Close sales", now >= r.salesEnd, "Sales close at the published deadline.");
+    add("close", "Close sales", now >= r.salesEnd, "Sales can close once the deadline passes.");
   }
   if (r.phase === 2) {
-    if (!r.snapshotted) add("snapshot", "Freeze next entries", true, "");
-    else add("requestRandomness", "Start draw", r.snapshotTotal > 0n && now < r.salesEnd + snapshot.drawStartGrace, "Anyone can start a completed nonempty draw before its deadline.");
+    if (!r.snapshotted) add("snapshot", "Count entries", true, "");
+    else add("requestRandomness", "Start draw", r.snapshotTotal > 0n && now < r.salesEnd + snapshot.drawStartGrace, "The draw can start after entries are counted, before the draw-start deadline.");
   }
-  if (r.phase === 1 || r.phase === 2) add("cancel", snapshot.lotCount === 0n ? "Cancel raffle" : "Enable refunds", now >= r.salesEnd + snapshot.drawStartGrace || (seller || operator) && (snapshot.lotCount === 0n || r.phase === 2 && r.snapshotted && r.snapshotTotal === 0n), "Purchased memberships prevent discretionary cancellation. Timed recovery becomes available after the draw-start deadline.");
-  if (r.phase === 3) add("abortDrawing", "Enable refunds", now >= r.vrfRequestedAt + snapshot.randomnessGrace, "Wait until the fixed randomness deadline.");
-  if (r.phase >= 1 && r.phase <= 4 && !r.revealed) add("reveal", "Reveal commitment", seller || operator, "Only the seller or operator can reveal a matching commitment.");
-  if (r.phase === 4) add("settle", "Settle raffle", r.revealed || now >= r.drawnAt + snapshot.revealGrace, "Settlement is available after reveal or the seven-day grace.");
+  if (r.phase === 1 || r.phase === 2) add("cancel", snapshot.lotCount === 0n ? "Cancel raffle" : "Enable refunds", now >= r.salesEnd + snapshot.drawStartGrace || (seller || operator) && (snapshot.lotCount === 0n || r.phase === 2 && r.snapshotted && r.snapshotTotal === 0n), "Memberships have been sold, so the raffle can’t be cancelled now. Refunds open if the draw hasn’t started by its deadline.");
+  if (r.phase === 3) add("abortDrawing", "Enable refunds", now >= r.vrfRequestedAt + snapshot.randomnessGrace, "Refunds open if the draw result doesn’t arrive by its deadline.");
+  if (r.phase >= 1 && r.phase <= 4 && !r.revealed) add("reveal", "Confirm the draw", seller || operator, "Only the seller or LABx can confirm the draw.");
+  if (r.phase === 4) add("settle", "Finish raffle", r.revealed || now >= r.drawnAt + snapshot.revealGrace, "The raffle can finish once the seller confirms the draw, or 7 days after the draw.");
   if (r.phase === 5) {
-    add("claimPrize", "Claim NFT", winner && r.escrowed, "Only the recorded winner can claim an unclaimed NFT.");
-    add("claimProceeds", "Claim proceeds", seller && r.principalEscrow > 0n, "Only the seller can claim remaining membership proceeds.");
-    add("claimFee", "Send protocol fees", r.feeEscrow > 0n, "The protocol fees have already been claimed.");
+    add("claimPrize", "Claim your NFT", winner && r.escrowed, "Only the winner can claim the NFT.");
+    add("claimProceeds", "Claim USDC", seller && r.principalEscrow > 0n, "Only the seller can claim the sales.");
+    add("claimFee", "Send LABx fees", r.feeEscrow > 0n, "LABx fees have already been sent.");
   }
   if (r.phase === 6) {
-    add("claimFee", "Send retained processing fees", r.feeEscrow > 0n, "The processing fees have already been claimed.");
+    add("claimFee", "Send LABx fees", r.feeEscrow > 0n, "LABx fees have already been sent.");
     add("refund", "Claim refund", !!account && account.principal > 0n, "This wallet has no remaining refund.");
-    add("reclaimPrize", "Reclaim NFT", seller && r.escrowed, "Only the seller can reclaim an unclaimed NFT.");
+    add("reclaimPrize", "Reclaim NFT", seller && r.escrowed, "Only the seller can reclaim the NFT.");
   }
   return actions.map(action => trustReason && ["approveRaffle", "open", "approveUsdc", "buyMembership"].includes(action.kind)
     ? { ...action, enabled: false, reason: trustReason } : action);

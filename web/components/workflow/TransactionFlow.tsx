@@ -1,20 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useSyncExternalStore, useState } from "react";
-import { formatEther, isHex, type Hex } from "viem";
+import { formatEther, isHex, type Address, type Hex } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "@/lib/chain/types";
-import { useTransactionOutcomes } from "./useTransactionOutcomes";
+import { useSavedHashCheck, useTransactionOutcomes } from "./useTransactionOutcomes";
 import { sameSubmittedIntent, type TransactionOutcome } from "@/lib/chain/transaction-outcomes";
+import { sameAddress } from "@/lib/chain/validation";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { lowerFirst } from "./format";
 
 type TransactionState =
   | { kind: "idle" }
-  | { kind: "recovery"; hash: string; nonce: number }
+  // hash is the editable field; saved is the hash the pending journal held when it was read.
+  | { kind: "recovery"; hash: string; nonce: number; saved: Hex | null }
   | { kind: "preparing" }
   | { kind: "review"; prepared: PreparedAction }
   | { kind: "submitting"; prepared: PreparedAction }
+  | { kind: "confirming"; submitted: SubmittedAction }
   | { kind: "pending"; submitted: SubmittedAction }
   | { kind: "rejected"; message: string }
   | { kind: "error"; message: string }
@@ -32,12 +35,17 @@ export type TransactionFlowProps = {
   label: string;
   formatUsdc: AmountFormatter;
   resumeHash?: Hex;
-  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction) => void | Promise<void>;
+  /** direct is true only when the confirmation came straight from this flow's own wallet request, not a later check or recovery. */
+  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction, direct: boolean) => void | Promise<void>;
   onCancel?: () => void;
   disabled?: boolean;
   disabledReason?: string;
   prepareOnMount?: boolean;
   submitOnClick?: boolean;
+  /** Sends once on mount as if the button was pressed. Only for a step the person's own click just started. */
+  submitOnMount?: boolean;
+  /** Awaited before the error shows when preparing that automatic send fails, often because the raffle already moved on, so the page can re-read it and show the step that fits now. */
+  onUnavailable?: () => void | Promise<void>;
 };
 
 function walletSnapshot(wallet: WalletSessionPort) {
@@ -60,6 +68,10 @@ function sameWallet(prepared: PreparedAction, snapshot: WalletSnapshot) {
 
 function shortAddress(value: string) {
   return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function networkName(chainId: number) {
+  return chainId === 11155111 ? "Ethereum Sepolia" : chainId === 31337 ? "Isolated local chain" : `Chain ${chainId}`;
 }
 
 function stableValue(value: unknown): string {
@@ -90,18 +102,33 @@ type Operation = { scope: number; id: number };
 // Calls that only change raffle state. Their prepared recipient is the contract default, not a payee, so the review names the called contract.
 const CONTRACT_CALL_KINDS = new Set<WorkflowAction["kind"]>(["createDraft", "updateDraft", "approveRaffle", "revokeRaffleApproval", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing"]);
 
-function actionReview(action: WorkflowAction) {
-  if (action.kind !== "approveUsdc" && action.kind !== "buyMembership") return null;
-  return (
-    <>
-      <div><dt>Raffle</dt><dd>#{action.id.toString()}</dd></div>
-      <div><dt>Pack ID</dt><dd>{action.packId}</dd></div>
-      <div><dt>Quantity</dt><dd>{action.quantity}</dd></div>
-    </>
-  );
+// Seller steps that pay nobody but the seller. The wallet shows the exact call, so like List they
+// skip the website review. Buyer payments always keep it.
+const SUBMIT_ON_CLICK_KINDS = new Set<WorkflowAction["kind"]>(["open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing", "reclaimPrize", "claimProceeds"]);
+
+// Plain rows people can check before the wallet opens. Full addresses, chain ID and pack index stay in Transaction details.
+function reviewRows(prepared: PreparedAction, raffle: Address, formatUsdc: AmountFormatter) {
+  const party = (value: Address) => sameAddress(value, raffle) ? `LABx raffle ${shortAddress(value)}`
+    : sameAddress(value, prepared.account) ? `Your wallet ${shortAddress(value)}` : shortAddress(value);
+  const amount = `${formatUsdc(prepared.amountUsdc)} USDC`;
+  const kind = prepared.action.kind;
+  const rows: [string, string][] = [["Wallet", shortAddress(prepared.account)], ["Network", networkName(prepared.chainId)]];
+  if (kind === "approveUsdc") rows.push(["Approval", `Lets ${party(prepared.recipient)} take up to ${amount}`]);
+  else if (kind === "approvePrize") rows.push(["Approval", `Lets ${party(prepared.recipient)} take this NFT`]);
+  else {
+    if (prepared.amountUsdc > 0n) rows.push([kind === "buyMembership" ? "Total" : "Amount", amount]);
+    if (prepared.value > 0n) rows.push(["Maximum ETH", `${formatEther(prepared.value)} ETH`]);
+    if (CONTRACT_CALL_KINDS.has(kind)) rows.push(["Contract", party(prepared.to)]);
+    else rows.push([kind === "buyMembership" ? "Paid to" : "Recipient", party(prepared.recipient)]);
+  }
+  return rows.map(([term, value]) => <div key={term}><dt>{term}</dt><dd>{value}</dd></div>);
 }
 
-export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false }: TransactionFlowProps) {
+function confirmLabel(action: WorkflowAction, label: string) {
+  return action.kind === "approveUsdc" ? "Confirm approval" : action.kind === "buyMembership" ? "Confirm purchase" : `Confirm ${lowerFirst(label)}`;
+}
+
+export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, onUnavailable, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false, submitOnMount = false }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
   const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
@@ -116,6 +143,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const scope = context.current.generation;
   const [scopedState, setScopedState] = useState<{ scope: number; value: TransactionState }>({ scope, value: { kind: "idle" } });
   const state = scopedState.scope === scope ? scopedState.value : { kind: "idle" } satisfies TransactionState;
+  const savedCheck = useSavedHashCheck(service, wallet, state.kind === "recovery" ? state.saved : state.kind === "pending" ? state.submitted.hash : null);
   const recoveryTerminal = state.kind === "recovery" && currentWallet.kind === "connected"
     ? outcomes.find(item => item.kind === "terminal" && item.account.toLowerCase() === currentWallet.account.toLowerCase()
       && item.confirmation.receipt.nonce === state.nonce)
@@ -126,8 +154,12 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const attemptedScope = useRef<number | null>(null);
   const [clearJournalScope, setClearJournalScope] = useState<number | null>(null);
   const ownSubmission = useRef<{ scope: number; submitted: SubmittedAction } | null>(null);
-  const callbacks = useRef({ onConfirmed, onCancel });
-  callbacks.current = { onConfirmed, onCancel };
+  // Read once at mount, and spent on the first decision: a later prop, scope or journal change never sends on its own.
+  const [autoSubmit] = useState(submitOnMount);
+  const autoSubmitSpent = useRef(false);
+  const callbacks = useRef({ onConfirmed, onCancel, onUnavailable });
+  callbacks.current = { onConfirmed, onCancel, onUnavailable };
+  const reviewButtons = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -169,7 +201,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       if (!pending) setClearJournalScope(expected.generation);
       setScopedState(current => {
         if (!isCurrent(expected) || current.scope !== expected.generation) return current;
-        if (pending) return operation.current?.scope === expected.generation ? current : { scope: expected.generation, value: { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce } };
+        if (pending) return operation.current?.scope === expected.generation ? current : { scope: expected.generation, value: { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce, saved: pending.hash } };
         return current.value.kind === "recovery" ? { scope: expected.generation, value: { kind: "idle" } } : current;
       });
     }).catch(error => {
@@ -181,11 +213,21 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }, [scope]);
 
   useEffect(() => {
-    if (state.kind !== "recovery" || !recoveryTerminal) return;
+    if (state.kind !== "recovery" || !recoveryTerminal && savedCheck !== "settled") return;
     const expected = context.current, recovery = state;
     let active = true;
     void expected.service.pending({ wallet: expected.wallet }).then(pending => {
-      if (!active || pending || !isCurrent(expected)) return;
+      if (!active || !isCurrent(expected)) return;
+      if (pending) {
+        // The journal now holds another transaction: follow its saved hash, and keep any hash the person typed.
+        if (pending.hash !== recovery.saved) setScopedState(current => {
+          if (!active || !isCurrent(expected) || current.scope !== expected.generation
+            || current.value !== recovery || operation.current?.scope === expected.generation) return current;
+          const typed = recovery.hash !== (recovery.saved ?? "");
+          return { scope: expected.generation, value: { ...recovery, hash: typed ? recovery.hash : pending.hash ?? "", nonce: pending.nonce, saved: pending.hash } };
+        });
+        return;
+      }
       setClearJournalScope(expected.generation);
       setScopedState(current => {
         if (!active || !isCurrent(expected) || current.scope !== expected.generation
@@ -194,20 +236,29 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       });
     }).catch(() => { /* Keep recovery available when the current journal cannot be read. */ });
     return () => { active = false; };
-    // Terminal outcomes prompt a fresh journal read, never action confirmation.
+    // Terminal outcomes and a settled automatic check prompt a fresh journal read, never action confirmation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, state, recoveryTerminal]);
+  }, [scope, state, recoveryTerminal, savedCheck]);
+
+  // A check elsewhere on the page, or the automatic one, settled this flow's own slow send: run the same check the
+  // Check again button runs, so the result still passes the ownership and intent rules in applyOutcome.
+  const ownSendSettled = state.kind === "pending" && outcomes.some(item => item.kind === "terminal" && owner.belongsToSubmission(state.submitted, item));
+  useEffect(() => {
+    if (state.kind === "pending" && ownSendSettled && !disabled) void checkConfirmation(state.submitted);
+    // checkConfirmation claims the scope before its first await, so a repeated render cannot start a second check.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownSendSettled, disabled]);
 
   async function showError(error: unknown, expected: FlowContext) {
     try {
       const pending = await expected.service.pending({ wallet: expected.wallet });
       if (!isCurrent(expected)) return;
-      if (pending) { setCurrent(expected, { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce }); return; }
+      if (pending) { setCurrent(expected, { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce, saved: pending.hash }); return; }
     } catch { /* Retain the original failure when recovery storage or the wallet is unavailable. */ }
     if (isCurrent(expected)) setCurrent(expected, errorState(error));
   }
 
-  async function prepare(fromClick = false) {
+  async function prepare(fromClick = false, automatic = false) {
     if (disabled || activeOutcome) return;
     const expected = context.current;
     const session = expected.wallet.getSnapshot();
@@ -220,16 +271,22 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       const pending = await expected.service.pending({ wallet: expected.wallet });
       if (!isCurrent(expected)) return;
       if (pending) {
-        setCurrent(expected, { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce });
+        setCurrent(expected, { kind: "recovery", hash: pending.hash ?? "", nonce: pending.nonce, saved: pending.hash });
         return;
       }
-      const prepared = await expected.service.prepare({ action, wallet: expected.wallet });
+      const prepared = await expected.service.prepare({ action, wallet: expected.wallet }).catch(async (error: unknown) => {
+        // Nothing reached the wallet. A re-read may replace this flow; if it is still shown, the error below explains.
+        if (automatic) await callbacks.current.onUnavailable?.();
+        throw error;
+      });
       if (!isCurrent(expected)) return;
-      if (fromClick && submitOnClick && action.kind === "open") {
+      if (fromClick && submitOnClick && SUBMIT_ON_CLICK_KINDS.has(action.kind)) {
         setCurrent(expected, { kind: "submitting", prepared });
         await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
-          if (isCurrent(expected)) ownSubmission.current = { scope: expected.generation, submitted };
-        }, () => { if (!isCurrent(expected)) throw new Error("This listing intent is no longer active."); }), expected);
+          if (!isCurrent(expected)) return;
+          ownSubmission.current = { scope: expected.generation, submitted };
+          setCurrent(expected, { kind: "confirming", submitted });
+        }, () => { if (!isCurrent(expected)) throw new Error("This action is no longer active."); }), expected, true);
       } else setCurrent(expected, { kind: "review", prepared });
     } catch (error) {
       await showError(error, expected);
@@ -246,7 +303,23 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prepareOnMount, disabled, activeOutcome, state.kind, clearJournalScope, scope, currentWallet, service]);
 
-  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext) {
+  useEffect(() => {
+    if (!autoSubmit || autoSubmitSpent.current) return;
+    // A saved transaction that needs a check, or an unreadable journal, ends the automatic send. The button stays.
+    if (state.kind === "recovery" || state.kind === "error") { autoSubmitSpent.current = true; return; }
+    if (state.kind !== "idle" || clearJournalScope !== scope || disabled || activeOutcome) return;
+    autoSubmitSpent.current = true;
+    void prepare(true, true);
+    // prepare re-reads the journal and checks the wallet and network before anything reaches the wallet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSubmit, state.kind, clearJournalScope, scope, disabled, activeOutcome]);
+
+  // A review can open below the screen edge, most often on a phone: bring Confirm and Back into view once.
+  useEffect(() => {
+    if (state.kind === "review") reviewButtons.current?.scrollIntoView({ block: "nearest" });
+  }, [state.kind]);
+
+  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext, direct = false) {
     if (!isCurrent(expected)) return;
     if (outcome.kind === "terminal") {
       const confirmation = outcome.confirmation;
@@ -255,7 +328,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         setCurrent(expected, { kind: "receipt", confirmation });
       } else if (confirmation.kind === "confirmed") {
         setCurrent(expected, { kind: "confirmed", confirmation });
-        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted);
+        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted, direct);
       } else setCurrent(expected, { kind: confirmation.kind, confirmation });
     } else if (outcome.kind === "pending" || outcome.kind === "checking") {
       setCurrent(expected, { kind: "pending", submitted: outcome.submitted });
@@ -287,8 +360,10 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     setCurrent(expected, { kind: "submitting", prepared });
     try {
       await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
-        if (isCurrent(expected)) ownSubmission.current = { scope: expected.generation, submitted };
-      }), expected);
+        if (!isCurrent(expected)) return;
+        ownSubmission.current = { scope: expected.generation, submitted };
+        setCurrent(expected, { kind: "confirming", submitted });
+      }), expected, true);
     } catch (error) {
       await showError(error, expected);
     } finally {
@@ -320,65 +395,104 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     }
   }
 
-  if (state.kind === "recovery") return <section className="transaction-state notice warning stack" role="status"><strong>Reconcile pending wallet activity</strong><p>This wallet has an unresolved transaction at nonce {state.nonce}. Check the wallet’s activity and confirm its transaction or replacement hash before another action. Reloading does not remove this protection.</p><label>Transaction hash<input value={state.hash} spellCheck={false} onChange={event => setCurrent(context.current, { ...state, hash: event.target.value.trim() })} /></label><button className="btn" type="button" disabled={disabled || !isHex(state.hash, { strict: true }) || state.hash.length !== 66} onClick={() => { if (isHex(state.hash)) void resume(state.hash); }}>Reconcile transaction</button>{disabledReason && disabled ? <p className="notice warning">{disabledReason}</p> : null}<p className="muted">If the wallet has not broadcast it, use the wallet to replace or cancel that nonce. This page cannot safely clear an uncertain send.</p></section>;
+  if (state.kind === "recovery") {
+    const recovery = state;
+    const form = <>
+      <label>Transaction hash<input value={recovery.hash} spellCheck={false} onChange={event => setCurrent(context.current, { ...recovery, hash: event.target.value.trim() })} /></label>
+      <button className="btn" type="button" disabled={disabled || !isHex(recovery.hash, { strict: true }) || recovery.hash.length !== 66} onClick={() => { if (isHex(recovery.hash)) void resume(recovery.hash); }}>Check transaction</button>
+      {disabledReason && disabled ? <p className="notice warning">{disabledReason}</p> : null}
+    </>;
+    const technical = <p className="muted">Unresolved transaction at nonce {recovery.nonce}. If the wallet has not broadcast it, use the wallet to replace or cancel that nonce. Reloading does not remove this protection, and this page cannot safely clear an uncertain send.</p>;
+    // A saved hash is checked automatically; the manual form waits behind Details until something needs a person.
+    if (recovery.saved && savedCheck !== null && savedCheck !== "attention") return (
+      <section className="transaction-state stack" role="status">
+        <button className="btn" type="button" disabled>Finishing your last step…</button>
+        <details><summary>Details</summary><div className="stack">{form}{technical}</div></details>
+      </section>
+    );
+    return (
+      <section className="transaction-state notice warning stack" role="status">
+        <strong>Your last transaction needs a check</strong>
+        <p>Open your wallet’s activity. When it shows that transaction as done, failed or replaced, paste its hash here and check it. New actions stay paused until then.</p>
+        {form}
+        <details><summary>Details</summary>{technical}</details>
+      </section>
+    );
+  }
 
+  // aria-busy marks a wallet request that is about to start or in flight, which also holds the raffle page's background re-read.
   if (state.kind === "idle") {
-    return <button className="btn" type="button" disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
+    return <button className="btn" type="button" aria-busy={autoSubmit && !autoSubmitSpent.current || undefined} disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
   }
   if (state.kind === "preparing") {
-    return <button className="btn" type="button" disabled>Preparing review…</button>;
+    return <button className="btn" type="button" aria-busy="true" disabled>{submitOnClick ? "Preparing…" : "Preparing review…"}</button>;
+  }
+  if (state.kind === "submitting" && submitOnClick) {
+    return <button className="btn" type="button" aria-busy="true" disabled>Waiting for wallet…</button>;
   }
   if (state.kind === "review" || state.kind === "submitting") {
     const stale = !sameWallet(state.prepared, currentWallet);
+    const prepared = state.prepared, action = prepared.action;
     return (
       <section className="transaction-review stack" aria-labelledby={reviewTitleId}>
-        <div><p className="kicker">Review transaction</p><h3 id={reviewTitleId}>{state.prepared.title}</h3></div>
-        <dl className="review-list">
-          {actionReview(state.prepared.action)}
-          <div><dt>Wallet</dt><dd>{shortAddress(state.prepared.account)}</dd></div>
-          <div><dt>Network</dt><dd>Chain {state.prepared.chainId}</dd></div>
-          {state.prepared.amountUsdc > 0n ? <div><dt>Amount</dt><dd>{formatUsdc(state.prepared.amountUsdc)} USDC</dd></div> : null}
-          {state.prepared.value > 0n ? <div><dt>Maximum ETH</dt><dd>{formatEther(state.prepared.value)} ETH</dd></div> : null}
-          {CONTRACT_CALL_KINDS.has(state.prepared.action.kind) ? <div><dt>Contract</dt><dd className="hash">{state.prepared.to}</dd></div> : <div><dt>Recipient</dt><dd className="hash">{state.prepared.recipient}</dd></div>}
-        </dl>
+        <div><p className="kicker">Review transaction</p><h3 id={reviewTitleId}>{prepared.title}</h3></div>
+        <dl className="review-list">{reviewRows(prepared, service.manifest.address, formatUsdc)}</dl>
         {stale ? <p className="notice error" role="alert">Wallet or network changed. Prepare this action again.</p> : null}
-        <details><summary>Transaction details</summary><p className="hash">Contract {state.prepared.to}</p></details>
-        <div className="btn-row">
-          <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(state.prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : `Confirm ${lowerFirst(label)}`}</button>
+        <details>
+          <summary>Transaction details</summary>
+          <p className="hash">Contract {prepared.to}</p>
+          {sameAddress(prepared.recipient, prepared.to) ? null : <p className="hash">{action.kind === "approveUsdc" || action.kind === "approvePrize" ? "Approved address" : "Recipient"} {prepared.recipient}</p>}
+          {action.kind === "approveUsdc" || action.kind === "buyMembership" ? <p>Raffle #{action.id.toString()} · Pack ID {action.packId} · Quantity {action.quantity}</p> : null}
+          <p>Chain ID {prepared.chainId}</p>
+        </details>
+        <div className="btn-row" ref={reviewButtons}>
+          <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : confirmLabel(action, label)}</button>
           <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Back</button>
         </div>
       </section>
     );
   }
-  if (state.kind === "pending") {
+  if (state.kind === "confirming" || state.kind === "pending") {
+    const submitted = state.submitted;
+    const details = <details><summary>Details</summary><p className="hash">{submitted.hash}</p></details>;
+    if (state.kind === "pending" && savedCheck === "attention") return (
+      <div className="transaction-state notice warning stack" role="status">
+        <strong>Your transaction needs a check</strong>
+        <p>Check again to see its result. New actions stay paused until then.</p>
+        <button className="btn" type="button" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={() => void checkConfirmation(submitted)}>Check again</button>
+        {details}
+      </div>
+    );
     return (
       <div className="transaction-state stack" role="status">
-        <strong>Transaction submitted</strong>
-        <p>Confirmation is still pending. The hash alone is not success.</p>
-        <p className="hash">{state.submitted.hash}</p>
-        <button className="btn" type="button" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={() => void checkConfirmation(state.submitted)}>Check confirmation</button>
+        <button className="btn" type="button" disabled>Confirming…</button>
+        <p className="transaction-progress"><span className="transaction-spinner" aria-hidden="true" />{state.kind === "confirming" ? "Confirming on the network… usually under 30 seconds" : "Still confirming on the network. This can take a few minutes when it is busy."}</p>
+        {state.kind === "pending" ? <button className="text-link" type="button" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={() => void checkConfirmation(submitted)}>Check again</button> : null}
+        {details}
       </div>
     );
   }
   if (state.kind === "receipt") {
-    return <div className="transaction-state notice stack" role="status"><strong>Recovered transaction receipt</strong><span>{state.confirmation.receipt.status === "success" ? "The recovered transaction succeeded" : "The recovered transaction reverted"} in block {state.confirmation.receipt.blockNumber.toString()}.</span><p>This receipt does not confirm the current {lowerFirst(label)} action.</p><p className="hash">{state.confirmation.hash}</p><button className="btn" type="button" disabled={disabled || activeOutcome} onClick={() => { ownSubmission.current = null; setCurrent(context.current, { kind: "idle" }); }}>Review this action</button></div>;
+    const receipt = state.confirmation.receipt;
+    return <div className="transaction-state notice stack" role="status"><strong>Earlier transaction found</strong><span>{receipt.status === "success" ? "It succeeded" : "It failed"} in block {receipt.blockNumber.toString()}, but it did not {lowerFirst(label)}.</span><details><summary>Transaction details</summary><p className="hash">{state.confirmation.hash}</p></details><button className="btn" type="button" disabled={disabled || activeOutcome} onClick={() => { ownSubmission.current = null; setCurrent(context.current, { kind: "idle" }); }}>Review this action</button></div>;
   }
   if (state.kind === "confirmed") {
-    return <div className="transaction-state notice ok stack" role="status"><strong>Confirmed</strong><span>Confirmed in block {state.confirmation.blockNumber.toString()}.</span><p className="hash">{state.confirmation.hash}</p></div>;
+    return <div className="transaction-state notice ok stack" role="status"><strong>Done.</strong><details><summary>Transaction details</summary><p>Confirmed in block {state.confirmation.blockNumber.toString()}.</p><p className="hash">{state.confirmation.hash}</p></details></div>;
   }
   if (state.kind === "reverted" || state.kind === "replaced") {
     return (
       <div className="transaction-state notice error stack" role="alert">
-        <strong>{state.kind === "reverted" ? "Transaction reverted" : "Transaction replaced"}</strong>
-        <span>{state.confirmation.reason}</span>
+        <strong>{state.kind === "reverted" ? "Transaction failed. The raffle did not change." : "Your wallet replaced this transaction"}</strong>
+        {state.kind === "replaced" ? <span>This action did not run.</span> : null}
+        <details><summary>Transaction details</summary><p className="hash">{state.confirmation.hash}</p></details>
         <button className="btn btn-dark" type="button" onClick={() => setCurrent(context.current, { kind: "idle" })}>Review again</button>
       </div>
     );
   }
   return (
     <div className={`transaction-state notice ${state.kind === "rejected" ? "warning" : "error"} stack`} role={state.kind === "error" ? "alert" : "status"}>
-      <strong>{state.kind === "rejected" ? "Wallet request rejected" : "Action unavailable"}</strong>
-      <span>{state.message}</span>
+      <strong>{state.kind === "rejected" ? "Cancelled in your wallet. Nothing was sent." : "Action unavailable"}</strong>
+      {state.kind === "rejected" ? null : <span>{state.message}</span>}
       <div className="btn-row">
         <button className="btn btn-dark" type="button" onClick={() => setCurrent(context.current, { kind: "idle" })}>Try again</button>
         {resumeHash ? <button className="text-link" type="button" disabled={disabled} title={disabled ? disabledReason : undefined} onClick={() => void resume()}>Resume transaction</button> : null}

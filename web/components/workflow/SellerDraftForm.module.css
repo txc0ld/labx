@@ -5,7 +5,7 @@
   min-width:0;
 }
 
-.privacyNotice,.formError { margin:0; }
+.formError { margin:0; }
 
 .formSection {
   display:grid;
@@ -56,6 +56,8 @@
   gap:1rem;
 }
 
+.pickerHeading { align-items:center; }
+
 .nftIntro>:global(.btn) { flex:0 0 auto; }
 .picker {
   display:grid;
@@ -66,8 +68,7 @@
   border-radius:14px;
   background:#fff;
 }
-.pickerHeading>div { display:grid; gap:.25rem; }
-.pickerHeading span,.inventoryNote { color:var(--charcoal); font-size:.72rem; line-height:1.45; }
+.inventoryNote { color:var(--charcoal); font-size:.72rem; line-height:1.45; }
 .refreshButton { flex:0 0 auto; min-height:2.75rem; padding:.6rem .85rem; border-radius:14px; font-size:.75rem; }
 .nftGallery {
   display:grid;
@@ -114,6 +115,10 @@
   gap:1rem;
   min-width:0;
 }
+
+/* Narrow forms keep bonus entries and supply side by side under the full-width price. */
+.packFields { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.packFields>label:first-child { grid-column:1/-1; }
 
 .fieldGrid label,.packFields label { align-content:start; min-width:0; }
 .describedField { display:grid; align-content:start; gap:.3rem; min-width:0; }
@@ -167,8 +172,7 @@
   background:#fff;
 }
 
-.packCard>legend { max-width:100%; color:var(--charcoal); font-size:.76rem; }
-.packCard>legend span { margin-inline-end:.45rem; }
+.packCard>legend { max-width:100%; }
 .packCard>legend strong { color:var(--ink); font-size:.9rem; overflow-wrap:anywhere; }
 
 .reviewAction {
@@ -187,11 +191,20 @@
 .reviewAction>:global(.btn) { flex:0 0 auto; }
 .review { width:100%; max-width:72rem; margin-inline:auto; }
 .stageHeading { margin:0; scroll-margin-top:8rem; }
+.progress { scroll-margin-block:8rem; }
 
 @container (min-width:36rem) {
   .detailsGrid { grid-template-columns:minmax(0,1.4fr) minmax(15rem,.6fr); }
   .nftGrid { grid-template-columns:minmax(0,1.5fr) minmax(10rem,.5fr); }
   .packFields { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .packFields>label:first-child { grid-column:auto; }
+}
+
+/* Wide forms show the tiers as compact rows: name, then price, bonus entries and supply. */
+@container (min-width:48rem) {
+  .packList { gap:.5rem; }
+  .packCard { grid-template-columns:minmax(6rem,9rem) minmax(0,1fr); align-items:end; gap:1rem; padding:.7rem 1rem; }
+  .packCard>legend { float:left; align-self:center; padding:0; }
 }
 
 @container (max-width:35.99rem) {

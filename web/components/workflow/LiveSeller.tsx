@@ -9,8 +9,9 @@ import { SellerDraftForm } from "./SellerDraftForm";
 export function LiveSeller() {
   const bench = useBench();
   const [revision, setRevision] = useState(0);
+  const [creating, setCreating] = useState(false);
   const draftForm = bench.browser.kind === "configured"
-    ? <SellerDraftForm service={bench.browser.service} wallet={bench.browser.wallet} saveCommitment={(input, options) => createCommitment(bench.browser.wallet, input, options)} onConfirmed={async () => { await bench.refreshCatalog(); setRevision(value => value + 1); }} />
+    ? <SellerDraftForm service={bench.browser.service} wallet={bench.browser.wallet} saveCommitment={(input, options) => createCommitment(bench.browser.wallet, input, options)} onConfirmed={async () => { await bench.refreshCatalog(); setRevision(value => value + 1); }} onCreatingChange={setCreating} />
     : undefined;
-  return <SellerDashboard browser={bench.browser} draftForm={draftForm} revision={revision} />;
+  return <SellerDashboard browser={bench.browser} draftForm={draftForm} revision={revision} loading={!bench.ready} creating={creating} />;
 }

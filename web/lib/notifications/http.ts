@@ -123,7 +123,7 @@ export function createNotificationConnectionTestHandler(dependencies: CronDepend
 
 function cronConfiguration(request: Request): { apiKey: string; from: string } | Response {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return cronError("Notification cron is not configured.", 503);
+  if (!secret || secret.length < MIN_CRON_SECRET_LENGTH) return cronError("Notification cron is not configured.", 503);
   if (!validBearer(request.headers.get("authorization"), secret)) return cronError("Notification cron authorization failed.", 401);
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM;
@@ -133,12 +133,14 @@ function cronConfiguration(request: Request): { apiKey: string; from: string } |
   return { apiKey, from };
 }
 
-function validBearer(header: string | null, expected: string): boolean {
-  if (!header?.startsWith("Bearer ") || expected.length < 16) return false;
-  const supplied = header.slice(7);
-  const left = Buffer.from(supplied);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
+/** A configured CRON_SECRET shorter than this counts as not configured. */
+export const MIN_CRON_SECRET_LENGTH = 16;
+
+/** Compares SHA-256 digests in constant time, so neither the content nor the length of the secret leaks. */
+export function validBearer(header: string | null, expected: string): boolean {
+  if (!header?.startsWith("Bearer ") || expected.length < MIN_CRON_SECRET_LENGTH) return false;
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(header.slice(7)), digest(expected));
 }
 
 function cronError(error: string, status: number): Response {

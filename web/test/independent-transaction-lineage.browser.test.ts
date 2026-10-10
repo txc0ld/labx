@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Page } from "playwright";
 import { connectWallet } from "./fixtures/connect-wallet";
+import { localDeadlineValue, openCreatePanel } from "./fixtures/seller-create";
 import { hash } from "../lib/chain/validation";
 import { raffleAbi } from "../lib/chain/abi";
 import { browserChain } from "./fixtures/browser-chain";
@@ -41,12 +42,12 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
   }
 
   async function fillDraft(page: Page) {
-    await page.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ }).click();
+    await openCreatePanel(page);
     const block = await chain.client.getBlock();
     await page.getByLabel("Raffle title").fill("Rendered replacement lineage");
     await page.getByLabel("NFT contract").fill(chain.nft.address);
     await page.getByLabel("Token ID").fill("9101");
-    await page.getByLabel("Sales deadline in UTC").fill(new Date(Number(block.timestamp + 3600n) * 1000).toISOString().slice(0, 16));
+    await page.getByLabel("Sales deadline (your time)").fill(await localDeadlineValue(page, block.timestamp + 3600n));
     await fillStandardMembershipEconomics(page, () => ({ price: "1", bonusEntries: "1", supply: "10" }));
   }
 
@@ -87,7 +88,7 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
     await tabA.reload({ waitUntil: "domcontentloaded" });
     const draftSummary = tabA.locator("summary").filter({ hasText: /Create a raffle|Prepare a draft/ });
     await connectWallet(tabA, draftSummary);
-    await draftSummary.click();
+    await openCreatePanel(tabA);
     await tabA.getByRole("button", { name: "Create", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await tabA.evaluate(() => {
       type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;

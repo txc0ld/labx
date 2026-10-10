@@ -78,7 +78,7 @@ run("independent transaction outcome ownership", () => {
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
     await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
     for (const checkbox of await agreements.all()) await checkbox.check();
-    const record = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
+    const record = fixture.page.getByRole("button", { name: "Sign agreement", exact: true });
     await record.waitFor({ state: "visible", timeout: 10_000 });
     await record.click();
   }
@@ -146,33 +146,43 @@ run("independent transaction outcome ownership", () => {
         hash: approval.hash
       }
     });
-    await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await acceptAndRecord();
-
-    const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
-    await recovery.waitFor({ state: "visible", timeout: 10_000 });
-    expect(await recovery.getByLabel("Transaction hash").inputValue()).toBe(approval.hash);
     const callbackReads: string[] = [];
+    const heldReceipts: Route[] = [];
+    let holdReceipts = true, countReads = false;
     await fixture.page.route(`${chain.url}/`, async route => {
       const body: unknown = route.request().postDataJSON();
-      for (const request of Array.isArray(body) ? body : [body]) {
-        if (isRaffleSnapshotRead(request)) callbackReads.push(JSON.stringify(request));
+      const requests = Array.isArray(body) ? body : [body];
+      if (holdReceipts && requests.some(value => typeof value === "object" && value !== null && "method" in value && value.method === "eth_getTransactionReceipt")) { heldReceipts.push(route); return; }
+      for (const request of requests) {
+        if (countReads && isRaffleSnapshotRead(request)) callbackReads.push(JSON.stringify(request));
       }
       await route.continue();
     });
     try {
-      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
-      await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key), { timeout: 10_000 }).toBeNull();
+      await fixture.page.reload({ waitUntil: "domcontentloaded" });
+      await acceptAndRecord();
+
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Finishing your last step…" });
+      await recovery.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await recovery.getByLabel("Transaction hash").inputValue()).toBe(approval.hash);
+      await expect.poll(() => heldReceipts.length, { timeout: 10_000 }).toBeGreaterThan(0);
+      expect(await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key)).not.toBeNull();
+      countReads = true;
+      holdReceipts = false;
+      await Promise.all(heldReceipts.splice(0).map(route => route.continue()));
+      await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key), { timeout: 15_000 }).toBeNull();
 
       expect(await purchased(1n, chain.buyer)).toHaveLength(0);
       const buyerText = await fixture.page.locator(".buyer-flow").innerText();
       expect(buyerText).not.toMatch(/purchase confirmed/i);
       await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).waitFor({ state: "visible", timeout: 10_000 });
       expect({
-        falseCurrentActionConfirmation: await fixture.page.locator(".buyer-flow .transaction-state").getByText("Confirmed", { exact: true }).count(),
+        falseCurrentActionConfirmation: await fixture.page.locator(".buyer-flow .transaction-state").getByText("Done.", { exact: true }).count(),
         confirmationCallbackReads: callbackReads.length
       }).toEqual({ falseCurrentActionConfirmation: 0, confirmationCallbackReads: 0 });
     } finally {
+      holdReceipts = false;
+      await Promise.all(heldReceipts.splice(0).map(route => route.continue().catch(() => {})));
       await fixture.page.unroute(`${chain.url}/`);
     }
   }, 60_000);
@@ -194,30 +204,33 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
 
-    await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
-    const pending = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction submitted" });
+    await review.getByRole("button", { name: "Confirm purchase", exact: true }).click();
+    const pending = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Confirming on the network… usually under 30 seconds" });
     await pending.waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.locator(".resume-transaction form").isVisible()).toBe(false);
+    await pending.locator("summary", { hasText: "Details" }).click();
     const hash = (await pending.innerText()).match(/0x[0-9a-f]{64}/i)?.[0] as Hex | undefined;
     expect(hash).toMatch(/^0x[0-9a-f]{64}$/i);
     await expect.poll(() => held.length, { timeout: 10_000 }).toBeGreaterThan(0);
     await chain.mine();
     await chain.mine();
 
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     holding = false;
     await Promise.all(held.splice(0).map(route => route.continue()));
     await fixture.page.unroute(`${chain.url}/`);
     const key = journalKey(chain.stranger);
     await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key), { timeout: 15_000 }).toBeNull();
 
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(await purchased(2n, chain.stranger)).toHaveLength(1);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    await fixture.page.locator(".buyer-flow .transaction-state", { hasText: "You’re in" }).locator("summary", { hasText: "Transaction details" }).click();
     const workspaceText = await fixture.page.locator("#content").innerText();
     expect(workspaceText).toContain(hash!);
-    expect(workspaceText).toMatch(/purchase confirmed/i);
+    expect(workspaceText).toMatch(/You’re in/);
 
     await fixture.page.setViewportSize({ width: 390, height: 844 });
     await fixture.page.evaluate(async () => {
@@ -233,7 +246,8 @@ run("independent transaction outcome ownership", () => {
       fullPage: true,
       animations: "disabled"
     });
-    const lowerRecords = fixture.page.getByText(/Inspect bonus-entry records \(1 lots\)/);
+    await fixture.page.locator("summary").filter({ hasText: "Draw details" }).click();
+    const lowerRecords = fixture.page.getByText(/Entry records \(1 purchase\)/);
     await lowerRecords.scrollIntoViewIfNeeded();
     await fixture.page.waitForTimeout(300);
     const lowerLayout = await lowerRecords.evaluate(element => {
@@ -272,7 +286,7 @@ run("independent transaction outcome ownership", () => {
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     const retained = fixture.page.locator("#content", { hasText: hash! });
     await retained.waitFor({ state: "visible", timeout: 10_000 });
-    await expect.poll(() => retained.innerText(), { timeout: 15_000 }).toMatch(/purchase confirmed/i);
+    await expect.poll(() => retained.innerText(), { timeout: 15_000 }).toMatch(/You’re in/);
     await expect.poll(() => fixture.page.getByRole("button", { name: "Buy again", exact: true }).isEnabled(), { timeout: 15_000 }).toBe(true);
     expect(await retained.getByText("Saved transaction needs verification", { exact: true }).count()).toBe(0);
   }, 75_000);
@@ -309,7 +323,7 @@ run("independent transaction outcome ownership", () => {
       };
     });
 
-    await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+    await review.getByRole("button", { name: "Confirm purchase", exact: true }).click();
     await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __latePurchaseRequests: number }).__latePurchaseRequests), { timeout: 10_000 }).toBe(1);
     await fixture.switchAccount(chain.buyer);
     await expect.poll(() => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
@@ -319,19 +333,37 @@ run("independent transaction outcome ownership", () => {
     await fixture.switchAccount(chain.treasury);
     await expect.poll(() => fixture.page.locator(".wallet-identity").innerText(), { timeout: 10_000 })
       .toContain(`${chain.treasury.slice(0, 6)}…${chain.treasury.slice(-4)}`);
-    await fixture.page.evaluate(() => (window as unknown as Window & { __releaseLatePurchase(): void }).__releaseLatePurchase());
-    await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __latePurchaseHash?: string }).__latePurchaseHash), { timeout: 10_000 }).toMatch(/^0x[0-9a-f]{64}$/i);
-    const hash = await fixture.page.evaluate(() => (window as unknown as Window & { __latePurchaseHash?: string }).__latePurchaseHash);
-    await chain.mine();
-    await chain.mine();
+    // Hold receipt reads so the late hash stays unresolved while its recovery control is inspected.
+    const held: Route[] = [];
+    let holding = true;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const requests = Array.isArray(body) ? body : [body];
+      if (holding && requests.some(value => typeof value === "object" && value !== null && "method" in value && value.method === "eth_getTransactionReceipt")) { held.push(route); return; }
+      await route.continue();
+    });
+    try {
+      await fixture.page.evaluate(() => (window as unknown as Window & { __releaseLatePurchase(): void }).__releaseLatePurchase());
+      await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __latePurchaseHash?: string }).__latePurchaseHash), { timeout: 10_000 }).toMatch(/^0x[0-9a-f]{64}$/i);
+      const hash = await fixture.page.evaluate(() => (window as unknown as Window & { __latePurchaseHash?: string }).__latePurchaseHash);
+      await chain.mine();
+      await chain.mine();
 
-    const saved = await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.treasury));
-    expect(saved).toContain(hash);
-    const originalWalletRecovery = fixture.page.locator(".resume-transaction form");
-    await originalWalletRecovery.waitFor({ state: "visible", timeout: 10_000 });
-    await expect.poll(() => originalWalletRecovery.getByLabel("Transaction hash").inputValue(), { timeout: 10_000 }).toBe(hash);
-    expect(await originalWalletRecovery.innerText()).toMatch(/Pending wallet activity|unresolved transaction/i);
-    expect(await fixture.page.locator("#content").innerText()).not.toMatch(/purchase confirmed/i);
+      const saved = await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.treasury));
+      expect(saved).toContain(hash);
+      const originalWalletRecovery = fixture.page.locator(".resume-transaction form");
+      await expect.poll(() => originalWalletRecovery.getByLabel("Transaction hash").inputValue(), { timeout: 10_000 }).toBe(hash);
+      const details = fixture.page.locator(".resume-transaction > details", { has: fixture.page.locator(":scope > summary", { hasText: "Transaction details" }) });
+      if (await details.count() && !await details.evaluate(element => element.hasAttribute("open"))) await details.locator(":scope > summary").click();
+      await originalWalletRecovery.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await originalWalletRecovery.getByLabel("Transaction hash").inputValue()).toBe(hash);
+      expect(await originalWalletRecovery.innerText()).toMatch(/Your last transaction needs a check/i);
+      expect(await fixture.page.locator("#content").innerText()).not.toMatch(/purchase confirmed/i);
+    } finally {
+      holding = false;
+      await Promise.all(held.splice(0).map(route => route.continue().catch(() => {})));
+      await fixture.page.unroute(`${chain.url}/`);
+    }
   }, 75_000);
 
   it("inspects an old confirmed hint without changing a separate newer pending journal", async () => {
@@ -362,7 +394,8 @@ run("independent transaction outcome ownership", () => {
     await fixture.page.waitForTimeout(2_000);
     const rawAfterInspection = await fixture.page.evaluate((key: string) => localStorage.getItem(key), pendingKey);
     const outcomeText = await oldOutcome.innerText();
-    const pendingText = await fixture.page.locator(".resume-transaction").innerText();
+    const pendingForm = fixture.page.locator(".resume-transaction form", { hasText: "Your last transaction needs a check" });
+    const pendingText = await pendingForm.isVisible() ? await pendingForm.textContent() ?? "" : "";
     await fixture.page.evaluate((key: string) => localStorage.removeItem(key), pendingKey);
 
     expect({
@@ -490,7 +523,7 @@ run("independent transaction outcome ownership", () => {
     });
 
     try {
-      await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+      await review.getByRole("button", { name: "Confirm purchase", exact: true }).click();
       const original = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction needs attention" });
       await original.waitFor({ state: "visible", timeout: 20_000 });
       expect(failedReceipts.length).toBeGreaterThan(0);
@@ -529,7 +562,7 @@ run("independent transaction outcome ownership", () => {
       const staleOriginalBeforeReload = await original.count();
       const agreements = fixture.page.locator(".agreements input[type=checkbox]");
       await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
-      const record = fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true });
+      const record = fixture.page.getByRole("button", { name: "Sign agreement", exact: true });
       const nextPurchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
       let purchaseAvailable = false;
       let agreementRecorded = false;
@@ -576,15 +609,17 @@ run("independent transaction outcome ownership", () => {
     await purchase.click();
     const review = fixture.page.locator(".transaction-review");
     await review.waitFor({ state: "visible", timeout: 10_000 });
-    await review.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
-    const submitted = fixture.page.locator(".resume-transaction .transaction-outcome", { hasText: "Transaction submitted" });
+    await review.getByRole("button", { name: "Confirm purchase", exact: true }).click();
+    const submitted = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Confirming on the network… usually under 30 seconds" });
     await submitted.waitFor({ state: "visible", timeout: 10_000 });
+    await submitted.locator("summary", { hasText: "Details" }).click();
     const transactionHash = (await submitted.innerText()).match(/0x[0-9a-f]{64}/i)?.[0];
     if (!transactionHash) throw new Error("The submitted purchase did not render its transaction hash.");
     await chain.mine();
     await chain.mine();
-    const localReceipt = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Purchase confirmed" });
+    const localReceipt = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "You’re in" });
     await localReceipt.waitFor({ state: "visible", timeout: 15_000 });
+    await localReceipt.locator("summary", { hasText: "Transaction details" }).click();
     expect(await localReceipt.getByText(transactionHash, { exact: true }).innerText()).toBe(transactionHash);
     await expect.poll(() => purchased(1n, chain.buyer), { timeout: 10_000 }).toHaveLength(1);
 
@@ -605,24 +640,28 @@ run("independent transaction outcome ownership", () => {
         throw new Error("The remote provider did not return a string account list.");
       }
       expect(remoteAccounts.map(account => account.toLowerCase())).toEqual([chain.buyer.toLowerCase()]);
-      const remoteReceipt = remote.locator(".buyer-flow .transaction-state", { hasText: "Purchase confirmed" });
+      const remoteReceipt = remote.locator(".buyer-flow .transaction-state", { hasText: "You’re in" });
+      await remoteReceipt.locator("summary", { hasText: "Transaction details" }).click({ timeout: 15_000 });
       await remoteReceipt.getByText(transactionHash, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-      await remote.getByRole("button", { name: "Refresh state", exact: true }).click();
+      await remote.getByRole("button", { name: "Refresh", exact: true }).click();
       const remoteAgain = remote.getByRole("button", { name: "Buy again", exact: true });
       await expect.poll(() => remoteAgain.isEnabled(), { timeout: 15_000 }).toBe(true);
       await remoteAgain.click();
-      await expect.poll(() => remote.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+      await expect.poll(() => remote.getByText("You’re in", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
 
       await localReceipt.getByText(transactionHash, { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
       expect(sensitiveMethods).toEqual([]);
-      await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
       const localAgain = fixture.page.getByRole("button", { name: "Buy again", exact: true });
       await expect.poll(() => localAgain.isEnabled(), { timeout: 15_000 }).toBe(true);
       await localAgain.click();
-      await expect.poll(() => fixture.page.getByText("Purchase confirmed", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
+      await expect.poll(() => fixture.page.getByText("You’re in", { exact: true }).count(), { timeout: 10_000 }).toBe(0);
       await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).waitFor({ state: "visible", timeout: 10_000 });
       expect(await fixture.page.getByRole("spinbutton", { name: "Quantity" }).inputValue()).toBe("1");
-      for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(false);
+      // The same order and account keep their ticks; the agreement is still signed again before the next purchase.
+      for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) expect(await checkbox.isChecked()).toBe(true);
+      expect(await fixture.page.getByText("Tick the boxes and sign the agreement", { exact: true }).isVisible()).toBe(true);
+      expect(await fixture.page.getByText("Agreement signed", { exact: true }).count()).toBe(0);
       expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
       expect(sensitiveMethods).toEqual([]);
     } finally {
@@ -637,7 +676,7 @@ run("independent transaction outcome ownership", () => {
     const older = await act({ kind: "approveUsdc", id: 1n, packId: 0, quantity: 1 }, buyer);
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
     await openPiece(1n, chain.buyer);
-    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
     await approve.waitFor({ state: "visible", timeout: 10_000 });
     await approve.click();
     const review = fixture.page.locator(".transaction-review");
@@ -662,8 +701,8 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
     try {
-      await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
-      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+      await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Your last transaction needs a check" });
       await recovery.waitFor({ state: "visible", timeout: 15_000 });
       const freshHash = await recovery.getByLabel("Transaction hash").inputValue();
       expect(freshHash).toMatch(/^0x[0-9a-f]{64}$/i);
@@ -676,12 +715,12 @@ run("independent transaction outcome ownership", () => {
       expect(await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key)).toBeNull();
       callbackReads.length = 0;
       await recovery.getByLabel("Transaction hash").fill(older.hash);
-      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
       const historicalState = fixture.page.locator(".buyer-flow .transaction-state", { hasText: older.hash });
       await historicalState.waitFor({ state: "visible", timeout: 15_000 });
       expect({
-        neutralReceipts: await historicalState.getByText("Recovered transaction receipt", { exact: true }).count(),
-        falseCurrentActionConfirmation: await historicalState.getByText("Confirmed", { exact: true }).count(),
+        neutralReceipts: await historicalState.getByText("Earlier transaction found", { exact: true }).count(),
+        falseCurrentActionConfirmation: await historicalState.getByText("Done.", { exact: true }).count(),
         confirmationCallbackReads: callbackReads.length
       }).toEqual({ neutralReceipts: 1, falseCurrentActionConfirmation: 0, confirmationCallbackReads: 0 });
     } finally {
@@ -692,7 +731,7 @@ run("independent transaction outcome ownership", () => {
   it("accepts the current flow's canonically verified same-nonce fee replacement", async () => {
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.treasury);
     await openPiece(1n, chain.treasury);
-    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
     await approve.waitFor({ state: "visible", timeout: 10_000 });
     await approve.click();
     const review = fixture.page.locator(".transaction-review");
@@ -719,8 +758,8 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
     try {
-      await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
-      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+      await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Your last transaction needs a check" });
       await recovery.waitFor({ state: "visible", timeout: 15_000 });
       const originalHash = await recovery.getByLabel("Transaction hash").inputValue() as Hex;
       const original = await chain.client.getTransaction({ hash: originalHash });
@@ -750,10 +789,10 @@ run("independent transaction outcome ownership", () => {
 
       callbackReads.length = 0;
       await recovery.getByLabel("Transaction hash").fill(replacementHash);
-      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
       await expect.poll(() => callbackReads.length, { timeout: 15_000 }).toBeGreaterThan(0);
       await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ state: "visible", timeout: 15_000 });
-      expect(await fixture.page.getByText("Recovered transaction receipt", { exact: true }).count()).toBe(0);
+      expect(await fixture.page.getByText("Earlier transaction found", { exact: true }).count()).toBe(0);
       await expect.poll(() => fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), journalKey(chain.treasury)), { timeout: 10_000 }).toBeNull();
     } finally {
       if (!automine) await chain.rpc("evm_setAutomine", [true]);
@@ -764,7 +803,7 @@ run("independent transaction outcome ownership", () => {
   it("renders a cold self-cancellation neutrally after the current flow's journal was cleared", async () => {
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.operator);
     await openPiece(1n, chain.operator);
-    const approve = fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true });
+    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
     await approve.waitFor({ state: "visible", timeout: 10_000 });
     await approve.click();
     const review = fixture.page.locator(".transaction-review");
@@ -791,8 +830,8 @@ run("independent transaction outcome ownership", () => {
       await route.continue();
     });
     try {
-      await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
-      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+      await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
+      const recovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Your last transaction needs a check" });
       await recovery.waitFor({ state: "visible", timeout: 15_000 });
       const originalHash = await recovery.getByLabel("Transaction hash").inputValue() as Hex;
       const original = await chain.client.getTransaction({ hash: originalHash });
@@ -823,13 +862,13 @@ run("independent transaction outcome ownership", () => {
       await fixture.page.evaluate((storageKey: string) => localStorage.removeItem(storageKey), key);
       callbackReads.length = 0;
       await recovery.getByLabel("Transaction hash").fill(cancellationHash);
-      await recovery.getByRole("button", { name: "Reconcile transaction", exact: true }).click();
+      await recovery.getByRole("button", { name: "Check transaction", exact: true }).click();
       const cancellationState = fixture.page.locator(".buyer-flow .transaction-state", { hasText: cancellationHash });
       await cancellationState.waitFor({ state: "visible", timeout: 15_000 });
       await fixture.page.waitForLoadState("networkidle");
       expect({
-        neutralReceipts: await cancellationState.getByText("Recovered transaction receipt", { exact: true }).count(),
-        falseCurrentActionConfirmation: await cancellationState.getByText("Confirmed", { exact: true }).count(),
+        neutralReceipts: await cancellationState.getByText("Earlier transaction found", { exact: true }).count(),
+        falseCurrentActionConfirmation: await cancellationState.getByText("Done.", { exact: true }).count(),
         confirmationCallbackReads: callbackReads.length,
         journal: await fixture.page.evaluate((storageKey: string) => localStorage.getItem(storageKey), key)
       }).toEqual({ neutralReceipts: 1, falseCurrentActionConfirmation: 0, confirmationCallbackReads: 0, journal: null });

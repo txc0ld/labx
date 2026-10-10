@@ -45,6 +45,8 @@ export interface RaffleService {
   readAccount(input: { id: bigint; account: Address; block?: BlockRef }): Promise<AccountRaffleState>;
   listLots(input: { id: bigint; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<Lot>>;
   history(input: { account: Address; fromBlock?: bigint; block?: BlockRef }): Promise<Page<HistoryItem>>;
+  /** Block time of the raffle's Revealed event at or before `block`. Rejects when it cannot find or check one. */
+  readRevealTime(input: { id: bigint; block: BlockRef }): Promise<bigint>;
   openingPolicy(input?: { block?: BlockRef }): Promise<{ policy: RafflePolicy; hash: Hex; block: BlockRef }>;
   quoteMembership(input: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote>;
   prepare(input: { action: WorkflowAction; wallet: WalletSessionPort; expectedDraft?: DraftInput }): Promise<PreparedAction>;

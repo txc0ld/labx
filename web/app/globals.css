@@ -836,6 +836,9 @@ fieldset.agreements label { padding:.55rem 0; border-bottom:1px solid var(--line
 .journey-card .btn { align-self:flex-start; margin-top:auto; }
 .walkthrough-list { display:grid; gap:.65rem; margin:0; padding-inline-start:1.3rem; }
 .text-link { display:inline-flex; align-items:center; min-height:44px; padding:.45rem .2rem; color:var(--ink); font-weight:650; text-underline-offset:5px; }
+button.text-link { appearance:none; border:0; border-radius:4px; background:transparent; cursor:pointer; text-align:start; text-decoration:underline; text-decoration-thickness:1px; }
+button.text-link:hover { text-decoration-thickness:2px; }
+button.text-link:disabled { cursor:not-allowed; opacity:.55; text-decoration-thickness:1px; }
 .workflow-rail { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem; margin:.5rem 0; padding:0; list-style:none; }
 .workflow-rail li { position:relative; display:grid; gap:.18rem; min-width:0; padding:.9rem; border:1px solid var(--line); border-radius:14px; background:rgba(250,249,246,.78); }
 .workflow-rail li:not(:last-child)::after { content:""; position:absolute; top:1.45rem; inset-inline-end:-.66rem; width:.65rem; height:1px; background:var(--line-dark); }
@@ -1011,9 +1014,14 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:150
 .payment-choice label { display:flex; flex-direction:row; align-items:center; gap:.45rem; }
 .transaction-review,.transaction-state,.workflow-next { padding:1rem; border:1px solid var(--line-dark); border-radius:18px; background:rgba(250,249,246,.86); }
 .transaction-review h3,.transaction-review p,.transaction-state p,.workflow-next h2,.workflow-next p { margin:0; }
-.transaction-review details,.workflow-details { font-size:.78rem; }
-.transaction-review summary,.workflow-details summary { min-height:44px; display:flex; align-items:center; cursor:pointer; font-weight:650; }
-.transaction-review .hash,.workflow-details .hash { word-break:break-all; }
+.transaction-review details,.transaction-state details,.workflow-details { font-size:.78rem; }
+.transaction-review summary,.transaction-state summary,.workflow-details summary { min-height:44px; display:flex; align-items:center; cursor:pointer; font-weight:650; }
+.transaction-review .hash,.transaction-state .hash,.workflow-details .hash { word-break:break-all; }
+.transaction-review details>p,.transaction-state details>p { margin:.25rem 0 0; }
+.transaction-state>.btn,.transaction-state>.text-link { justify-self:start; }
+.transaction-progress { display:flex; align-items:center; gap:.55rem; }
+.transaction-spinner { flex:none; width:.95rem; height:.95rem; border:2px solid var(--line-dark); border-top-color:var(--ink); border-radius:50%; animation:transaction-spin .9s linear infinite; }
+@keyframes transaction-spin { to { transform:rotate(360deg); } }
 .workflow-next { align-items:start; }
 .account-balance { display:grid; gap:.25rem; padding:.9rem 0; border-block:1px solid var(--line); }
 .account-balance strong { font-size:1.5rem; font-variant-numeric:tabular-nums; }
@@ -1184,3 +1192,45 @@ html[data-motion="enabled"] [data-reveal]:focus-within { opacity:1; transform:no
 .chain-pack-grid .squishy-pack-price { font-size:clamp(1.35rem,1.6vw,1.7rem); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
 .chain-pack-grid .squishy-pack-entries,.chain-pack-grid .squishy-pack-details { font-size:.8rem; }
 .chain-pack-grid .squishy-pack-background { width:48px; height:80px; }
+
+/* Raffle page: plain header facts, seller progress and compact membership tiers. */
+.piece-seller { margin:0; color:var(--charcoal); font-size:.75rem; }
+.piece-price { margin:0; font-size:1rem; font-weight:650; font-variant-numeric:tabular-nums; }
+.piece-links { display:flex; flex-wrap:wrap; gap:0 1.25rem; }
+.workflow-next .workflow-fact { margin-top:.45rem; font-weight:650; font-variant-numeric:tabular-nums; }
+.pack-fee-note { margin:0; color:var(--charcoal); font-size:.8125rem; line-height:1.45; }
+.help-finish .stack>p { margin:0; color:var(--charcoal); }
+.seller-more { display:flex; flex-wrap:wrap; align-items:start; gap:0 1.25rem; }
+.seller-more>details[open] { flex-basis:100%; }
+.seller-progress { gap:.9rem; }
+.raffle-timeline { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:.6rem; margin:0; padding:0; list-style:none; }
+.raffle-timeline li { display:grid; align-content:start; gap:.35rem; min-width:0; color:var(--charcoal); font-size:.78rem; line-height:1.35; }
+.raffle-timeline-dot { display:inline-grid; place-items:center; width:1.4rem; height:1.4rem; border:1px solid currentColor; border-radius:999px; font-size:.7rem; }
+.raffle-timeline li[data-state="done"] .raffle-timeline-dot { border-color:var(--ink); background:var(--ink); color:var(--paper); }
+.raffle-timeline li[data-state="current"] { color:var(--ink); font-weight:650; }
+.raffle-timeline li[data-state="current"] .raffle-timeline-dot { border-color:var(--ink); background:var(--lime); }
+.seller-sales { display:grid; margin:0; padding:0; list-style:none; border-block:1px solid var(--line); }
+.seller-sales li { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.25rem 1rem; padding:.6rem 0; font-size:.875rem; }
+.seller-sales li+li { border-top:1px solid var(--line); }
+.seller-sales strong { font-variant-numeric:tabular-nums; }
+.sales-activity { gap:.75rem; }
+.sales-activity details summary { min-height:44px; }
+.chain-pack-grid .squishy-pack-card { min-height:10.5rem; }
+@media (max-width:760px) {
+  body:has(.checkout-bar) { padding-bottom:10rem; }
+  .seller-piece .chain-piece-visual { order:2; }
+  .chain-pack-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:.55rem; }
+  .chain-pack-grid .squishy-pack-card { min-height:0; padding:.75rem; border-radius:22px; }
+  .chain-pack-grid .squishy-pack-topline { gap:.25rem; }
+  .chain-pack-grid .squishy-pack-topline strong { font-size:1rem; }
+  .chain-pack-grid .squishy-pack-choice { padding:.15rem .45rem; font-size:.625rem; }
+  .chain-pack-grid .squishy-pack-body { grid-template-columns:minmax(0,1fr) 32px; gap:.4rem; padding-block:.3rem; }
+  .chain-pack-grid .squishy-pack-price { font-size:1.15rem; }
+  .chain-pack-grid .squishy-pack-entries { margin-top:.2rem; font-size:.75rem; }
+  .chain-pack-grid .squishy-pack-details { padding-top:.45rem; font-size:.7rem; }
+  .chain-pack-grid .squishy-pack-background { width:32px; height:50px; }
+}
+@media (max-width:520px) {
+  .raffle-timeline { grid-auto-flow:row; }
+  .raffle-timeline li { grid-template-columns:1.4rem minmax(0,1fr); align-items:center; gap:.6rem; }
+}

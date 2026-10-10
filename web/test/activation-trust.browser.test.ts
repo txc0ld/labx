@@ -8,6 +8,7 @@ import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
 import { hash } from "../lib/chain/validation";
 import { raffleAbi } from "../lib/chain/abi";
 import { transactionIntent } from "../lib/chain/pending-journal";
+import { watchWallet } from "./fixtures/wallet-watch";
 
 const run = process.env.RUN_BROWSER_ACCEPTANCE === "1" ? describe : describe.skip;
 run("activation drift beside browser recovery", () => {
@@ -89,29 +90,29 @@ run("activation drift beside browser recovery", () => {
     await viewport(1440);
     await visit("/piece/2", c.buyer);
     await fixture.page.getByText(/reviewed deployment has a pending ownership transfer/).first().waitFor({ state: "visible", timeout: 15_000 });
-    expect(await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).count()).toBe(0);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
     await viewport(375);
     expect(await fixture.page.getByText(/Existing recovery and receipt controls remain available/).isVisible()).toBe(true);
     await visit("/seller/2", c.seller);
     await fixture.page.getByText(/Existing recovery and receipt controls remain available/).waitFor({ timeout: 15_000 });
-    const recover = fixture.page.getByRole("button", { name: "Sign to recover commitment", exact: true });
+    // The seller's recovery control stays usable beside the warning. Confirm the draw waits for a drawn winner; the last
+    // test checks its draw-setup signature under the same ownership drift.
     const secondary = fixture.page.locator("details.workflow-details > summary").filter({ hasText: /^Advanced \(/ });
-    await expect.poll(async () => await recover.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 15_000 }).toBe(true);
-    if (!await recover.isVisible().catch(() => false)) await secondary.click();
-    await recover.waitFor({ state: "visible", timeout: 15_000 });
-    await recover.click();
-    await fixture.page.getByText("Commitment recovered", { exact: true }).waitFor({ timeout: 15_000 });
-    expect(await fixture.page.getByRole("button", { name: "Reveal commitment", exact: true }).isEnabled()).toBe(true);
+    await secondary.click();
+    const cancel = fixture.page.getByRole("button", { name: "Cancel raffle", exact: true });
+    await cancel.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await cancel.isEnabled()).toBe(true);
+    expect(await fixture.page.getByRole("button", { name: "Confirm the draw", exact: true, includeHidden: true }).count()).toBe(0);
     await viewport(1440);
-    expect(await fixture.page.getByRole("button", { name: "Reveal commitment", exact: true }).isEnabled()).toBe(true);
+    expect(await cancel.isEnabled()).toBe(true);
     expect((await fetch(`${fixture.baseUrl}/api/workflow/context`)).status).toBe(200);
   }, 40_000);
   it("preserves explicit approval refresh and automatic recognized-raffle refresh during cold receipt recovery", async () => {
     await c.write(c.raffle, "transferOwnership", [c.operator]); await c.write(c.raffle, "acceptOwnership");
     await c.write(c.usdc, "mint", [c.buyer, 100_000_000n]);
     await visit("/piece/2", c.buyer);
-    await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ timeout: 15_000 });
     const selector = encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [2n] }).slice(0, 10);
     let raffleReads = 0;
     await fixture.page.route(`${c.url}/`, async route => {
@@ -139,15 +140,15 @@ run("activation drift beside browser recovery", () => {
       raffleReads = 0;
       await recoverReceipt(c.buyer, approval.transactionHash);
       expect(raffleReads).toBe(0);
-      await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
       await expect.poll(() => raffleReads, { timeout: 15_000 }).toBeGreaterThan(0);
       await fixture.page.waitForLoadState("networkidle");
       await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ timeout: 15_000 });
       expect(raffleReads).toBeGreaterThan(0);
       await expect.poll(() => fixture.page.locator(".order-total").innerText(), { timeout: 15_000 }).toMatch(/27\.5/);
-      await expect.poll(() => fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).count(), { timeout: 15_000 }).toBe(0);
+      await expect.poll(() => fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).count(), { timeout: 15_000 }).toBe(0);
       for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
-      await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
       await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).waitFor({ timeout: 15_000 });
       const purchase = await c.write(c.raffle, "buyPack", [2n, 0, 1, PUBLISHED_TERMS_HASH], c.buyer); await c.mine();
       raffleReads = 0;
@@ -165,9 +166,9 @@ run("activation drift beside browser recovery", () => {
       raffleReads = 0;
       await recoverReceipt(c.seller, nftApproval.transactionHash);
       expect(raffleReads).toBe(0);
-      await fixture.page.getByRole("button", { name: "Refresh state", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
       await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-      await fixture.page.getByRole("heading", { name: "Awaiting LABx review", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.getByRole("heading", { name: "Waiting for LABx review", exact: true }).waitFor({ timeout: 15_000 });
       expect(raffleReads).toBeGreaterThan(0);
       expect((await c.service.readRaffle({ id: 4n })).raffle.escrowed).toBe(true);
     } finally { await fixture.page.unroute(`${c.url}/`); }
@@ -200,7 +201,7 @@ run("activation drift beside browser recovery", () => {
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key, value: JSON.stringify(oldJournal) });
     await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ timeout: 15_000 });
     for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
-    const localRecovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Reconcile pending wallet activity" });
+    const localRecovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Your last transaction needs a check" });
     await fixture.page.evaluate(({ key, newerJournal, newerHash }) => {
       const originalGet = Storage.prototype.getItem;
       let armed = true;
@@ -225,12 +226,42 @@ run("activation drift beside browser recovery", () => {
         return value;
       };
     }, { key, newerJournal, newerHash });
-    await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
     await expect.poll(() => fixture.page.getAttribute("html", "data-recovery-race"), { timeout: 15_000 }).toBe("delivered");
     await fixture.page.waitForLoadState("networkidle");
     expect(await localRecovery.getByLabel("Transaction hash").inputValue()).toBe(newerHash);
     expect(await fixture.page.evaluate(key => localStorage.getItem(key), key)).toBe(newerJournal);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
   }, 45_000);
+
+  it("loads the private draw setup and sends Confirm the draw straight to the wallet during an ownership transfer", async () => {
+    // Raffle 2 has one purchase from the earlier checks. Draw it, then start an ownership transfer again.
+    const { raffle } = await c.service.readRaffle({ id: 2n });
+    await c.warp(raffle.salesEnd);
+    await c.write(c.raffle, "close", [2n], c.stranger);
+    await c.write(c.raffle, "snapshot", [2n, 100n], c.stranger);
+    await c.write(c.raffle, "requestRandomness", [2n], c.stranger);
+    const drawing = await c.service.readRaffle({ id: 2n });
+    await c.write(c.vrf, "fulfill", [c.raffle.address, drawing.raffle.vrfRequestId, 0n]);
+    expect((await c.service.readRaffle({ id: 2n })).raffle.phase).toBe(4);
+    await c.write(c.raffle, "transferOwnership", [c.stranger]);
+    await viewport(375);
+    await visit("/seller/2", c.seller);
+    const confirmDraw = fixture.page.getByRole("button", { name: "Confirm the draw", exact: true });
+    await confirmDraw.waitFor({ state: "visible", timeout: 15_000 });
+    // The draw-setup signature still loads the private setup, and the confirmation goes straight to the wallet.
+    // The test wallet refuses that confirmation so the step stays available to retry.
+    const wallet = await watchWallet(fixture.page);
+    await wallet.reject(encodeFunctionData({ abi: raffleAbi, functionName: "reveal", args: [2n, commit, commit, commit] }).slice(0, 74));
+    await confirmDraw.click();
+    await fixture.page.getByText("Cancelled in your wallet. Nothing was sent.", { exact: true }).waitFor({ timeout: 15_000 });
+    expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
+    expect(await wallet.reviews()).toBe(0);
+    expect((await c.service.readRaffle({ id: 2n })).raffle.revealed).toBe(false);
+    await fixture.page.getByRole("button", { name: "Try again", exact: true }).click();
+    expect(await confirmDraw.isEnabled()).toBe(true);
+    await viewport(1440);
+    expect(await confirmDraw.isEnabled()).toBe(true);
+  }, 60_000);
 
 });

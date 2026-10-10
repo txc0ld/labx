@@ -139,13 +139,16 @@ run("wallet NFT picker adversarial browser behavior", () => {
 
   it("replaces refreshed rows, blocks stale ownership, preserves intervening edits, and remains usable by keyboard", async () => {
     const form = page.getByRole("region", { name: "New draft picker" });
-    const open = form.getByRole("button", { name: "Choose from wallet" });
-    expect(await open.getAttribute("aria-expanded")).toBe("false");
-    await open.focus();
-    await page.keyboard.press("Enter");
-    expect(await form.getByRole("button", { name: "Close wallet NFTs" }).getAttribute("aria-expanded")).toBe("true");
     await form.getByRole("region", { name: "Wallet NFTs" }).waitFor();
     await form.getByRole("button", { name: /Select First NFT/ }).waitFor();
+    expect(await form.getByRole("button", { name: /Choose from wallet|Close wallet NFTs/ }).count()).toBe(0);
+    expect(await form.getByLabel("NFT contract").count()).toBe(0);
+    const manual = form.getByRole("button", { name: "Enter contract and token ID instead", exact: true });
+    expect(await manual.getAttribute("aria-expanded")).toBe("false");
+    await manual.focus();
+    await page.keyboard.press("Enter");
+    expect(await manual.getAttribute("aria-expanded")).toBe("true");
+    await form.getByLabel("NFT contract").waitFor();
     const loadMore = form.getByRole("button", { name: "Load more wallet NFTs" });
     await loadMore.focus();
     await page.keyboard.press("Enter");

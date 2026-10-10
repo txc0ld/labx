@@ -38,7 +38,9 @@ export function sellerOwnsRaffle(account: Address, snapshot: RaffleSnapshot): bo
 
 export type SellerNextStep =
   | { kind: "action"; action: SellerActionAvailability; message?: string }
-  | { kind: "waiting"; title: string; message: string };
+  | { kind: "waiting"; title: string; message: string }
+  // LABx runs this step itself. The seller can still run it from a closed disclosure.
+  | { kind: "automatic"; action: SellerActionAvailability; title: string; message: string };
 
 const DRAW_KINDS = new Set<SellerActionKind>(["close", "snapshot", "requestRandomness", "reveal"]);
 
@@ -47,12 +49,12 @@ export function drawBlocker(snapshot: RaffleSnapshot): string | null {
   const { raffle, block } = snapshot;
   if (raffle.phase !== 1 && raffle.phase !== 2 || block.timestamp < raffle.salesEnd) return null;
   if (snapshot.lotCount === 0n) return "No memberships were sold.";
-  if (raffle.snapshotted && raffle.snapshotTotal === 0n) return "No entries were frozen.";
-  if (block.timestamp >= raffle.salesEnd + snapshot.drawStartGrace) return "The draw-start deadline has passed.";
+  if (raffle.snapshotted && raffle.snapshotTotal === 0n) return "No entries were counted.";
+  if (block.timestamp >= raffle.salesEnd + snapshot.drawStartGrace) return "The draw didn’t start in time.";
   return null;
 }
 
-const REFUNDS = "Enable refunds so buyers can claim their principal.";
+const REFUNDS = "Enable refunds so buyers get their membership price back.";
 
 export function cancelGuidance(snapshot: RaffleSnapshot, blocker: string, forSeller = true) {
   if (snapshot.lotCount > 0n) return `${blocker} ${REFUNDS}`;
@@ -61,7 +63,82 @@ export function cancelGuidance(snapshot: RaffleSnapshot, blocker: string, forSel
 
 export const RECLAIM_GUIDANCE = "The raffle is cancelled. Reclaim your NFT.";
 
-export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[]): SellerNextStep {
+/** The seller's one click for an expired raffle that sold nothing: cancel it, then reclaim the NFT. */
+export const CANCEL_AND_RECLAIM = "Cancel and get NFT back";
+
+export function cancelReclaimsPrize(snapshot: RaffleSnapshot): boolean {
+  return snapshot.lotCount === 0n && drawBlocker(snapshot) !== null;
+}
+
+const RUNNER_DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
+const RUNNER_SETTLE = "LABx finishes the raffle automatically. This usually takes a few minutes.";
+const RUNNER_LATE = "LABx hasn’t run this step yet. You can run it yourself.";
+
+/** Seconds a step LABx runs may stay pending after it is due before the seller is asked to run it. */
+const RUNNER_LATE_AFTER = 30n * 60n;
+
+/**
+ * Block time a runner step became due: sales end for closing, counting and starting the draw. Finishing an unconfirmed draw is due
+ * at the end of the confirmation window. A confirmed draw is due at the draw, or at revealedAt if that is later: the block time of
+ * the draw confirmation, so a late confirmation still gives LABx its 30 minutes. It is never due later than the end of the
+ * confirmation window, when the runner may finish any drawn raffle.
+ */
+function runnerDueAt({ raffle, revealGrace }: RaffleSnapshot, kind: SellerActionKind, revealedAt = 0n): bigint {
+  if (kind !== "settle") return raffle.salesEnd;
+  const graceEnd = raffle.drawnAt + revealGrace;
+  if (!raffle.revealed) return graceEnd;
+  // The runner settles a confirmed draw at once, and any drawn raffle once the reveal grace ends, so it is never due later than that.
+  const confirmed = revealedAt > raffle.drawnAt ? revealedAt : raffle.drawnAt;
+  return confirmed < graceEnd ? confirmed : graceEnd;
+}
+
+/** Block times at which a pending runner step goes back to the seller, so a page that stays open can tell when its view changes. */
+export function runnerLateTimes(snapshot: RaffleSnapshot, revealedAt?: bigint): readonly bigint[] {
+  return [runnerDueAt(snapshot, "close"), runnerDueAt(snapshot, "settle", revealedAt)].map(due => due + RUNNER_LATE_AFTER);
+}
+
+/** Permissionless draw steps the draw runner sends. Confirming the draw, claims, cancellation and reclaim stay with the seller. */
+const RUNNER_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) => { title: string; message: string }>> = {
+  close: () => ({ title: "Sales ended", message: RUNNER_DRAW }),
+  snapshot: () => ({ title: "Sales closed", message: RUNNER_DRAW }),
+  requestRandomness: () => ({ title: "Entries counted", message: RUNNER_DRAW }),
+  settle: ({ raffle }) => ({ title: raffle.revealed ? "Draw confirmed" : "Winner drawn", message: RUNNER_SETTLE })
+};
+
+/** What a seller step does, in the words its card uses. */
+export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind): string {
+  switch (kind) {
+    case "close": return "Sales have ended. Close sales so entries can be counted.";
+    case "snapshot": return "Locks in every purchase for the draw.";
+    case "requestRandomness": return "Picks a random winner. The result usually takes a few minutes.";
+    case "reveal": return "Sign to load your saved draw setup, then confirm it. This lets you finish now instead of waiting 7 days.";
+    case "settle": return "Finishes the raffle so you can claim your sales and the winner can claim the NFT.";
+    case "claimProceeds": return "The raffle is complete. Your share of the sales is ready.";
+    case "cancel":
+      if (snapshot.raffle.phase === 0) return snapshot.raffle.escrowed ? "Cancels this draft. You can then reclaim your NFT." : "Cancels this draft.";
+      return snapshot.lotCount === 0n ? "Ends sales now. You can then reclaim your NFT." : REFUNDS;
+    case "abortDrawing": return REFUNDS;
+    case "reclaimPrize": return RECLAIM_GUIDANCE;
+    default: return "";
+  }
+}
+
+/**
+ * The seller's next step. With the draw runner on, LABx's own draw steps become automatic until they are 30 minutes overdue by
+ * block time. revealedAt is the block time of the draw confirmation, from its Revealed event, or a later time when that event
+ * cannot be read; without it, finishing a confirmed draw is timed from the draw.
+ */
+export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], runner = false, revealedAt?: bigint): SellerNextStep {
+  const next = manualNextStep(snapshot, actions);
+  if (!runner || next.kind !== "action") return next;
+  const automatic = RUNNER_STEPS[next.action.kind]?.(snapshot);
+  if (!automatic) return next;
+  // The page cannot see whether the runner is healthy, so an overdue step goes back to the seller.
+  if (snapshot.block.timestamp >= runnerDueAt(snapshot, next.action.kind, revealedAt) + RUNNER_LATE_AFTER) return { kind: "action", action: next.action, message: RUNNER_LATE };
+  return { kind: "automatic", action: next.action, ...automatic };
+}
+
+function manualNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[]): SellerNextStep {
   const { raffle, block } = snapshot;
   const waiting = (title: string, message: string): SellerNextStep => ({ kind: "waiting", title, message });
   const enabled = (kind: SellerActionKind) => actions.find(item => item.kind === kind && item.enabled);
@@ -76,47 +153,51 @@ export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly Selle
   const blocker = drawBlocker(snapshot);
   if (blocker) {
     const cancel = enabled("cancel");
-    return cancel ? { kind: "action", action: cancel, message: cancelGuidance(snapshot, blocker) } : waiting("Draw cannot start", blocker);
+    if (!cancel) return waiting("Draw cannot start", blocker);
+    return cancelReclaimsPrize(snapshot)
+      ? { kind: "action", action: { ...cancel, label: CANCEL_AND_RECLAIM }, message: `${blocker} Cancel the raffle and get your NFT back. Your wallet asks you to confirm twice.` }
+      : { kind: "action", action: cancel, message: cancelGuidance(snapshot, blocker) };
   }
   switch (raffle.phase) {
     case 0:
-      if (block.timestamp >= raffle.salesEnd) return waiting("Sales deadline passed", "Edit the draft deadline before continuing. LABx must review the updated draft.");
-      if (!raffle.escrowed) return next(["approvePrize", "escrow"], "NFT escrow unavailable", "Refresh the NFT ownership and approval state before continuing.");
-      if (snapshot.admission.status !== "approved") return waiting("Awaiting LABx review", snapshot.admission.status === "changed" ? "Your NFT is escrowed. LABx must review the changed draft before you can open memberships." : "Your NFT is escrowed. Once LABx approves this draft, you can open memberships here.");
-      if (snapshot.paused) return waiting("Opening paused", "This draft is approved. Memberships can open after LABx resumes admissions.");
-      return next(["open"], "Opening unavailable", "Refresh the current opening requirements before continuing.");
+      if (block.timestamp >= raffle.salesEnd) return waiting("Sales deadline passed", "Set a new deadline in Edit draft. LABx will review the change.");
+      if (!raffle.escrowed) return next(["approvePrize", "escrow"], "NFT not locked yet", "Refresh to check the NFT in your wallet.");
+      if (snapshot.admission.status !== "approved") return waiting("Waiting for LABx review", snapshot.admission.status === "changed" ? "Your NFT is locked in. LABx needs to review your changes before you can list it." : "Your NFT is locked in. Once LABx approves, you can list it here.");
+      if (snapshot.paused) return waiting("Listing paused", "Your raffle is approved. You can list it when LABx resumes listings.");
+      return next(["open"], "Listing unavailable", "Refresh to check the listing requirements.");
     case 1:
-      if (block.timestamp < raffle.salesEnd) return waiting(snapshot.paused ? "Membership sales paused" : "Memberships are open", "Sales can close at the published deadline. Refresh the raffle then to continue the draw.");
-      return next(["close"], "Sales deadline reached", "Refresh the raffle to close sales.");
+      if (block.timestamp < raffle.salesEnd) return snapshot.paused ? waiting("Sales paused", "LABx has paused new sales for now.") : waiting("Your raffle is live", "Buyers can join until sales end. This page moves to the next step when they do.");
+      return next(["close"], "Sales have ended", "Refresh to close sales.");
     case 2:
-      return next(raffle.snapshotted ? ["requestRandomness"] : ["snapshot"], "Draw not ready", "Review the draw status. Available recovery actions are under Advanced.");
+      return next(raffle.snapshotted ? ["requestRandomness"] : ["snapshot"], "Draw not ready", "Check Draw details. Other options are under Advanced.");
     case 3: {
       const abort = block.timestamp >= raffle.vrfRequestedAt + snapshot.randomnessGrace ? enabled("abortDrawing") : undefined;
-      if (abort) return { kind: "action", action: abort, message: `The randomness deadline passed without a result. ${REFUNDS}` };
-      return waiting("Waiting for the draw", "The randomness request is pending. Refresh after fulfillment.");
+      if (abort) return { kind: "action", action: abort, message: `The draw didn’t return a result in time. ${REFUNDS}` };
+      return waiting("Drawing a winner", "This usually takes a few minutes. This page updates on its own.");
     }
     case 4:
-      return next(["settle", "reveal"], "Waiting for settlement", "Settlement becomes available after reveal or the published grace period.");
+      return next(["settle", "reveal"], "Waiting to finish", "You can finish the raffle after confirming the draw, or 7 days after the draw.");
     case 5:
-      if (raffle.principalEscrow === 0n) return waiting("Raffle settled", "There are no seller proceeds left to claim.");
-      return next(["claimProceeds"], "Raffle settled", "There are no seller proceeds left to claim.");
+      if (raffle.principalEscrow === 0n) return waiting("Raffle complete", "Your sales have been paid to your wallet.");
+      return next(["claimProceeds"], "Raffle complete", "Your sales have been paid to your wallet.");
     case 6: {
-      const refundNote = snapshot.lotCount > 0n ? "Buyers can claim any remaining refundable principal." : "No memberships were purchased.";
+      const refundNote = snapshot.lotCount > 0n ? "Buyers can claim refunds of the membership price." : "No memberships were sold.";
       const reclaim = raffle.escrowed ? enabled("reclaimPrize") : undefined;
       if (reclaim) return { kind: "action", action: reclaim, message: snapshot.lotCount > 0n ? `${RECLAIM_GUIDANCE} ${refundNote}` : RECLAIM_GUIDANCE };
       return waiting("Raffle cancelled", refundNote);
     }
     default:
-      return waiting("Raffle state unavailable", "Refresh the verified contract state before continuing.");
+      return waiting("Raffle state unavailable", "Refresh to load the raffle.");
   }
 }
 
-/** Enabled seller actions other than the next step, in portal order. Draw controls are dropped once no draw can happen. */
+/** Enabled seller actions other than the next step, in portal order. Draw controls are dropped once no draw can happen, and Confirm the draw waits until a winner is drawn. */
 export function sellerSecondaryActions(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], next: SellerNextStep): readonly SellerActionAvailability[] {
-  const primary = next.kind === "action" ? next.action.kind : null;
+  const primary = next.kind === "waiting" ? null : next.action.kind;
   const blocked = drawBlocker(snapshot) !== null;
+  const beforeDraw = snapshot.raffle.phase < 4;
   return SELLER_ACTION_KINDS.flatMap(kind => {
     const item = actions.find(candidate => candidate.kind === kind && candidate.enabled);
-    return item && kind !== "updateDraft" && kind !== primary && !(blocked && DRAW_KINDS.has(kind)) ? [item] : [];
+    return item && kind !== "updateDraft" && kind !== primary && !(blocked && DRAW_KINDS.has(kind)) && !(beforeDraw && kind === "reveal") ? [item] : [];
   });
 }

@@ -66,10 +66,16 @@ jobs:
           RUN_CHAIN_INTEGRATION: "1"
           RUN_INDEPENDENT_WALLET_REVIEW_REPAIRS: "1"
           RUN_INDEPENDENT_TRANSACTION_LINEAGE: "1"
+          RUN_DRAW_RUNNER_INTEGRATION: "1"
 
+  # Two parallel halves of one browser lane. Each runs its share of the same files with the same flags.
   browser-acceptance:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     defaults:
       run:
         working-directory: web
@@ -115,6 +121,8 @@ jobs:
             test/independent-complete-create-race.browser.test.ts \
             test/independent-owner-export-rejection-race.browser.test.ts \
             test/independent-empty-raffle-recovery.browser.test.ts \
+            test/seller-draw-runner.browser.test.ts \
+            --shard=${{ matrix.shard }}/2 \
             --maxWorkers=1
         env:
           RUN_BROWSER_ACCEPTANCE: "1"
@@ -138,5 +146,6 @@ jobs:
           RUN_INDEPENDENT_COMPLETE_CREATE_RACE: "1"
           RUN_INDEPENDENT_OWNER_EXPORT_REJECTION_RACE: "1"
           RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER: "1"
+          RUN_SELLER_DRAW_RUNNER_BROWSER: "1"
           LABX_WALLET_NFT_EVIDENCE_DIR: "../artifacts/wallet-nft-picker"
           LABX_SELLER_SIMPLIFICATION_EVIDENCE_DIR: "../artifacts/seller-simplification"

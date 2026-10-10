@@ -133,13 +133,13 @@ run("isolated Anvil seller and membership journeys", () => {
     const { id, input, reveal } = await draft(1n);
     await act({ kind: "updateDraft", id, draft: { ...input, title: "Updated local fixture" } });
     await open(id);
-    await expect(chain.service.prepare({ action: { kind: "close", id }, wallet: seller })).rejects.toThrow(/published deadline/);
+    await expect(chain.service.prepare({ action: { kind: "close", id }, wallet: seller })).rejects.toThrow("Sales can close once the deadline passes.");
     const bought = await purchase(id);
     const account = await chain.service.readAccount({ id, account: chain.buyer });
     expect(account.principal).toBe(50_000_000n); expect(account.fee).toBe(2_500_000n); expect(account.usdcAllowance).toBe(0n);
     const lots = await chain.service.listLots({ id }); expect(lots.items).toHaveLength(1); expect(lots.items[0].amount).toBe(6);
     const history = await chain.service.history({ account: chain.buyer }); expect(history.items.find(row => row.transactionHash === bought.transaction.hash)?.bonusEntries).toBe(6);
-    await expect(chain.service.prepare({ action: { kind: "cancel", id }, wallet: seller })).rejects.toThrow(/discretionary cancellation/);
+    await expect(chain.service.prepare({ action: { kind: "cancel", id }, wallet: seller })).rejects.toThrow("Memberships have been sold, so the raffle can’t be cancelled now.");
     await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: buyer })).rejects.toThrow(/unavailable/);
     await chain.warp(input.salesEnd); await act({ kind: "close", id }, stranger);
     await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: buyer })).rejects.toThrow(/unavailable/);
@@ -154,13 +154,13 @@ run("isolated Anvil seller and membership journeys", () => {
     expect(decodeFunctionData({ abi: raffleAbi, data: started.prepared.data })).toMatchObject({ functionName: "requestRandomness", args: [id] });
     await expect(chain.service.prepare({ action: { kind: "requestRandomness", id }, wallet: stranger })).rejects.toThrow(/unavailable/);
     const drawing = await chain.service.readRaffle({ id }); await chain.write(chain.vrf, "fulfill", [chain.raffle.address, drawing.raffle.vrfRequestId, 4n]);
-    await expect(chain.service.prepare({ action: { kind: "settle", id }, wallet: stranger })).rejects.toThrow(/seven-day/);
+    await expect(chain.service.prepare({ action: { kind: "settle", id }, wallet: stranger })).rejects.toThrow("The raffle can finish once the seller confirms the draw, or 7 days after the draw.");
     await act({ kind: "reveal", id, publicHash: reveal.publicHash, privateHash: reveal.privateHash, salt: reveal.salt });
     await act({ kind: "settle", id }, stranger); await act({ kind: "claimPrize", id }, buyer); await act({ kind: "claimProceeds", id }); await act({ kind: "claimFee", id }, stranger);
     expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [1n] })).toBe(chain.buyer);
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(49_000_000n);
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.treasury] })).toBe(3_500_000n);
-    await expect(chain.service.prepare({ action: { kind: "claimPrize", id }, wallet: buyer })).rejects.toThrow(/unclaimed NFT/);
+    await expect(chain.service.prepare({ action: { kind: "claimPrize", id }, wallet: buyer })).rejects.toThrow("Only the winner can claim the NFT.");
   }, 30_000);
   it("recovers a funded raffle without a draw through buyer refunds and seller NFT reclaim", async () => {
     const { id, input } = await draft(2n); await open(id); await purchase(id);
