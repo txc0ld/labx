@@ -9,12 +9,12 @@ import { formatEther, type Hex } from "viem";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { sellerAccounting } from "@/lib/chain/fees";
 import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, WorkflowAction } from "@/lib/chain/types";
-import { SELLER_ACTION_KINDS, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, type SellerActionAvailability } from "@/lib/chain/seller-actions";
+import { cancelGuidance, drawBlocker, RECLAIM_GUIDANCE, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, type SellerActionAvailability } from "@/lib/chain/seller-actions";
 import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";
 import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
-import { formatDate, formatUsdc, phaseLabel, shortAddress } from "./format";
+import { catalogAvailability, formatDate, formatUsdc, shortAddress } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 import { transactionMeaning } from "@/lib/chain/transaction-outcomes";
 import { useTransactionOutcomes } from "./useTransactionOutcomes";
@@ -237,7 +237,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
         </div>
         <div className="purchase-console">
           <header className="purchase-header">
-            <div className="purchase-eyebrow"><p className="kicker">Seller {shortAddress(snapshot.raffle.seller)}</p><span className="piece-status">{phaseLabel(phase)}</span></div>
+            <div className="purchase-eyebrow"><p className="kicker">Seller {shortAddress(snapshot.raffle.seller)}</p><span className="piece-status">{catalogAvailability(snapshot).label}</span></div>
             <h1 className="page-title">{snapshot.raffle.title}</h1>
             <p className="piece-deadline">Sales deadline {formatDate(snapshot.raffle.salesEnd)} UTC · {snapshot.lotCount.toString()} recorded lots</p>
             {mode === "public" ? <p className="notice" role="status"><strong>LABx review:</strong> {admissionCopy(snapshot)}. This records review of the exact prize and draw-funding use; it is not proof of authenticity or future transferability.</p> : null}
@@ -249,7 +249,7 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
             ? <SellerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
             : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />}
           {mode === "seller" ? <details className="workflow-details"><summary>Revenue and obligations</summary><SellerFinancialSummary snapshot={snapshot} /></details> : null}
-          {mode === "public" ? <RecoveryAlternatives browser={browser} snapshot={snapshot} availability={availability} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : null}
+          {mode === "public" ? <RecoveryAlternatives browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : null}
           {mode === "seller" && seller && phase === 0 && saveCommitment && writesEnabled ? <details className="workflow-details"><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} /></details> : null}
           <details className="workflow-details"><summary>Contract and review details</summary><dl className="review-list"><div><dt>Chain</dt><dd>{browser.service.manifest.chainId === 11155111 ? "Ethereum Sepolia" : "Isolated local chain"} ({browser.service.manifest.chainId})</dd></div><div><dt>Raffle contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ? <a href={explorerAddress(browser.service.manifest.chainId, browser.service.manifest.address) ?? undefined} target="_blank" rel="noreferrer">{browser.service.manifest.address} ↗</a> : browser.service.manifest.address}</dd></div><div><dt>Collection contract</dt><dd className="hash">{explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ? <a href={explorerAddress(browser.service.manifest.chainId, snapshot.raffle.nft) ?? undefined} target="_blank" rel="noreferrer">{snapshot.raffle.nft} ↗</a> : snapshot.raffle.nft}</dd></div><div><dt>Token</dt><dd>{explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ? <a href={explorerToken(browser.service.manifest.chainId, snapshot.raffle.nft, snapshot.raffle.tokenId) ?? undefined} target="_blank" rel="noreferrer">#{snapshot.raffle.tokenId.toString()} on explorer ↗</a> : `#${snapshot.raffle.tokenId.toString()}`}</dd></div><div><dt>LABx review</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(snapshot.policy.minBuyerFeeUsdc)} USDC or {formatBps(snapshot.policy.buyerFeeBps)} per purchase call; nonrefundable after success</dd></div><div><dt>Seller commission</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)} at settlement only</dd></div><div><dt>Treasury</dt><dd className="hash">{snapshot.policy.treasury}</dd></div><div><dt>State block</dt><dd>{snapshot.block.number.toString()}</dd></div></dl></details>
         </div>
@@ -277,6 +277,29 @@ function SellerFinancialSummary({ snapshot }: { snapshot: RaffleSnapshot }) {
       <p>Gross sales include cancelled sales. Pending principal is not earned revenue. Successful purchase processing fees are retained for the pinned treasury and excluded from seller revenue. Cancellation adds no seller commission.</p>
     </section>
   );
+}
+
+const RECOVERY_KINDS = ["claimPrize", "refund", "reclaimPrize", "abortDrawing", "settle", "cancel", "close", "snapshot", "requestRandomness", "claimFee"] as const;
+type RecoveryAvailability = ActionAvailability & { kind: typeof RECOVERY_KINDS[number] };
+
+/** Enabled public recovery actions in priority order. Draw steps disappear once no draw can happen. While a draw is still possible, the seller cancels from the seller page, so only the operator sees sales-phase cancellation here. */
+function publicRecoveryActions(snapshot: RaffleSnapshot, availability: readonly ActionAvailability[], account: AccountRaffleState | null): readonly RecoveryAvailability[] {
+  const blocked = drawBlocker(snapshot) !== null;
+  const sellerCancelOnSellerPage = !blocked && (snapshot.raffle.phase === 1 || snapshot.raffle.phase === 2) && !!account && sellerOwnsRaffle(account.account, snapshot);
+  return RECOVERY_KINDS.flatMap(kind => {
+    const item = availability.find(candidate => candidate.kind === kind && candidate.enabled);
+    if (!item || blocked && (kind === "close" || kind === "snapshot" || kind === "requestRandomness") || kind === "cancel" && sellerCancelOnSellerPage) return [];
+    return [{ ...item, kind }];
+  });
+}
+
+function recoveryGuidance(snapshot: RaffleSnapshot, kind: RecoveryAvailability["kind"], account: AccountRaffleState | null) {
+  const blocker = drawBlocker(snapshot);
+  if (kind === "cancel" && blocker) return cancelGuidance(snapshot, blocker, !!account && sellerOwnsRaffle(account.account, snapshot));
+  if (kind === "cancel" && snapshot.lotCount === 0n && (snapshot.raffle.phase === 1 || snapshot.raffle.phase === 2)) return "No memberships have been sold. Cancelling ends sales now so the seller can reclaim the NFT.";
+  if (kind === "reclaimPrize") return RECLAIM_GUIDANCE;
+  if (kind === "claimFee") return "Anyone can send protocol fees to the pinned treasury; they are never paid to the caller.";
+  return "The contract currently permits this action.";
 }
 
 function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed, writesEnabled, writeDisabledReason }: {
@@ -370,12 +393,11 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
         payment: selectedPayment
       }
     : null;
-  const recoveryKinds: WorkflowAction["kind"][] = ["claimPrize", "refund", "abortDrawing", "settle", "cancel", "close", "snapshot", "requestRandomness", "claimFee"];
-  const nextRecovery = recoveryKinds.map(kind => availability.find(item => item.kind === kind)).find(item => item?.enabled);
+  const nextRecovery = publicRecoveryActions(snapshot, availability, account)[0];
   const recoveryAction: WorkflowAction | null = nextRecovery
     ? nextRecovery.kind === "snapshot"
       ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
-      : { kind: nextRecovery.kind as "claimPrize" | "refund" | "close" | "cancel" | "abortDrawing" | "settle" | "claimFee", id: snapshot.id }
+      : { kind: nextRecovery.kind, id: snapshot.id }
     : null;
 
   async function recordReviewedAgreement() {
@@ -465,10 +487,10 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
           </div>
           </section>
         </>
-      ) : !salesOpen ? <p className="notice" role="status">Membership sales are not open{snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.</p> : null}
+      ) : !salesOpen ? <p className="notice" role="status">{Number(snapshot.raffle.phase) === 1 && snapshot.block.timestamp >= snapshot.raffle.salesEnd ? "Membership sales ended at the published deadline." : `Membership sales are not open${snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.`}</p> : null}
       {!salesOpen && buyerWallet.kind === "disconnected" ? <WalletGate wallet={browser.wallet}><span /></WalletGate> : null}
       {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable principal</span><strong>{formatUsdc(account.principal)} USDC</strong><small>{formatUsdc(account.fee)} USDC processing fee paid to date remains historical and nonrefundable. Cancellation refunds principal only.</small></div> : null}
-      {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || (nextRecovery.kind === "claimFee" ? "Anyone can send protocol fees to the pinned treasury; they are never paid to the caller." : "The contract currently permits this action.")}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section> : null}
+      {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || recoveryGuidance(snapshot, nextRecovery.kind, account)}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section> : null}
     </div>
   );
 }
@@ -485,23 +507,20 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
 }) {
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
   const sellerAvailability = sellerPortalActions(availability);
-  const ordered = SELLER_ACTION_KINDS.flatMap((kind) => {
-    const item = sellerAvailability.find((candidate) => candidate.kind === kind && candidate.enabled);
-    return item && item.kind !== "updateDraft" ? [item] : [];
-  });
   const next = sellerNextStep(snapshot, sellerAvailability);
   const primary = next.kind === "action" ? next.action : null;
-  const secondary = ordered.filter(item => item.kind !== primary?.kind);
+  const secondary = sellerSecondaryActions(snapshot, sellerAvailability, next);
   return (
     <div className="stack">
-      {primary ? <SellerActionControl key={primary.kind} primary browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section> : null}
+      {primary ? <SellerActionControl key={primary.kind} primary description={next.kind === "action" ? next.message : undefined} browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section> : null}
       {secondary.length ? <details className="workflow-details"><summary>Advanced ({secondary.length})</summary><div className="stack">{secondary.map((item) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />)}</div></details> : null}
     </div>
   );
 }
 
-function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, writesEnabled, writeDisabledReason, primary = false }: {
+function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, writesEnabled, writeDisabledReason, primary = false, description }: {
   primary?: boolean;
+  description?: string;
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   availability: SellerActionAvailability;
@@ -542,7 +561,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   const action: WorkflowAction = availability.kind === "snapshot"
     ? { kind: "snapshot", id: snapshot.id, maxSteps: 100n }
     : { kind: availability.kind, id: snapshot.id };
-  return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{availability.label}</h2><p>{availability.reason || "Review the prepared transaction before opening your wallet."}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={availability.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+  return <section className="workflow-next stack"><div><p className="kicker">Seller action</p><h2>{availability.label}</h2><p>{availability.reason || description || "Review the prepared transaction before opening your wallet."}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={availability.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
 }
 
 function OpeningPolicyControl({ browser, snapshot, onConfirmed, writesEnabled, writeDisabledReason }: {
@@ -586,15 +605,14 @@ function OpeningPolicyControl({ browser, snapshot, onConfirmed, writesEnabled, w
   return <section className="workflow-next stack"><div><h2>List your raffle</h2><p>Make memberships available to buyers. These fees are fixed once you list.</p></div><dl className="review-list"><div><dt>LABx approval</dt><dd>{admissionCopy(snapshot)}</dd></div><div><dt>Processing fee</dt><dd>Greater of {formatUsdc(policy.policy.minBuyerFeeUsdc)} USDC or {formatBps(policy.policy.buyerFeeBps)} per purchase call; retained after a successful purchase</dd></div><div><dt>Seller commission</dt><dd>{formatBps(policy.policy.sellerFeeBps)} at settlement only</dd></div></dl><TransactionFlow service={browser.service} wallet={browser.wallet} submitOnClick action={{ kind: "open", id: snapshot.id, expectedPolicyHash: policy.hash }} label="List" formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /><details className="workflow-details"><summary>Listing details</summary><dl className="review-list"><div><dt>Treasury</dt><dd className="hash">{policy.policy.treasury}</dd></div><div><dt>Coordinator</dt><dd className="hash">{policy.policy.coordinator}</dd></div><div><dt>Terms</dt><dd className="hash">{policy.policy.termsHash}</dd></div><div><dt>Payment</dt><dd>{policy.policy.nativePayment ? "Native VRF billing" : "LINK VRF billing"}</dd></div><div><dt>State block</dt><dd>{policy.block.number.toString()}</dd></div></dl><button className="text-link" type="button" onClick={() => setRetry(value => value + 1)}>Refresh policy review</button></details></section>;
 }
 
-function RecoveryAlternatives({ browser, snapshot, availability, onConfirmed, writesEnabled, writeDisabledReason }: {
-  browser: Extract<BrowserService, { kind: "configured" }>; snapshot: RaffleSnapshot;
+function RecoveryAlternatives({ browser, snapshot, account, availability, onConfirmed, writesEnabled, writeDisabledReason }: {
+  browser: Extract<BrowserService, { kind: "configured" }>; snapshot: RaffleSnapshot; account: AccountRaffleState | null;
   availability: readonly ActionAvailability[]; onConfirmed: () => Promise<void>;
   writesEnabled: boolean; writeDisabledReason?: string;
 }) {
-  const kinds = ["settle", "cancel", "abortDrawing", "refund", "reclaimPrize"] as const;
-  const primaryKind = (["claimPrize", "refund", "abortDrawing", "settle", "cancel", "close", "snapshot", "requestRandomness", "claimFee"] as const)
-    .map(kind => availability.find(item => item.kind === kind && item.enabled)).find(item => item?.enabled)?.kind;
-  const actions = kinds.flatMap(kind => { const item = availability.find(item => item.kind === kind && item.enabled && item.kind !== primaryKind); return item ? [{ ...item, kind }] : []; });
+  const kinds = ["settle", "cancel", "abortDrawing", "refund", "reclaimPrize", "claimFee"] as const;
+  const [, ...others] = publicRecoveryActions(snapshot, availability, account);
+  const actions = kinds.flatMap(kind => others.filter(item => item.kind === kind).map(item => ({ ...item, kind })));
   if (!actions.length) return null;
   return <section className="workflow-details stack" aria-label="Other available actions"><h3>Available recovery and settlement</h3><p>These actions do not require commitment recovery.</p>{actions.map(item => <TransactionFlow key={item.kind} service={browser.service} wallet={browser.wallet} action={{ kind: item.kind, id: snapshot.id }} label={item.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} />)}</section>;
 }

@@ -85,12 +85,12 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
     if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
     await trigger.click();
-    const confirm = fixture.page.getByRole("button", { name: `Confirm ${label.toLowerCase()}`, exact: true });
+    const confirm = fixture.page.getByRole("button", { name: `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`, exact: true });
     await confirm.waitFor({ state: "visible", timeout: 15_000 });
     const review = confirm.locator("xpath=ancestor::section[contains(@class, 'transaction-review')]");
     const reviewed = await review.innerText();
     const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });
-    await review.getByRole("button", { name: `Confirm ${label.toLowerCase()}`, exact: true }).click();
+    await review.getByRole("button", { name: `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`, exact: true }).click();
     await expect.poll(async () => chain.client.getBlockNumber({ cacheTime: 0 }), { timeout: 15_000 }).toBeGreaterThan(blockBeforeSubmit);
     await fixture.page.waitForTimeout(250);
     await expect.poll(async () => {

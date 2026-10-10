@@ -26,7 +26,7 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     if (!r.snapshotted) add("snapshot", "Freeze next entries", true, "");
     else add("requestRandomness", "Start draw", r.snapshotTotal > 0n && now < r.salesEnd + snapshot.drawStartGrace, "Anyone can start a completed nonempty draw before its deadline.");
   }
-  if (r.phase === 1 || r.phase === 2) add("cancel", "Enable refunds", now >= r.salesEnd + snapshot.drawStartGrace || (seller || operator) && (snapshot.lotCount === 0n || r.phase === 2 && r.snapshotted && r.snapshotTotal === 0n), "Purchased memberships prevent discretionary cancellation. Timed recovery becomes available after the draw-start deadline.");
+  if (r.phase === 1 || r.phase === 2) add("cancel", snapshot.lotCount === 0n ? "Cancel raffle" : "Enable refunds", now >= r.salesEnd + snapshot.drawStartGrace || (seller || operator) && (snapshot.lotCount === 0n || r.phase === 2 && r.snapshotted && r.snapshotTotal === 0n), "Purchased memberships prevent discretionary cancellation. Timed recovery becomes available after the draw-start deadline.");
   if (r.phase === 3) add("abortDrawing", "Enable refunds", now >= r.vrfRequestedAt + snapshot.randomnessGrace, "Wait until the fixed randomness deadline.");
   if (r.phase >= 1 && r.phase <= 4 && !r.revealed) add("reveal", "Reveal commitment", seller || operator, "Only the seller or operator can reveal a matching commitment.");
   if (r.phase === 4) add("settle", "Settle raffle", r.revealed || now >= r.drawnAt + snapshot.revealGrace, "Settlement is available after reveal or the seven-day grace.");

@@ -26,7 +26,7 @@ export function DrawProgress({ service, snapshot }: { service: RaffleService; sn
   return <section className="well pad stack" aria-labelledby="draw-progress-title"><h2 id="draw-progress-title">Draw progress</h2><dl className="review-list">
     <div><dt>Sales close</dt><dd>{deadline(r.salesEnd)}</dd></div>
     {(r.phase === 1 || r.phase === 2) && <div><dt>Draw-start recovery</dt><dd>{deadline(r.salesEnd + snapshot.drawStartGrace)}</dd></div>}
-    {r.phase >= 2 && <><div><dt>Snapshot progress</dt><dd>{r.lotCursor.toString()} / {snapshot.lotCount.toString()} lots processed{r.snapshotted ? " · Complete" : " · In progress"}</dd></div><div><dt>Eligible bonus entries</dt><dd>{r.snapshotTotal.toString()}{!r.snapshotted ? " so far" : ""}</dd></div></>}
+    {r.phase >= 2 && (r.phase !== 6 || r.snapshotted || r.lotCursor > 0n) && <><div><dt>Snapshot progress</dt><dd>{r.lotCursor.toString()} / {snapshot.lotCount.toString()} lots processed{r.snapshotted ? " · Complete" : r.phase === 6 ? " · Stopped at cancellation" : " · In progress"}</dd></div><div><dt>Eligible bonus entries</dt><dd>{r.snapshotTotal.toString()}{!r.snapshotted && r.phase !== 6 ? " so far" : ""}</dd></div></>}
     {r.phase === 3 && <div><dt>Randomness cutoff</dt><dd>{deadline(r.vrfRequestedAt + snapshot.randomnessGrace)}</dd></div>}
     {r.phase === 4 && <div><dt>Settlement without reveal</dt><dd>{deadline(r.drawnAt + snapshot.revealGrace)}</dd></div>}
     {r.winner !== zeroAddress && <div><dt>Drawn wallet</dt><dd className="hash">{r.winner}</dd></div>}

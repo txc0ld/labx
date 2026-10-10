@@ -7,6 +7,7 @@ import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, Wor
 import { useTransactionOutcomes } from "./useTransactionOutcomes";
 import { sameSubmittedIntent, type TransactionOutcome } from "@/lib/chain/transaction-outcomes";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
+import { lowerFirst } from "./format";
 
 type TransactionState =
   | { kind: "idle" }
@@ -85,6 +86,9 @@ type FlowContext = {
 };
 
 type Operation = { scope: number; id: number };
+
+// Calls that only change raffle state. Their prepared recipient is the contract default, not a payee, so the review names the called contract.
+const CONTRACT_CALL_KINDS = new Set<WorkflowAction["kind"]>(["createDraft", "updateDraft", "approveRaffle", "revokeRaffleApproval", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing"]);
 
 function actionReview(action: WorkflowAction) {
   if (action.kind !== "approveUsdc" && action.kind !== "buyMembership") return null;
@@ -333,15 +337,15 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
           {actionReview(state.prepared.action)}
           <div><dt>Wallet</dt><dd>{shortAddress(state.prepared.account)}</dd></div>
           <div><dt>Network</dt><dd>Chain {state.prepared.chainId}</dd></div>
-          <div><dt>Amount</dt><dd>{formatUsdc(state.prepared.amountUsdc)} USDC</dd></div>
+          {state.prepared.amountUsdc > 0n ? <div><dt>Amount</dt><dd>{formatUsdc(state.prepared.amountUsdc)} USDC</dd></div> : null}
           {state.prepared.value > 0n ? <div><dt>Maximum ETH</dt><dd>{formatEther(state.prepared.value)} ETH</dd></div> : null}
-          <div><dt>Recipient</dt><dd className="hash">{state.prepared.recipient}</dd></div>
+          {CONTRACT_CALL_KINDS.has(state.prepared.action.kind) ? <div><dt>Contract</dt><dd className="hash">{state.prepared.to}</dd></div> : <div><dt>Recipient</dt><dd className="hash">{state.prepared.recipient}</dd></div>}
         </dl>
         {stale ? <p className="notice error" role="alert">Wallet or network changed. Prepare this action again.</p> : null}
         <details><summary>Transaction details</summary><p className="hash">Contract {state.prepared.to}</p></details>
         <div className="btn-row">
-          <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(state.prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : `Confirm ${label.toLowerCase()}`}</button>
-          <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Cancel</button>
+          <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(state.prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : `Confirm ${lowerFirst(label)}`}</button>
+          <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Back</button>
         </div>
       </section>
     );
@@ -357,7 +361,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     );
   }
   if (state.kind === "receipt") {
-    return <div className="transaction-state notice stack" role="status"><strong>Recovered transaction receipt</strong><span>{state.confirmation.receipt.status === "success" ? "The recovered transaction succeeded" : "The recovered transaction reverted"} in block {state.confirmation.receipt.blockNumber.toString()}.</span><p>This receipt does not confirm the current {label.toLowerCase()} action.</p><p className="hash">{state.confirmation.hash}</p><button className="btn" type="button" disabled={disabled || activeOutcome} onClick={() => { ownSubmission.current = null; setCurrent(context.current, { kind: "idle" }); }}>Review this action</button></div>;
+    return <div className="transaction-state notice stack" role="status"><strong>Recovered transaction receipt</strong><span>{state.confirmation.receipt.status === "success" ? "The recovered transaction succeeded" : "The recovered transaction reverted"} in block {state.confirmation.receipt.blockNumber.toString()}.</span><p>This receipt does not confirm the current {lowerFirst(label)} action.</p><p className="hash">{state.confirmation.hash}</p><button className="btn" type="button" disabled={disabled || activeOutcome} onClick={() => { ownSubmission.current = null; setCurrent(context.current, { kind: "idle" }); }}>Review this action</button></div>;
   }
   if (state.kind === "confirmed") {
     return <div className="transaction-state notice ok stack" role="status"><strong>Confirmed</strong><span>Confirmed in block {state.confirmation.blockNumber.toString()}.</span><p className="hash">{state.confirmation.hash}</p></div>;

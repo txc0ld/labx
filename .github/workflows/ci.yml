@@ -69,7 +69,7 @@ jobs:
 
   browser-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: web
@@ -114,6 +114,7 @@ jobs:
             test/independent-create-selection-race.browser.test.ts \
             test/independent-complete-create-race.browser.test.ts \
             test/independent-owner-export-rejection-race.browser.test.ts \
+            test/independent-empty-raffle-recovery.browser.test.ts \
             --maxWorkers=1
         env:
           RUN_BROWSER_ACCEPTANCE: "1"
@@ -136,5 +137,6 @@ jobs:
           RUN_INDEPENDENT_CREATE_SELECTION_RACE: "1"
           RUN_INDEPENDENT_COMPLETE_CREATE_RACE: "1"
           RUN_INDEPENDENT_OWNER_EXPORT_REJECTION_RACE: "1"
+          RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER: "1"
           LABX_WALLET_NFT_EVIDENCE_DIR: "../artifacts/wallet-nft-picker"
           LABX_SELLER_SIMPLIFICATION_EVIDENCE_DIR: "../artifacts/seller-simplification"

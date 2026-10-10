@@ -92,7 +92,7 @@ run("independent buyer state journeys", () => {
     await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
     const approvalText = await approvalReview.innerText();
     expect(approvalText).toContain("88.5 USDC");
-    await approvalReview.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+    await approvalReview.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
 
     await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBe(88_500_000n);
     await fixture.page.waitForTimeout(500);
@@ -164,7 +164,7 @@ run("independent buyer state journeys", () => {
       }
       await route.continue();
     });
-    await review.getByRole("button", { name: "Confirm approve exact usdc", exact: true }).click();
+    await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
     await expect.poll(() => held.length, { timeout: 10_000 }).toBeGreaterThan(0);
 
     await fixture.switchAccount(chain.treasury);
