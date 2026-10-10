@@ -112,7 +112,8 @@ async function cleanupBrowserFailure(browser: Awaited<ReturnType<typeof chromium
   return cleanupFailure(server, failure);
 }
 
-export async function browserChain(chain: LocalChain, initialAccount: Address = chain.seller, mineConfirmation = true) {
+/** env adds or overrides variables for this fixture's dev server only, such as a public feature flag with its own LABX_NEXT_DIST_DIR. */
+export async function browserChain(chain: LocalChain, initialAccount: Address = chain.seller, mineConfirmation = true, env: Record<string, string> = {}) {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const output: string[] = [];
@@ -133,7 +134,8 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
         expectedPolicy: { ...chain.manifest.expectedPolicy, subscriptionId: chain.manifest.expectedPolicy.subscriptionId.toString(), minBuyerFeeUsdc: chain.manifest.expectedPolicy.minBuyerFeeUsdc.toString() }
       }),
       NEXT_PUBLIC_LOCAL_RPC_URL: chain.url,
-      NEXT_PUBLIC_SITE_URL: baseUrl
+      NEXT_PUBLIC_SITE_URL: baseUrl,
+      ...env
     },
     stdio: ["ignore", "pipe", "pipe"]
   });

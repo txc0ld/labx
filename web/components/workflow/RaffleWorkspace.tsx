@@ -9,8 +9,10 @@ import { decodeFunctionData, formatEther, zeroAddress, type Hex } from "viem";
 import { raffleAbi } from "@/lib/chain/abi";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { FEE_DENOMINATOR, sellerAccounting } from "@/lib/chain/fees";
-import type { ActionAvailability, AccountRaffleState, MembershipQuote, RaffleSnapshot, SubmittedAction, WorkflowAction } from "@/lib/chain/types";
-import { cancelGuidance, drawBlocker, RECLAIM_GUIDANCE, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
+import type { ActionAvailability, AccountRaffleState, Confirmation, MembershipQuote, RaffleSnapshot, SubmittedAction, WorkflowAction } from "@/lib/chain/types";
+import { cancelGuidance, cancelReclaimsPrize, drawBlocker, RECLAIM_GUIDANCE, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
+import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
+import { drawRunnerEnabled } from "@/lib/draw-runner";
 import { sameAddress } from "@/lib/chain/validation";
 import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";
@@ -247,9 +249,11 @@ function LoadedRaffle({ browser, snapshot, termsHash, availableActions, saveComm
     : refreshState.kind === "error" ? "Refresh the raffle before your next step." : undefined;
   const availabilityStatus = catalogAvailability(snapshot);
 
-  // Re-read silently only while nothing on the main path can be done: before the sales deadline, or while the draw result is pending.
+  // Re-read silently only while nothing on the main path can be done: before the sales deadline, while the draw result is pending,
+  // or while LABx runs the seller's next draw step.
   const waiting = phase === 1 && now < r.salesEnd && (mode === "seller" || !availabilityStatus.purchasable && publicRecoveryActions(snapshot, availability, currentAccount).length === 0)
-    || phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace;
+    || phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace
+    || mode === "seller" && drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true).kind === "automatic";
   const walletBusy = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "overflow");
   const shouldPoll = waiting && refreshState.kind === "idle" && !walletBusy;
   useEffect(() => {
@@ -708,16 +712,26 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   writeDisabledReason?: string;
   editDraft: ReactNode;
 }) {
+  // The cancellation this page just confirmed, so Reclaim NFT can follow it once. Kept only in memory: a reload never resumes it.
+  const [reclaimAfter, setReclaimAfter] = useState<{ id: bigint; block: bigint } | null>(null);
+  const loaded = account !== null;
+  useEffect(() => {
+    // The first loaded state at or after the cancellation either starts Reclaim NFT or ends the sequence.
+    if (reclaimAfter && loaded && snapshot.block.number >= reclaimAfter.block) setReclaimAfter(null);
+  }, [reclaimAfter, loaded, snapshot.block.number]);
   if (!account) return <WalletGate wallet={browser.wallet}><p className="notice" role="status">Loading seller controls…</p></WalletGate>;
   const sellerAvailability = sellerPortalActions(availability);
-  const next = sellerNextStep(snapshot, sellerAvailability);
+  const next = sellerNextStep(snapshot, sellerAvailability, drawRunnerEnabled());
   const primary = next.kind === "action" ? next.action : null;
+  const reclaimNow = primary?.kind === "reclaimPrize" && reclaimAfter !== null && reclaimAfter.id === snapshot.id && snapshot.block.number >= reclaimAfter.block;
   const secondary = sellerSecondaryActions(snapshot, sellerAvailability, next);
   const control = (item: SellerActionAvailability) => <SellerActionControl key={item.kind} browser={browser} snapshot={snapshot} availability={item} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />;
   const paid = Number(snapshot.raffle.phase) === 5 && snapshot.raffle.principalEscrow === 0n ? sellerAccounting(snapshot).paidProceeds : null;
   return (
     <div className="stack">
-      {primary ? <SellerActionControl key={primary.kind} primary description={next.kind === "action" ? next.message : undefined} browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} /> : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p>{paid !== null ? <p className="workflow-fact">Paid to you: {formatUsdcAmount(paid)} USDC</p> : null}</section> : null}
+      {primary ? <SellerActionControl key={primary.kind} primary description={next.kind === "action" ? next.message : undefined} browser={browser} snapshot={snapshot} availability={primary} recoverCommitment={recoverCommitment} onConfirmed={onConfirmed} onCancelled={block => setReclaimAfter({ id: snapshot.id, block })} submitOnMount={reclaimNow} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} />
+        : next.kind === "automatic" ? <><section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section><details className="workflow-details"><summary>Run it yourself</summary>{control(next.action)}</details></>
+        : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p>{paid !== null ? <p className="workflow-fact">Paid to you: {formatUsdcAmount(paid)} USDC</p> : null}</section> : null}
       {editDraft || secondary.length ? <div className="seller-more">
         {editDraft ? <details className="workflow-details"><summary>Edit draft</summary>{editDraft}</details> : null}
         {Number(snapshot.raffle.phase) === 0
@@ -728,7 +742,7 @@ function SellerActions({ browser, snapshot, account, availability, recoverCommit
   );
 }
 
-function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, writesEnabled, writeDisabledReason, primary = false, description }: {
+function SellerActionControl({ browser, snapshot, availability, recoverCommitment, onConfirmed, onCancelled, submitOnMount = false, writesEnabled, writeDisabledReason, primary = false, description }: {
   primary?: boolean;
   description?: string;
   browser: Extract<BrowserService, { kind: "configured" }>;
@@ -736,6 +750,10 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   availability: SellerActionAvailability;
   recoverCommitment?: RecoverCommitment;
   onConfirmed: () => Promise<void>;
+  /** Called with the block of a cancellation confirmed straight from its own click, when Reclaim NFT should follow. */
+  onCancelled?: (block: bigint) => void;
+  /** Send this step once on mount: the seller's click on the previous step asked for it. */
+  submitOnMount?: boolean;
   writesEnabled: boolean;
   writeDisabledReason?: string;
 }) {
@@ -755,7 +773,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
       setRecovered(value);
       setPreflight("idle");
     } catch (error) {
-      setPreflightError(error instanceof Error ? error.message : "The draw setup could not be loaded.");
+      setPreflightError(isWalletRequestRejected(error) ? "Cancelled in your wallet. Nothing was sent." : error instanceof Error ? error.message : "The draw setup could not be loaded.");
       setPreflight("error");
     } finally { preflightInFlight.current = false; }
   }
@@ -764,8 +782,10 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   if (availability.kind === "open") return <OpeningPolicyControl browser={browser} snapshot={snapshot} onConfirmed={onConfirmed} writesEnabled={writesEnabled && primary} writeDisabledReason={writeDisabledReason} />;
   if (availability.kind === "reveal") {
     if (!recoverCommitment) return <p className="notice warning" role="status">Draw setup recovery is not configured, so the draw cannot be confirmed here.</p>;
-    if (!recovered) return <section className="workflow-next stack"><div><h2>{availability.label}</h2><p>{sellerStepText(snapshot, "reveal")}</p></div><button className="btn" type="button" disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Waiting for signature…" : "Sign to continue"}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
-    return <section className="workflow-next stack"><div><h2>{availability.label}</h2><p>Draw setup loaded. Submit it to confirm the draw.</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label="Submit draw setup" formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+    const heading = <div><h2>{availability.label}</h2><p>{sellerStepText(snapshot, "reveal")}</p></div>;
+    if (!recovered) return <section className="workflow-next stack">{heading}<button className="btn" type="button" disabled={preflight === "loading" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recoverSavedCommitment()}>{preflight === "loading" ? "Waiting for signature…" : availability.label}</button>{preflight === "error" ? <p className="notice error" role="alert">{preflightError}</p> : null}</section>;
+    // One click: the signature above loaded the draw setup, so the confirmation goes straight to the wallet once. A retry needs a click.
+    return <section className="workflow-next stack">{heading}<TransactionFlow service={browser.service} wallet={browser.wallet} action={{ kind: "reveal", id: snapshot.id, publicHash: recovered.publicHash, privateHash: recovered.privateHash, salt: recovered.salt }} label={availability.label} submitOnClick submitOnMount formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
   }
   if (availability.kind === "updateDraft") return null;
   const action: WorkflowAction = availability.kind === "snapshot"
@@ -773,7 +793,12 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
     : { kind: availability.kind, id: snapshot.id };
   const label = availability.kind === "claimProceeds" ? `Claim ${formatUsdcAmount(snapshot.raffle.principalEscrow)} USDC` : availability.label;
   const fact = sellerActionFact(snapshot, availability.kind);
-  return <section className="workflow-next stack"><div><h2>{label}</h2><p>{availability.reason || description || sellerStepText(snapshot, availability.kind)}</p>{fact ? <p className="workflow-fact">{fact}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} submitOnClick={STATE_ONLY_KINDS.has(availability.kind)} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={label} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
+  // Reclaim NFT follows only a cancellation whose own click confirmed it. A rejection, revert or later check ends the sequence.
+  const reclaimNext = availability.kind === "cancel" && cancelReclaimsPrize(snapshot) ? onCancelled : undefined;
+  const confirmed = reclaimNext
+    ? async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, direct: boolean) => { if (direct) reclaimNext(confirmation.blockNumber); await onConfirmed(); }
+    : onConfirmed;
+  return <section className="workflow-next stack"><div><h2>{label}</h2><p>{availability.reason || description || sellerStepText(snapshot, availability.kind)}</p>{fact ? <p className="workflow-fact">{fact}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} submitOnClick={STATE_ONLY_KINDS.has(availability.kind)} submitOnMount={submitOnMount} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={label} formatUsdc={formatUsdcAmount} onConfirmed={confirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
 }
 
 function OpeningPolicyControl({ browser, snapshot, onConfirmed, writesEnabled, writeDisabledReason }: {

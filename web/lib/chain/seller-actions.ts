@@ -38,7 +38,9 @@ export function sellerOwnsRaffle(account: Address, snapshot: RaffleSnapshot): bo
 
 export type SellerNextStep =
   | { kind: "action"; action: SellerActionAvailability; message?: string }
-  | { kind: "waiting"; title: string; message: string };
+  | { kind: "waiting"; title: string; message: string }
+  // LABx runs this step itself. The seller can still run it from a closed disclosure.
+  | { kind: "automatic"; action: SellerActionAvailability; title: string; message: string };
 
 const DRAW_KINDS = new Set<SellerActionKind>(["close", "snapshot", "requestRandomness", "reveal"]);
 
@@ -61,6 +63,24 @@ export function cancelGuidance(snapshot: RaffleSnapshot, blocker: string, forSel
 
 export const RECLAIM_GUIDANCE = "The raffle is cancelled. Reclaim your NFT.";
 
+/** The seller's one click for an expired raffle that sold nothing: cancel it, then reclaim the NFT. */
+export const CANCEL_AND_RECLAIM = "Cancel and get NFT back";
+
+export function cancelReclaimsPrize(snapshot: RaffleSnapshot): boolean {
+  return snapshot.lotCount === 0n && drawBlocker(snapshot) !== null;
+}
+
+const RUNNER_DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
+const RUNNER_SETTLE = "LABx finishes the raffle automatically after you confirm the draw.";
+
+/** Permissionless draw steps the draw runner sends. Confirming the draw, claims, cancellation and reclaim stay with the seller. */
+const RUNNER_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) => { title: string; message: string }>> = {
+  close: () => ({ title: "Sales ended", message: RUNNER_DRAW }),
+  snapshot: () => ({ title: "Sales closed", message: RUNNER_DRAW }),
+  requestRandomness: () => ({ title: "Entries counted", message: RUNNER_DRAW }),
+  settle: ({ raffle }) => ({ title: raffle.revealed ? "Draw confirmed" : "Winner drawn", message: RUNNER_SETTLE })
+};
+
 /** What a seller step does, in the words its card uses. */
 export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind): string {
   switch (kind) {
@@ -79,7 +99,15 @@ export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind)
   }
 }
 
-export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[]): SellerNextStep {
+/** The seller's next step. With the draw runner on, LABx's own draw steps become automatic. */
+export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], runner = false): SellerNextStep {
+  const next = manualNextStep(snapshot, actions);
+  if (!runner || next.kind !== "action") return next;
+  const automatic = RUNNER_STEPS[next.action.kind]?.(snapshot);
+  return automatic ? { kind: "automatic", action: next.action, ...automatic } : next;
+}
+
+function manualNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[]): SellerNextStep {
   const { raffle, block } = snapshot;
   const waiting = (title: string, message: string): SellerNextStep => ({ kind: "waiting", title, message });
   const enabled = (kind: SellerActionKind) => actions.find(item => item.kind === kind && item.enabled);
@@ -94,7 +122,10 @@ export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly Selle
   const blocker = drawBlocker(snapshot);
   if (blocker) {
     const cancel = enabled("cancel");
-    return cancel ? { kind: "action", action: cancel, message: cancelGuidance(snapshot, blocker) } : waiting("Draw cannot start", blocker);
+    if (!cancel) return waiting("Draw cannot start", blocker);
+    return cancelReclaimsPrize(snapshot)
+      ? { kind: "action", action: { ...cancel, label: CANCEL_AND_RECLAIM }, message: `${blocker} Cancel the raffle and get your NFT back. Your wallet asks you to confirm twice.` }
+      : { kind: "action", action: cancel, message: cancelGuidance(snapshot, blocker) };
   }
   switch (raffle.phase) {
     case 0:
@@ -131,7 +162,7 @@ export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly Selle
 
 /** Enabled seller actions other than the next step, in portal order. Draw controls are dropped once no draw can happen. */
 export function sellerSecondaryActions(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], next: SellerNextStep): readonly SellerActionAvailability[] {
-  const primary = next.kind === "action" ? next.action.kind : null;
+  const primary = next.kind === "waiting" ? null : next.action.kind;
   const blocked = drawBlocker(snapshot) !== null;
   return SELLER_ACTION_KINDS.flatMap(kind => {
     const item = actions.find(candidate => candidate.kind === kind && candidate.enabled);

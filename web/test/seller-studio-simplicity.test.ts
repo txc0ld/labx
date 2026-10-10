@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, erc721Abi, keccak256, toBytes, zeroAddress, zeroHash, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { encodeDraft, finishCreate, type CreateRecord } from "../lib/chain/create-flow";
@@ -191,15 +191,41 @@ describe("Studio card next step", () => {
     expect(cardNextStep(raffleSnapshot({ phase: 5 }), SELLER)).toMatchObject({ label: "View" });
   });
 
-  it("offers Cancel raffle for an unsold raffle and Enable refunds once memberships sold", () => {
+  it("offers Cancel and get NFT back for an unsold raffle and Enable refunds once memberships sold", () => {
     const expired = NOW - 604_800n;
-    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: expired }), SELLER)).toMatchObject({ label: "Cancel raffle" });
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: expired }), SELLER)).toEqual({ label: "Cancel and get NFT back", status: "No memberships were sold." });
     expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: expired, lotCount: 2n }), SELLER)).toMatchObject({ label: "Enable refunds" });
     expect(cardNextStep(raffleSnapshot({ phase: 6 }), SELLER)).toEqual({ label: "Reclaim NFT", status: "Raffle cancelled" });
   });
 
   it("does not offer Finish creating for an expired draft", () => {
     expect(cardNextStep(raffleSnapshot({ phase: 0, escrowed: false, salesEnd: NOW }), SELLER)).toMatchObject({ label: "View" });
+  });
+
+  it("leaves closing, counting, starting and finishing to LABx when the draw runner is on", () => {
+    const draw = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
+    const closing = raffleSnapshot({ phase: 1, salesEnd: NOW, lotCount: 3n });
+    const counting = raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n });
+    const starting = raffleSnapshot({ phase: 2, salesEnd: NOW, lotCount: 3n, snapshotted: true, snapshotTotal: 3n });
+    const finishing = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, lotCount: 3n, revealed: true });
+    for (const value of [closing, counting, starting]) expect(cardNextStep(value, SELLER, true)).toEqual({ label: "View", status: draw });
+    expect(cardNextStep(finishing, SELLER, true)).toEqual({ label: "View", status: "LABx finishes the raffle automatically after you confirm the draw." });
+    expect(cardNextStep(finishing, SELLER, false)).toEqual({ label: "Finish raffle", status: "Draw confirmed" });
+    const unconfirmed = raffleSnapshot({ phase: 4, salesEnd: NOW - 60n, lotCount: 3n });
+    expect(cardNextStep({ ...unconfirmed, raffle: { ...unconfirmed.raffle, drawnAt: NOW } }, SELLER, true)).toEqual({ label: "Confirm the draw", status: "Winner drawn" });
+    expect(cardNextStep(raffleSnapshot({ phase: 5, principalEscrow: 78_400_000n }), SELLER, true)).toEqual({ label: "Claim 78.40 USDC", status: "Raffle finished" });
+    expect(cardNextStep(raffleSnapshot({ phase: 6 }), SELLER, true)).toEqual({ label: "Reclaim NFT", status: "Raffle cancelled" });
+    expect(cardNextStep(raffleSnapshot({ phase: 1, salesEnd: NOW - 604_800n }), SELLER, true)).toMatchObject({ label: "Cancel and get NFT back" });
+  });
+
+  it("reads the draw runner flag and keeps manual steps when it is off", () => {
+    const closing = raffleSnapshot({ phase: 1, salesEnd: NOW, lotCount: 3n });
+    try {
+      vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", undefined);
+      expect(cardNextStep(closing, SELLER)).toEqual({ label: "Close sales", status: "Sales ended" });
+      vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", "1");
+      expect(cardNextStep(closing, SELLER)).toMatchObject({ label: "View" });
+    } finally { vi.unstubAllEnvs(); }
   });
 });
 
