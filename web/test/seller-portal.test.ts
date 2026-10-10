@@ -535,15 +535,16 @@ describe("seller next step with the draw runner", () => {
     }
 
     it("never waits past the reveal grace for the runner to finish a confirmed draw, even when the reveal time is unknown", () => {
-    const value = snapshot({ id: 1n, phase: 4 });
-    value.raffle.revealed = true;
-    value.raffle.drawnAt = value.block.timestamp - value.revealGrace - 1_800n;
-    const actions = currentSellerActions(value);
-    // A page-seen time of "now" would otherwise hold the automatic message for 30 more minutes.
-    expect(sellerNextStep(value, actions, true, value.block.timestamp)).toEqual({ kind: "action", action: actions.find(item => item.kind === "settle"), message: LATE });
-    expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.block.timestamp - 1n } }, actions, true, value.block.timestamp)).toMatchObject({ kind: "automatic", action: { kind: "settle" } });
-  });
-  it("gives finishing back at once when the Revealed event is more than 30 minutes old", () => {
+      const value = snapshot({ id: 1n, phase: 4 });
+      value.raffle.revealed = true;
+      value.raffle.drawnAt = value.block.timestamp - value.revealGrace - 1_800n;
+      const actions = currentSellerActions(value);
+      // A page-seen time of "now" would otherwise hold the automatic message for 30 more minutes.
+      expect(sellerNextStep(value, actions, true, value.block.timestamp)).toEqual({ kind: "action", action: actions.find(item => item.kind === "settle"), message: LATE });
+      expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.block.timestamp - 1n } }, actions, true, value.block.timestamp)).toMatchObject({ kind: "automatic", action: { kind: "settle" } });
+    });
+
+    it("gives finishing back at once when the Revealed event is more than 30 minutes old", () => {
       const value = loadedDraw();
       const revealedAt = value.block.timestamp - 1_800n;
       expect(sellerNextStep(value, currentSellerActions(value), true, revealedAt)).toEqual({ kind: "action", action: currentSellerActions(value).find(item => item.kind === "settle"), message: LATE });

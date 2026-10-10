@@ -724,6 +724,17 @@ describe("draw runner cron handler", () => {
     expect(body).toMatchObject({ ok: false, status: "deadline", sends: 0, items: [], nextCursor: "1" });
   });
 
+  it("counts a finished check with nothing to do as progress when a later raffle uses up the send window", async () => {
+    vi.useFakeTimers({ now: START });
+    const store = new MemoryStore();
+    const { chain, sent } = fakeChain({ 1: open(0n), 2: drawn() }, { readDelayMs: 16_000 });
+    const pending = call(chain, store, () => Date.now());
+    await vi.advanceTimersByTimeAsync(56_000);
+    const { body } = await pending;
+    expect(sent).toEqual([]);
+    expect(body).toMatchObject({ ok: true, status: "deadline", sends: 0, items: [], nextCursor: "2" });
+  });
+
   it("reports not ok when the scan reads nothing, even when the saved cursor sits below the low-water mark", async () => {
     vi.useFakeTimers({ now: START });
     const store = new MemoryStore();

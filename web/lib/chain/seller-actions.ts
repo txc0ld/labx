@@ -80,7 +80,8 @@ const RUNNER_LATE_AFTER = 30n * 60n;
 /**
  * Block time a runner step became due: sales end for closing, counting and starting the draw. Finishing an unconfirmed draw is due
  * at the end of the confirmation window. A confirmed draw is due at the draw, or at revealedAt if that is later: the block time of
- * the draw confirmation, so a late confirmation still gives LABx its 30 minutes.
+ * the draw confirmation, so a late confirmation still gives LABx its 30 minutes. It is never due later than the end of the
+ * confirmation window, when the runner may finish any drawn raffle.
  */
 function runnerDueAt({ raffle, revealGrace }: RaffleSnapshot, kind: SellerActionKind, revealedAt = 0n): bigint {
   if (kind !== "settle") return raffle.salesEnd;
