@@ -1,30 +1,60 @@
-import { keccak256, parseAbi, parseGwei, type Address, type Hex, type PrivateKeyAccount, type PublicClient } from "viem";
+import { keccak256, parseAbi, zeroAddress, type Address, type PrivateKeyAccount, type PublicClient } from "viem";
 import { raffleAbi } from "../chain/abi";
 import { actionBuilder } from "../chain/actions";
 import { createReader } from "../chain/reader";
 import { sameAddress } from "../chain/validation";
 import type { DeploymentManifest } from "../chain/types";
 import { mayNeedRunner, scanWindow } from "./decide";
+import { broadcastRefused, errorCategory, within } from "./errors";
 import type { DrawChain } from "./run";
 
-export const MAX_FEE_PER_GAS = parseGwei("50");
-const safeAbi = parseAbi(["function getOwners() view returns (address[])"]);
+/** Safe's module list starts and ends at this sentinel. */
+export const SAFE_SENTINEL: Address = "0x0000000000000000000000000000000000000001";
+const SAFE_MODULE_PAGE = 50n;
+/** The base addresses are depth 0. Owners and modules of a contract at depth 0 or 1 are read; addresses at depth 2 are listed but not expanded. */
+const SAFE_DEPTH = 2;
+const safeAbi = parseAbi([
+  "function getOwners() view returns (address[])",
+  "function getModulesPaginated(address start, uint256 pageSize) view returns (address[] array, address next)"
+]);
 
 type Client = Pick<PublicClient, "readContract" | "getCode">;
 
-/** Addresses the runner key must never belong to. Throws when a Safe owner list cannot be read. */
+/**
+ * Addresses the runner key must never belong to: the owner, pending owner, expected owner, current and pinned treasury,
+ * and the Safe owners and modules of any of them that has code, two levels down. Throws when any read fails, when a
+ * contract is not a readable Safe, or when a module list does not fit in one page.
+ */
 export async function privilegedAddresses(client: Client, manifest: DeploymentManifest, blockNumber: bigint): Promise<Address[]> {
   const base = { address: manifest.address, abi: raffleAbi, blockNumber } as const;
-  const [owner, treasury] = await Promise.all([
+  const [owner, pendingOwner, treasury] = await Promise.all([
     client.readContract({ ...base, functionName: "owner" }),
+    client.readContract({ ...base, functionName: "pendingOwner" }),
     client.readContract({ ...base, functionName: "treasury" })
   ]);
-  const result: Address[] = [owner, manifest.expectedOwner, treasury, manifest.expectedPolicy.treasury];
-  for (const candidate of sameAddress(owner, manifest.expectedOwner) ? [owner] : [owner, manifest.expectedOwner]) {
-    const code = await client.getCode({ address: candidate, blockNumber });
-    if (code && code !== "0x") result.push(...await client.readContract({ address: candidate, abi: safeAbi, functionName: "getOwners", blockNumber }));
+  const found: Address[] = [];
+  let level: readonly Address[] = [owner, pendingOwner, manifest.expectedOwner, treasury, manifest.expectedPolicy.treasury];
+  for (let depth = 0; ; depth++) {
+    const fresh: Address[] = [];
+    for (const candidate of level) {
+      if (!sameAddress(candidate, zeroAddress) && ![...found, ...fresh].some(item => sameAddress(item, candidate))) fresh.push(candidate);
+    }
+    found.push(...fresh);
+    if (depth === SAFE_DEPTH) return found;
+    level = (await Promise.all(fresh.map(candidate => safeControllers(client, candidate, blockNumber)))).flat();
   }
-  return result;
+}
+
+/** Owners and modules when the address has code, or nothing for an account without code. */
+async function safeControllers(client: Client, address: Address, blockNumber: bigint): Promise<readonly Address[]> {
+  const code = await client.getCode({ address, blockNumber });
+  if (!code || code === "0x") return [];
+  const [owners, [modules, next]] = await Promise.all([
+    client.readContract({ address, abi: safeAbi, functionName: "getOwners", blockNumber }),
+    client.readContract({ address, abi: safeAbi, functionName: "getModulesPaginated", args: [SAFE_SENTINEL, SAFE_MODULE_PAGE], blockNumber })
+  ]);
+  if (!sameAddress(next, SAFE_SENTINEL) && !sameAddress(next, zeroAddress)) throw new Error("A Safe has more modules than the runner reads.");
+  return [...owners, ...modules];
 }
 
 export function createDrawChain({ client, manifest, account }: { client: PublicClient; manifest: DeploymentManifest; account: PrivateKeyAccount }): DrawChain {
@@ -64,31 +94,29 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
       ]);
       return { latest, pending };
     },
-    async send(prepared, nonce) {
-      let hash: Hex | null = null;
+    async quote(prepared) {
+      const [fees, gas] = await Promise.all([
+        client.estimateFeesPerGas(),
+        client.estimateGas({ account: runner, to: prepared.to, data: prepared.data, value: 0n })
+      ]);
+      return { gasLimit: gas * 6n / 5n, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas };
+    },
+    async send(prepared, nonce, quote, timeoutMs) {
+      const serializedTransaction = await account.signTransaction({
+        type: "eip1559", chainId: manifest.chainId, to: prepared.to, data: prepared.data, value: 0n, nonce,
+        gas: quote.gasLimit, maxFeePerGas: quote.maxFeePerGas, maxPriorityFeePerGas: quote.maxPriorityFeePerGas
+      });
+      const hash = keccak256(serializedTransaction);
       try {
-        const fees = await client.estimateFeesPerGas();
-        if (fees.maxFeePerGas > MAX_FEE_PER_GAS) return { kind: "fee-cap" };
-        const gas = await client.estimateGas({ account: runner, to: prepared.to, data: prepared.data, value: 0n });
-        const signed = await account.signTransaction({
-          type: "eip1559", chainId: manifest.chainId, to: prepared.to, data: prepared.data, value: 0n, nonce,
-          gas: gas * 6n / 5n, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas
-        });
-        hash = keccak256(signed);
-        await client.sendRawTransaction({ serializedTransaction: signed });
+        await within(client.sendRawTransaction({ serializedTransaction }), timeoutMs);
         return { kind: "sent", hash };
-      } catch {
-        return { kind: "failed", hash };
+      } catch (error) {
+        return broadcastRefused(error) ? { kind: "refused", error: errorCategory(error) } : { kind: "unknown", hash, error: errorCategory(error) };
       }
     },
     async wait(hash, timeoutMs) {
-      if (timeoutMs <= 0) return "pending";
-      try {
-        const receipt = await client.waitForTransactionReceipt({ hash, timeout: timeoutMs });
-        return receipt.status === "success" ? "succeeded" : "reverted";
-      } catch {
-        return "pending";
-      }
+      const receipt = await within(client.waitForTransactionReceipt({ hash, timeout: timeoutMs }), timeoutMs);
+      return receipt.status === "success" ? "succeeded" : "reverted";
     }
   };
 }

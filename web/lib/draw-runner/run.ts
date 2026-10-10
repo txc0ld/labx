@@ -1,22 +1,39 @@
-import { parseEther, type Address, type Hex } from "viem";
+import { parseEther, parseGwei, type Address, type Hex } from "viem";
 import type { Store } from "../points";
 import type { PreparedAction, RaffleSnapshot } from "../chain/types";
 import { assertRunnerCall, nextRunnerAction, type RunnerAction } from "./decide";
+import { errorCategory, within, type ErrorCategory } from "./errors";
 
 export const RUN_MS = 56_000;
+/** All chain and store work ends this long before the run deadline, which leaves time for the cursor write and the report. */
+export const FINISH_RESERVE_MS = 4_000;
+/** A send starts only with at least this much of the run left, so its broadcast and receipt wait fit. */
+export const SEND_MIN_REMAINING_MS = 25_000;
+export const SEND_TIMEOUT_MS = 10_000;
+const CURSOR_WRITE_MS = 2_000;
 export const MAX_SENDS = 6;
 export const SCAN_LIMIT = 50;
 export const MIN_BALANCE = parseEther("0.01");
-const LEASE_BUCKET_MS = 60_000;
+export const MAX_FEE_PER_GAS = parseGwei("50");
+/** Largest gas limit the runner signs for each call. snapshot(100) measured about 4.9M gas; the others under 200k. */
+export const GAS_CAP: Readonly<Record<RunnerAction["kind"], bigint>> = { close: 400_000n, snapshot: 7_000_000n, requestRandomness: 400_000n, settle: 400_000n };
+/** The vercel.json schedule runs every five minutes on the clock. */
+export const LEASE_BUCKET_MS = 300_000;
 const CURSOR_KEY = "draw-runner:cursor";
 
-export type SendResult = { kind: "sent"; hash: Hex } | { kind: "fee-cap" } | { kind: "failed"; hash: Hex | null };
+export type Quote = { gasLimit: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
+export type SendResult =
+  | { kind: "sent"; hash: Hex }
+  /** The node answered with an error, so the transaction is in no pool. */
+  | { kind: "refused"; error: ErrorCategory }
+  /** The transaction may or may not be in a pool. */
+  | { kind: "unknown"; hash: Hex; error: ErrorCategory };
 
 /** Chain access for one run. The viem implementation lives in ./chain. */
 export type DrawChain = {
   runner: Address;
   contract: Address;
-  /** Contract owner, pinned treasury and Safe owners. Throws when any of them cannot be read. */
+  /** Owner, pending owner, treasuries, and the owners and modules of any of them that is a contract. Throws when any of them cannot be read. */
   privilegedAddresses(): Promise<readonly Address[]>;
   scan(cursor: bigint, limit: number): Promise<{ candidates: readonly bigint[]; nextCursor: bigint }>;
   read(id: bigint): Promise<RaffleSnapshot>;
@@ -24,63 +41,111 @@ export type DrawChain = {
   prepare(action: RunnerAction): Promise<PreparedAction>;
   balance(): Promise<bigint>;
   nonces(): Promise<{ latest: number; pending: number }>;
-  send(prepared: PreparedAction, nonce: number): Promise<SendResult>;
-  wait(hash: Hex, timeoutMs: number): Promise<"succeeded" | "reverted" | "pending">;
+  /** Current fees and a gas limit from a fresh estimate. Throws when the estimate fails, for example because someone else took the step. */
+  quote(prepared: PreparedAction): Promise<Quote>;
+  /** Signs with the quote and broadcasts, waiting at most timeoutMs for the node. */
+  send(prepared: PreparedAction, nonce: number, quote: Quote, timeoutMs: number): Promise<SendResult>;
+  /** Throws when no receipt arrives within timeoutMs. */
+  wait(hash: Hex, timeoutMs: number): Promise<"succeeded" | "reverted">;
 };
 
-export type RunOutcome = "succeeded" | "reverted" | "pending" | "failed" | "skipped";
-export type RunItem = { id: string; action: RunnerAction["kind"]; hash: Hex | null; outcome: RunOutcome };
+export type RunOutcome = "succeeded" | "reverted" | "unknown" | "failed" | "skipped" | "low-funds" | "gas-cap";
+export type RunItem = { id: string; action: RunnerAction["kind"]; hash: Hex | null; outcome: RunOutcome; error: ErrorCategory | null };
 export type RunStatus = "complete" | "busy" | "send-cap" | "deadline" | "low-funds" | "fee-cap" | "pending-transaction" | "send-failed" | "interrupted";
 export type RunReport = { status: RunStatus; runner: Address; sends: number; items: RunItem[]; nextCursor: string | null };
 
+/**
+ * Lease keys for every five-minute bucket that [start, deadline] touches. Two runs whose intervals share an instant
+ * both hold that instant's bucket, so the atomic setIfAbsent lets only one of them run. A run that starts on schedule
+ * ends inside its own bucket and writes one row.
+ */
+export function leaseKeys(start: number, deadline: number): string[] {
+  const first = Math.floor(start / LEASE_BUCKET_MS), last = Math.floor(deadline / LEASE_BUCKET_MS);
+  return Array.from({ length: last - first + 1 }, (_, offset) => `draw-runner:lease:5m:${first + offset}`);
+}
+
+/** Balance a send needs: every unit of its gas limit at the maximum fee, plus a tenth for fee movement before it lands. */
+export function requiredBalance(quote: Quote): bigint {
+  return quote.gasLimit * quote.maxFeePerGas * 11n / 10n;
+}
+
 export async function runDraw({ chain, store, now, deadline }: { chain: DrawChain; store: Store; now: () => number; deadline: number }): Promise<RunReport> {
-  const bucket = Math.floor(now() / LEASE_BUCKET_MS), started = new Date(now()).toISOString();
-  // A run lasts under one bucket, so holding this bucket and the next excludes every overlapping run.
-  const leased = await store.setIfAbsent({ [`draw-runner:lease:${bucket}`]: started, [`draw-runner:lease:${bucket + 1}`]: started });
+  const workEnd = deadline - FINISH_RESERVE_MS;
+  const bounded = <T>(work: Promise<T>) => within(work, workEnd - now());
+  const started = now();
+  const leased = await bounded(store.setIfAbsent(Object.fromEntries(leaseKeys(started, deadline).map(key => [key, new Date(started).toISOString()]))));
   const report: RunReport = { status: "complete", runner: chain.runner, sends: 0, items: [], nextCursor: null };
   if (!leased) return { ...report, status: "busy" };
-  if (await chain.balance() < MIN_BALANCE) return { ...report, status: "low-funds" };
+  if (await bounded(chain.balance()) < MIN_BALANCE) return { ...report, status: "low-funds" };
 
-  const saved = await store.get(CURSOR_KEY);
-  const scan = await chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT);
+  const saved = await bounded(store.get(CURSOR_KEY));
+  const scan = await bounded(chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT));
   let nextCursor = scan.nextCursor;
   const stop = (status: RunStatus, id: bigint) => { report.status = status; nextCursor = id; };
   raffles: for (const id of scan.candidates) {
+    const record = (action: RunnerAction, hash: Hex | null, outcome: RunOutcome, error: ErrorCategory | null) => {
+      report.items.push({ id: id.toString(), action: action.kind, hash, outcome, error });
+    };
     try {
       for (;;) {
-        if (now() >= deadline) { stop("deadline", id); break raffles; }
-        const action = nextRunnerAction(await chain.read(id), chain.runner);
+        if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
+        const action = nextRunnerAction(await bounded(chain.read(id)), chain.runner);
         if (!action) break;
         if (report.sends >= MAX_SENDS) { stop("send-cap", id); break raffles; }
         let prepared: PreparedAction;
         try {
-          prepared = await chain.prepare(action);
+          prepared = await bounded(chain.prepare(action));
           assertRunnerCall(prepared, action, chain.contract);
-        } catch {
-          report.items.push({ id: id.toString(), action: action.kind, hash: null, outcome: "skipped" });
+        } catch (error) {
+          // The step no longer applies, or it could not be checked. A revert or a refusal carries no label.
+          const category = errorCategory(error);
+          record(action, null, "skipped", category === "Other" ? null : category);
           break;
         }
-        if (await chain.balance() < MIN_BALANCE) { stop("low-funds", id); break raffles; }
-        const nonce = await chain.nonces();
-        if (nonce.pending !== nonce.latest) { stop("pending-transaction", id); break raffles; }
-        if (now() >= deadline) { stop("deadline", id); break raffles; }
-        const sent = await chain.send(prepared, nonce.pending);
-        if (sent.kind === "fee-cap") { stop("fee-cap", id); break raffles; }
-        report.sends++;
-        if (sent.kind === "failed") {
-          report.items.push({ id: id.toString(), action: action.kind, hash: sent.hash, outcome: "failed" });
-          stop("send-failed", id); break raffles;
+        let quote: Quote;
+        try {
+          quote = await bounded(chain.quote(prepared));
+        } catch (error) {
+          const category = errorCategory(error);
+          // Someone else took the step after the pinned simulation. Nothing was sent; go on to the next raffle.
+          if (category === "EstimateGasRevert") { record(action, null, "skipped", category); break; }
+          if (category === "InsufficientFunds") { record(action, null, "low-funds", category); break; }
+          record(action, null, "failed", category);
+          stop("interrupted", id + 1n); break raffles;
         }
-        const outcome = await chain.wait(sent.hash, deadline - now());
-        report.items.push({ id: id.toString(), action: action.kind, hash: sent.hash, outcome });
-        if (outcome === "pending") { stop("pending-transaction", id); break raffles; }
+        if (quote.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
+        if (quote.gasLimit > GAS_CAP[action.kind]) { record(action, null, "gas-cap", null); break; }
+        // An unaffordable step is left for a later run. Cheaper steps on later raffles still go ahead.
+        if (await bounded(chain.balance()) < requiredBalance(quote)) { record(action, null, "low-funds", null); break; }
+        const nonce = await bounded(chain.nonces());
+        if (nonce.pending !== nonce.latest) { stop("pending-transaction", id); break raffles; }
+        if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
+        const sent = await chain.send(prepared, nonce.pending, quote, Math.min(SEND_TIMEOUT_MS, workEnd - now()));
+        if (sent.kind === "refused") {
+          if (sent.error === "InsufficientFunds") { record(action, null, "low-funds", sent.error); break; }
+          record(action, null, "failed", sent.error);
+          stop("send-failed", id + 1n); break raffles;
+        }
+        report.sends++;
+        if (sent.kind === "unknown") {
+          record(action, sent.hash, "unknown", sent.error);
+          stop("pending-transaction", id); break raffles;
+        }
+        let outcome: "succeeded" | "reverted";
+        try {
+          outcome = await bounded(chain.wait(sent.hash, workEnd - now()));
+        } catch (error) {
+          record(action, sent.hash, "unknown", errorCategory(error));
+          stop("pending-transaction", id); break raffles;
+        }
+        record(action, sent.hash, outcome, null);
         if (outcome === "reverted") break;
       }
     } catch {
-      // A read failed. Resume after this raffle so one unreadable raffle cannot stall the scan.
+      // A read failed or ran out of time. Resume after this raffle so one unreadable raffle cannot stall the scan.
       stop("interrupted", id + 1n); break;
     }
   }
-  try { await store.set(CURSOR_KEY, nextCursor.toString()); } catch { report.status = "interrupted"; }
+  try { await within(store.set(CURSOR_KEY, nextCursor.toString()), CURSOR_WRITE_MS); } catch { report.status = "interrupted"; }
   return { ...report, nextCursor: nextCursor.toString() };
 }
