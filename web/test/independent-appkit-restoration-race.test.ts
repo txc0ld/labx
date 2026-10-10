@@ -15,6 +15,7 @@ const sdk = vi.hoisted(() => ({
   walletConnectDisconnects: 0,
   walletConnectEmitEvents: true,
   walletConnectReplacement: undefined as object | undefined,
+  prePublicationGate: undefined as Promise<void> | undefined,
   changeSelectorOnAccountRead: 0,
   changeSelector: (_connector: string) => {},
   storageChange: (_key: string) => {}
@@ -34,6 +35,10 @@ vi.mock("@reown/appkit", async importOriginal => {
       protected override async injectModalUi() {}
       override async syncIdentity() {}
       protected override async syncBalance() {}
+      protected override async syncWalletConnectAccount() {
+        await sdk.prePublicationGate;
+        return super.syncWalletConnectAccount();
+      }
       protected override async initChainAdapters() {
         const { ConnectorController } = await import("@reown/appkit-controllers");
         const adapter = this.chainAdapters?.eip155 as EthersAdapter;
@@ -76,7 +81,8 @@ async function setupActualSdk(
   connector: "injected" | "walletConnect" = "injected",
   usageGate?: Promise<void>,
   liveAccount = account,
-  walletConnectAccounts = [liveAccount]
+  walletConnectAccounts = [liveAccount],
+  prePublicationGate?: Promise<void>
 ) {
   const localRecords = new Map<string, string>();
   const localStorage = {
@@ -100,6 +106,7 @@ async function setupActualSdk(
   sdk.walletConnectDisconnects = 0;
   sdk.walletConnectEmitEvents = true;
   sdk.walletConnectReplacement = undefined;
+  sdk.prePublicationGate = prePublicationGate;
   sdk.changeSelectorOnAccountRead = changeSelectorOnAccountRead;
   sdk.connectorId = connector === "walletConnect" ? "walletConnect" : "independent-injected";
   sdk.connectorType = connector === "walletConnect" ? "WALLET_CONNECT" : "INJECTED";
@@ -169,6 +176,7 @@ afterEach(() => {
   sdk.walletConnectDisconnects = 0;
   sdk.walletConnectEmitEvents = true;
   sdk.walletConnectReplacement = undefined;
+  sdk.prePublicationGate = undefined;
   sdk.changeSelectorOnAccountRead = 0;
   sdk.changeSelector = () => {};
   sdk.storageChange = () => {};
@@ -435,4 +443,44 @@ describe("independent installed AppKit restoration race", () => {
     expect(sdk.walletConnectDisconnects).toBe(0);
     expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
   });
+
+  it("locally releases a pre-publication SDK restore after a new Connect is cancelled", async () => {
+    const publication = (() => {
+      let resolve = () => {};
+      return { promise: new Promise<void>(yes => { resolve = yes; }), resolve };
+    })();
+    const methods = await setupActualSdk(0, "walletConnect", undefined, account, [account], publication.promise);
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const restoration = wallet.restore();
+    await vi.waitFor(() => expect(sdk.instance).toBeDefined());
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const open = vi.spyOn(appKit, "open");
+    const owner = {};
+
+    expect(appKit.getProvider("eip155")).toBeUndefined();
+    const connecting = wallet.connect({ owner });
+    void connecting.catch(() => {});
+    wallet.cancelConnection(owner);
+    wallet.dispose();
+
+    await new Promise(resolve => setTimeout(resolve, 20_250));
+    expect(open).not.toHaveBeenCalled();
+    publication.resolve();
+    await expect(restoration).resolves.toMatchObject({ kind: "disconnected" });
+    await expect(connecting).rejects.toThrow();
+    await vi.waitFor(() => {
+      expect(appKit.getProvider("eip155")).toBeUndefined();
+      expect(appKit.getAccount("eip155")?.isConnected).not.toBe(true);
+    });
+
+    expect(sdk.adapter?.getWalletConnectProvider()).toBe(sdk.provider);
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(open).not.toHaveBeenCalled();
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+  }, 35_000);
 });
