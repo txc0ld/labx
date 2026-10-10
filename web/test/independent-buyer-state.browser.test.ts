@@ -92,7 +92,7 @@ run("independent buyer state journeys", () => {
     await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
     const approvalText = await approvalReview.innerText();
     expect(approvalText).toContain("88.5 USDC");
-    await approvalReview.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
+    await approvalReview.getByRole("button", { name: "Confirm approval", exact: true }).click();
 
     await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBe(88_500_000n);
     await fixture.page.waitForTimeout(500);
@@ -115,7 +115,7 @@ run("independent buyer state journeys", () => {
     await purchaseReview.waitFor({ state: "visible", timeout: 10_000 });
     const purchaseText = await purchaseReview.innerText();
     expect(purchaseText).toContain("88.5 USDC");
-    await purchaseReview.getByRole("button", { name: "Confirm purchase membership", exact: true }).click();
+    await purchaseReview.getByRole("button", { name: "Confirm purchase", exact: true }).click();
 
     const confirmed = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Confirmed" });
     await confirmed.waitFor({ state: "visible", timeout: 15_000 });
@@ -164,7 +164,7 @@ run("independent buyer state journeys", () => {
       }
       await route.continue();
     });
-    await review.getByRole("button", { name: "Confirm approve exact USDC", exact: true }).click();
+    await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
     await expect.poll(() => held.length, { timeout: 10_000 }).toBeGreaterThan(0);
 
     await fixture.switchAccount(chain.treasury);
@@ -175,7 +175,7 @@ run("independent buyer state journeys", () => {
       .toContain(`${chain.treasury.slice(0, 6)}…${chain.treasury.slice(-4)}`);
     await fixture.page.waitForTimeout(250);
 
-    expect(await fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Confirmed" }).count()).toBe(0);
+    expect(await fixture.page.locator(".buyer-flow .transaction-state", { hasText: /Done\.|Confirmed/ }).count()).toBe(0);
     expect(await fixture.page.locator(".buyer-flow [role=alert]").allInnerTexts()).toEqual([]);
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   }, 45_000);

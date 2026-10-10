@@ -540,6 +540,8 @@ run("rendered seller portal on isolated Anvil", () => {
     await start.click();
     const review = fixture.page.locator(".transaction-review");
     await review.waitFor({ state: "visible" });
+    expect(await review.innerText()).toContain(`LABx raffle ${chain.raffle.address.slice(0, 6)}…${chain.raffle.address.slice(-4)}`);
+    await review.locator("summary", { hasText: "Transaction details" }).click();
     expect(await review.innerText()).toContain(chain.raffle.address);
     await review.getByRole("button", { name: "Confirm start draw", exact: true }).click();
     await expect.poll(async () => (await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "getRaffle", args: [29n] })).phase, { timeout: 15_000 }).toBe(3);

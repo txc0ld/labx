@@ -78,14 +78,17 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     return review.locator(".review-list > div").evaluateAll(rows => rows.map(row => [row.querySelector("dt")?.textContent ?? "", row.querySelector("dd")?.textContent ?? ""] as const));
   }
 
-  /** Opens the review from `trigger` and returns the exact confirm button and its review rows. */
+  /** Opens the review from `trigger` and returns the exact confirm button, its review rows and its opened Transaction details. */
   async function openReview(trigger: Locator, confirmName: string) {
     await trigger.click();
     const confirm = fixture.page.getByRole("button", { name: confirmName, exact: true });
     await confirm.waitFor({ state: "visible", timeout: 15_000 });
     const review = confirm.locator("xpath=ancestor::section[contains(@class, 'transaction-review')]");
-    return { confirm, rows: await reviewRows(review) };
+    const rows = await reviewRows(review);
+    await review.locator("summary", { hasText: "Transaction details" }).click();
+    return { confirm, rows, details: await review.locator("details").innerText() };
   }
+  const short = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
   async function confirmReview(confirm: Locator) {
     const before = await chain.client.getBlockNumber({ cacheTime: 0 });
@@ -93,7 +96,7 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     await expect.poll(async () => chain.client.getBlockNumber({ cacheTime: 0 }), { timeout: 15_000 }).toBeGreaterThan(before);
     await expect.poll(async () => {
       const states = await fixture.page.locator(".transaction-state").allInnerTexts();
-      return await confirm.count() === 0 && !states.some((text: string) => /Transaction submitted|Waiting for wallet|Checking confirmation/i.test(text));
+      return await confirm.count() === 0 && !states.some((text: string) => /Transaction submitted|Waiting for wallet|Checking confirmation|Confirming|Finishing your last step/i.test(text));
     }, { timeout: 15_000 }).toBe(true);
     const alerts = (await fixture.page.locator(".notice.error[role=alert], .transaction-state[role=alert]").allInnerTexts()).map((text: string) => text.trim()).filter(Boolean);
     expect(alerts).toEqual([]);
@@ -189,10 +192,12 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     expect(await buttonCount("Close sales")).toBe(0);
     expect(await buttonCount("Freeze next entries")).toBe(0);
 
-    const { confirm, rows } = await openReview(primary.getByRole("button", { name: "Cancel raffle", exact: true }), "Confirm cancel raffle");
+    const { confirm, rows, details } = await openReview(primary.getByRole("button", { name: "Cancel raffle", exact: true }), "Confirm cancel raffle");
     expect(rows.map(([term]) => term)).toEqual(["Wallet", "Network", "Contract"]);
     expect(rows.find(([term]) => term === "Wallet")?.[1]).toBe(`${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)}`);
-    expect(rows.find(([term]) => term === "Contract")?.[1].toLowerCase()).toBe(chain.raffle.address.toLowerCase());
+    expect(rows.find(([term]) => term === "Network")?.[1]).toBe("Isolated local chain");
+    expect(rows.find(([term]) => term === "Contract")?.[1]).toBe(`LABx raffle ${short(chain.raffle.address)}`);
+    expect(details.toLowerCase()).toContain(`contract ${chain.raffle.address.toLowerCase()}`);
     await confirmReview(confirm);
     await expect.poll(async () => (await service.readRaffle({ id: expiredId })).raffle.phase, { timeout: 15_000 }).toBe(6);
     expect(await ownerOf(1001n)).toBe(chain.raffle.address);
@@ -207,9 +212,10 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
     expect(await fixture.page.locator("summary").filter({ hasText: "Advanced (" }).count()).toBe(0);
     expect(await drawProgressTerms()).not.toContain("Snapshot progress");
 
-    const { confirm, rows } = await openReview(primary.getByRole("button", { name: "Reclaim NFT", exact: true }), "Confirm reclaim NFT");
+    const { confirm, rows, details } = await openReview(primary.getByRole("button", { name: "Reclaim NFT", exact: true }), "Confirm reclaim NFT");
     expect(rows.map(([term]) => term)).toEqual(["Wallet", "Network", "Recipient"]);
-    expect(rows.find(([term]) => term === "Recipient")?.[1].toLowerCase()).toBe(chain.seller.toLowerCase());
+    expect(rows.find(([term]) => term === "Recipient")?.[1]).toBe(`Your wallet ${short(chain.seller)}`);
+    expect(details.toLowerCase()).toContain(`recipient ${chain.seller.toLowerCase()}`);
     await confirmReview(confirm);
     await expect.poll(async () => ownerOf(1001n), { timeout: 15_000 }).toBe(chain.seller);
     expect((await service.readRaffle({ id: expiredId })).raffle.escrowed).toBe(false);
@@ -307,7 +313,8 @@ describe.runIf(process.env.RUN_INDEPENDENT_EMPTY_RECOVERY_BROWSER === "1")("inde
 
     const reclaimed = await openReview(reclaimNow.getByRole("button", { name: "Reclaim NFT", exact: true }), "Confirm reclaim NFT");
     expect(reclaimed.rows.map(([term]) => term)).toEqual(["Wallet", "Network", "Recipient"]);
-    expect(reclaimed.rows.find(([term]) => term === "Recipient")?.[1].toLowerCase()).toBe(chain.seller.toLowerCase());
+    expect(reclaimed.rows.find(([term]) => term === "Recipient")?.[1]).toBe(`Your wallet ${short(chain.seller)}`);
+    expect(reclaimed.details.toLowerCase()).toContain(`recipient ${chain.seller.toLowerCase()}`);
     expect(await noOverflow()).toBe(true);
     await confirmReview(reclaimed.confirm);
     await expect.poll(async () => ownerOf(1003n), { timeout: 15_000 }).toBe(chain.seller);

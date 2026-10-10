@@ -79,24 +79,25 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await fixture.page.locator(".chain-piece").waitFor({ state: "visible", timeout: 10_000 });
   }
 
-  async function transact(label: string) {
+  async function transact(label: string, confirmName = `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`) {
     const trigger = fixture.page.getByRole("button", { name: label, exact: true }).first();
     const secondary = fixture.page.locator("summary").filter({ hasText: "Advanced (" });
     await expect.poll(async () => await trigger.isVisible().catch(() => false) || await secondary.isVisible().catch(() => false), { timeout: 10_000 }).toBe(true);
     if (!await trigger.isVisible().catch(() => false) && await secondary.isVisible().catch(() => false)) await secondary.click();
     await trigger.click();
-    const confirm = fixture.page.getByRole("button", { name: `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`, exact: true });
+    const confirm = fixture.page.getByRole("button", { name: confirmName, exact: true });
     await confirm.waitFor({ state: "visible", timeout: 15_000 });
     const review = confirm.locator("xpath=ancestor::section[contains(@class, 'transaction-review')]");
+    await review.locator("summary", { hasText: "Transaction details" }).click();
     const reviewed = await review.innerText();
     const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });
-    await review.getByRole("button", { name: `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`, exact: true }).click();
+    await review.getByRole("button", { name: confirmName, exact: true }).click();
     await expect.poll(async () => chain.client.getBlockNumber({ cacheTime: 0 }), { timeout: 15_000 }).toBeGreaterThan(blockBeforeSubmit);
     await fixture.page.waitForTimeout(250);
     await expect.poll(async () => {
       const reviews = await confirm.count();
       const states = await fixture.page.locator(".transaction-state").allInnerTexts();
-      return reviews === 0 && !states.some((text: string) => /Transaction submitted|Waiting for wallet|Checking confirmation/i.test(text));
+      return reviews === 0 && !states.some((text: string) => /Transaction submitted|Waiting for wallet|Checking confirmation|Confirming|Finishing your last step/i.test(text));
     }, { timeout: 15_000 }).toBe(true);
     const alerts = (await fixture.page.locator(".notice.error[role=alert], .transaction-state[role=alert]").allInnerTexts()).map((text: string) => text.trim()).filter(Boolean);
     expect(alerts).toEqual([]);
@@ -158,7 +159,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await switchAccount(chain.buyer);
     await goto(`/piece/${id.toString()}`, chain.buyer);
     await fixture.page.getByRole("button", { name: "Approve exact USDC", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const approval = await transact("Approve exact USDC");
+    const approval = await transact("Approve exact USDC", "Confirm approval");
     expect(approval).toContain(expectedTotal);
     expect(approval).toContain(chain.raffle.address);
     const agreements = fixture.page.locator(".agreements input[type=checkbox]");
@@ -166,7 +167,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     for (const checkbox of await agreements.all()) await checkbox.check();
     await fixture.page.getByRole("button", { name: "Sign and record agreement", exact: true }).click();
     await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const purchaseReview = await transact("Purchase membership");
+    const purchaseReview = await transact("Purchase membership", "Confirm purchase");
     expect(purchaseReview).toContain(expectedTotal);
     expect(purchaseReview).toContain(chain.raffle.address);
     const account = await chain.service.readAccount({ id, account: chain.buyer });
