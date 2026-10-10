@@ -145,6 +145,7 @@ run("independent owner review race verification", () => {
     await chain.write(chain.raffle, "updateDraft", [4n, chain.nft.address, 884n, before.snapshot.raffle.salesEnd, before.snapshot.raffle.reserveNonce, before.snapshot.raffle.reserveCommit, "Changed after owner request", [{ name: "Membership", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]], chain.seller);
     await restoreAutomaticDiscovery();
     await fixture.page.getByRole("button", { name: "Refresh exact state", exact: true }).click();
+    await fixture.page.getByRole("heading", { name: "Changed after owner request", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     await fixture.page.getByText("Advanced: executed Ethereum transaction hash", { exact: true }).click();
     await fixture.page.getByLabel("Executed Ethereum transaction hash").fill(executionHash);
     await fixture.page.getByRole("button", { name: "Confirm canonical execution", exact: true }).click();
@@ -156,7 +157,7 @@ run("independent owner review race verification", () => {
     await fixture.page.getByRole("button", { name: "Review current state", exact: true }).click();
     await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("checkbox").count()).toBe(0);
-    expect(await fixture.page.getByRole("button", { name: "Approve", exact: true }).isEnabled()).toBe(true);
+    await expect.poll(() => fixture.page.getByRole("button", { name: "Approve", exact: true }).isEnabled(), { timeout: 10_000 }).toBe(true);
   }, 30_000);
 
   it("keeps executed revocation recovery confirmation-only across reload", async () => {

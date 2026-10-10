@@ -114,7 +114,7 @@ run("independent seller simplification boundaries", () => {
     await openSeller(5n);
     await fixture.page.evaluate(() => { (window as unknown as Window & { __sellerBadHash: boolean }).__sellerBadHash = true; });
     await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByRole("alert").waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByRole("alert").filter({ hasText: "The wallet response is uncertain" }).waitFor({ state: "visible", timeout: 15_000 });
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction")).toHaveLength(1);
     const raw = await fixture.page.evaluate(key => localStorage.getItem(key), pendingKey(chain.seller));
     expect(raw).not.toBeNull();
@@ -141,6 +141,9 @@ run("independent seller simplification boundaries", () => {
   }, 60_000);
 
   it("does not loop a failed opening-policy read and discards its delayed result after a wallet change", async () => {
+    await openSeller(4n);
+    await fixture.page.getByRole("button", { name: "List", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Listing details" }).click();
     const policySelector = encodeFunctionData({ abi: raffleAbi, functionName: "openingPolicyHash" }).slice(0, 10);
     let failPolicy = true;
     let failures = 0;
@@ -158,7 +161,7 @@ run("independent seller simplification boundaries", () => {
       await route.continue();
     });
     try {
-      await openSeller(4n);
+      await fixture.page.getByRole("button", { name: "Refresh policy review", exact: true }).click();
       await fixture.page.getByRole("alert").filter({ hasText: "independent opening policy failure" }).waitFor({ state: "visible", timeout: 15_000 });
       await fixture.page.waitForTimeout(750);
       expect(failures).toBe(1);
@@ -166,6 +169,7 @@ run("independent seller simplification boundaries", () => {
       await fixture.page.getByRole("button", { name: "Retry opening policy", exact: true }).press("Enter");
       await fixture.page.getByRole("button", { name: "List", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
       holdPolicy = true;
+      await fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Listing details" }).click();
       await fixture.page.getByRole("button", { name: "Refresh policy review", exact: true }).click();
       await expect.poll(() => held.length, { timeout: 5_000 }).toBeGreaterThan(0);
       await fixture.switchAccount(chain.stranger);
