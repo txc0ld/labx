@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeFunctionData, encodeFunctionData, erc20Abi, toHex, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, erc20Abi, toHex, zeroHash, type Hex } from "viem";
+import type { Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
 import { workflowMessage } from "../lib/chain/messages";
 import { hash } from "../lib/chain/validation";
@@ -13,6 +14,7 @@ import { watchWallet } from "./fixtures/wallet-watch";
 
 const DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
 const SETTLE = "LABx finishes the raffle automatically after you confirm the draw.";
+const LATE = "LABx hasn’t run this step yet. You can run it yourself.";
 
 // The draw runner itself is a server job. Here another local account stands in for it, so the page shows what the seller sees.
 describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page with the draw runner on", () => {
@@ -37,6 +39,9 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     fixture.page.on("console", (message: { type(): string; text(): string }) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     await chain.write(chain.nft, "mint", [chain.seller, 501n]);
     await chain.write(chain.nft, "mint", [chain.seller, 502n]);
+    for (const tokenId of [503n, 504n, 505n]) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
+    // One 27.50 USDC purchase for each listed raffle.
+    await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.buyer, 100_000_000n]);
     const listed = await listSoldRaffle(501n, "Runner raffle");
     id = listed.id;
@@ -106,6 +111,66 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
 
   async function phase() {
     return (await chain.service.readRaffle({ id })).raffle.phase;
+  }
+
+  /** Lists a sold raffle and runs it, as the runner would, to a drawn winner whose draw is not confirmed yet. */
+  async function drawnRaffle(tokenId: bigint, title: string) {
+    const listed = await listSoldRaffle(tokenId, title);
+    await chain.warp(listed.salesEnd);
+    for (const step of ["close", "snapshot", "requestRandomness"] as const) await chain.write(chain.raffle, step, step === "snapshot" ? [listed.id, 100n] : [listed.id], chain.stranger);
+    const drawing = await chain.service.readRaffle({ id: listed.id });
+    await chain.write(chain.vrf, "fulfill", [chain.raffle.address, drawing.raffle.vrfRequestId, 0n]);
+    return listed.id;
+  }
+
+  /** Holds the first page read of raffle `raffleId` pinned after block `after` until release(). Other reads pass through. */
+  async function holdNextRaffleRead(raffleId: bigint, after: bigint) {
+    const read = encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [raffleId] }).toLowerCase();
+    let held = false, release = () => {}, continued = Promise.resolve();
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const handler = async (route: Route) => {
+      const body: unknown = route.request().postDataJSON();
+      const match = !held && (Array.isArray(body) ? body : [body]).some((request: unknown) => {
+        if (!request || typeof request !== "object" || !("method" in request) || request.method !== "eth_call" || !("params" in request) || !Array.isArray(request.params)) return false;
+        const [call, block]: unknown[] = request.params;
+        return !!call && typeof call === "object" && "data" in call && typeof call.data === "string" && call.data.toLowerCase() === read
+          && typeof block === "string" && block.startsWith("0x") && BigInt(block) > after;
+      });
+      if (!match) return route.continue();
+      held = true;
+      continued = released.then(() => route.continue());
+      await continued;
+    };
+    await fixture.page.route(`${chain.url}/`, handler);
+    return {
+      held: () => held,
+      async release() {
+        release();
+        await continued.catch(() => {});
+        await fixture.page.unroute(`${chain.url}/`, handler);
+      }
+    };
+  }
+
+  /** Holds every wallet transaction request until window.__releaseSends() runs. */
+  async function holdSends() {
+    await fixture.page.evaluate(() => {
+      type Request = (input: { method: string; params?: readonly unknown[] }) => Promise<unknown>;
+      const scope = window as unknown as Window & { ethereum: { request: Request }; __heldSends: number; __releaseSends(): void };
+      const original = scope.ethereum.request.bind(scope.ethereum);
+      let release = () => {};
+      const held = new Promise<void>(resolve => { release = resolve; });
+      scope.__heldSends = 0;
+      scope.__releaseSends = () => release();
+      scope.ethereum.request = async input => {
+        if (input.method === "eth_sendTransaction") { scope.__heldSends += 1; await held; }
+        return original(input);
+      };
+    });
+    return {
+      count: () => fixture.page.evaluate(() => (window as unknown as Window & { __heldSends: number }).__heldSends),
+      release: () => fixture.page.evaluate(() => (window as unknown as Window & { __releaseSends?(): void }).__releaseSends?.())
+    };
   }
 
   it("shows the runner message on the Studio card instead of Close sales", async () => {
@@ -259,4 +324,159 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     }
     expect(pageErrors).toEqual([]);
   }, 150_000);
+  describe("Confirm the draw stops at every failure and retries only on a click", () => {
+    let confirmId: bigint;
+    const revealSelector = encodeFunctionData({ abi: raffleAbi, functionName: "reveal", args: [0n, zeroHash, zeroHash, zeroHash] }).slice(0, 10);
+
+    function confirmCard() {
+      return fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Confirm the draw", exact: true, level: 2 }) });
+    }
+
+    async function revealed() {
+      return (await chain.service.readRaffle({ id: confirmId })).raffle.revealed;
+    }
+
+    beforeAll(async () => {
+      confirmId = await drawnRaffle(503n, "Confirm failures raffle");
+    }, 120_000);
+
+    it("leaves the step to retry when the draw-setup signature is rejected", async () => {
+      await open(`/seller/${confirmId.toString()}`, "Confirm the draw");
+      const confirm = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });
+      await confirm.waitFor({ state: "visible", timeout: 15_000 });
+      const wallet = await watchWallet(fixture.page);
+      await fixture.page.evaluate(() => (window as unknown as { __labxRejectNextSignature(code: number, message: string): void }).__labxRejectNextSignature(4001, "Rejected draw setup"));
+      await confirm.click();
+      await confirmCard().getByText("Cancelled in your wallet. Nothing was sent.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+      await fixture.page.waitForTimeout(1_500);
+      expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign"]);
+      expect(await wallet.reviews()).toBe(0);
+      expect(await confirm.isEnabled()).toBe(true);
+      expect(await revealed()).toBe(false);
+    }, 90_000);
+
+    it("sends nothing when the saved draw setup fails its integrity check", async () => {
+      await open(`/seller/${confirmId.toString()}`, "Confirm the draw");
+      const confirm = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });
+      await confirm.waitFor({ state: "visible", timeout: 15_000 });
+      let tampered = 0;
+      const tamper = async (route: Route) => {
+        const response = await route.fetch();
+        const body: unknown = await response.json();
+        if (!body || typeof body !== "object" || !("salt" in body)) throw new Error("The draw setup response has no salt.");
+        tampered += 1;
+        await route.fulfill({ response, json: { ...body, salt: `0x${"11".repeat(32)}` } });
+      };
+      await fixture.page.route(`${fixture.baseUrl}/api/reserve/reveal`, tamper);
+      try {
+        const wallet = await watchWallet(fixture.page);
+        await confirm.click();
+        await confirmCard().getByText("Recovered commitment failed its integrity check.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+        await fixture.page.waitForTimeout(1_500);
+        expect(tampered).toBe(1);
+        expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign"]);
+        expect(await wallet.reviews()).toBe(0);
+        expect(await confirm.isEnabled()).toBe(true);
+        expect(await revealed()).toBe(false);
+      } finally { await fixture.page.unroute(`${fixture.baseUrl}/api/reserve/reveal`, tamper); }
+    }, 90_000);
+
+    it("stops at a rejected confirmation and sends it again only when the seller clicks", async () => {
+      await open(`/seller/${confirmId.toString()}`, "Confirm the draw");
+      const confirm = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });
+      await confirm.waitFor({ state: "visible", timeout: 15_000 });
+      const wallet = await watchWallet(fixture.page);
+      await wallet.reject(revealSelector);
+      await confirm.click();
+      await confirmCard().getByText("Cancelled in your wallet. Nothing was sent.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+      await fixture.page.waitForTimeout(2_000);
+      expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
+      expect(await revealed()).toBe(false);
+
+      await confirmCard().getByRole("button", { name: "Try again", exact: true }).click();
+      const retry = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });
+      await retry.waitFor({ state: "visible", timeout: 10_000 });
+      await fixture.page.waitForTimeout(2_000);
+      expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction"]);
+      expect(await revealed()).toBe(false);
+
+      // The loaded draw setup is reused, so the retry is one wallet confirmation without a new signature.
+      await retry.click();
+      await expect.poll(revealed, { timeout: 30_000 }).toBe(true);
+      const requests = await wallet.requests();
+      expect(requests.map(request => request.method)).toEqual(["personal_sign", "eth_sendTransaction", "eth_sendTransaction"]);
+      expect(requests[2].data?.startsWith(revealSelector)).toBe(true);
+      expect(await wallet.reviews()).toBe(0);
+      await automaticCard("Draw confirmed").waitFor({ state: "visible", timeout: 30_000 });
+      expect(pageErrors).toEqual([]);
+    }, 120_000);
+  });
+
+  it("drops a background re-read that lands while Count entries waits for the wallet, so the control is not remounted", async () => {
+    const listed = await listSoldRaffle(504n, "Held count raffle");
+    await chain.warp(listed.salesEnd);
+    await chain.write(chain.raffle, "close", [listed.id], chain.stranger);
+    await open(`/seller/${listed.id.toString()}`, DRAW);
+    await automaticCard("Sales closed").waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.locator("summary", { hasText: /^Run it yourself$/ }).click();
+    const count = visibleButton("Count entries");
+    await count.waitFor({ state: "visible", timeout: 10_000 });
+    const sends = await holdSends();
+    const wallet = await watchWallet(fixture.page);
+
+    // A real change on the raffle, then hold the page's next re-read of it so it lands only after the click.
+    const before = await chain.client.getBlockNumber({ cacheTime: 0 });
+    const read = await holdNextRaffleRead(listed.id, before);
+    try {
+      await chain.write(chain.raffle, "setPaused", [true]);
+      await expect.poll(() => read.held(), { timeout: 25_000 }).toBe(true);
+      await count.click();
+      await expect.poll(() => sends.count(), { timeout: 10_000 }).toBe(1);
+      const control = await fixture.page.getByRole("button", { name: "Waiting for wallet…", exact: true }).elementHandle();
+      if (!control) throw new Error("The wallet step is not shown.");
+      await read.release();
+      await fixture.page.waitForTimeout(4_000);
+      expect(await control.evaluate(element => element.isConnected && element.getAttribute("aria-busy"))).toBe("true");
+
+      await sends.release();
+      await expect.poll(async () => (await chain.service.readRaffle({ id: listed.id })).raffle.snapshotted, { timeout: 30_000 }).toBe(true);
+      const requests = await wallet.requests();
+      expect(requests.map(request => request.method)).toEqual(["eth_sendTransaction"]);
+      expect(decodeFunctionData({ abi: raffleAbi, data: requests[0].data as Hex })).toEqual({ functionName: "snapshot", args: [listed.id, 100n] });
+      expect(await wallet.reviews()).toBe(0);
+      await automaticCard("Entries counted").waitFor({ state: "visible", timeout: 30_000 });
+    } finally {
+      await sends.release().catch(() => {});
+      await read.release().catch(() => {});
+      await chain.write(chain.raffle, "setPaused", [false]);
+    }
+    expect(pageErrors).toEqual([]);
+  }, 150_000);
+
+  it("gives a draw step back to the seller once LABx is 30 minutes late, on the raffle page and the Studio card", async () => {
+    const listed = await listSoldRaffle(505n, "Overdue raffle");
+    await chain.warp(listed.salesEnd + 1_800n);
+    await open(`/seller/${listed.id.toString()}`, LATE);
+    const closing = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Close sales", exact: true, level: 2 }) });
+    expect(await closing.getByText(LATE, { exact: true }).isVisible()).toBe(true);
+    expect(await fixture.page.locator("summary", { hasText: /^Run it yourself$/ }).count()).toBe(0);
+    expect(await fixture.page.getByText(DRAW, { exact: true }).count()).toBe(0);
+    await evidence("runner-late-1280");
+
+    const wallet = await watchWallet(fixture.page);
+    await closing.getByRole("button", { name: "Close sales", exact: true }).click();
+    const counting = fixture.page.locator("section.workflow-next").filter({ has: fixture.page.getByRole("heading", { name: "Count entries", exact: true, level: 2 }) });
+    await counting.getByText(LATE, { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+    expect((await chain.service.readRaffle({ id: listed.id })).raffle.phase).toBe(2);
+    const requests = await wallet.requests();
+    expect(requests.map(request => request.method)).toEqual(["eth_sendTransaction"]);
+    expect(decodeFunctionData({ abi: raffleAbi, data: requests[0].data as Hex })).toEqual({ functionName: "close", args: [listed.id] });
+    expect(await wallet.reviews()).toBe(0);
+
+    await open("/seller", "Overdue raffle");
+    const card = fixture.page.locator("section[aria-labelledby='seller-raffles-title'] li").filter({ hasText: "Overdue raffle" });
+    expect(await card.getByRole("link").getAttribute("aria-label")).toBe("Count entries: Overdue raffle");
+    expect(await card.getByText(DRAW, { exact: true }).count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  }, 120_000);
 });

@@ -72,6 +72,16 @@ export function cancelReclaimsPrize(snapshot: RaffleSnapshot): boolean {
 
 const RUNNER_DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
 const RUNNER_SETTLE = "LABx finishes the raffle automatically after you confirm the draw.";
+const RUNNER_LATE = "LABx hasn’t run this step yet. You can run it yourself.";
+
+/** Seconds a step LABx runs may stay pending after it is due before the seller is asked to run it. */
+const RUNNER_LATE_AFTER = 30n * 60n;
+
+/** Block time a runner step became due: sales end for closing, counting and starting the draw; for finishing, the draw once it is confirmed, otherwise the end of the confirmation window. */
+function runnerDueAt({ raffle, revealGrace }: RaffleSnapshot, kind: SellerActionKind): bigint {
+  if (kind !== "settle") return raffle.salesEnd;
+  return raffle.revealed ? raffle.drawnAt : raffle.drawnAt + revealGrace;
+}
 
 /** Permissionless draw steps the draw runner sends. Confirming the draw, claims, cancellation and reclaim stay with the seller. */
 const RUNNER_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) => { title: string; message: string }>> = {
@@ -99,12 +109,15 @@ export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind)
   }
 }
 
-/** The seller's next step. With the draw runner on, LABx's own draw steps become automatic. */
+/** The seller's next step. With the draw runner on, LABx's own draw steps become automatic until they are 30 minutes overdue by block time. */
 export function sellerNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[], runner = false): SellerNextStep {
   const next = manualNextStep(snapshot, actions);
   if (!runner || next.kind !== "action") return next;
   const automatic = RUNNER_STEPS[next.action.kind]?.(snapshot);
-  return automatic ? { kind: "automatic", action: next.action, ...automatic } : next;
+  if (!automatic) return next;
+  // The page cannot see whether the runner is healthy, so an overdue step goes back to the seller.
+  if (snapshot.block.timestamp >= runnerDueAt(snapshot, next.action.kind) + RUNNER_LATE_AFTER) return { kind: "action", action: next.action, message: RUNNER_LATE };
+  return { kind: "automatic", action: next.action, ...automatic };
 }
 
 function manualNextStep(snapshot: RaffleSnapshot, actions: readonly SellerActionAvailability[]): SellerNextStep {
