@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
-import { cancelGuidance, parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions } from "../lib/chain/seller-actions";
+import { cancelGuidance, parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions, sellerStepText } from "../lib/chain/seller-actions";
+import { catalogAvailability, fromPriceLabel } from "../components/workflow/format";
 import { availableActions } from "../lib/chain/workflow";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";
 import { mergeSellerActivityPage, type SellerRaffleActivity } from "../lib/chain/seller-types";
@@ -230,7 +231,7 @@ describe("seller-only action and ownership boundaries", () => {
 
 describe("seller next step", () => {
   const cancel = { kind: "cancel", enabled: true, label: "Cancel draft", reason: "" } as const;
-  const open = { kind: "open", enabled: true, label: "Open memberships", reason: "" } as const;
+  const open = { kind: "open", enabled: true, label: "List", reason: "" } as const;
   function draft(status: "pending" | "changed" | "approved") {
     const value = snapshot({ id: 1n, phase: 0 });
     return { ...value, admission: { ...value.admission, status, reviewHash: zeroHash } };
@@ -244,8 +245,8 @@ describe("seller next step", () => {
   it("shows that settled proceeds are exhausted instead of a generic seller-role restriction", () => {
     const value = snapshot({ id: 1n, phase: 5, principalEscrow: 0n });
     const actions = currentSellerActions(value);
-    expect(actions.find(item => item.kind === "claimProceeds")).toMatchObject({ enabled: false, reason: "Only the seller can claim remaining membership proceeds." });
-    expect(sellerNextStep(value, actions)).toEqual({ kind: "waiting", title: "Raffle settled", message: "There are no seller proceeds left to claim." });
+    expect(actions.find(item => item.kind === "claimProceeds")).toMatchObject({ enabled: false, reason: "Only the seller can claim the sales." });
+    expect(sellerNextStep(value, actions)).toEqual({ kind: "waiting", title: "Raffle complete", message: "Your sales have been paid to your wallet." });
     const funded = snapshot({ id: 1n, phase: 5, principalEscrow: 1n });
     expect(sellerNextStep(funded, currentSellerActions(funded))).toMatchObject({ kind: "action", action: { kind: "claimProceeds", enabled: true } });
   });
@@ -256,8 +257,8 @@ describe("seller next step", () => {
     value.block.timestamp = value.raffle.salesEnd;
     const actions = currentSellerActions(value);
     expect(actions.find(item => item.kind === "cancel")).toMatchObject({ enabled: true, label: "Enable refunds" });
-    expect(sellerNextStep(value, actions)).toEqual({ kind: "action", action: actions.find(item => item.kind === "cancel"), message: "No entries were frozen. Enable refunds so buyers can claim their principal." });
-    expect(sellerNextStep(value, actions.filter(item => item.kind !== "cancel"))).toEqual({ kind: "waiting", title: "Draw cannot start", message: "No entries were frozen." });
+    expect(sellerNextStep(value, actions)).toEqual({ kind: "action", action: actions.find(item => item.kind === "cancel"), message: "No entries were counted. Enable refunds so buyers get their membership price back." });
+    expect(sellerNextStep(value, actions.filter(item => item.kind !== "cancel"))).toEqual({ kind: "waiting", title: "Draw cannot start", message: "No entries were counted." });
   });
   it.each([1, 2])("offers cancellation, then NFT reclaim, for an expired phase %i raffle without memberships", phase => {
     const value = snapshot({ id: 1n, phase });
@@ -278,14 +279,14 @@ describe("seller next step", () => {
     expect(cancelGuidance(value, "No memberships were sold.")).toBe("No memberships were sold. Cancel the raffle, then reclaim your NFT.");
     expect(cancelGuidance(value, "No memberships were sold.", false)).toBe("No memberships were sold. Cancel the raffle so the seller can reclaim the NFT.");
     value.lotCount = 1n;
-    expect(cancelGuidance(value, "The draw-start deadline has passed.", false)).toBe("The draw-start deadline has passed. Enable refunds so buyers can claim their principal.");
+    expect(cancelGuidance(value, "The draw didn’t start in time.", false)).toBe("The draw didn’t start in time. Enable refunds so buyers get their membership price back.");
   });
   it("labels seller cancellation by whether buyers have refunds to claim", () => {
     const value = snapshot({ id: 1n, phase: 1 });
     const actions = currentSellerActions(value);
     expect(actions.find(item => item.kind === "cancel")).toMatchObject({ enabled: true, label: "Cancel raffle" });
     const next = sellerNextStep(value, actions);
-    expect(next).toMatchObject({ kind: "waiting", title: "Memberships are open" });
+    expect(next).toMatchObject({ kind: "waiting", title: "Your raffle is live" });
     expect(sellerSecondaryActions(value, actions, next).map(item => item.kind)).toEqual(["reveal", "cancel"]);
     value.lotCount = 1n;
     expect(currentSellerActions(value).find(item => item.kind === "cancel")).toMatchObject({ enabled: false, label: "Enable refunds" });
@@ -309,7 +310,7 @@ describe("seller next step", () => {
     value.block.timestamp += 1n;
     const actions = currentSellerActions(value);
     const next = sellerNextStep(value, actions);
-    expect(next).toEqual({ kind: "action", action: actions.find(item => item.kind === "cancel"), message: "The draw-start deadline has passed. Enable refunds so buyers can claim their principal." });
+    expect(next).toEqual({ kind: "action", action: actions.find(item => item.kind === "cancel"), message: "The draw didn’t start in time. Enable refunds so buyers get their membership price back." });
     expect(next).toMatchObject({ action: { label: "Enable refunds" } });
     expect(sellerSecondaryActions(value, actions, next)).toEqual([]);
   });
@@ -334,15 +335,15 @@ describe("seller next step", () => {
     value.block.timestamp = value.raffle.vrfRequestedAt + value.randomnessGrace - 1n;
     const beforeTimeout = currentSellerActions(value);
     expect(beforeTimeout.filter(item => item.enabled)).toEqual([]);
-    expect(sellerNextStep(value, beforeTimeout)).toEqual({ kind: "waiting", title: "Waiting for the draw", message: "The randomness request is pending. Refresh after fulfillment." });
+    expect(sellerNextStep(value, beforeTimeout)).toEqual({ kind: "waiting", title: "Drawing a winner", message: "This usually takes a few minutes. This page updates on its own." });
     value.block.timestamp += 1n;
     const atTimeout = currentSellerActions(value);
     expect(atTimeout.find(item => item.kind === "abortDrawing")).toMatchObject({ enabled: true, label: "Enable refunds" });
-    expect(sellerNextStep(value, atTimeout)).toEqual({ kind: "action", action: atTimeout.find(item => item.kind === "abortDrawing"), message: "The randomness deadline passed without a result. Enable refunds so buyers can claim their principal." });
+    expect(sellerNextStep(value, atTimeout)).toEqual({ kind: "action", action: atTimeout.find(item => item.kind === "abortDrawing"), message: "The draw didn’t return a result in time. Enable refunds so buyers get their membership price back." });
   });
   it.each([
-    { lots: 0n, principal: 0n, message: "No memberships were purchased." },
-    { lots: 1n, principal: 1_000_000n, message: "Buyers can claim any remaining refundable principal." }
+    { lots: 0n, principal: 0n, message: "No memberships were sold." },
+    { lots: 1n, principal: 1_000_000n, message: "Buyers can claim refunds of the membership price." }
   ])("describes cancelled raffle purchases accurately with $lots recorded lots", ({ lots, principal, message }) => {
     const value = snapshot({ id: 1n, phase: 6, principalEscrow: principal });
     value.raffle.escrowed = false;
@@ -353,19 +354,19 @@ describe("seller next step", () => {
     const value = snapshot({ id: 1n, phase: 6 });
     value.lotCount = 1n;
     const actions = currentSellerActions(value);
-    expect(sellerNextStep(value, actions)).toEqual({ kind: "action", action: actions.find(item => item.kind === "reclaimPrize"), message: "The raffle is cancelled. Reclaim your NFT. Buyers can claim any remaining refundable principal." });
-    expect(sellerNextStep(value, actions.map(item => ({ ...item, enabled: false })))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim any remaining refundable principal." });
+    expect(sellerNextStep(value, actions)).toEqual({ kind: "action", action: actions.find(item => item.kind === "reclaimPrize"), message: "The raffle is cancelled. Reclaim your NFT. Buyers can claim refunds of the membership price." });
+    expect(sellerNextStep(value, actions.map(item => ({ ...item, enabled: false })))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim refunds of the membership price." });
     value.raffle.escrowed = false;
-    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim any remaining refundable principal." });
+    expect(sellerNextStep(value, currentSellerActions(value))).toEqual({ kind: "waiting", title: "Raffle cancelled", message: "Buyers can claim refunds of the membership price." });
   });
   it.each(["pending", "changed"] as const)("keeps cancellation secondary for an escrowed %s draft", status => {
-    expect(sellerNextStep(draft(status), [cancel])).toMatchObject({ kind: "waiting", title: "Awaiting LABx review" });
+    expect(sellerNextStep(draft(status), [cancel])).toMatchObject({ kind: "waiting", title: "Waiting for LABx review" });
   });
   it("uses eligible approval and escrow before opening", () => {
     const value = draft("pending");
     value.raffle.escrowed = false;
     const approve = { kind: "approvePrize", enabled: true, label: "Approve NFT", reason: "" } as const;
-    const escrow = { kind: "escrow", enabled: true, label: "Escrow NFT", reason: "" } as const;
+    const escrow = { kind: "escrow", enabled: true, label: "Lock NFT", reason: "" } as const;
     expect(sellerNextStep(value, [cancel, approve])).toEqual({ kind: "action", action: approve });
     expect(sellerNextStep(value, [cancel, { ...approve, enabled: false }, escrow])).toEqual({ kind: "action", action: escrow });
   });
@@ -373,15 +374,42 @@ describe("seller next step", () => {
     const value = draft("approved");
     expect(sellerNextStep(value, [cancel, open])).toEqual({ kind: "action", action: open });
     expect(sellerNextStep(value, [cancel, { ...open, enabled: false, reason: "Owner trust changed" }])).toMatchObject({ kind: "waiting", message: "Owner trust changed" });
-    expect(sellerNextStep({ ...value, paused: true }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Opening paused" });
+    expect(sellerNextStep({ ...value, paused: true }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Listing paused" });
     expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.raffle.salesEnd } }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Sales deadline passed" });
   });
   it("does not promote refund or reveal controls while waiting for the deadline or randomness", () => {
-    const actions = [cancel, { kind: "abortDrawing", enabled: true, label: "Enable refunds", reason: "" }, { kind: "reveal", enabled: true, label: "Reveal commitment", reason: "" }] as const;
-    expect(sellerNextStep(snapshot({ id: 1n, phase: 1 }), actions)).toMatchObject({ kind: "waiting", title: "Memberships are open" });
+    const actions = [cancel, { kind: "abortDrawing", enabled: true, label: "Enable refunds", reason: "" }, { kind: "reveal", enabled: true, label: "Confirm the draw", reason: "" }] as const;
+    expect(sellerNextStep(snapshot({ id: 1n, phase: 1 }), actions)).toMatchObject({ kind: "waiting", title: "Your raffle is live" });
     const drawing = snapshot({ id: 1n, phase: 3 });
     drawing.raffle.vrfRequestedAt = drawing.block.timestamp;
-    expect(sellerNextStep(drawing, actions)).toMatchObject({ kind: "waiting", title: "Waiting for the draw" });
+    expect(sellerNextStep(drawing, actions)).toMatchObject({ kind: "waiting", title: "Drawing a winner" });
     expect(sellerNextStep(snapshot({ id: 1n, phase: 6 }), actions)).toMatchObject({ kind: "waiting", title: "Raffle cancelled" });
+  });
+});
+
+describe("raffle page wording", () => {
+  const pack = (name: string, priceUsdc: bigint, sold = 0) => ({ name, priceUsdc, bonusEntries: 1, maxSupply: 10, sold, active: true });
+
+  it("prices the cheapest available membership with its processing fee, as the catalog and raffle page show it", () => {
+    const value = { ...snapshot({ id: 1n }), packs: [pack("Entry", 10_000_000n, 10), pack("Bronze", 25_000_000n), pack("Gold", 200_000_000n)] };
+    expect(fromPriceLabel(value)).toBe("From 27.50 USDC incl. fee");
+    expect(fromPriceLabel({ ...value, packs: [pack("Gold", 200_000_000n)] })).toBe("From 204.00 USDC incl. fee");
+    expect(fromPriceLabel({ ...value, packs: [pack("Entry", 10_000_000n, 10)] })).toBeNull();
+  });
+
+  it("shows an approved draft as Approved and other drafts as Draft", () => {
+    const pending = snapshot({ id: 1n, phase: 0 });
+    expect(catalogAvailability(pending).label).toBe("Draft");
+    expect(catalogAvailability({ ...pending, admission: { ...pending.admission, status: "approved", reviewHash: zeroHash } }).label).toBe("Approved");
+  });
+
+  it("describes each seller step in plain words and keeps the refund rule for cancellations with sales", () => {
+    const open = snapshot({ id: 1n, phase: 1 });
+    expect(sellerStepText(open, "snapshot")).toBe("Locks in every purchase for the draw.");
+    expect(sellerStepText(open, "reveal")).toBe("Sign to load your saved draw setup, then confirm it. This lets you finish now instead of waiting 7 days.");
+    expect(sellerStepText(open, "cancel")).toBe("Ends sales now. You can then reclaim your NFT.");
+    expect(sellerStepText({ ...open, lotCount: 2n }, "cancel")).toBe("Enable refunds so buyers get their membership price back.");
+    expect(sellerStepText(snapshot({ id: 1n, phase: 0 }), "cancel")).toBe("Cancels this draft. You can then reclaim your NFT.");
+    expect(sellerStepText(open, "updateDraft")).toBe("");
   });
 });
