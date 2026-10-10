@@ -410,7 +410,7 @@ run("buyer UI repair invariants in a rendered browser", () => {
 
     await approve.click();
     await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
-    await fixture.page.getByText("Done.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    // "Done." is shown only until the refresh removes the approval step, so wait for the allowance itself.
     await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBeGreaterThan(0n);
     for (const size of sizes) {
       await fixture.page.setViewportSize(size);
