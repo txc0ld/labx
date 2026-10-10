@@ -7,7 +7,7 @@ import { actionBuilder } from "../chain/actions";
 import { createReader } from "../chain/reader";
 import { sameAddress } from "../chain/validation";
 import type { DeploymentManifest } from "../chain/types";
-import { mayNeedRunner, scanRaffles } from "./decide";
+import { finalPhase, mayNeedRunner, scanRaffles } from "./decide";
 import { broadcastRefused, errorCategory, within } from "./errors";
 import type { DrawChain } from "./run";
 
@@ -93,7 +93,7 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
       await reader.checkedBlock(at);
       return result;
     },
-    async scan(cursor, limit, timeoutMs) {
+    async scan(cursor, lowWater, limit, timeoutMs) {
       const end = Date.now() + timeoutMs;
       const at = await within(reader.checkedBlock(), timeoutMs);
       const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number } as const;
@@ -103,9 +103,10 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
         client.readContract({ ...base, functionName: "REVEAL_GRACE" })
       ]), end - Date.now());
       const result = await scanRaffles({
-        cursor, nextId, limit, timeoutMs: end - Date.now(),
+        cursor, lowWater, nextId, limit, timeoutMs: end - Date.now(),
         read: id => client.readContract({ ...base, functionName: "getRaffle", args: [id] }),
-        keep: raffle => mayNeedRunner(raffle, { now: at.timestamp, drawStartGrace, revealGrace })
+        keep: raffle => mayNeedRunner(raffle, { now: at.timestamp, drawStartGrace, revealGrace }),
+        final: finalPhase
       });
       await reader.checkedBlock(at);
       return result;

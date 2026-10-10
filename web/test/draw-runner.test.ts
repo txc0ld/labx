@@ -8,7 +8,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import type { PreparedAction, Raffle, RaffleSnapshot } from "../lib/chain/types";
 import { MemoryStore } from "../lib/store";
 import type { Store } from "../lib/points";
-import { assertRunnerCall, mayNeedRunner, nextRunnerAction, SCAN_CONCURRENCY, scanRaffles, scanWindow, type RunnerAction, type ScanResult } from "../lib/draw-runner/decide";
+import { assertRunnerCall, finalPhase, mayNeedRunner, nextRunnerAction, SCAN_CONCURRENCY, scanRaffles, scanWindow, type RunnerAction, type ScanResult } from "../lib/draw-runner/decide";
 import { createDrawChain, privilegedAddresses } from "../lib/draw-runner/chain";
 import { errorCategory, RunnerTimeoutError, within } from "../lib/draw-runner/errors";
 import { createDrawCronHandler, runnerAccount } from "../lib/draw-runner/http";
@@ -95,20 +95,58 @@ describe("draw runner decision table", () => {
 
 describe("draw runner scan window", () => {
   it("covers every raffle when there are fewer than the limit", () => {
-    expect(scanWindow(1n, 1n, 50)).toEqual({ ids: [], nextCursor: 1n });
-    expect(scanWindow(1n, 4n, 50)).toEqual({ ids: [1n, 2n, 3n], nextCursor: 1n });
-    expect(scanWindow(2n, 4n, 50)).toEqual({ ids: [2n, 3n, 1n], nextCursor: 2n });
+    expect(scanWindow(1n, 1n, 1n, 50)).toEqual({ ids: [], nextCursor: 1n });
+    expect(scanWindow(1n, 1n, 4n, 50)).toEqual({ ids: [1n, 2n, 3n], nextCursor: 1n });
+    expect(scanWindow(2n, 1n, 4n, 50)).toEqual({ ids: [2n, 3n, 1n], nextCursor: 2n });
   });
   it("resumes from the cursor and wraps past the newest raffle", () => {
-    const first = scanWindow(1n, 121n, 50);
+    const first = scanWindow(1n, 1n, 121n, 50);
     expect(first.ids[0]).toBe(1n); expect(first.ids.at(-1)).toBe(50n); expect(first.nextCursor).toBe(51n);
-    const third = scanWindow(101n, 121n, 50);
+    const third = scanWindow(101n, 1n, 121n, 50);
     expect(third.ids.slice(0, 2)).toEqual([101n, 102n]); expect(third.ids.slice(19, 21)).toEqual([120n, 1n]);
     expect(third.ids).toHaveLength(50); expect(third.nextCursor).toBe(31n);
   });
   it("restarts at the first raffle when the saved cursor is out of range", () => {
-    expect(scanWindow(0n, 4n, 2)).toEqual({ ids: [1n, 2n], nextCursor: 3n });
-    expect(scanWindow(99n, 4n, 2)).toEqual({ ids: [1n, 2n], nextCursor: 3n });
+    expect(scanWindow(0n, 1n, 4n, 2)).toEqual({ ids: [1n, 2n], nextCursor: 3n });
+    expect(scanWindow(99n, 1n, 4n, 2)).toEqual({ ids: [1n, 2n], nextCursor: 3n });
+  });
+  it("starts at the low-water mark and wraps back to it instead of to the first raffle", () => {
+    expect(scanWindow(1n, 11n, 21n, 50)).toEqual({ ids: Array.from({ length: 10 }, (_, index) => BigInt(index + 11)), nextCursor: 11n });
+    expect(scanWindow(18n, 11n, 21n, 5)).toEqual({ ids: [18n, 19n, 20n, 11n, 12n], nextCursor: 13n });
+    expect(scanWindow(5n, 21n, 21n, 50)).toEqual({ ids: [], nextCursor: 21n });
+  });
+});
+
+describe("draw runner low-water mark", () => {
+  const raffles = (phases: readonly number[]) => phases.map(phase => snapshot({ phase }).raffle);
+  function scan(phases: readonly number[], options: { cursor?: bigint; lowWater?: bigint; limit?: number; timeoutMs?: number; read?: (id: bigint) => Promise<Raffle> | undefined } = {}) {
+    const all = raffles(phases);
+    return scanRaffles({
+      cursor: options.cursor ?? 1n, lowWater: options.lowWater ?? 1n, nextId: BigInt(phases.length + 1), limit: options.limit ?? SCAN_LIMIT, timeoutMs: options.timeoutMs ?? 10_000,
+      read: async id => options.read?.(id) ?? all[Number(id) - 1], keep: () => false, final: finalPhase
+    });
+  }
+
+  it("counts only settled and cancelled raffles as final", () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map(phase => finalPhase(snapshot({ phase }).raffle))).toEqual([false, false, false, false, false, true, true]);
+  });
+  it("moves over settled and cancelled raffles from the mark and stops at the first that is not", async () => {
+    expect((await scan([5, 6, 5, 0, 5, 6])).lowWater).toBe(4n);
+    for (const phase of [0, 1, 2, 3, 4]) expect((await scan([5, phase, 5])).lowWater).toBe(2n);
+    expect((await scan([5, 6, 5])).lowWater).toBe(4n);
+  });
+  it("never moves past a raffle whose read failed or did not finish", async () => {
+    expect(await scan([5, 5, 5, 5, 5], { read: id => id === 3n ? Promise.reject(new Error("rpc failed")) : undefined })).toMatchObject({ lowWater: 3n, stop: "interrupted" });
+    expect(await scan([5, 5, 5, 5, 5], { timeoutMs: 30, read: id => id === 3n ? new Promise<never>(() => {}) : undefined })).toMatchObject({ lowWater: 3n, stop: "deadline" });
+  });
+  it("does not move when the mark is outside the raffles read, and follows a wrap back to it", async () => {
+    expect(await scan([5, 5, 5, 5, 5, 5], { cursor: 4n, limit: 2 })).toMatchObject({ lowWater: 1n, nextCursor: 6n });
+    expect(await scan([5, 5, 5, 0, 5, 5], { cursor: 5n, limit: 5 })).toMatchObject({ lowWater: 4n, nextCursor: 4n });
+  });
+  it("starts from the first raffle when the mark is above the raffle count", async () => {
+    const read: bigint[] = [];
+    expect(await scan([0, 5], { lowWater: 9n, read: id => { read.push(id); return undefined; } })).toMatchObject({ lowWater: 1n });
+    expect(read).toEqual([1n, 2n]);
   });
 });
 
@@ -116,27 +154,30 @@ describe("draw runner scan reads", () => {
   const ids = (count: number) => Array.from({ length: count }, (_, index) => BigInt(index + 1));
   const even = (id: bigint) => id % 2n === 0n;
 
+  const never = () => false;
+
   it("reads the window at most SCAN_CONCURRENCY at a time and keeps the raffles that pass", async () => {
+    expect(SCAN_CONCURRENCY).toBe(8);
     let active = 0, peak = 0;
     const read = async (id: bigint) => { active++; peak = Math.max(peak, active); await new Promise(done => setTimeout(done, 1)); active--; return id; };
-    const result = await scanRaffles({ cursor: 991n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 10_000, read, keep: even });
+    const result = await scanRaffles({ cursor: 991n, lowWater: 1n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 10_000, read, keep: even, final: never });
     expect(peak).toBe(SCAN_CONCURRENCY);
-    expect(result).toEqual({ candidates: [...ids(1000).slice(990), ...ids(490)].filter(even), nextCursor: 491n, stop: null });
+    expect(result).toEqual({ candidates: [...ids(1000).slice(990), ...ids(490)].filter(even), nextCursor: 491n, lowWater: 1n, stop: null });
   });
 
   it("keeps the raffles before a failed read and resumes after it", async () => {
     const read = async (id: bigint) => { if (id === 7n) throw new Error("rpc failed"); return id; };
-    expect(await scanRaffles({ cursor: 1n, nextId: 21n, limit: 20, timeoutMs: 10_000, read, keep: () => true }))
-      .toEqual({ candidates: ids(6), nextCursor: 8n, stop: "interrupted" });
-    expect(await scanRaffles({ cursor: 1n, nextId: 21n, limit: 7, timeoutMs: 10_000, read, keep: () => true }))
-      .toEqual({ candidates: ids(6), nextCursor: 8n, stop: "interrupted" });
+    expect(await scanRaffles({ cursor: 1n, lowWater: 1n, nextId: 21n, limit: 20, timeoutMs: 10_000, read, keep: () => true, final: never }))
+      .toEqual({ candidates: ids(6), nextCursor: 8n, lowWater: 1n, stop: "interrupted" });
+    expect(await scanRaffles({ cursor: 1n, lowWater: 1n, nextId: 21n, limit: 7, timeoutMs: 10_000, read, keep: () => true, final: never }))
+      .toEqual({ candidates: ids(6), nextCursor: 8n, lowWater: 1n, stop: "interrupted" });
   });
 
   it("keeps the raffles read before the time ran out, resumes at the first unread raffle and starts no read after that", async () => {
     const reads: bigint[] = [];
     const read = (id: bigint) => { reads.push(id); return id === 5n ? new Promise<bigint>(() => {}) : new Promise<bigint>(done => setTimeout(() => done(id), 2)); };
-    expect(await scanRaffles({ cursor: 1n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 30, read, keep: () => true }))
-      .toEqual({ candidates: ids(4), nextCursor: 5n, stop: "deadline" });
+    expect(await scanRaffles({ cursor: 1n, lowWater: 1n, nextId: 1001n, limit: SCAN_LIMIT, timeoutMs: 30, read, keep: () => true, final: never }))
+      .toEqual({ candidates: ids(4), nextCursor: 5n, lowWater: 1n, stop: "deadline" });
     const count = reads.length;
     expect(count).toBeGreaterThan(SCAN_CONCURRENCY);
     expect(count).toBeLessThan(SCAN_LIMIT);
@@ -380,11 +421,12 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
   const chain: DrawChain = {
     runner, contract,
     async privilegedAddresses() { if (options.privileged instanceof Error) throw options.privileged; return options.privileged ?? [owner]; },
-    scan(cursor, limit, timeoutMs) {
+    scan(cursor, lowWater, limit, timeoutMs) {
       return scanRaffles({
-        cursor, nextId: BigInt(Object.keys(raffles).length + 1), limit, timeoutMs,
+        cursor, lowWater, nextId: BigInt(Object.keys(raffles).length + 1), limit, timeoutMs,
         async read(id) { scanned.push(id); return options.scanRead?.(id, current(id).raffle) ?? current(id).raffle; },
-        keep: raffle => mayNeedRunner(raffle, { now: SALES_END + 1n, drawStartGrace: GRACE, revealGrace: GRACE })
+        keep: raffle => mayNeedRunner(raffle, { now: SALES_END + 1n, drawStartGrace: GRACE, revealGrace: GRACE }),
+        final: finalPhase
       });
     },
     async read(id) {
@@ -894,6 +936,50 @@ describe("draw runner scan cadence", () => {
   });
 });
 
+describe("draw runner low-water mark across runs", () => {
+  beforeEach(() => {
+    vi.stubEnv("CRON_SECRET", secret);
+    vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", runnerKey);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+  const at = (phase: number): FakeRaffle => ({ ...drawn(), phase });
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => BigInt(from + index));
+  const mark = (id: number) => `${contract.toLowerCase()}:${id}`;
+
+  it("does not read settled or cancelled raffles below the low-water mark again", async () => {
+    // Raffle 6 needs a settle and raffle 9 is a draft. The rest are settled or cancelled.
+    const raffles = { 1: at(5), 2: at(6), 3: at(5), 4: at(6), 5: at(5), 6: drawn(), 7: at(6), 8: at(5), 9: at(0), 10: at(5) };
+    const store = new MemoryStore();
+    const { chain, sent, scanned } = fakeChain(raffles);
+    expect((await call(chain, store, () => START)).body).toMatchObject({ ok: true, status: "complete", sends: 1 });
+    expect(scanned).toEqual(range(1, 10));
+    expect(sent.map(item => `${item.id}:${item.action}`)).toEqual(["6:settle"]);
+    expect(await store.get("draw-runner:low-water")).toBe(mark(6));
+
+    scanned.length = 0;
+    expect((await call(chain, store, () => START + 600_000)).body).toMatchObject({ ok: true, status: "complete", sends: 0 });
+    expect(scanned).toEqual(range(6, 10));
+    expect(await store.get("draw-runner:low-water")).toBe(mark(9));
+
+    scanned.length = 0;
+    expect((await call(chain, store, () => START + 1_200_000)).body).toMatchObject({ ok: true, status: "complete", sends: 0 });
+    expect(scanned).toEqual(range(9, 10));
+    expect(await store.get("draw-runner:low-water")).toBe(mark(9));
+  });
+
+  it("ignores a low-water mark saved for another contract or in another form", async () => {
+    for (const saved of ["0x9999999999999999999999999999999999999999:6", "6", `${contract.toLowerCase()}:0`, `${contract.toLowerCase()}:x`]) {
+      const store = new MemoryStore();
+      await store.set("draw-runner:low-water", saved);
+      const { chain, scanned } = fakeChain({ 1: at(5), 2: at(5), 3: at(5), 4: at(5), 5: at(5), 6: at(0) });
+      await call(chain, store, () => START);
+      expect(scanned).toEqual(range(1, 6));
+      expect(await store.get("draw-runner:low-water")).toBe(mark(6));
+    }
+  });
+});
+
 describe("draw runner lease", () => {
   beforeEach(() => {
     vi.stubEnv("CRON_SECRET", secret);
@@ -1058,10 +1144,15 @@ describe("draw runner chain scan", () => {
     vi.useFakeTimers({ now: START });
     const chain = scanChain(Array.from({ length: 200 }, () => 4), { firstBlockMs: 6_000, readMs: 1_000 });
     let result: ScanResult | undefined;
-    void chain.scan(1n, SCAN_LIMIT, 10_500).then(value => { result = value; });
+    void chain.scan(1n, 1n, SCAN_LIMIT, 10_500).then(value => { result = value; });
     await vi.advanceTimersByTimeAsync(10_500);
     // Six seconds of block reads leave four and a half seconds: four rounds of raffle reads.
-    expect(result).toEqual({ candidates: Array.from({ length: 4 * SCAN_CONCURRENCY }, (_, index) => BigInt(index + 1)), nextCursor: BigInt(4 * SCAN_CONCURRENCY + 1), stop: "deadline" });
+    expect(result).toEqual({ candidates: Array.from({ length: 4 * SCAN_CONCURRENCY }, (_, index) => BigInt(index + 1)), nextCursor: BigInt(4 * SCAN_CONCURRENCY + 1), lowWater: 1n, stop: "deadline" });
+  });
+
+  it("moves the low-water mark over raffles settled or cancelled at the pinned block", async () => {
+    const chain = scanChain([5, 6, 5, 4, 5], { firstBlockMs: 0, readMs: 0 });
+    expect(await chain.scan(2n, 1n, SCAN_LIMIT, 10_000)).toEqual({ candidates: [4n], nextCursor: 2n, lowWater: 4n, stop: null });
   });
 });
 

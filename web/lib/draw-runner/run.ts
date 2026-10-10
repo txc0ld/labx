@@ -12,7 +12,7 @@ export const SEND_MIN_REMAINING_MS = 25_000;
 export const SEND_TIMEOUT_MS = 10_000;
 const CURSOR_WRITE_MS = 2_000;
 export const MAX_SENDS = 6;
-/** Most raffles one run reads. Two runs, about ten minutes apart, read every raffle while there are at most twice this many. */
+/** Most raffles one run reads. Two runs, about ten minutes apart, read every raffle at or above the low-water mark while there are at most twice this many. */
 export const SCAN_LIMIT = 500;
 /** The scan stops reading raffles after this long, so the steps it finds still have time to run. */
 export const SCAN_MS = 20_000;
@@ -27,6 +27,8 @@ export const GAS_CAP: Readonly<Record<RunnerAction["kind"], bigint>> = { close: 
 /** The vercel.json schedule runs every five minutes on the clock. */
 export const LEASE_BUCKET_MS = 300_000;
 const CURSOR_KEY = "draw-runner:cursor";
+/** "<contract>:<id>": every raffle below id was settled or cancelled when a scan read it. */
+const LOW_WATER_KEY = "draw-runner:low-water";
 
 export type Quote = { gasLimit: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
 export type SendResult =
@@ -42,8 +44,11 @@ export type DrawChain = {
   contract: Address;
   /** Owner, pending owner, treasuries, and the Safe owners and modules of any of them with code, two levels down. Throws when any of them cannot be read. */
   privilegedAddresses(): Promise<readonly Address[]>;
-  /** Pins a block, reads the raffle count and up to `limit` raffles from `cursor`, and returns those that may need a step. Everything before the final block check stops after `timeoutMs`. */
-  scan(cursor: bigint, limit: number, timeoutMs: number): Promise<ScanResult>;
+  /**
+   * Pins a block, reads the raffle count and up to `limit` raffles from `cursor`, never below `lowWater`, and returns
+   * those that may need a step and the new low-water mark. Everything before the final block check stops after `timeoutMs`.
+   */
+  scan(cursor: bigint, lowWater: bigint, limit: number, timeoutMs: number): Promise<ScanResult>;
   read(id: bigint): Promise<RaffleSnapshot>;
   /** Builds and simulates at a pinned block. Throws when the step no longer applies. */
   prepare(action: RunnerAction): Promise<PreparedAction>;
@@ -88,10 +93,14 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   if (!leased) return { ...report, status: "busy" };
   if (await bounded(chain.balance()) < MIN_BALANCE) return { ...report, ok: false, status: "low-funds" };
 
-  const saved = await bounded(store.get(CURSOR_KEY));
+  const [savedCursor, savedLowWater] = await bounded(Promise.all([store.get(CURSOR_KEY), store.get(LOW_WATER_KEY)]));
+  const savedId = (value: string | null) => value && /^[1-9]\d{0,77}$/.test(value) ? BigInt(value) : 1n;
+  // The mark names its contract, so a mark saved for another deployment is ignored.
+  const markPrefix = `${chain.contract.toLowerCase()}:`;
+  const lowWater = savedLowWater?.startsWith(markPrefix) ? savedId(savedLowWater.slice(markPrefix.length)) : 1n;
   // The scan, including its block and count reads, ends early enough that the first step it finds can still be sent.
   const scanMs = Math.max(SCAN_FLOOR_MS, Math.min(SCAN_MS, deadline - SEND_MIN_REMAINING_MS - SCAN_MARGIN_MS - now()));
-  const scan = await bounded(chain.scan(saved && /^[1-9]\d{0,77}$/.test(saved) ? BigInt(saved) : 1n, SCAN_LIMIT, scanMs));
+  const scan = await bounded(chain.scan(savedId(savedCursor), lowWater, SCAN_LIMIT, scanMs));
   let nextCursor = scan.nextCursor;
   let attempted = false;
   // A scan that ran out of time or hit a failed read still hands over the raffles it read; the cursor resumes after them.
@@ -168,7 +177,9 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
       stop("interrupted", id + 1n); break;
     }
   }
-  try { await within(store.set(CURSOR_KEY, nextCursor.toString()), CURSOR_WRITE_MS); } catch { report.status = "interrupted"; }
+  try {
+    await within(Promise.all([store.set(CURSOR_KEY, nextCursor.toString()), store.set(LOW_WATER_KEY, `${markPrefix}${scan.lowWater}`)]), CURSOR_WRITE_MS);
+  } catch { report.status = "interrupted"; }
   // A run that hit its deadline before it tried any raffle the scan found has stalled, so it is not ok.
   report.ok = HEALTHY.has(report.status) && (report.status !== "deadline" || attempted)
     && report.items.every(item => item.outcome === "succeeded" || (item.outcome === "skipped" && (item.error === null || item.error === "EstimateGasRevert")));
