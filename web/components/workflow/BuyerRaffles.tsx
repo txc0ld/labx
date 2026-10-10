@@ -72,7 +72,7 @@ export function BuyerRaffles({ browser }: { browser: BrowserService }) {
       {state.kind === "ready" && state.rows.length ? <ol className="private-record-list">{state.rows.map(item => (
         <li key={item.id.toString()}>
           <div><strong><Link href={`/piece/${item.id.toString()}`}>{item.title}</Link></strong><span>{item.status}</span></div>
-          <p>{item.memberships} · {item.entries} {item.entries === 1 ? "entry" : "entries"}</p>
+          <span>{item.memberships} · {item.entries} {item.entries === 1 ? "entry" : "entries"}</span>
           {item.action ? <Link className="btn" href={`/piece/${item.id.toString()}`}>{item.action}</Link> : null}
         </li>
       ))}</ol> : null}
