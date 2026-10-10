@@ -16,7 +16,8 @@ const sdk = vi.hoisted(() => ({
   walletConnectEmitEvents: true,
   walletConnectReplacement: undefined as object | undefined,
   changeSelectorOnAccountRead: 0,
-  changeSelector: (_connector: string) => {}
+  changeSelector: (_connector: string) => {},
+  storageChange: (_key: string) => {}
 }));
 
 vi.mock("@reown/appkit", async importOriginal => {
@@ -37,20 +38,23 @@ vi.mock("@reown/appkit", async importOriginal => {
         const { ConnectorController } = await import("@reown/appkit-controllers");
         const adapter = this.chainAdapters?.eip155 as EthersAdapter;
         sdk.adapter = adapter;
-        const connector = {
-          id: sdk.connectorId,
-          name: "Independent fixture",
-          type: sdk.connectorType,
-          chain: "eip155",
-          provider: sdk.provider
-        } as EthersAdapter["connectors"][number];
-        Object.defineProperty(adapter, "connectors", { configurable: true, get: () => [connector] });
         if (sdk.connectorId === "walletConnect") {
-          adapter.getWalletConnectProvider = () => sdk.provider as ReturnType<EthersAdapter["getWalletConnectProvider"]>;
-          (this as unknown as { universalProvider?: object }).universalProvider = sdk.provider;
+          await adapter.setUniversalProvider(sdk.provider as Parameters<EthersAdapter["setUniversalProvider"]>[0]);
+          (this as unknown as { universalProvider: unknown }).universalProvider = sdk.provider;
+          ConnectorController.setConnectors(adapter.connectors);
+        } else {
+          const connector = {
+            id: sdk.connectorId,
+            name: "Independent fixture",
+            type: sdk.connectorType,
+            chain: "eip155",
+            provider: sdk.provider
+          } as EthersAdapter["connectors"][number];
+          Object.defineProperty(adapter, "connectors", { configurable: true, get: () => [connector] });
+          ConnectorController.setConnectors([connector]);
         }
-        ConnectorController.setConnectors([connector]);
         ConnectorController.setConnectorId(sdk.selected, "eip155");
+        this.listenAdapter("eip155");
         this.initAdapterController();
       }
     }
@@ -63,13 +67,16 @@ vi.mock("../lib/chain/walletconnect-accessibility", () => ({
 }));
 
 const account = "0x1111111111111111111111111111111111111111";
+const replacementAccount = "0x2222222222222222222222222222222222222222";
 const project = "b".repeat(32);
 const scope = "independent-actual-sdk-race";
 
 async function setupActualSdk(
   changeSelectorOnAccountRead: number,
   connector: "injected" | "walletConnect" = "injected",
-  usageGate?: Promise<void>
+  usageGate?: Promise<void>,
+  liveAccount = account,
+  walletConnectAccounts = [liveAccount]
 ) {
   const localRecords = new Map<string, string>();
   const localStorage = {
@@ -77,11 +84,16 @@ async function setupActualSdk(
     setItem: (key: string, value: string) => { localRecords.set(key, value); },
     removeItem: (key: string) => { localRecords.delete(key); }
   };
+  const storageListeners = new Set<(event: StorageEvent) => void>();
   vi.stubGlobal("window", {
     location: { origin: "https://labx.test" },
     localStorage,
-    addEventListener: () => {},
-    removeEventListener: () => {}
+    addEventListener: (name: string, listener: (event: StorageEvent) => void) => {
+      if (name === "storage") storageListeners.add(listener);
+    },
+    removeEventListener: (name: string, listener: (event: StorageEvent) => void) => {
+      if (name === "storage") storageListeners.delete(listener);
+    }
   });
   vi.stubGlobal("localStorage", localStorage);
   sdk.accountReads = 0;
@@ -101,7 +113,7 @@ async function setupActualSdk(
       peer: { metadata: { name: "Independent wallet", description: "fixture", url: "https://wallet.test", icons: [] } },
       namespaces: {
         eip155: {
-          accounts: [`eip155:11155111:${account}`],
+          accounts: walletConnectAccounts.map(selected => `eip155:11155111:${selected}`),
           methods: ["personal_sign", "eth_sendTransaction"],
           events: ["accountsChanged", "chainChanged"]
         }
@@ -112,6 +124,7 @@ async function setupActualSdk(
       Object.assign(provider, { session: undefined });
       if (sdk.walletConnectReplacement) {
         sdk.provider = sdk.walletConnectReplacement;
+        await sdk.adapter?.setUniversalProvider(sdk.walletConnectReplacement as Parameters<EthersAdapter["setUniversalProvider"]>[0]);
         return;
       }
       if (sdk.walletConnectEmitEvents) {
@@ -125,7 +138,7 @@ async function setupActualSdk(
       if (method === "eth_accounts") {
         sdk.accountReads++;
         if (sdk.accountReads === sdk.changeSelectorOnAccountRead) sdk.changeSelector("other-injected");
-        return [account];
+        return [liveAccount];
       }
       if (method === "eth_chainId") return "0xaa36a7";
       throw new Error(`Forbidden restoration method: ${method}`);
@@ -133,6 +146,9 @@ async function setupActualSdk(
   });
   const { ApiController, ConnectorController, CoreHelperUtil } = await import("@reown/appkit-controllers");
   sdk.changeSelector = connector => ConnectorController.setConnectorId(connector, "eip155");
+  sdk.storageChange = key => {
+    for (const listener of storageListeners) listener({ key } as StorageEvent);
+  };
   vi.spyOn(ApiController, "fetchUsage").mockImplementation(() => usageGate ?? Promise.resolve());
   vi.spyOn(CoreHelperUtil, "isMobile").mockReturnValue(false);
   saveWalletConsent(consentKey(project, scope), { connectorId: sdk.connectorId, account, chainId: 11155111 });
@@ -155,6 +171,7 @@ afterEach(() => {
   sdk.walletConnectReplacement = undefined;
   sdk.changeSelectorOnAccountRead = 0;
   sdk.changeSelector = () => {};
+  sdk.storageChange = () => {};
 });
 
 describe("independent installed AppKit restoration race", () => {
@@ -248,16 +265,35 @@ describe("independent installed AppKit restoration race", () => {
     const chooser = await createAppKitProvider(project, scope);
     await expect(chooser.restore?.(new AbortController().signal)).resolves.not.toBeNull();
     const replacementDisconnect = vi.fn(async () => {});
-    sdk.walletConnectReplacement = {
+    sdk.walletConnectReplacement = Object.assign(new EventEmitter(), {
       session: { topic: "replacement-session" },
       request: vi.fn(),
       disconnect: replacementDisconnect
-    };
+    });
 
     await expect(chooser.disconnect()).rejects.toThrow(/reload/i);
 
     expect(sdk.walletConnectDisconnects).toBe(1);
     expect(replacementDisconnect).not.toHaveBeenCalled();
+  });
+
+  it("locally detaches an SDK WalletConnect account mismatch without deleting either session or prompting", async () => {
+    const methods = await setupActualSdk(0, "walletConnect", undefined, replacementAccount, [replacementAccount, account]);
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const restored = await wallet.restore();
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const open = vi.spyOn(appKit, "open");
+
+    expect(restored).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(appKit.getAccount("eip155")?.isConnected).toBe(false));
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("fully tears down an SDK session adopted before readiness when Disconnect wins the loading race", async () => {
@@ -284,5 +320,119 @@ describe("independent installed AppKit restoration race", () => {
     expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
     await vi.waitFor(() => expect(sdk.walletConnectDisconnects).toBe(1));
     expect(sdk.instance?.getProvider("eip155")).toBeUndefined();
+  });
+
+  it("locally releases an SDK session adopted before readiness when another tab changes consent", async () => {
+    const usage = (() => {
+      let resolve = () => {};
+      return { promise: new Promise<void>(yes => { resolve = yes; }), resolve };
+    })();
+    const methods = await setupActualSdk(0, "walletConnect", usage.promise);
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const restoration = wallet.restore();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider));
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const open = vi.spyOn(appKit, "open");
+
+    saveWalletConsent(consentKey(project, scope), { connectorId: "replacement", account, chainId: 11155111 });
+    sdk.storageChange(consentKey(project, scope));
+    usage.resolve();
+    await restoration;
+
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(appKit.getProvider("eip155")).toBeUndefined());
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("cleans an adopted SDK session without a prompt when readiness rejects", async () => {
+    const usage = (() => {
+      let reject = (_reason: Error) => {};
+      return { promise: new Promise<void>((_resolve, no) => { reject = no; }), reject };
+    })();
+    const methods = await setupActualSdk(0, "walletConnect", usage.promise);
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const restoration = wallet.restore();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider));
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const open = vi.spyOn(appKit, "open");
+
+    usage.reject(new Error("independent readiness failure"));
+    await restoration;
+
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(appKit.getProvider("eip155")).toBeUndefined());
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("cleans an adopted SDK session without a prompt when readiness times out", async () => {
+    const methods = await setupActualSdk(0, "walletConnect", new Promise<void>(() => {}));
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const restoration = wallet.restore();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider));
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    const open = vi.spyOn(appKit, "open");
+
+    await restoration;
+
+    expect(wallet.getSnapshot()).toMatchObject({ kind: "disconnected" });
+    await vi.waitFor(() => expect(appKit.getProvider("eip155")).toBeUndefined(), { timeout: 3_000 });
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("waits for delayed SDK adoption to release before opening one new Connect prompt", async () => {
+    const usage = (() => {
+      let resolve = () => {};
+      return { promise: new Promise<void>(yes => { resolve = yes; }), resolve };
+    })();
+    const methods = await setupActualSdk(0, "walletConnect", usage.promise);
+    const [{ createAppKitProvider }, { BrowserWalletSession }] = await Promise.all([
+      import("../lib/chain/appkit-provider"),
+      import("../lib/chain/wallet-connectors")
+    ]);
+    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const restoration = wallet.restore();
+    await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(sdk.provider));
+    const appKit = sdk.instance;
+    if (!appKit) throw new Error("The actual AppKit fixture did not initialize.");
+    let providerAtPrompt: unknown;
+    const open = vi.spyOn(appKit, "open").mockImplementation(async () => {
+      providerAtPrompt = appKit.getProvider("eip155");
+    });
+    const owner = {};
+
+    const connecting = wallet.connect({ owner });
+    void connecting.catch(() => {});
+    expect(open).not.toHaveBeenCalled();
+    usage.resolve();
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+    wallet.cancelConnection(owner);
+    await expect(connecting).rejects.toThrow();
+    await restoration;
+
+    expect(providerAtPrompt).toBeUndefined();
+    expect(open).toHaveBeenCalledOnce();
+    expect(sdk.walletConnectDisconnects).toBe(0);
+    expect(methods.every(method => method === "eth_accounts" || method === "eth_chainId")).toBe(true);
   });
 });
