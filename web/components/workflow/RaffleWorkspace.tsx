@@ -293,9 +293,9 @@ function publicRecoveryActions(snapshot: RaffleSnapshot, availability: readonly 
   });
 }
 
-function recoveryGuidance(snapshot: RaffleSnapshot, kind: RecoveryAvailability["kind"]) {
+function recoveryGuidance(snapshot: RaffleSnapshot, kind: RecoveryAvailability["kind"], account: AccountRaffleState | null) {
   const blocker = drawBlocker(snapshot);
-  if (kind === "cancel" && blocker) return cancelGuidance(snapshot, blocker);
+  if (kind === "cancel" && blocker) return cancelGuidance(snapshot, blocker, !!account && sellerOwnsRaffle(account.account, snapshot));
   if (kind === "reclaimPrize") return RECLAIM_GUIDANCE;
   if (kind === "claimFee") return "Anyone can send protocol fees to the pinned treasury; they are never paid to the caller.";
   return "The contract currently permits this action.";
@@ -489,7 +489,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
       ) : !salesOpen ? <p className="notice" role="status">{Number(snapshot.raffle.phase) === 1 && snapshot.block.timestamp >= snapshot.raffle.salesEnd ? "Membership sales ended at the published deadline." : `Membership sales are not open${snapshot.paused && Number(snapshot.raffle.phase) === 1 ? " because admissions are paused" : ""}.`}</p> : null}
       {!salesOpen && buyerWallet.kind === "disconnected" ? <WalletGate wallet={browser.wallet}><span /></WalletGate> : null}
       {account && (account.principal > 0n || account.fee > 0n) ? <div className="account-balance"><span>Your refundable principal</span><strong>{formatUsdc(account.principal)} USDC</strong><small>{formatUsdc(account.fee)} USDC processing fee paid to date remains historical and nonrefundable. Cancellation refunds principal only.</small></div> : null}
-      {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || recoveryGuidance(snapshot, nextRecovery.kind)}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section> : null}
+      {nextRecovery && recoveryAction ? <section className="workflow-next stack"><div><p className="kicker">Available now</p><h2>{nextRecovery.label}</h2><p>{nextRecovery.reason || recoveryGuidance(snapshot, nextRecovery.kind, account)}</p></div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction} label={nextRecovery.label} formatUsdc={formatUsdc} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section> : null}
     </div>
   );
 }
@@ -609,7 +609,7 @@ function RecoveryAlternatives({ browser, snapshot, availability, onConfirmed, wr
   availability: readonly ActionAvailability[]; onConfirmed: () => Promise<void>;
   writesEnabled: boolean; writeDisabledReason?: string;
 }) {
-  const kinds = ["settle", "cancel", "abortDrawing", "refund", "reclaimPrize"] as const;
+  const kinds = ["settle", "cancel", "abortDrawing", "refund", "reclaimPrize", "claimFee"] as const;
   const [, ...others] = publicRecoveryActions(snapshot, availability);
   const actions = kinds.flatMap(kind => others.filter(item => item.kind === kind).map(item => ({ ...item, kind })));
   if (!actions.length) return null;

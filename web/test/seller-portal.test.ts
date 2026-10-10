@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
-import { parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions } from "../lib/chain/seller-actions";
+import { cancelGuidance, parseSellerRaffleId, sellerNextStep, sellerPortalActions, sellerOwnsRaffle, sellerSecondaryActions } from "../lib/chain/seller-actions";
 import { availableActions } from "../lib/chain/workflow";
 import { scanSellerPortfolio, sellerPortfolioTotals } from "../lib/chain/seller-portfolio";
 import { mergeSellerActivityPage, type SellerRaffleActivity } from "../lib/chain/seller-types";
@@ -272,6 +272,13 @@ describe("seller next step", () => {
     cancelled.block.timestamp = value.block.timestamp;
     const after = currentSellerActions(cancelled);
     expect(sellerNextStep(cancelled, after)).toEqual({ kind: "action", action: after.find(item => item.kind === "reclaimPrize"), message: "The raffle is cancelled. Reclaim your NFT." });
+  });
+  it("tells other wallets that only the seller reclaims the NFT", () => {
+    const value = snapshot({ id: 1n, phase: 1 });
+    expect(cancelGuidance(value, "No memberships were sold.")).toBe("No memberships were sold. Cancel the raffle, then reclaim your NFT.");
+    expect(cancelGuidance(value, "No memberships were sold.", false)).toBe("No memberships were sold. Cancel the raffle so the seller can reclaim the NFT.");
+    value.lotCount = 1n;
+    expect(cancelGuidance(value, "The draw-start deadline has passed.", false)).toBe("The draw-start deadline has passed. Enable refunds so buyers can claim their principal.");
   });
   it("labels seller cancellation by whether buyers have refunds to claim", () => {
     const value = snapshot({ id: 1n, phase: 1 });

@@ -8,7 +8,7 @@ import { scanSellerPortfolio, sellerPortfolioTotals } from "@/lib/chain/seller-p
 import type { BlockRef, RaffleSnapshot } from "@/lib/chain/types";
 import styles from "./SellerPortal.module.css";
 import { ResumeTransaction } from "./ResumeTransaction";
-import { formatDate, formatUsdc, phaseLabel } from "./format";
+import { catalogAvailability, formatDate, formatUsdc } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type SellerState =
@@ -143,7 +143,7 @@ function SellerRaffleCard({ snapshot }: { snapshot: RaffleSnapshot }) {
         : snapshot.admission.status === "opened" ? "Approved at opening" : "No approval recorded at opening";
   return (
     <li>
-      <div className={styles.cardTopline}><span>Raffle #{snapshot.id.toString()}</span><span className={styles.phase}>{phaseLabel(phase)}</span></div>
+      <div className={styles.cardTopline}><span>Raffle #{snapshot.id.toString()}</span><span className={styles.phase}>{catalogAvailability(snapshot).label}</span></div>
       <div className={styles.cardTitle}><h3>{snapshot.raffle.title}</h3><p>Closes {formatDate(snapshot.raffle.salesEnd)} UTC</p></div>
       <dl className={styles.cardFacts}><div><dt>LABx review</dt><dd>{admission}</dd></div><div><dt>Gross pack sales</dt><dd>{formatUsdc(accounting.grossPrincipal)} USDC</dd></div><div><dt>{outcome.label}</dt><dd>{formatUsdc(outcome.value)} USDC</dd></div></dl>
       <Link className={`btn btn-dark ${styles.manageButton}`} href={`/seller/${snapshot.id.toString()}`}>Manage raffle <span aria-hidden="true">→</span></Link>

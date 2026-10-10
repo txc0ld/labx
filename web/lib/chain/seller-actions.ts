@@ -54,8 +54,9 @@ export function drawBlocker(snapshot: RaffleSnapshot): string | null {
 
 const REFUNDS = "Enable refunds so buyers can claim their principal.";
 
-export function cancelGuidance(snapshot: RaffleSnapshot, blocker: string) {
-  return `${blocker} ${snapshot.lotCount === 0n ? "Cancel the raffle, then reclaim your NFT." : REFUNDS}`;
+export function cancelGuidance(snapshot: RaffleSnapshot, blocker: string, forSeller = true) {
+  if (snapshot.lotCount > 0n) return `${blocker} ${REFUNDS}`;
+  return `${blocker} ${forSeller ? "Cancel the raffle, then reclaim your NFT." : "Cancel the raffle so the seller can reclaim the NFT."}`;
 }
 
 export const RECLAIM_GUIDANCE = "The raffle is cancelled. Reclaim your NFT.";

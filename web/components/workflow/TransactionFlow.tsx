@@ -87,8 +87,8 @@ type FlowContext = {
 
 type Operation = { scope: number; id: number };
 
-// State changes on the raffle contract itself. Their prepared recipient is the contract default, not a payee.
-const NO_TRANSFER_KINDS = new Set<WorkflowAction["kind"]>(["createDraft", "updateDraft", "approveRaffle", "revokeRaffleApproval", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing"]);
+// Calls that only change raffle state. Their prepared recipient is the contract default, not a payee, so the review names the called contract.
+const CONTRACT_CALL_KINDS = new Set<WorkflowAction["kind"]>(["createDraft", "updateDraft", "approveRaffle", "revokeRaffleApproval", "open", "close", "snapshot", "requestRandomness", "reveal", "settle", "cancel", "abortDrawing"]);
 
 function actionReview(action: WorkflowAction) {
   if (action.kind !== "approveUsdc" && action.kind !== "buyMembership") return null;
@@ -339,13 +339,13 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
           <div><dt>Network</dt><dd>Chain {state.prepared.chainId}</dd></div>
           {state.prepared.amountUsdc > 0n ? <div><dt>Amount</dt><dd>{formatUsdc(state.prepared.amountUsdc)} USDC</dd></div> : null}
           {state.prepared.value > 0n ? <div><dt>Maximum ETH</dt><dd>{formatEther(state.prepared.value)} ETH</dd></div> : null}
-          {NO_TRANSFER_KINDS.has(state.prepared.action.kind) ? null : <div><dt>Recipient</dt><dd className="hash">{state.prepared.recipient}</dd></div>}
+          {CONTRACT_CALL_KINDS.has(state.prepared.action.kind) ? <div><dt>Contract</dt><dd className="hash">{state.prepared.to}</dd></div> : <div><dt>Recipient</dt><dd className="hash">{state.prepared.recipient}</dd></div>}
         </dl>
         {stale ? <p className="notice error" role="alert">Wallet or network changed. Prepare this action again.</p> : null}
         <details><summary>Transaction details</summary><p className="hash">Contract {state.prepared.to}</p></details>
         <div className="btn-row">
           <button className="btn" type="button" disabled={disabled || activeOutcome || stale || state.kind === "submitting"} title={disabled ? disabledReason : undefined} onClick={() => void submit(state.prepared)}>{state.kind === "submitting" ? "Waiting for wallet…" : `Confirm ${lowerFirst(label)}`}</button>
-          <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Cancel</button>
+          <button className="text-link" type="button" disabled={state.kind === "submitting"} onClick={() => { setCurrent(context.current, { kind: "idle" }); callbacks.current.onCancel?.(); }}>Back</button>
         </div>
       </section>
     );
