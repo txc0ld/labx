@@ -324,7 +324,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.locator("body").innerText()).not.toContain(secret);
     expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(secret);
     await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByText(/Preparation recovery is unavailable/).waitFor();
+    await fixture.page.getByText(/Your raffle setup couldn.t be restored right now/).waitFor();
     expect(posts).toBe(1);
     expect(await chain.client.getBlockNumber()).toBe(block.number);
     await fixture.page.unroute("**/api/reserve");

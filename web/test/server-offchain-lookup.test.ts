@@ -74,7 +74,7 @@ describe("POST /api/reserve", () => {
 
   it("checks the seller's signature before reading the NFT contract the request names", async () => {
     const forged = await post(other);
-    expect(forged.status).toBe(400);
+    expect(forged.status).toBe(401);
     expect(forged.readContract).not.toHaveBeenCalled();
     vi.resetModules();
     const signed = await post();

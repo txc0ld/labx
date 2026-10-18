@@ -6,6 +6,7 @@ import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../published-terms";
 import { publicSiteUrl } from "../operator";
 import type { WorkflowContext } from "./api-types";
 import { workflowMessage } from "./messages";
+import { WorkflowRefusal } from "../workflow-failure";
 /** Server reads never follow an off-chain lookup (CCIP-Read), so a contract named in a request cannot make LABx fetch a URL. */
 export function serverClient(rpc: string) {
   return createPublicClient({ ccipRead: false, transport: http(rpc, { timeout: 15_000, retryCount: 1 }) });
@@ -43,8 +44,8 @@ export async function verifyWorkflowAuthorization(args: {
   verify: (args: { address: Address; message: string; signature: Hex }) => Promise<boolean>; now?: number;
 }) {
   const now = BigInt(Math.floor((args.now ?? Date.now()) / 1000));
-  if (!/^\d{1,12}$/.test(args.deadline) || BigInt(args.deadline) < now || BigInt(args.deadline) > now + 600n) throw new Error("Wallet authorization expired. Please retry.");
+  if (!/^\d{1,12}$/.test(args.deadline) || BigInt(args.deadline) < now || BigInt(args.deadline) > now + 600n) throw new WorkflowRefusal("Wallet authorization expired. Please retry.");
   const message = workflowMessage(args.operation, args.context, args.account, args.input, args.deadline);
-  if (!await args.verify({ address: args.account, message, signature: args.signature })) throw new Error("Wallet authorization was refused.");
+  if (!await args.verify({ address: args.account, message, signature: args.signature })) throw new WorkflowRefusal("Wallet authorization was refused.");
   return message;
 }
