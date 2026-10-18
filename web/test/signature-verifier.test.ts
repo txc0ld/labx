@@ -18,8 +18,23 @@ const CONTRACT_SIGNATURE: Hex = "0x1234";
 /** The ERC-8010 suffix alone: it passes the envelope check, but no wallet can ever have made it. */
 const ERC8010_MAGIC_ONLY: Hex = "0x8010801080108010801080108010801080108010801080108010801080108010";
 
-/** How the JSON-RPC node answers eth_call: the wallet contract's verdict, a revert, an RPC error, or no answer at all. */
-type NodeAnswer = "valid" | "invalid" | "revert" | "rate-limited" | "down";
+type NodeReply = { status?: number; json?: object; text?: string };
+/** How the JSON-RPC node answers eth_call: the wallet contract's verdict, a revert, an RPC error, or no usable answer. */
+const replies = {
+  valid: { json: { result: "0x01" } },
+  invalid: { json: { result: "0x00" } },
+  "empty data": { json: { result: "0x" } },
+  revert: { json: { error: { code: 3, message: "execution reverted", data: "0x" } } },
+  "Besu revert": { json: { error: { code: -32000, message: "Execution reverted", data: "0x" } } },
+  "VM execution revert": { json: { error: { code: -32015, message: "VM execution error.", data: "Reverted 0x" } } },
+  down: { status: 502, text: "Bad gateway" },
+  "rate-limited": { status: 429, json: { error: { code: -32005, message: "rate limit exceeded" } } },
+  "a null result": { json: { result: null } },
+  "no result": { json: {} },
+  "a malformed result": { json: { result: "0x02" } },
+  "a gateway error naming a revert": { status: 502, json: { error: "upstream execution reverted endpoint unavailable" } }
+} satisfies Record<string, NodeReply>;
+type NodeAnswer = keyof typeof replies;
 let node: Server, nodeUrl = "", answer: NodeAnswer = "invalid";
 const calls: string[] = [];
 
@@ -30,13 +45,11 @@ beforeAll(async () => {
     request.on("end", () => {
       const { id, method } = JSON.parse(raw) as { id: number; method: string };
       calls.push(method);
-      if (answer === "down") { response.statusCode = 502; return response.end("Bad gateway"); }
+      const reply: NodeReply = method === "eth_call" ? replies[answer] : { json: { error: { code: -32601, message: "unsupported" } } };
+      response.statusCode = reply.status ?? 200;
+      if (reply.text !== undefined) return response.end(reply.text);
       response.setHeader("content-type", "application/json");
-      const reply = (body: object) => response.end(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
-      if (method !== "eth_call") return reply({ error: { code: -32601, message: "unsupported" } });
-      if (answer === "revert") return reply({ error: { code: 3, message: "execution reverted", data: "0x" } });
-      if (answer === "rate-limited") return reply({ error: { code: -32005, message: "rate limit exceeded" } });
-      reply({ result: answer === "valid" ? "0x01" : "0x00" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id, ...reply.json }));
     });
   });
   await new Promise<void>(resolve => node.listen(0, "127.0.0.1", resolve));
@@ -87,7 +100,10 @@ describe("signature verification with the production server client", () => {
   it.each([
     ["accepts", "valid", 200],
     ["refuses", "invalid", 401],
-    ["refuses", "revert", 401]
+    ["refuses", "empty data", 401],
+    ["refuses", "revert", 401],
+    ["refuses", "Besu revert", 401],
+    ["refuses", "VM execution revert", 401]
   ] as const)("%s a contract wallet signature when the node answers %s", async (_, nodeAnswer, status) => {
     answer = nodeAnswer;
     const result = await post("records", contractWallet, CONTRACT_SIGNATURE);
@@ -95,7 +111,7 @@ describe("signature verification with the production server client", () => {
     expect(result.calls).toContain("eth_call");
   });
 
-  it.each(["down", "rate-limited"] as const)("answers 503, not refused, when the node is %s for a contract wallet signature", async nodeAnswer => {
+  it.each(["down", "rate-limited", "a null result", "no result", "a malformed result", "a gateway error naming a revert"] as const)("answers 503, not refused, when the node gives %s for a contract wallet signature", async nodeAnswer => {
     answer = nodeAnswer;
     const result = await post("records", contractWallet, CONTRACT_SIGNATURE);
     expect(result).toMatchObject({ status: 503, logs: [["workflow-request records 503 records-unavailable"]] });

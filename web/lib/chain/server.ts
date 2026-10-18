@@ -1,4 +1,4 @@
-import { BaseError, createPublicClient, custom, ExecutionRevertedError, http, recoverMessageAddress, type Address, type Hex, type PublicClient } from "viem";
+import { BaseError, createPublicClient, custom, ExecutionRevertedError, http, HttpRequestError, isHex, recoverMessageAddress, RpcRequestError, TimeoutError, type Address, type Hex, type PublicClient } from "viem";
 import { getNodeError } from "viem/utils";
 import { APPROVED_DEPLOYMENTS, attestDeployment } from "./deployment";
 import { sameAddress } from "./validation";
@@ -16,22 +16,35 @@ export function serverClient(rpc: string) {
 /**
  * Checks a wallet signature. A plain wallet signature is recovered locally, with no RPC. Any other signature (ERC-1271,
  * ERC-6492 or ERC-8010) needs the node, and viem reports a failed node call as an invalid signature, so this throws when the
- * node gave no verdict (an answer or a revert), and refuses a signature that cannot be decoded.
+ * node gave no verdict (hex data or a revert) or viem could not read its answer, and refuses a signature that cannot be decoded.
  */
 export function signatureVerifier(client: Pick<PublicClient, "request">): SignatureVerifier {
   return async ({ address, message, signature }) => {
     try { if (sameAddress(await recoverMessageAddress({ message, signature }), address)) return true; } catch { /* Not a plain wallet signature, so the node decides. */ }
-    let unanswered = false;
+    let asked = false, unanswered = false;
     const observed = createPublicClient({ ccipRead: false, transport: custom({
       async request(args) {
-        try { return await client.request(args); }
-        catch (error) { if (!(error instanceof BaseError && getNodeError(error, {}) instanceof ExecutionRevertedError)) unanswered = true; throw error; }
+        asked = true;
+        let result: unknown;
+        try { result = await client.request(args); }
+        catch (error) { if (!reverted(error)) unanswered = true; throw error; }
+        // Every answer this check reads (eth_call, eth_getCode) is hex data. A missing or null result is no answer.
+        if (!isHex(result)) { unanswered = true; throw new Error("The node returned no result."); }
+        return result;
       }
     }, { retryCount: 0 }) });
-    const valid = await observed.verifyMessage({ address, message, signature }).catch(() => false);
-    if (!valid && unanswered) throw new Error("The node did not check the signature.");
+    // viem throws, rather than answering false, for a signature it cannot decode, before any node request, and for node data it cannot read.
+    const valid = await observed.verifyMessage({ address, message, signature }).catch(() => asked ? undefined : false);
+    if (valid === undefined || !valid && unanswered) throw new Error("The node did not check the signature.");
     return valid;
   };
+}
+/** A revert is the wallet contract's answer. A failed HTTP request or a timeout never is, whatever its body says. */
+function reverted(error: unknown) {
+  if (!(error instanceof BaseError) || error.walk(cause => cause instanceof HttpRequestError || cause instanceof TimeoutError) !== null) return false;
+  // Nethermind and OpenEthereum report a revert as -32015 "VM execution error." with data "Reverted 0x…".
+  return getNodeError(error, {}) instanceof ExecutionRevertedError
+    || error.walk(cause => cause instanceof RpcRequestError && cause.code === -32015 && typeof cause.data === "string" && cause.data.startsWith("Reverted")) !== null;
 }
 /** publicnode's US servers keep only about 25,000 blocks of logs ("pruned history unavailable"); this public gateway keeps all of Sepolia. */
 export const SEPOLIA_HISTORY_RPC = "https://sepolia.gateway.tenderly.co";
