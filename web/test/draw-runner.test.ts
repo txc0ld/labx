@@ -865,8 +865,13 @@ describe("draw runner cron handler", () => {
     const at = fakeChain({ 1: { ...state } }, { quote: () => ({ ...cheap, gasLimit: cap }) });
     expect((await call(at.chain)).body.items[0]).toMatchObject({ action: kind, outcome: "succeeded" });
   });
-  it("caps requestRandomness at 400k gas", () => {
-    expect(GAS_CAP.requestRandomness).toBe(400_000n);
+  it("lets requestRandomness through at the gas the real Sepolia coordinator needs, with the runner's fifth on top", async () => {
+    const measured = 649_603n * 6n / 5n;
+    expect(GAS_CAP.requestRandomness).toBe(1_200_000n);
+    const chain = fakeChain({ 1: { ...closed(), snapshotted: true, cursor: 2n } }, { quote: () => ({ ...cheap, gasLimit: measured }) });
+    expect((await call(chain.chain)).body.items[0]).toMatchObject({ action: "requestRandomness", outcome: "succeeded" });
+    const over = fakeChain({ 1: { ...closed(), snapshotted: true, cursor: 2n } }, { quote: () => ({ ...cheap, gasLimit: 1_200_001n }) });
+    expect((await call(over.chain)).body.items[0]).toMatchObject({ action: "requestRandomness", outcome: "gas-cap" });
   });
 
   it("stops without counting a send when gas is above the fee cap", async () => {

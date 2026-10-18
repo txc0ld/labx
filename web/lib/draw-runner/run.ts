@@ -22,8 +22,11 @@ export const SCAN_MARGIN_MS = 5_000;
 export const SCAN_FLOOR_MS = 2_000;
 export const MIN_BALANCE = parseEther("0.01");
 export const MAX_FEE_PER_GAS = parseGwei("50");
-/** Largest gas limit the runner signs for each call. snapshot(100) measured about 4.9M gas; the others under 200k. */
-export const GAS_CAP: Readonly<Record<RunnerAction["kind"], bigint>> = { close: 400_000n, snapshot: 7_000_000n, requestRandomness: 400_000n, settle: 400_000n };
+/**
+ * Largest gas limit the runner signs for each call. snapshot(100) measured about 4.9M gas locally. On Sepolia raffle 3,
+ * close used 34,698 and requestRandomness 649,603 against the real VRF coordinator, so its cap leaves room for the estimate plus a fifth.
+ */
+export const GAS_CAP: Readonly<Record<RunnerAction["kind"], bigint>> = { close: 400_000n, snapshot: 7_000_000n, requestRandomness: 1_200_000n, settle: 400_000n };
 /** The vercel.json schedule runs every five minutes on the clock. */
 export const LEASE_BUCKET_MS = 300_000;
 const CURSOR_KEY = "draw-runner:cursor";
