@@ -143,10 +143,9 @@ contract LabxRaffleTest is AdmissionFixture {
         labx.buyPack(id, packId, qty, bytes32(TERMS));
     }
 
-    function test_constructor_revertsOnMainnet() public {
+    function test_constructor_deploysOnMainnet() public {
         vm.chainId(1);
-        vm.expectRevert(LabxRaffle.MainnetDisabled.selector);
-        _deploy(address(usdc));
+        assertGt(address(_deploy(address(usdc))).code.length, 0);
     }
 
     function test_constructor_revertsWhenUsdcIsNotSixDecimals() public {

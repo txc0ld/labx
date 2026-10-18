@@ -167,7 +167,6 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         uint16 requestConfirmations;
     }
 
-    error MainnetDisabled();
     error ZeroAddress();
     error NotOwner();
     error NotPendingOwner();
@@ -306,7 +305,6 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     }
 
     constructor(Init memory init) {
-        if (block.chainid == 1) revert MainnetDisabled();
         if (init.treasury == address(0) || init.usdc == address(0) || init.vrfCoordinator == address(0)) {
             revert ZeroAddress();
         }
