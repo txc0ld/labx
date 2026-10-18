@@ -265,4 +265,41 @@ describe("Sales and payouts", () => {
     expect(blocks).toEqual([...RECENT].reverse().concat(OLD));
     expect(logReads().filter(name => name === "configured")).toHaveLength(Number((HEAD - DEPLOYMENT) / 2_000n) + 1);
   });
+
+  it("reads back through empty windows to the next activity, at most ten windows a load", async () => {
+    const activity = sellerActivity("archive");
+    const loads: { blocks: bigint[]; windows: number }[] = [];
+    let cursor: bigint | undefined;
+    do {
+      const before = logReads().filter(name => name === "configured").length;
+      const page = await activity.listRaffleActivity({ id: 7n, cursor });
+      loads.push({ blocks: page.items.map(item => item.blockNumber), windows: logReads().filter(name => name === "configured").length - before });
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    expect(loads).toEqual([
+      { blocks: [...RECENT].reverse(), windows: 1 },
+      { blocks: [], windows: 10 },
+      { blocks: [], windows: 10 },
+      { blocks: [], windows: 10 },
+      { blocks: [OLD], windows: 1 },
+      { blocks: [], windows: 7 }
+    ]);
+  });
+
+  it("fails a load whose later window fails, and a retry from the same cursor reads the same windows again", async () => {
+    const ranges = () => calls.filter(call => call.node === "configured" && call.method === "eth_getLogs")
+      .map(call => [BigInt((call.params[0] as Filter).fromBlock), BigInt((call.params[0] as Filter).toBlock)]);
+    const cursor = HEAD - 22_000n;
+
+    await expect(sellerActivity("down").listRaffleActivity({ id: 7n, cursor })).rejects.toThrow(/backend unavailable/);
+    const failed = ranges();
+    expect(failed).toEqual([[cursor - 1_999n, cursor], [cursor - 3_999n, cursor - 2_000n]]);
+
+    calls.length = 0;
+    const retried = await sellerActivity("archive").listRaffleActivity({ id: 7n, cursor });
+    expect(ranges().slice(0, 2)).toEqual(failed);
+    expect(retried.items).toEqual([]);
+    expect(retried.nextCursor).toBe(cursor - 20_000n);
+  });
 });

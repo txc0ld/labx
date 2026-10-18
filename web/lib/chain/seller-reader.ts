@@ -21,6 +21,8 @@ type SellerReaderDependency = {
 const FINANCIAL_EVENTS = ["PackPurchased", "ProceedsClaimed", "FeeClaimed", "Refunded"] as const satisfies readonly SellerFinancialEventName[];
 const FINANCIAL_TOPIC_LIST = FINANCIAL_EVENTS.map((name) => toEventSelector(getAbiItem({ abi: raffleAbi, name })));
 const FINANCIAL_TOPICS = new Set(FINANCIAL_TOPIC_LIST);
+/** Empty 2,000-block windows read in one activity load before handing back a cursor. */
+const ACTIVITY_WINDOWS = 10;
 
 export function createSellerReader(client: PublicClient, manifest: DeploymentManifest, reader: SellerReaderDependency) {
   async function listSellerRaffles({ seller, cursor, limit = 12, block }: {
@@ -33,7 +35,11 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     return reader.listRaffles({ cursor, limit, block, seller });
   }
 
-  /** One 2,000-block page of the raffle's financial events, newest first, ending at `cursor` (the checked block by default). `nextCursor` ends the next older page. */
+  /**
+   * The raffle's financial events, newest first, ending at `cursor` (the checked block by default). Reads 2,000-block windows
+   * back until one has activity, up to 10 windows (20,000 blocks), so an old raffle's sales appear without clicking through
+   * empty pages. `nextCursor` ends the next older window.
+   */
   async function listRaffleActivity({ id, cursor, block }: {
     id: bigint;
     cursor?: bigint;
@@ -42,9 +48,21 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     positiveId(id);
     const at = await reader.checkedBlock(block);
     await reader.readRaffle({ id, block: at });
-    const toBlock = cursor ?? at.number;
+    let toBlock = cursor ?? at.number;
     if (toBlock < manifest.deploymentBlock || toBlock > at.number) throw new Error("Invalid activity block range.");
-    const fromBlock = toBlock - 1_999n > manifest.deploymentBlock ? toBlock - 1_999n : manifest.deploymentBlock;
+    for (let windows = 1; ; windows += 1) {
+      const fromBlock = toBlock - 1_999n > manifest.deploymentBlock ? toBlock - 1_999n : manifest.deploymentBlock;
+      const items = await readActivityWindow(id, fromBlock, toBlock);
+      const nextCursor = fromBlock > manifest.deploymentBlock ? fromBlock - 1n : null;
+      if (items.length || nextCursor === null || windows === ACTIVITY_WINDOWS) {
+        await reader.checkedBlock(at);
+        return { items: items.reverse(), nextCursor, block: at };
+      }
+      toBlock = nextCursor;
+    }
+  }
+
+  async function readActivityWindow(id: bigint, fromBlock: bigint, toBlock: bigint): Promise<SellerRaffleActivity[]> {
     const rawLogs = await client.request({
       method: "eth_getLogs",
       params: [{
@@ -93,8 +111,7 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
       }
     }
 
-    await reader.checkedBlock(at);
-    return { items: items.reverse(), nextCursor: fromBlock > manifest.deploymentBlock ? fromBlock - 1n : null, block: at };
+    return items;
   }
 
   return { listSellerRaffles, listRaffleActivity };

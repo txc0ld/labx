@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
+import { erc20Abi, erc721Abi, keccak256, numberToHex, toBytes } from "viem";
 import { hashCommitment } from "../lib/commitment";
 import { raffleAbi } from "../lib/chain/abi";
 import type { WalletSessionPort } from "../lib/chain/ports";
@@ -481,7 +481,37 @@ run("rendered seller portal on isolated Anvil", () => {
     expect((await chain.service.readAccount({ id: 2n, account: chain.seller })).principal).toBe(0n);
   }, 30_000);
 
-  it("keeps newer activity through an older-page failure and finishes on retry", async () => {
+  type ActivityRead = { fromBlock: string; toBlock: string; failed: boolean };
+  /** Records the activity panel's log reads for one raffle and fails every read that `fail` picks. The panel can load twice as a page opens, so a single injected failure could land on the discarded load. */
+  async function routeActivity(id: bigint, fail: (read: ActivityRead) => boolean) {
+    const reads: ActivityRead[] = [];
+    await fixture.page.route(`${chain.url}/`, async (route: {
+      request(): { postDataJSON(): unknown };
+      continue(): Promise<void>;
+      fulfill(input: { status: number; contentType: string; body: string }): Promise<void>;
+    }) => {
+      const payload = route.request().postDataJSON() as { id?: unknown; method?: unknown; params?: [{ fromBlock?: string; toBlock?: string; topics?: unknown[] }] } | null;
+      const filter = payload?.method === "eth_getLogs" ? payload.params?.[0] : undefined;
+      if (!filter || filter.topics?.[1] !== numberToHex(id, { size: 32 }) || !filter.fromBlock || !filter.toBlock) return route.continue();
+      const read = { fromBlock: filter.fromBlock, toBlock: filter.toBlock, failed: false };
+      if (fail(read)) {
+        read.failed = true;
+        reads.push(read);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ jsonrpc: "2.0", id: payload?.id ?? null, error: { code: -32000, message: "transient activity RPC failure" } })
+        });
+        return;
+      }
+      reads.push(read);
+      await route.continue();
+    });
+    return reads;
+  }
+  const range = ({ fromBlock, toBlock }: ActivityRead) => [fromBlock, toBlock];
+
+  it("keeps newer activity through an older-page failure and finishes on a retry of the same blocks", async () => {
     // Runs after the refund: activity is newest first, so the first page holds the refund and the older page the purchase.
     await fixture.switchAccount(chain.seller);
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
@@ -496,39 +526,50 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await purchased.count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(1);
 
-    let failuresRemaining = 1;
-    await fixture.page.route(`${chain.url}/`, async (route: {
-      request(): { postDataJSON(): unknown };
-      continue(): Promise<void>;
-      fulfill(input: { status: number; contentType: string; body: string }): Promise<void>;
-    }) => {
-      const payload = route.request().postDataJSON();
-      if (failuresRemaining > 0 && payload && typeof payload === "object" && "method" in payload && payload.method === "eth_getLogs") {
-        failuresRemaining -= 1;
-        const id = "id" in payload ? payload.id : null;
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "transient activity RPC failure" } })
-        });
-        return;
-      }
-      await route.continue();
-    });
-
+    let failing = true;
+    const reads = await routeActivity(2n, () => failing);
     await activity.getByRole("button", { name: "Load more", exact: true }).click();
     await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(failuresRemaining).toBe(0);
+    expect(reads.map(read => read.failed)).toEqual([true]);
+    failing = false;
     expect(await refunded.count()).toBe(1);
     expect(await purchased.count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
 
     await activity.getByRole("button", { name: "Try again", exact: true }).click();
     await purchased.waitFor({ state: "visible", timeout: 15_000 });
+    expect(reads.map(range)).toEqual([range(reads[0]), range(reads[0])]);
     expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
-    expect(await refunded.count()).toBe(1);
     expect(await activity.locator("li strong").allInnerTexts()).toEqual(["Refund", `${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`]);
+    await fixture.page.unroute(`${chain.url}/`);
+  }, 45_000);
+
+  it("reads past an empty newest page in one load and ends empty after a failed older read is retried", async () => {
+    await fixture.switchAccount(chain.seller);
+    let failing = true;
+    const reads = await routeActivity(26n, read => failing && BigInt(read.fromBlock) === chain.manifest.deploymentBlock);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/26`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 26" }));
+    await fixture.page.locator("summary").filter({ hasText: "Sales and payouts" }).click();
+    const activity = fixture.page.locator("section[aria-label='Sales and payouts']");
+    await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    // A load read the empty newest window, then went on by itself to the adjacent older one, which failed.
+    const failedAt = reads.findIndex(read => read.failed);
+    expect(failedAt).toBeGreaterThan(0);
+    expect(BigInt(reads[failedAt - 1].fromBlock)).toBe(BigInt(reads[failedAt].toBlock) + 1n);
+    const newest = range(reads[failedAt - 1]), older = range(reads[failedAt]);
+    failing = false;
+    expect(await activity.getByText(/^(No sales or payouts yet\.|None found so far\.)$/).count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+
+    await activity.getByRole("button", { name: "Try again", exact: true }).click();
+    await activity.getByText("No sales or payouts yet.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(reads.filter(read => !read.failed).map(range).slice(-2)).toEqual([newest, older]);
+    expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+    expect(await activity.locator("li").count()).toBe(0);
     await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
 

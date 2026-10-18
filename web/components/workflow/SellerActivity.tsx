@@ -54,7 +54,7 @@ export function SellerActivity({ service, id, refreshKey }: { service: RaffleSer
     <section className="stack sales-activity" aria-label="Sales and payouts">
       {state.kind === "loading" ? <p className="notice" role="status">Loading sales and payouts…</p> : null}
       {state.kind === "error" ? <div className="notice error stack" role="alert"><strong>Couldn’t load all sales and payouts</strong><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void load(state.nextCursor ?? undefined, state.block ?? undefined)}>Try again</button></div> : null}
-      {state.kind !== "loading" && state.items.length === 0 ? <p>{state.nextCursor === null ? "No sales or payouts yet." : "None found so far."}</p> : null}
+      {state.kind === "ready" && state.items.length === 0 ? <p>{state.nextCursor === null ? "No sales or payouts yet." : "None found so far."}</p> : null}
       {state.kind !== "loading" && state.items.length ? <ol className={styles.activityList}>{state.items.map((item) => <ActivityRow key={`${item.transactionHash}-${item.logIndex}`} item={item} />)}</ol> : null}
       {state.kind === "ready" && state.nextCursor !== null ? <button className="btn btn-dark" type="button" disabled={state.loadingMore} onClick={() => void load(state.nextCursor ?? undefined, state.block)}>{state.loadingMore ? "Loading…" : "Load more"}</button> : null}
     </section>
