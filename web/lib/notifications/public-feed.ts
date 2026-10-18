@@ -1,7 +1,8 @@
 import type { Hex } from "viem";
 import { createNotificationReadBudget, notificationWorkflow, NotificationRangeTooDenseError, NotificationReadBudgetError, NotificationRpcTimeoutError, readFinalizedEvents, type NotificationEvent, type NotificationWorkflow } from "./events";
 
-const RANGE_SIZE = 500n;
+/** An empty range costs five reads at any size, so one request's four ranges reach 100,000 blocks, about two weeks on Sepolia. */
+const RANGE_SIZE = 25_000n;
 const MAX_RANGES = 4;
 const MAX_LIMIT = 50;
 const FRESH_AFTER_SECONDS = 20 * 60;

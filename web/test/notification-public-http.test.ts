@@ -111,10 +111,39 @@ describe("public notification feed", () => {
   });
 
   it("offers an older range cursor when the bounded recent scan is empty", async () => {
-    const workflow = publicWorkflow(manifest.deploymentBlock + 2_500n, []);
+    const workflow = publicWorkflow(manifest.deploymentBlock + 100_500n, []);
     const page = await readRecentNotifications({ workflow, limit: 2, now: 1_760_000_000_000 });
     expect(page.items).toEqual([]);
-    expect(page.nextCursor).toMatch(/^before\./);
+    expect(page.nextCursor).toBe(`before.${manifest.deploymentBlock + 500n}`);
+  });
+
+  it("reaches events about 62,000 finalized blocks back in the first request, within the read budget", async () => {
+    // Sepolia on 19 October 2026: the newest feed event (Opened, block 11880263) was about 62,000 blocks behind the finalized head.
+    const deployment = manifest.deploymentBlock;
+    const base = rangedPublicWorkflow({
+      finalized: deployment + 76_626n,
+      events: [{ id: 1, block: deployment + 7_838n }, { id: 2, block: deployment + 13_392n }, { id: 3, block: deployment + 14_482n }]
+    });
+    let reads = 0;
+    const workflow = async (): Promise<NotificationWorkflow> => {
+      const value = await base();
+      const client = value.client;
+      return { ...value, client: {
+        getChainId: () => { reads += 1; return client.getChainId(); },
+        getLogs: args => { reads += 1; return client.getLogs(args); },
+        getBlock: args => { reads += 1; return client.getBlock(args); }
+      } };
+    };
+
+    const bell = await readRecentNotifications({ workflow, limit: 1, now: 1_760_000_000_000 });
+    expect(bell.items.map(item => item.raffleId)).toEqual(["3"]);
+    expect(reads).toBeLessThanOrEqual(65);
+
+    reads = 0;
+    const feed = await readRecentNotifications({ workflow, limit: 20, now: 1_760_000_000_000 });
+    expect(feed.items.map(item => item.raffleId)).toEqual(["3", "2", "1"]);
+    expect(feed.nextCursor).toBeNull();
+    expect(reads).toBeLessThanOrEqual(65);
   });
 
   it("paginates every event in a dense finalized block", async () => {
@@ -128,10 +157,10 @@ describe("public notification feed", () => {
 
   it("returns two verified 25-block ranges when the next range exhausts the shared budget", async () => {
     const deployment = manifest.deploymentBlock;
-    const recent = Array.from({ length: 25 }, (_, index) => ({ id: index + 1, block: deployment + 1_475n - BigInt(index) }));
-    const middle = Array.from({ length: 25 }, (_, index) => ({ id: index + 26, block: deployment + 524n - BigInt(index) }));
-    const older = Array.from({ length: 10 }, (_, index) => ({ id: index + 51, block: deployment + 499n - BigInt(index) }));
-    const workflow = rangedPublicWorkflow({ finalized: deployment + 1_499n, events: [...recent, ...middle, ...older] });
+    const recent = Array.from({ length: 25 }, (_, index) => ({ id: index + 1, block: deployment + 74_975n - BigInt(index) }));
+    const middle = Array.from({ length: 25 }, (_, index) => ({ id: index + 26, block: deployment + 25_024n - BigInt(index) }));
+    const older = Array.from({ length: 10 }, (_, index) => ({ id: index + 51, block: deployment + 24_999n - BigInt(index) }));
+    const workflow = rangedPublicWorkflow({ finalized: deployment + 74_999n, events: [...recent, ...middle, ...older] });
 
     const first = await readRecentNotifications({ workflow, limit: 50, now: 1_760_000_000_000 });
     const second = await readRecentNotifications({ workflow, limit: 50, cursor: first.nextCursor!, now: 1_760_000_000_000 });
@@ -146,9 +175,9 @@ describe("public notification feed", () => {
 
   it("returns a shorter verified page when a later range times out", async () => {
     const deployment = manifest.deploymentBlock;
-    const events = [1, 2, 3].map((id, index) => ({ id, block: deployment + 999n - BigInt(index) }));
+    const events = [1, 2, 3].map((id, index) => ({ id, block: deployment + 49_999n - BigInt(index) }));
     const workflow = rangedPublicWorkflow({
-      finalized: deployment + 999n,
+      finalized: deployment + 49_999n,
       events,
       failLogCall: 2,
       failure: new NotificationRpcTimeoutError()
@@ -161,15 +190,15 @@ describe("public notification feed", () => {
   it("keeps an older-range cursor when a later timeout follows a verified empty range", async () => {
     const deployment = manifest.deploymentBlock;
     const workflow = rangedPublicWorkflow({
-      finalized: deployment + 999n,
+      finalized: deployment + 49_999n,
       events: [],
       failLogCall: 2,
       failure: new NotificationRpcTimeoutError()
     });
     const page = await readRecentNotifications({ workflow, limit: 50, now: 1_760_000_000_000 });
     expect(page.items).toEqual([]);
-    expect(page.nextCursor).toBe(`before.${deployment + 499n}`);
-    expect(page.range.fromBlock).toBe((deployment + 500n).toString());
+    expect(page.nextCursor).toBe(`before.${deployment + 24_999n}`);
+    expect(page.range.fromBlock).toBe((deployment + 25_000n).toString());
   });
 
   it("fails closed when the first range exhausts its budget", async () => {
@@ -184,10 +213,10 @@ describe("public notification feed", () => {
 
   it("fails closed on a canonical mismatch after one completed range", async () => {
     const deployment = manifest.deploymentBlock;
-    const corruptBlock = deployment + 499n;
+    const corruptBlock = deployment + 24_999n;
     const workflow = rangedPublicWorkflow({
-      finalized: deployment + 999n,
-      events: [{ id: 1, block: deployment + 999n }, { id: 2, block: corruptBlock }],
+      finalized: deployment + 49_999n,
+      events: [{ id: 1, block: deployment + 49_999n }, { id: 2, block: corruptBlock }],
       corruptBlock
     });
     await expect(readRecentNotifications({ workflow, limit: 50 })).rejects.toThrow(/not canonical/);

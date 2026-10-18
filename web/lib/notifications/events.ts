@@ -10,7 +10,8 @@ import { serverWorkflow } from "../chain/server";
 import type { BlockRef, DeploymentManifest } from "../chain/types";
 import { sameAddress } from "../chain/validation";
 
-const MAX_BLOCK_RANGE = 500n;
+/** The cron reads 250-block pages; the public feed reads up to 25,000 blocks per range. */
+const MAX_BLOCK_RANGE = 25_000n;
 const MAX_LOGS_PER_RANGE = 100;
 const MAX_CANONICAL_BLOCKS = 25;
 const MAX_LOG_REQUESTS = 32;
