@@ -1,6 +1,7 @@
 import { encodeAbiParameters, keccak256, parseAbiParameters, toBytes, isAddress, isHex, verifyMessage, type Address, type Hex } from "viem";
 import { generatePrivateKey } from "viem/accounts";
 import { hashCommitment } from "./commitment";
+import { isSupportedChainId, isSupportedChainText } from "./chain/networks";
 import type { Store } from "./points";
 
 export type ReserveRecord = {
@@ -53,7 +54,7 @@ export async function createReserve(
   if (!input.labx || input.labx === "0x0000000000000000000000000000000000000000") {
     throw new Error("Raffle address is not configured.");
   }
-  if (input.chainId !== 11155111n && input.chainId !== 31337n) throw new Error("Sepolia is the only supported chain.");
+  if (!isSupportedChainId(Number(input.chainId))) throw new Error("This chain is not supported.");
   const nonce = keccak256(toBytes(generatePrivateKey()));
   const salt = keccak256(toBytes(generatePrivateKey()));
   const plaintext = input.privateCommitment.trim();
@@ -135,7 +136,7 @@ export async function readReserveRecord(store: Store, commit: Hex): Promise<Rese
   const wallet = (key: string): Address => { const value = text(key); if (!isAddress(value)) throw new Error("Commitment wallet is invalid."); return value; };
   const digest = (key: string): Hex => { const value = text(key); if (!isHex(value, { strict: true }) || value.length !== 66) throw new Error("Commitment hash is invalid."); return value; };
   const tokenId = text("tokenId"), chainId = text("chainId");
-  if (!/^\d{1,78}$/.test(tokenId) || !["11155111", "31337"].includes(chainId)) throw new Error("Commitment identifiers are invalid.");
+  if (!/^\d{1,78}$/.test(tokenId) || !isSupportedChainText(chainId)) throw new Error("Commitment identifiers are invalid.");
   const record: ReserveRecord = { seller: wallet("seller"), nft: wallet("nft"), tokenId, chainId, labx: wallet("labx"), publicSummary: text("publicSummary"), publicHash: digest("publicHash"), privateHash: digest("privateHash"), salt: digest("salt"), nonce: digest("nonce"), commit: digest("commit") };
   const expected = hashCommitment({ ...record, chainId: BigInt(chainId), tokenId: BigInt(tokenId) });
   if (expected !== commit || record.commit !== commit || keccak256(toBytes(record.publicSummary)) !== record.publicHash) throw new Error("Commitment record failed integrity checks.");

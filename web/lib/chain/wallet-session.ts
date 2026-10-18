@@ -1,4 +1,5 @@
 import { isHex, stringToHex, toHex } from "viem";
+import { configuredChainId } from "./networks";
 import type { WalletSessionPort } from "./ports";
 import type { WalletProvider, WalletSnapshot } from "./types";
 import { address, hash, sameAddress } from "./validation";
@@ -10,7 +11,7 @@ export class WalletSession implements WalletSessionPort {
   private disposed = false;
   private epoch = 0;
   private retireListeners = () => {};
-  constructor(private provider: WalletProvider | undefined, protected readonly chainId = 11155111) {
+  constructor(private provider: WalletProvider | undefined, protected readonly chainId: number = configuredChainId()) {
     this.listen();
   }
   private listen() {

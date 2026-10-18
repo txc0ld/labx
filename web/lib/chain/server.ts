@@ -1,6 +1,6 @@
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { APPROVED_DEPLOYMENTS, attestDeployment } from "./deployment";
-import { SEPOLIA_HISTORY_RPC } from "./history-rpc";
+import { configuredChainId, NETWORKS } from "./networks";
 import { sameAddress } from "./validation";
 import { parseLocalManifest } from "./manifest";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../published-terms";
@@ -16,8 +16,9 @@ export function historyClient(historyRpc: string) {
   return createPublicClient({ ccipRead: false, transport: http(historyRpc, { timeout: 8_000, retryCount: 0 }) });
 }
 export async function serverWorkflow() {
-  let manifest = APPROVED_DEPLOYMENTS.find(item => item.chainId === 11155111 && process.env.NEXT_PUBLIC_RAFFLE_ADDRESS && sameAddress(item.address, process.env.NEXT_PUBLIC_RAFFLE_ADDRESS));
-  let rpc = process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+  const chainId = configuredChainId();
+  let manifest = APPROVED_DEPLOYMENTS.find(item => item.chainId === chainId && process.env.NEXT_PUBLIC_RAFFLE_ADDRESS && sameAddress(item.address, process.env.NEXT_PUBLIC_RAFFLE_ADDRESS));
+  let rpc = process.env.NEXT_PUBLIC_RPC_URL || NETWORKS[chainId].rpc;
   let origin = new URL(publicSiteUrl()).origin;
   if (process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_LOCAL_RAFFLE_MANIFEST) {
     let localManifest;
@@ -34,7 +35,8 @@ export async function serverWorkflow() {
   const attested = await attestDeployment(client, manifest);
   if (attested.kind !== "verified") throw new Error(attested.reason);
   const context: WorkflowContext = { origin, chainId: manifest.chainId, contract: manifest.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
-  const history = manifest.chainId === 11155111 ? historyClient(SEPOLIA_HISTORY_RPC) : null;
+  const fullHistory = NETWORKS[manifest.chainId].history;
+  const history = fullHistory ? historyClient(fullHistory.rpc) : null;
   return { context, manifest, client, history, block: attested.block };
 }
 export async function verifyWorkflowAuthorization(args: {

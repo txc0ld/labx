@@ -1,10 +1,9 @@
 import { BaseError, hexToBigInt, http, isAddress, isHex, numberToHex, type Address, type EIP1193RequestFn, type Transport } from "viem";
+import type { FullHistory } from "./networks";
 
-/** publicnode's US servers keep only about 25,000 blocks of logs ("pruned history unavailable"); this public gateway keeps all of Sepolia. */
-export const SEPOLIA_HISTORY_RPC = "https://sepolia.gateway.tenderly.co";
-
-export function isPrunedHistoryError(error: unknown): boolean {
-  return error instanceof BaseError && /pruned history/i.test(`${error.message} ${error.details}`);
+/** Whether the configured RPC refused a log read with its chain's refusal for logs it no longer keeps. */
+export function isPrunedHistoryError(error: unknown, history: FullHistory | null): boolean {
+  return history !== null && error instanceof BaseError && history.refusal.test(`${error.message} ${error.details}`);
 }
 
 const MISMATCH = "Older activity from the full-history RPC did not match this network.";
@@ -13,20 +12,20 @@ const HEADER_READS = 4;
 
 /**
  * The browser's read transport. Every request goes to the configured RPC. Only an eth_getLogs for one contract and block range
- * that it answers with "pruned history" is asked once more, of the full-history RPC, with no retry, and those logs are checked
- * against the configured RPC's blocks. Blocks, calls and every other error stay with the configured RPC.
+ * that it answers with its chain's history refusal is asked once more, of the full-history RPC, with no retry, and those logs are
+ * checked against the configured RPC's blocks. Blocks, calls and every other error stay with the configured RPC.
  */
-export function browserReadTransport(rpc: string, historyRpc: string | null): Transport {
+export function browserReadTransport(rpc: string, history: FullHistory | null): Transport {
   const configured = http(rpc, { timeout: 15_000, retryCount: 1 });
-  if (historyRpc === null) return configured;
-  const history = http(historyRpc, { timeout: 8_000, retryCount: 0 });
+  if (history === null) return configured;
+  const full = http(history.rpc, { timeout: 8_000, retryCount: 0 });
   return params => {
-    const primary = configured(params), fallback = history(params);
+    const primary = configured(params), fallback = full(params);
     const request = (async (args, options) => {
       try { return await primary.request(args, options); }
       catch (error) {
         const filter = args.method === "eth_getLogs" ? rangeFilter((args.params as readonly unknown[] | undefined)?.[0]) : null;
-        if (!filter || !isPrunedHistoryError(error)) throw error;
+        if (!filter || !isPrunedHistoryError(error, history)) throw error;
         return canonicalLogs(primary.request, filter, await fallback.request(args));
       }
     }) as typeof primary.request;

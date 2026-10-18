@@ -1,5 +1,5 @@
 import { createPublicClient, decodeEventLog, formatUnits, http, parseAbiItem, type Address, type Hex } from "viem";
-import { sepolia } from "viem/chains";
+import { NETWORKS, type SupportedChainId } from "./chain/networks";
 import type { Receipt } from "./email";
 import type { RequestContext } from "./request-auth";
 
@@ -34,7 +34,8 @@ export async function verifiedPurchase(identity: PurchaseIdentity, context: Requ
   } catch { throw new Error("A finalized LABx purchase could not be verified."); }
 }
 
-export function receiptChainReader(): PurchaseReader {
+export function receiptChainReader(chainId: SupportedChainId): PurchaseReader {
   // Only configured RPC, chain and contract are used; request bodies cannot choose a provider.
-  return createPublicClient({ chain: sepolia, ccipRead: false, transport: http(process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com", { timeout: 10_000, retryCount: 1 }) });
+  const network = NETWORKS[chainId];
+  return createPublicClient({ chain: network.chain, ccipRead: false, transport: http(process.env.NEXT_PUBLIC_RPC_URL || network.rpc, { timeout: 10_000, retryCount: 1 }) });
 }

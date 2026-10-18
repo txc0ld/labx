@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { PreparationNotDispatchedError } from "@/lib/chain/submission-errors";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { isAddress, zeroHash, type Hex, type Address } from "viem";
+import { NETWORKS } from "@/lib/chain/networks";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { DraftInput, RaffleSnapshot } from "@/lib/chain/types";
 import type { PublicReserve } from "@/lib/reserve";
@@ -149,7 +150,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }, [service, existing, walletSnapshot]);
 
   const identityLocked = existing?.raffle.escrowed === true;
-  const walletPickerReady = walletSnapshot.kind === "connected" && walletSnapshot.chainId === 11155111 && service.manifest.chainId === 11155111;
+  const network = NETWORKS[service.manifest.chainId], nftDiscovery = network.nftApiHost !== null;
+  const walletPickerReady = walletSnapshot.kind === "connected" && walletSnapshot.chainId === service.manifest.chainId && nftDiscovery;
   // A new raffle starts on the wallet gallery; drafts keep their entered NFT and offer the gallery on request.
   const galleryFirst = !existing && walletPickerReady;
   const galleryOpen = galleryFirst || pickerOpen;
@@ -282,8 +284,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   async function loadInventory(cursor?: string) {
     const snapshot = wallet.getSnapshot();
-    if (snapshot.kind !== "connected" || snapshot.chainId !== 11155111 || service.manifest.chainId !== 11155111) {
-      setInventory({ kind: "error", items: [], message: "Automatic NFT discovery is available for a connected Ethereum Sepolia wallet. You can still enter the NFT manually." });
+    if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId || !nftDiscovery) {
+      setInventory({ kind: "error", items: [], message: `Automatic NFT discovery is available for a connected ${network.name} wallet. You can still enter the NFT manually.` });
       return;
     }
     const version = ++inventoryGeneration.current;
@@ -343,8 +345,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   async function chooseNft(item: WalletNft) {
     if (identityLockedRef.current) return;
     const snapshot = wallet.getSnapshot();
-    if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId || snapshot.chainId !== 11155111) {
-      setSelectionError("Reconnect the same Ethereum Sepolia wallet before selecting an NFT.");
+    if (snapshot.kind !== "connected" || snapshot.chainId !== service.manifest.chainId || !nftDiscovery) {
+      setSelectionError(`Reconnect the same ${network.name} wallet before selecting an NFT.`);
       return;
     }
     const version = ++selectionGeneration.current;
@@ -633,7 +635,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       <fieldset className={formStyles.formSection}>
         <legend><span>02</span> Prize NFT</legend>
         <div className={formStyles.nftIntro}><p className={formStyles.sectionHelp}>Pick an NFT from your wallet, or enter its contract address and token ID.</p>{existing && !identityLocked ? <button className="btn btn-dark" type="button" aria-controls={pickerId} aria-expanded={pickerOpen} disabled={!walletPickerReady} onClick={pickerOpen ? closePicker : openPicker}>{pickerOpen ? "Close wallet NFTs" : "Choose from wallet"}</button> : null}</div>
-        {service.manifest.chainId !== 11155111 ? <p className={formStyles.inventoryNote}>Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.</p> : null}
+        {!nftDiscovery ? <p className={formStyles.inventoryNote}>Automatic NFT discovery is disabled for isolated local-chain fixtures. Manual entry remains available.</p> : null}
         {galleryOpen ? <div id={pickerId} className={formStyles.picker} role="region" aria-label="Wallet NFTs" aria-busy={inventoryBusy || pendingNft !== null}>
           <div className={formStyles.pickerHeading}><strong>Your NFTs</strong><button ref={refreshFocus} className={`btn btn-dark ${formStyles.refreshButton}`} type="button" aria-disabled={inventoryBusy} aria-busy={inventoryBusy} onClick={() => { if (inventoryBusy) return; invalidateInventory(); setInventory({ kind: "idle" }); setSelectionError(""); void loadInventory(); }}>Refresh</button></div>
           <p className={formStyles.inventoryNote} role="status" aria-live="polite" aria-atomic="true">{inventoryStatus}</p>

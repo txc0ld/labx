@@ -1,7 +1,8 @@
 "use client";
 import { createPublicClient } from "viem";
 import { APPROVED_DEPLOYMENTS, LEGACY_RAFFLE } from "./deployment";
-import { browserReadTransport, SEPOLIA_HISTORY_RPC } from "./history-rpc";
+import { browserReadTransport } from "./history-rpc";
+import { configuredChainId, NETWORKS } from "./networks";
 import { createRaffleService } from "./service";
 import { WalletSession } from "./wallet-session";
 import { BrowserWalletSession } from "./wallet-connectors";
@@ -24,8 +25,9 @@ let configured: BrowserService | undefined;
 export function configuredBrowserService(): BrowserService {
   if (typeof window === "undefined") return { kind: "unavailable", reason: "Connect a wallet in your browser.", wallet: new WalletSession(undefined) };
   if (configured) return configured;
+  const chainId = configuredChainId();
   let manifest: DeploymentManifest | undefined;
-  let rpc = process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+  let rpc = process.env.NEXT_PUBLIC_RPC_URL || NETWORKS[chainId].rpc;
   const selected = process.env.NEXT_PUBLIC_RAFFLE_ADDRESS;
   try {
     if (process.env.NODE_ENV === "development" && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
@@ -36,14 +38,14 @@ export function configuredBrowserService(): BrowserService {
         manifest = local; rpc = localRpc.href;
       }
     }
-    manifest ??= APPROVED_DEPLOYMENTS.find(item => selected && item.chainId === 11155111 && sameAddress(item.address, selected));
-    const wallet = new BrowserWalletSession(window.ethereum, manifest?.chainId ?? 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser, manifest ? `${manifest.version}:${manifest.chainId}:${manifest.address.toLowerCase()}:${manifest.runtimeCodeHash.toLowerCase()}` : undefined);
+    manifest ??= APPROVED_DEPLOYMENTS.find(item => selected && item.chainId === chainId && sameAddress(item.address, selected));
+    const wallet = new BrowserWalletSession(window.ethereum, manifest?.chainId ?? chainId, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser, manifest ? `${manifest.version}:${manifest.chainId}:${manifest.address.toLowerCase()}:${manifest.runtimeCodeHash.toLowerCase()}` : undefined);
     if (!manifest) {
       configured = { kind: "unavailable", wallet, reason: selected && sameAddress(selected, LEGACY_RAFFLE) ? "The configured contract is historical. It does not support the current buyer protections." : "A reviewed raffle deployment has not been configured yet." };
     } else {
-      configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: browserReadTransport(rpc, manifest.chainId === 11155111 ? SEPOLIA_HISTORY_RPC : null) }), manifest) };
+      configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: browserReadTransport(rpc, NETWORKS[manifest.chainId].history) }), manifest) };
       void wallet.restore();
     }
-  } catch { configured = { kind: "unavailable", reason: "Deployment configuration is invalid.", wallet: new BrowserWalletSession(window.ethereum, 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser) }; }
+  } catch { configured = { kind: "unavailable", reason: "Deployment configuration is invalid.", wallet: new BrowserWalletSession(window.ethereum, chainId, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser) }; }
   return configured;
 }
