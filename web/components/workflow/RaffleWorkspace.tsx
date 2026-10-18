@@ -256,13 +256,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
     : refreshState.kind === "error" ? "Refresh the raffle before your next step." : undefined;
   const availabilityStatus = catalogAvailability(snapshot);
 
-  // Re-read silently only while the page can change by itself and nothing on the main path can be done: while the draw result is
-  // pending, while LABx runs the seller's next draw step, and in the last 15 minutes before the sales deadline.
-  // pollFrom is the chain time re-reading starts.
-  const pollFrom = phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace
-    || mode === "seller" && drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true, revealedAt).kind === "automatic" ? now
-    : phase === 1 && now < r.salesEnd && (mode === "seller" || !availabilityStatus.purchasable && publicRecoveryActions(snapshot, availability, currentAccount).length === 0) ? r.salesEnd - DEADLINE_POLL_WINDOW
-    : null;
+  const pollFrom = pollStart(snapshot, mode, availability, currentAccount, revealedAt);
   // The page's block time stands still between reads, so the wait until pollFrom is timed from this read.
   const pollDelaySeconds = pollFrom !== null && pollFrom > now ? Number(pollFrom - now) : 0;
   const walletBusy = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "overflow");
@@ -273,7 +267,8 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
     let inFlight = false;
     // A review, a submission or confirmation, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps
     // the page still, so a re-read never remounts a control mid-sequence. A read that started before the control got busy is dropped.
-    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, .transaction-state, [aria-busy=true]");
+    // A purchase receipt is not mid-sequence, so it does not hold the page.
+    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, .transaction-state:not(.purchase-receipt), [aria-busy=true]");
     const timer = window.setInterval(() => {
       if (Date.now() - start < pollDelaySeconds * 1000) return;
       if (inFlight || document.visibilityState !== "visible" || busy()) return;
@@ -347,12 +342,38 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   );
 }
 
+/**
+ * Re-read silently only while the page can change by itself: while the draw result is pending, while the seller waits for LABx
+ * review or for LABx to run their next draw step, and in the last 15 minutes before the sales deadline. A public page with
+ * entries keeps re-reading after the deadline while the draw runner or the seller can still move it on to a prize claim or
+ * refunds, and an open checkout re-reads from the deadline so it closes. Returns the chain time re-reading starts, or null.
+ */
+export function pollStart(snapshot: RaffleSnapshot, mode: RaffleWorkspaceMode, availability: readonly ActionAvailability[], account: AccountRaffleState | null, revealedAt: bigint | undefined): bigint | null {
+  const r = snapshot.raffle, now = snapshot.block.timestamp, phase = Number(r.phase);
+  if (phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace) return now;
+  if (mode === "seller") {
+    if (drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true, revealedAt).kind === "automatic") return now;
+    if (phase === 0 && r.escrowed && now < r.salesEnd && snapshot.admission.status !== "approved") return now;
+    return phase === 1 && now < r.salesEnd ? r.salesEnd - DEADLINE_POLL_WINDOW : null;
+  }
+  if (phase === 1 && now < r.salesEnd) {
+    if (catalogAvailability(snapshot).purchasable) return r.salesEnd;
+    return publicRecoveryActions(snapshot, availability, account).length === 0 ? r.salesEnd - DEADLINE_POLL_WINDOW : null;
+  }
+  // Without entries nothing can unlock for a buyer. After the draw-start deadline anyone can cancel, so buyers reach refunds themselves.
+  return snapshot.lotCount > 0n && ((phase === 1 || phase === 2) && now < r.salesEnd + snapshot.drawStartGrace || phase === 4) ? now : null;
+}
+
 /** Seller's main-path progress: four steps and what sold. */
-function SellerProgress({ snapshot }: { snapshot: RaffleSnapshot }) {
+export function SellerProgress({ snapshot }: { snapshot: RaffleSnapshot }) {
   const r = snapshot.raffle, phase = Number(r.phase);
+  // Only listing sets approvedAtOpening, so a draft cancelled before it was listed shows no listing or sales steps.
+  const listed = snapshot.admission.record.approvedAtOpening;
   const steps: { key: string; label: ReactNode; done: boolean }[] = [
-    { key: "listed", label: "Listed", done: phase >= 1 },
-    { key: "closed", label: <>{phase >= 2 ? "Sales closed" : "Sales close"} <LocalTime at={r.salesEnd} short /></>, done: phase >= 2 },
+    ...(listed ? [
+      { key: "listed", label: "Listed", done: true },
+      { key: "closed", label: <>{phase >= 2 ? "Sales closed" : "Sales close"} <LocalTime at={r.salesEnd} short /></>, done: phase >= 2 }
+    ] : []),
     ...(phase === 6
       ? [{ key: "cancelled", label: "Cancelled", done: true }]
       : [{ key: "drawn", label: "Winner drawn", done: phase >= 4 }, { key: "paid", label: "Paid", done: phase === 5 && r.principalEscrow === 0n }])
@@ -440,6 +461,7 @@ function buyerStatus(snapshot: RaffleSnapshot, account: AccountRaffleState | nul
     case 0: return { title: "Not listed yet", text: "Memberships aren’t on sale yet." };
     case 1:
       if (snapshot.block.timestamp >= r.salesEnd) return { title: "Sales have ended", text: blocker ?? "The draw runs next." };
+      if (catalogAvailability(snapshot).remaining === 0) return { title: "Sold out", text: "All memberships are sold. The draw runs after sales end." };
       return { title: "Sales are paused", text: "LABx has paused new sales for now." };
     case 2: return { title: "Sales closed", text: blocker ?? "The draw runs next." };
     case 3: return { title: "Drawing a winner", text: "This usually takes a few minutes. This page updates on its own." };
@@ -469,7 +491,7 @@ function purchaseRecap(snapshot: RaffleSnapshot, submitted: SubmittedAction) {
 type Consent = { order: string | null; account: string | null; terms: boolean; rules: boolean; age: boolean };
 const NO_CONSENT: Consent = { order: null, account: null, terms: false, rules: false, age: false };
 
-function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed, writesEnabled, writeDisabledReason, updating }: {
+export function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed, writesEnabled, writeDisabledReason, updating }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   account: AccountRaffleState | null;
@@ -500,7 +522,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   const buyerAccount = buyerWallet.kind === "connected" ? buyerWallet.account.toLowerCase() : null;
   const selected = snapshot.packs[packId];
   const phase = Number(snapshot.raffle.phase);
-  const salesOpen = phase === 1 && snapshot.block.timestamp < snapshot.raffle.salesEnd && !snapshot.paused;
+  const salesOpen = phase === 1 && snapshot.block.timestamp < snapshot.raffle.salesEnd && !snapshot.paused && catalogAvailability(snapshot).remaining > 0;
   const quantityValid = Number.isSafeInteger(quantity) && quantity >= 1 && quantity <= 20;
   const { owner, outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
   const purchaseOutcome = [...outcomes].reverse().find(outcome => outcome.kind === "terminal" && outcome.confirmation.receipt.status === "success"
@@ -630,9 +652,12 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
   }
 
   const status = !salesOpen && mainActions.length === 0 ? buyerStatus(snapshot, account, buyerAccount) : null;
+  // The receipt stays in every phase until Buy again or Dismiss acknowledges it, so its saved checkpoint can clear.
+  const recap = purchaseOutcome?.kind === "terminal" ? purchaseRecap(snapshot, purchaseOutcome.submitted) : null;
+  const receipt = purchaseConfirmation ? <div className="transaction-state purchase-receipt notice ok stack" role="status">{phase === 1 ? <><strong>You’re in</strong><span>{recap ?? "Your purchase is confirmed."} The draw runs after <LocalTime at={snapshot.raffle.salesEnd} />.</span></> : <><strong>Purchase confirmed</strong>{recap ? <span>{recap}</span> : null}</>}<details><summary>Transaction details</summary><p>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</p><p className="hash">{purchaseConfirmation.hash}</p></details>{purchasesEnded ? <button className="text-link" type="button" disabled={!canArchivePurchase} onClick={buyAgain}>Dismiss</button> : salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain && (updating || quoteState === "loading") ? <p>Updating… Buy again will be ready in a moment.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null;
   return (
     <div className="stack buyer-flow">
-      {purchaseConfirmation && phase === 1 ? <div className="transaction-state notice ok stack" role="status"><strong>You’re in</strong><span>{purchaseOutcome?.kind === "terminal" ? purchaseRecap(snapshot, purchaseOutcome.submitted) ?? "Your purchase is confirmed." : "Your purchase is confirmed."} The draw runs after <LocalTime at={snapshot.raffle.salesEnd} />.</span><details><summary>Transaction details</summary><p>Confirmed in block {purchaseConfirmation.blockNumber.toString()}.</p><p className="hash">{purchaseConfirmation.hash}</p></details>{purchasesEnded ? <button className="text-link" type="button" disabled={!canArchivePurchase} onClick={buyAgain}>Dismiss</button> : salesOpen ? <><button className="btn" type="button" disabled={!canBuyAgain} onClick={buyAgain}>Buy again</button>{!canBuyAgain && (updating || quoteState === "loading") ? <p>Updating… Buy again will be ready in a moment.</p> : null}</> : null}{receiptError ? <p role="alert">{receiptError}</p> : null}</div> : null}
+      {phase === 1 ? receipt : null}
       {salesOpen && !purchaseConfirmation ? (
         <>
           {selectionNotice ? <p className="notice warning" role="status">{selectionNotice}</p> : null}
@@ -694,6 +719,7 @@ function BuyerActions({ browser, snapshot, account, availability, termsHash, rec
         const copy = buyerActionCopy(snapshot, item, account);
         return <section key={item.kind} className="workflow-next stack"><div><h2>{copy.title}</h2>{copy.text ? <p>{copy.text}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={recoveryAction(snapshot, item.kind)} label={copy.label} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
       })}
+      {phase !== 1 ? receipt : null}
       {account && account.principal > 0n && phase !== 6 ? <div className="account-balance"><span>Membership price paid</span><strong>{formatUsdcAmount(account.principal)} USDC</strong><small>{phase <= 3 ? `Plus the ${formatUsdcAmount(account.fee)} USDC processing fee. If this raffle is cancelled, you get ${formatUsdcAmount(account.principal)} USDC back. The processing fee is not refunded.` : `Plus the ${formatUsdcAmount(account.fee)} USDC processing fee.`}</small></div> : null}
       {helpActions.length ? <details className="workflow-details help-finish"><summary>Other actions</summary><div className="stack"><p>Optional. Anyone can run these steps for a network fee. They pay you nothing.</p>{helpActions.map(item => <TransactionFlow key={item.kind} service={browser.service} wallet={browser.wallet} action={recoveryAction(snapshot, item.kind)} label={item.label} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} />)}</div></details> : null}
     </div>
