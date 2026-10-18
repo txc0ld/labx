@@ -1,4 +1,4 @@
-import { createPublicClient, http, type Address, type Hex } from "viem";
+import { createPublicClient, fallback, http, type Address, type Hex } from "viem";
 import { APPROVED_DEPLOYMENTS, attestDeployment } from "./deployment";
 import { sameAddress } from "./validation";
 import { parseLocalManifest } from "./manifest";
@@ -9,6 +9,12 @@ import { workflowMessage } from "./messages";
 /** Server reads never follow an off-chain lookup (CCIP-Read), so a contract named in a request cannot make LABx fetch a URL. */
 export function serverClient(rpc: string) {
   return createPublicClient({ ccipRead: false, transport: http(rpc, { timeout: 15_000, retryCount: 1 }) });
+}
+/** publicnode's US servers keep only about 25,000 blocks of logs ("pruned history unavailable"); this public gateway keeps all of Sepolia. */
+export const SEPOLIA_HISTORY_RPC = "https://sepolia.gateway.tenderly.co";
+/** For log reads only: the configured RPC first, then the full-history RPC when it refuses. Transactions never use this client. */
+export function historyClient(rpc: string, historyRpc: string) {
+  return createPublicClient({ ccipRead: false, transport: fallback([http(rpc, { timeout: 15_000, retryCount: 1 }), http(historyRpc, { timeout: 15_000, retryCount: 1 })]) });
 }
 export async function serverWorkflow() {
   let manifest = APPROVED_DEPLOYMENTS.find(item => item.chainId === 11155111 && process.env.NEXT_PUBLIC_RAFFLE_ADDRESS && sameAddress(item.address, process.env.NEXT_PUBLIC_RAFFLE_ADDRESS));
@@ -29,7 +35,8 @@ export async function serverWorkflow() {
   const attested = await attestDeployment(client, manifest);
   if (attested.kind !== "verified") throw new Error(attested.reason);
   const context: WorkflowContext = { origin, chainId: manifest.chainId, contract: manifest.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
-  return { context, manifest, client, block: attested.block };
+  const history = manifest.chainId === 11155111 ? historyClient(rpc, SEPOLIA_HISTORY_RPC) : client;
+  return { context, manifest, client, history, block: attested.block };
 }
 export async function verifyWorkflowAuthorization(args: {
   operation: Parameters<typeof workflowMessage>[0]; context: WorkflowContext; account: Address; input: unknown; deadline: string; signature: Hex;

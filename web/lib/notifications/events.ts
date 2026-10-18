@@ -221,7 +221,7 @@ export function adaptNotificationWorkflow(workflow: Awaited<ReturnType<typeof se
         return { number: block.number, hash: block.hash, timestamp: block.timestamp, gasLimit: block.gasLimit };
       },
       async getLogs(args) {
-        return workflow.client.getLogs(args);
+        return workflow.history.getLogs(args);
       }
     }
   };
