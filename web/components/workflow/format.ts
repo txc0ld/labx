@@ -105,3 +105,15 @@ export function catalogAvailability(snapshot: RaffleSnapshot) {
         : snapshot.policy.termsHash.toLowerCase() !== PUBLISHED_TERMS_HASH.toLowerCase() ? "Terms unavailable" : "Open";
   return { label, purchasable: label === "Open", ended, remaining };
 }
+
+/**
+ * The prize leaves the contract once: to the winner of a finished raffle, or back to the seller after a cancellation.
+ * Listing needs the prize locked, so a cancelled raffle that was listed returned it; a cancelled draft may never have held it.
+ */
+export function prizeStatus(snapshot: RaffleSnapshot) {
+  const r = snapshot.raffle;
+  if (r.escrowed) return { status: "Prize locked", detail: "Locked in the raffle contract" };
+  if (r.phase === 5) return { status: "Prize claimed", detail: "Claimed by the winner" };
+  if (r.phase === 6 && snapshot.admission.record.approvedAtOpening) return { status: "Prize returned to the seller", detail: "Returned to the seller" };
+  return r.phase === 6 ? { status: "Prize not locked", detail: "Not locked" } : { status: "Prize not locked yet", detail: "Not locked yet" };
+}

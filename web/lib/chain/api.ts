@@ -22,7 +22,9 @@ async function request(path: string, input?: unknown) {
   const response = await fetch(path, { method: input === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input) });
   const content = await response.text();
   if (content.length > 262_144) throw new Error("Workflow response was too large.");
-  const body = record(JSON.parse(content));
+  let body: Record<string, unknown>;
+  // A platform error page (a timeout or crash) is not JSON, and its parse error means nothing to the person.
+  try { body = record(JSON.parse(content)); } catch (error) { if (response.ok) throw error; throw new Error("LABx didn't respond. Try again in a minute."); }
   if (!response.ok || body.ok !== true) throw new Error(typeof body.error === "string" ? body.error : "The workflow request was not acknowledged.");
   return body;
 }

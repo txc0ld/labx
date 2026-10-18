@@ -3,7 +3,7 @@ import { address, hash } from "@/lib/chain/validation";
 import { workflowRequestBody } from "@/lib/chain/request-body";
 import { recordAgreement } from "@/lib/agreement-record";
 import { activeStore } from "@/lib/store";
-import { serverWorkflow } from "@/lib/chain/server";
+import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { raffleAbi } from "@/lib/chain/abi";
 import { requirePublishedTerms, TERMS_VERSION } from "@/lib/published-terms";
 export async function POST(request: Request) {
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     requirePublishedTerms(policy.termsHash);
     if (body.terms !== true || body.rules !== true || body.age !== true || typeof body.deadline !== "string" || typeof body.signature !== "string" || !isHex(body.signature)) throw new Error("Signed agreements are required.");
     const input = { address: address(body.address), pieceId: body.pieceId, terms: true, rules: true, age: true, termsHash: hash(body.termsHash), deadline: body.deadline, signature: body.signature };
-    const result = await recordAgreement(activeStore(), input, context, Date.now(), args => client.verifyMessage(args));
+    const result = await recordAgreement(activeStore(), input, context, Date.now(), signatureVerifier(client));
     return Response.json({ ok: true, recorded: true, ...result, termsHash: context.termsHash, version: TERMS_VERSION }, { headers: { "Cache-Control": "no-store" } });
   } catch { return Response.json({ ok: false, error: "Agreement was not saved. Verify the published terms, wallet authorization and persistent storage." }, { status: 400 }); }
 }
