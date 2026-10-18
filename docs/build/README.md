@@ -16,6 +16,18 @@ Use these documents for the current version 3 source:
 - [Dependency and CI security](dependency-ci-security-20261007.md) records the patched WebSocket dependency and verified action pins.
 - [Release and migration plan](../../LAUNCH.md) lists the checks and approvals required before a release.
 
+Later records, newest first:
+
+- [Draw runner and one-click seller finish steps](draw-runner-20261010.md) records the automatic close, count, draw and finish steps, their limits and how to turn them on and off. Its one-click reveal supersedes the "mount must never sign or submit" rule in the seller workflow simplification record.
+- [Seller workflow simplification](seller-workflow-simplification-20261010.md) records the simpler seller page and Studio next steps.
+- [Direct transactions from delegated accounts](smart-wallet-direct-20261010.md) records which EIP-7702 delegated accounts may send transactions directly.
+- [Three-action raffle workflow contract](three-action-flow-20261010.md) defines the Create, Approve and List actions.
+- [Forge lint triage](forge-lint-triage-20261010.md) records which Forge warnings were accepted and why.
+- [Five membership tiers](five-membership-tiers-20261010.md) records the Entry to Platinum default tiers.
+- [Raffle notifications](raffle-notifications-20261009.md) and its [review repair](raffle-notification-review-repair-20261009.md) record the notification cron, feed and admin email.
+- [Safe approval handoff](safe-approval-20261009.md) records the first, read-only Safe approval slice. Approve now sends the call to the connected Safe wallet, with export as an Advanced fallback; see `web/lib/chain/README.md`.
+- [Seller workspace layout](seller-layout-20261008.md), [wallet NFT picker](wallet-nft-picker-20261008.md), [unified wallet connection](unified-wallet-20261008.md) and [automatic seller commitment](automatic-commitment-20261008.md) record the 8 October seller and wallet changes.
+
 The following reports are retained as historical evidence. Later reports above supersede their candidate or design status:
 
 - `*-20261006.md` reports predate the current version 3 seller, fee, admission and recovery candidate.

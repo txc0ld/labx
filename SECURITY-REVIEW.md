@@ -1,5 +1,7 @@
 # LABx security review
 
+> **Superseded.** This review covers the retired v1 contract `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C`. Its instructions, such as keeping `cancel`, owner `retryRandomness` and LINK funding, do not apply to v3. Use `SECURITY.md` and `docs/build/README.md` for the current contract.
+
 Independent review of branch `cursor/labx-v1-sepolia-a20f` at `536d7ec2905ecb2ab204c4aebaa804accf5458a8` (PR 1). The author of the contracts is not the author of this note. No fixes are included here.
 
 ## Scope

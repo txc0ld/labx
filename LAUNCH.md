@@ -1,6 +1,6 @@
 # LABx v3 release and migration plan
 
-This is a plan for a separately authorized Sepolia release. It does not authorize publishing, deploying, transferring assets or ownership, funding a subscription, or accepting agreements. The current Sepolia deployment and source-registration checkpoint is [the v3 activation record](docs/build/v3-sepolia-registration-20261008.md). The user-signed deployment and Safe acceptance have been verified; hosted release and real VRF lifecycle testing remain separate gates.
+This is a plan for a separately authorized Sepolia release. It does not authorize publishing, deploying, transferring assets or ownership, funding a subscription, or accepting agreements. The current Sepolia deployment and source-registration checkpoint is [the v3 activation record](docs/build/v3-sepolia-registration-20261008.md). The user-signed deployment and Safe acceptance have been verified, and labx.art serves the deployment. A real VRF lifecycle test remains a separate gate.
 
 ## 1. Freeze the source candidate
 
@@ -46,8 +46,8 @@ For the authorized Sepolia test deployment, verified deployment/configuration re
 
 ## 6. Publish the website separately
 
-Use Vercel root `web`. Review the environment's public origin, selected approved manifest/RPC and both durable-storage settings. If email receipts are enabled, configure and verify the delivery provider and sender. Do not revive retired entry-signing or bot-token settings.
+Use Vercel root `web`. Review the environment's public origin, selected approved manifest/RPC and Neon storage settings. If email receipts are enabled, configure and verify the delivery provider and sender. Do not revive retired entry-signing or bot-token settings.
 
 Confirm the exact hosted commit and deployment state. Test its catalog, direct routes, wallet/network changes, purchase/claim review screens, keyboard/mobile layouts and receipt/history recovery. Preview and production aliases are different release destinations; record each explicitly.
 
-Operational monitoring must cover subscription balance, pending draw deadlines, snapshot progress, failed receipts and durable-store errors. Rollback can disable new website actions but cannot reverse an on-chain transaction or rewrite an open raffle's policy. Preserve access to existing claims and recovery when changing frontend releases.
+Operational monitoring must cover subscription balance, pending draw deadlines, snapshot progress, failed receipts and durable-store errors. With the draw runner on, it must also cover the runner's balance (`low-funds`) and any `draw-runner` log line with `ok: false`, including 503 refusals. Turning the runner off is described in [the draw runner record](docs/build/draw-runner-20261010.md). Rollback can disable new website actions but cannot reverse an on-chain transaction or rewrite an open raffle's policy. Preserve access to existing claims and recovery when changing frontend releases.

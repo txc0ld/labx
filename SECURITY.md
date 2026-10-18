@@ -1,6 +1,6 @@
 # LABx security
 
-This describes the prepared version 3 source. It is not a claim about the historical Sepolia deployment, a formal audit or a zero-risk guarantee. See `LAUNCH.md` for release prerequisites and `docs/build/seller-portal-fees-20261007.md` for candidate-specific evidence.
+This describes the version 3 contract deployed on Sepolia at `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327` and the website that uses it. It is not a formal audit or a zero-risk guarantee. See `LAUNCH.md` for release prerequisites and `docs/build/seller-portal-fees-20261007.md` for candidate-specific evidence.
 
 ## Assets and authority
 
@@ -34,19 +34,20 @@ The pinned coordinator, USDC, prize token, RPC, optional router/oracle and serve
 
 The ETH route is off unless router, WETH and the feed are wired at deployment. Their addresses and pool fee are immutable. It checks oracle freshness, slippage and a short transaction deadline, swaps into USDC and refunds change. Refunds after cancellation are denominated in USDC, including for purchases funded with ETH. Keep this route disabled until its actual liquidity and dependencies are verified.
 
-Ethereum mainnet, chain ID 1, is rejected by the contract constructor. The deployment script accepts Sepolia only. No approved production deployment manifest is currently supplied. Local Anvil overrides require development mode and loopback configuration.
+Ethereum mainnet, chain ID 1, is rejected by the contract constructor. The deployment script accepts Sepolia only. The only approved manifest is the Sepolia v3 deployment in `web/lib/chain/deployment.ts`. Local Anvil overrides require development mode and loopback configuration.
 
 ## Website and server
 
 - A configured address alone does not authorize writes. The approved manifest must match chain, address, runtime hash, contract version, deployment block and USDC. Two UI confirmations do not establish finality; receipt issuance requires a finalized purchase.
 - Owner admission review uses exact zero-value contract calls. Safe proposals and executed transactions are distinct: confirmation requires a canonical successful receipt, matching raffle event and current admission state. The owner workflow must not use a signer EOA as the Safe or weaken financial transaction confirmation.
-- User review precedes every wallet transaction. Exact USDC approval is separate from purchase. Accounts, chain, state and amounts are revalidated. A deployment/account-scoped browser journal retains opaque transaction intent and public hash/nonce metadata for explicit recovery after reload. It does not store private commitment payloads or signatures. Storage/lock failure prevents a new send. Clearing browser data, using another device or submitting outside this website remains outside that guard.
+- Every website transaction is confirmed by the user in their own wallet; the draw runner below is the only server signer. Exact USDC approval is separate from purchase. Accounts, chain, state and amounts are revalidated. A deployment/account-scoped browser journal retains opaque transaction intent and public hash/nonce metadata for explicit recovery after reload. It does not store private commitment payloads or signatures. Storage/lock failure prevents a new send. Clearing browser data, using another device or submitting outside this website remains outside that guard.
 - Commitment creation/recovery, agreements, receipts and private records require fresh scoped wallet signatures. Authorization binds origin, chain, deployment and relevant identity. Never place private plaintext, salt, recovered commitment payloads or signatures in browser storage, logs or analytics.
-- Agreement text and version determine `PUBLISHED_TERMS_HASH`. A mismatched raffle cannot silently substitute different terms. A wallet signature proves an assertion, not age, personhood or legal enforceability. Contract-wallet signature verification is not implemented.
+- Agreement text and version determine `PUBLISHED_TERMS_HASH`. A mismatched raffle cannot silently substitute different terms. A wallet signature proves an assertion, not age, personhood or legal enforceability. Routes that check signatures through the RPC client also accept contract-wallet signatures (ERC-1271 and ERC-6492).
 - Receipts verify the finalized purchase log, buyer and amounts. The recipient and email payload are immutable after reservation. Idempotent mail retries are bounded; expired or uncertain jobs require reconciliation. This does not prove ownership of an email address.
-- Vercel requires both Upstash settings. Durable write failures fail closed. The local file store serializes one process and is not a multiprocess database. Receipt delivery additionally requires Resend configuration.
+- Vercel uses Neon (`LABX_STORE=neon`). Durable write failures fail closed. The local file store serializes one process and is not a multiprocess database. Receipt delivery additionally requires Resend configuration.
 - AMOE and CAPTCHA entry routes are disabled. The legacy contract entry selector reverts. Historical check-in points confer no entries or privilege; its server token is never public.
-- Remote metadata JSON reads are bounded browser requests without credentials, referrers or redirects. Those bounds do not cover the RPC tokenURI response or native image transfer and decoded size. The server does not fetch arbitrary metadata URLs. Unknown or failed metadata is not replaced with a fabricated listing.
+- Remote metadata JSON reads are bounded browser requests without credentials, referrers or redirects. Those bounds do not cover the RPC tokenURI response or native image transfer and decoded size. The server does not fetch arbitrary metadata URLs, and its chain reads do not follow CCIP-Read off-chain lookups. Unknown or failed metadata is not replaced with a fabricated listing.
+- The draw runner signs with `LABX_KEEPER_PRIVATE_KEY`, a server-only key, on a five-minute cron behind `CRON_SECRET`. It sends only `close`, `snapshot`, `requestRandomness` and `settle` to the approved contract, with zero value and fixed gas and fee caps. Anyone may make those calls, so a leaked key can spend only its own gas, or hold its nonce with a stuck transaction, which pauses the runner; sellers get the manual steps back after 30 minutes. It refuses to run with the owner's, pending owner's or treasury's key, or a Safe signer's or module's, and logs each refusal. It must be a dedicated account: not the VRF subscription owner, and not a seller.
 
 Prior Slither results were triaged under documented trust assumptions; they are not a clean-scan claim or a comprehensive audit of the final application. See the exact revision's independent review and test artifacts.
 

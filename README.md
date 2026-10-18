@@ -6,7 +6,9 @@ Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166. The publ
 
 ## Current status
 
-The source registry now includes the verified v3 Sepolia contract `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327`, created at block 11865781. The Safe `0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1` accepted ownership and is the pinned treasury. Native-ETH VRF billing is configured; membership purchases use USDC, with the optional ETH purchase route disabled. See [the activation record](docs/build/v3-sepolia-registration-20261008.md) for exact manifest and verification evidence. Hosted selection and release are separate checks. Durable hosted storage is still a separate configuration blocker for seller commitments and buyer agreement recording; registration alone does not make those flows ready.
+The source registry now includes the verified v3 Sepolia contract `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327`, created at block 11865781. The Safe `0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1` accepted ownership and is the pinned treasury. Native-ETH VRF billing is configured; membership purchases use USDC, with the optional ETH purchase route disabled. See [the activation record](docs/build/v3-sepolia-registration-20261008.md) for exact manifest and verification evidence. labx.art serves this deployment with Neon storage (`LABX_STORE=neon`).
+
+When enabled, a server-side draw runner (`/api/cron/draw`, every five minutes) closes sales, counts entries, starts the draw and finishes the raffle with its own dedicated Sepolia key. It can make only those four public calls. See [the draw runner record](docs/build/draw-runner-20261010.md) for its limits and operation.
 
 This is a Sepolia testing deployment. The Safe's threshold of one is testing-only. Human review remains required for each raffle. Deployment verification does not establish a completed live Chainlink raffle lifecycle; that test remains separate.
 
