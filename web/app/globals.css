@@ -855,6 +855,8 @@ html[data-motion="enabled"] .capsule-grid>li:nth-child(2) { transition-delay:50m
 html[data-motion="enabled"] .capsule-grid>li:nth-child(3) { transition-delay:100ms; }
 html[data-motion="enabled"] .capsule-grid>li:nth-child(4) { transition-delay:150ms; }
 :focus-visible { outline:3px solid var(--ink); outline-offset:3px; }
+/* Main is focused by script after the intro and by the skip link; a frame around the whole page helps no one. */
+#content:focus-visible { outline:none; }
 .terminal :focus-visible { outline-color:var(--lime); }
 
 @media (max-width:1000px) { .capsule-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:2.5rem 1.25rem; } .piece-console { grid-template-columns:minmax(0,.9fr) minmax(24rem,1.1fr); gap:2rem; } }

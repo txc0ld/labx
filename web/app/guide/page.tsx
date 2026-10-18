@@ -39,7 +39,7 @@ export default function GuidePage() {
           <p>Compare the USDC price, bonus entries and remaining supply.</p>
           <dl className="guide-facts">
             <div><dt>Processing fee</dt><dd>{BUYER_FEE_BPS / 100}<small>%</small><span className="fee-minimum">2.50 USDC minimum</span></dd></div>
-            <div><dt>Quantity</dt><dd>Live <small>contract limit</small></dd></div>
+            <div><dt>Quantity</dt><dd>1–20 <small>per purchase</small></dd></div>
           </dl>
           <details className="guide-details">
             <summary>Pricing details</summary>

@@ -53,7 +53,7 @@ export function JourneyOverview() {
           <p className="kicker">Buyer and seller paths</p>
           <h2 id="journey-title">From membership to outcome.</h2>
         </div>
-        <p>These website actions remain unavailable until the verified contract connection is complete.</p>
+        <p>Payments, listings and claims are confirmed in your own wallet.</p>
       </header>
       <div className="journey-grid">
         {journeys(drawRunnerEnabled()).map((journey) => (
