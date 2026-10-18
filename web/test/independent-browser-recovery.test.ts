@@ -97,7 +97,9 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     if (!transactionHash) throw new Error(`Submitted purchase did not render its transaction hash: ${submittedText}`);
 
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await expect.poll(async () => fixture.page.getByRole("radiogroup", { name: "Membership packs" }).locator("label").first().getAttribute("data-disabled"), { timeout: 10_000 }).toBe("true");
+    // A sold-out raffle shows a short sold-out message in place of the checkout.
+    await fixture.page.getByText("All memberships are sold.").waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).count()).toBe(0);
     expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
     const recovery = fixture.page.locator(".resume-transaction");
     await recovery.waitFor({ state: "visible", timeout: 10_000 });
