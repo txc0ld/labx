@@ -18,7 +18,7 @@ import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";
 import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
-import { catalogAvailability, formatUsdcAmount, fromPriceLabel, networkName, shortAddress } from "./format";
+import { catalogAvailability, formatUsdcAmount, fromPriceLabel, networkName, prizeStatus, shortAddress } from "./format";
 import { LocalTime } from "./LocalTime";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 import { transactionMeaning } from "@/lib/chain/transaction-outcomes";
@@ -255,6 +255,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
     ? "Wait for the raffle to finish updating."
     : refreshState.kind === "error" ? "Refresh the raffle before your next step." : undefined;
   const availabilityStatus = catalogAvailability(snapshot);
+  const prize = prizeStatus(snapshot);
 
   const pollFrom = pollStart(snapshot, mode, availability, currentAccount, revealedAt);
   // The page's block time stands still between reads, so the wait until pollFrom is timed from this read.
@@ -310,7 +311,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
           <header className="purchase-header">
             <div className="purchase-eyebrow">{mode === "public" ? <p className="piece-seller">Seller {shortAddress(r.seller)}</p> : null}<span className="piece-status">{availabilityStatus.label}</span></div>
             <h1 className="page-title">{r.title}</h1>
-            <p className="piece-deadline">{phase >= 2 || now >= r.salesEnd ? "Sales ended" : "Sales end"} <LocalTime at={r.salesEnd} /> · {r.escrowed ? "Prize locked" : "Prize not locked yet"}</p>
+            <p className="piece-deadline">{phase >= 2 || now >= r.salesEnd ? "Sales ended" : "Sales end"} <LocalTime at={r.salesEnd} /> · {prize.status}</p>
             {fromPrice ? <p className="piece-price">{fromPrice}</p> : null}
             <div className="piece-links"><Link className="guide-link" href="/fairness">Draw protections</Link>{mode === "seller" && phase >= 1 ? <Link className="guide-link" href={`/piece/${snapshot.id.toString()}`}>View public page</Link> : null}</div>
           </header>
@@ -325,7 +326,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Sales and payouts</summary><SellerActivity service={browser.service} id={snapshot.id} refreshKey={snapshot.block.hash} /></details> : null}
           <details className="workflow-details"><summary>Contract and review details</summary><dl className="review-list">
             <div><dt>Seller</dt><dd className="hash">{r.seller}</dd></div>
-            <div><dt>Prize</dt><dd>{r.escrowed ? "Locked in the raffle contract" : "Not locked yet"}</dd></div>
+            <div><dt>Prize</dt><dd>{prize.detail}</dd></div>
             <div><dt>LABx review</dt><dd>{admissionCopy(snapshot)}. This records review of the exact prize and draw-funding use; it is not proof of authenticity or future transferability.</dd></div>
             <div><dt>Processing fee</dt><dd>{formatBps(snapshot.policy.buyerFeeBps)} or {formatUsdcAmount(snapshot.policy.minBuyerFeeUsdc)} USDC per purchase, whichever is more. Not refunded, including on cancellation.</dd></div>
             <div><dt>Seller fee</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)} of sales, charged only when the raffle finishes</dd></div>
