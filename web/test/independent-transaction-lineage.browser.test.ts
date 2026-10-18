@@ -82,7 +82,7 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
       if (await stopped.isVisible()) return true;
       await tabA.clock.fastForward(5_000);
       return stopped.isVisible();
-    }, { timeout: 30_000, intervals: [500] }).toBe(true);
+    }, { timeout: 30_000, interval: 500 }).toBe(true);
 
     const createRecord = await tabA.evaluate(account => {
       const key = Object.keys(localStorage).find(candidate => candidate.startsWith("labx:create:v1:") && candidate.endsWith(account.toLowerCase()));
