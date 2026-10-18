@@ -214,7 +214,7 @@ describe("draw runner key", () => {
   it.each([
     ["missing", undefined], ["empty", ""], ["short", runnerKey.slice(0, 64)], ["short without 0x", runnerKey.slice(3)],
     ["long without 0x", `${runnerKey.slice(2)}0`], ["with an uppercase 0X", `0X${runnerKey.slice(2)}`], ["with a doubled prefix", `0x${runnerKey}`],
-    ["with whitespace", `${runnerKey} `], ["without 0x and with whitespace", ` ${runnerKey.slice(2)}`], ["not hex", `0x${"zz".repeat(32)}`],
+    ["with inner whitespace", `${runnerKey.slice(0, 34)} ${runnerKey.slice(34)}`], ["not hex", `0x${"zz".repeat(32)}`],
     ["zero", `0x${"00".repeat(32)}`], ["zero without 0x", "00".repeat(32)], ["above the curve order", `0x${"ff".repeat(32)}`]
   ])("rejects a %s key", (_, value) => {
     expect(runnerAccount(value)).toBeNull();
@@ -224,6 +224,9 @@ describe("draw runner key", () => {
     expect(runnerKey.slice(2)).toMatch(/^[0-9a-f]{64}$/);
     expect(runnerAccount(runnerKey.slice(2))?.address).toBe(runner);
     expect(runnerAccount(runnerKey.slice(2).toUpperCase())?.address).toBe(runner);
+  });
+  it("ignores whitespace around the key, as a pasted environment value can carry a trailing newline", () => {
+    for (const value of [`${runnerKey} `, `${runnerKey}\n`, ` ${runnerKey.slice(2)}`, `\t${runnerKey}\r\n`]) expect(runnerAccount(value)?.address).toBe(runner);
   });
 });
 
@@ -542,6 +545,33 @@ describe("draw runner cron handler", () => {
     expect(body).toEqual({ ok: false, error: "The draw runner key must not belong to the LABx owner, a Safe signer or the treasury." });
     expect(sent).toEqual([]);
     expect(await store.get("draw-runner:cursor")).toBeNull();
+  });
+
+  it("logs one line for each refusal, naming the reason and the runner address but never the key", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", "");
+      await call(fakeChain({ 1: open() }).chain);
+      vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", runnerKey.slice(0, 40));
+      await call(fakeChain({ 1: open() }).chain);
+      vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", runnerKey);
+      await call(fakeChain({ 1: open() }, { privileged: [runner] }).chain);
+      await call(fakeChain({ 1: open() }, { privileged: new Error(runnerKey) }).chain);
+      const throwing = fakeChain({ 1: open() }).chain;
+      const store: Store = { get: async () => { throw new Error(runnerKey); }, set: async () => {}, setIfAbsent: async () => { throw new Error(runnerKey); } };
+      await call(throwing, store);
+      vi.stubEnv("CRON_SECRET", "");
+      await call(fakeChain({ 1: open() }).chain);
+      expect(errors.mock.calls).toEqual([
+        ["draw-runner", { ok: false, error: "The draw runner key is missing or invalid.", key: "missing" }],
+        ["draw-runner", { ok: false, error: "The draw runner key is missing or invalid.", key: "malformed" }],
+        ["draw-runner", { ok: false, error: "The draw runner key must not belong to the LABx owner, a Safe signer or the treasury.", runner }],
+        ["draw-runner", { ok: false, error: "The draw runner could not check the deployment.", runner, category: "Other" }],
+        ["draw-runner", { ok: false, error: "The draw runner did not complete.", runner, category: "Other" }],
+        ["draw-runner", { ok: false, error: "Draw runner cron is not configured." }]
+      ]);
+      expect(JSON.stringify(errors.mock.calls).toLowerCase()).not.toContain(runnerKey.slice(2, 34).toLowerCase());
+    } finally { errors.mockRestore(); }
   });
 
   it("refuses with 503 when the Safe signers cannot be read", async () => {
