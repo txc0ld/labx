@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, zeroAddress, zeroHash, type Address } from "viem";
-import { assertCreateGeneration, captureCreateGeneration, encodeDraft, readCreateRecord, retireStaleCreate, writeCreateRecord, type CreateRecord } from "../lib/chain/create-flow";
+import { assertCreateGeneration, captureCreateGeneration, encodeDraft, finishCreate, raffleCreateRecord, readCreateRecord, retireStaleCreate, writeCreateRecord, type CreateRecord } from "../lib/chain/create-flow";
 import { cancelReclaimsPrize, purchasesToCount, sellerNextStep, sellerPortalActions, sellerSecondaryActions } from "../lib/chain/seller-actions";
 import { availableActions } from "../lib/chain/workflow";
 import { cardNextStep } from "../components/workflow/seller-card";
@@ -150,6 +150,104 @@ describe("a Studio Create the seller changed on the raffle page", () => {
       expect(readCreateRecord(fixture.storage, key)).toEqual(record);
       expect(fixture.readRaffle).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("Create on the raffle page after the seller rejected the approval and edited again", () => {
+  const BASE = "raffle-page-create";
+  const RAFFLE_KEY = `${BASE}:raffle:9`;
+  const wallet = { getSnapshot: () => ({ kind: "connected" as const, account: SELLER, chainId: 31337, revision: 1 }), assertCurrent: async () => undefined } as unknown as WalletSessionPort;
+  const rejected = Object.assign(new Error("User rejected the request."), { code: 4001 });
+  const checkpoint = { id: "approval", intentHash: hash("approval-intent"), nonce: 3, startedBlock: "40" };
+  const draftOf = (value: RaffleSnapshot): DraftInput => {
+    const r = value.raffle;
+    return { nft: r.nft, tokenId: r.tokenId, salesEnd: r.salesEnd, reserveNonce: r.reserveNonce, reserveCommit: r.reserveCommit, title: r.title, packs: value.packs };
+  };
+  const recordOf = (title: string): Extract<CreateRecord, { kind: "draft" }> => ({ kind: "draft", data: encodeDraft(draftOf(raffleSnapshot({ title }))), id: "9", creationHash: null, pending: null });
+
+  function setup(journal: Awaited<ReturnType<RaffleService["pending"]>> = null) {
+    const map = new Map<string, string>();
+    const storage: Storage = {
+      get length() { return map.size; },
+      clear: () => map.clear(),
+      getItem: item => map.get(item) ?? null,
+      key: index => [...map.keys()][index] ?? null,
+      removeItem: item => { map.delete(item); },
+      setItem: (item, raw) => { map.set(item, raw); }
+    };
+    // Studio's record still holds the draft as first created; the seller has since edited it on the raffle page.
+    const studio: CreateRecord = { kind: "draft", data: encodeDraft(draft), creationHash: hash("create-tx"), id: "9", pending: null };
+    writeCreateRecord(storage, BASE, studio);
+    let chain = raffleSnapshot({ title: "First edit" });
+    // The wallet refuses the approval before sending, as the transaction service reports a rejection.
+    const submit = vi.fn(async (input: Parameters<RaffleService["submit"]>[0]) => { input.beforeRequest?.(checkpoint); input.onNotDispatched?.(checkpoint); throw rejected; });
+    const service = {
+      manifest: { chainId: 31337, address: RAFFLE },
+      readRaffle: async () => chain,
+      readAccount: async () => sellerAccount(chain, { nftOwner: SELLER }),
+      pending: async () => journal,
+      prepare: async ({ action }: { action: unknown }) => ({ action }),
+      submit
+    } as unknown as RaffleService;
+    /** What the raffle page's Create runs under the Create lock, for the page showing `page`. */
+    async function press(page = chain) {
+      const shown = draftOf(page);
+      const { key, record } = await raffleCreateRecord({ service, wallet, storage, baseKey: BASE, id: page.id, draft: shown, assertIntent: () => undefined });
+      return finishCreate({ service, wallet, draft: shown, record, save: next => writeCreateRecord(storage, key, next), assertIntent: () => undefined, onStep: () => undefined });
+    }
+    const retired = () => [...map.entries()].filter(([item]) => item.startsWith(`${RAFFLE_KEY}:retired:`)).map(([, raw]) => JSON.parse(raw));
+    return { storage, studio, submit, press, retired, edit: (title: string) => { chain = raffleSnapshot({ title }); } };
+  }
+
+  it("asks for the approval again instead of refusing every press", async () => {
+    const fixture = setup();
+    await expect(fixture.press()).rejects.toBe(rejected);
+    expect(readCreateRecord(fixture.storage, RAFFLE_KEY)).toEqual(recordOf("First edit"));
+
+    fixture.edit("Second edit");
+    await expect(fixture.press()).rejects.toBe(rejected);
+
+    expect(fixture.submit).toHaveBeenCalledTimes(2);
+    expect(readCreateRecord(fixture.storage, RAFFLE_KEY)).toEqual(recordOf("Second edit"));
+    expect(fixture.retired()).toEqual([recordOf("First edit")]);
+    expect(readCreateRecord(fixture.storage, BASE)).toEqual(fixture.studio);
+  });
+
+  it("never retires a raffle record with its own approval send saved", async () => {
+    const fixture = setup();
+    const sending = { ...recordOf("First edit"), pending: { step: "approvePrize" as const, hash: null, checkpoint } };
+    writeCreateRecord(fixture.storage, RAFFLE_KEY, sending);
+    fixture.edit("Second edit");
+
+    await expect(fixture.press()).rejects.toThrow("The saved draft differs from this creation intent.");
+
+    expect(readCreateRecord(fixture.storage, RAFFLE_KEY)).toEqual(sending);
+    expect(fixture.retired()).toEqual([]);
+    expect(fixture.submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the raffle record while any wallet transaction is unresolved", async () => {
+    const fixture = setup({ id: "unknown-send", hash: null, nonce: 3 });
+    writeCreateRecord(fixture.storage, RAFFLE_KEY, recordOf("First edit"));
+    fixture.edit("Second edit");
+
+    await expect(fixture.press()).rejects.toThrow("Finish your pending wallet transaction first.");
+
+    expect(readCreateRecord(fixture.storage, RAFFLE_KEY)).toEqual(recordOf("First edit"));
+    expect(fixture.retired()).toEqual([]);
+    expect(fixture.submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps another tab's record for the current draft when this page still shows the older one", async () => {
+    const fixture = setup();
+    const older = raffleSnapshot({ title: "First edit" });
+    fixture.edit("Second edit");
+    writeCreateRecord(fixture.storage, RAFFLE_KEY, recordOf("Second edit"));
+
+    await expect(fixture.press(older)).rejects.toThrow("The saved draft differs from this creation intent.");
+
+    expect(readCreateRecord(fixture.storage, RAFFLE_KEY)).toEqual(recordOf("Second edit"));
+    expect(fixture.retired()).toEqual([]);
   });
 });
 

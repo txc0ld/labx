@@ -463,7 +463,7 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
       options.onSend?.();
       sent.push({ id: action.id.toString(), action: action.kind, nonce: at });
       nonce++;
-      if ((options.wait ?? "succeeded") === "succeeded") advance(raffles[action.id.toString()], action.kind);
+      if ((options.wait ?? "succeeded") === "succeeded") advance(raffles[action.id.toString()], action.kind, action.kind === "snapshot" ? action.maxSteps : undefined);
       return { kind: "sent", hash: pad(toHex(sent.length), { size: 32 }) };
     },
     async wait() {
@@ -475,9 +475,9 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
   };
   return { chain, sent, attempts, scanned };
 }
-function advance(r: FakeRaffle, kind: RunnerAction["kind"]) {
+function advance(r: FakeRaffle, kind: RunnerAction["kind"], steps = 100n) {
   if (kind === "close") r.phase = 2;
-  if (kind === "snapshot") { r.cursor += 100n; if (r.cursor >= r.lots) r.snapshotted = true; }
+  if (kind === "snapshot") { r.cursor += steps; if (r.cursor >= r.lots) r.snapshotted = true; }
   if (kind === "requestRandomness") r.phase = 3;
   if (kind === "settle") r.phase = 5;
 }
@@ -865,8 +865,13 @@ describe("draw runner cron handler", () => {
     const at = fakeChain({ 1: { ...state } }, { quote: () => ({ ...cheap, gasLimit: cap }) });
     expect((await call(at.chain)).body.items[0]).toMatchObject({ action: kind, outcome: "succeeded" });
   });
-  it("caps requestRandomness at 400k gas", () => {
-    expect(GAS_CAP.requestRandomness).toBe(400_000n);
+  it("lets requestRandomness through at the gas the real Sepolia coordinator needs, with the runner's fifth on top", async () => {
+    const measured = 649_603n * 6n / 5n;
+    expect(GAS_CAP.requestRandomness).toBe(1_200_000n);
+    const chain = fakeChain({ 1: { ...closed(), snapshotted: true, cursor: 2n } }, { quote: () => ({ ...cheap, gasLimit: measured }) });
+    expect((await call(chain.chain)).body.items[0]).toMatchObject({ action: "requestRandomness", outcome: "succeeded" });
+    const over = fakeChain({ 1: { ...closed(), snapshotted: true, cursor: 2n } }, { quote: () => ({ ...cheap, gasLimit: 1_200_001n }) });
+    expect((await call(over.chain)).body.items[0]).toMatchObject({ action: "requestRandomness", outcome: "gas-cap" });
   });
 
   it("stops without counting a send when gas is above the fee cap", async () => {
@@ -889,6 +894,23 @@ describe("draw runner cron handler", () => {
     expect(body.items[0]).toEqual({ id: "1", action: "close", hash: null, outcome: "skipped", error: null });
     expect(sent.map(item => item.id)).toEqual(["2", "2", "2"]);
     expect(body).toMatchObject({ ok: true, status: "complete", sends: 3 });
+  });
+
+  it("halves a count batch whose quote is over the cap until it fits, and keeps that size", async () => {
+    // Sepolia's measured cost, about 230,000 gas a lot, plus the runner's fifth: 100 lots quote 27.6M, 25 lots 6.9M.
+    const perLot = 230_000n * 6n / 5n;
+    const { chain, sent } = fakeChain({ 1: { ...closed(60n) } }, { quote: action => action.kind === "snapshot" ? { ...cheap, gasLimit: action.maxSteps * perLot } : undefined });
+    const { body } = await call(chain);
+    expect(outcomes(body)).toEqual(["1:snapshot:succeeded:null", "1:snapshot:succeeded:null", "1:snapshot:succeeded:null", "1:requestRandomness:succeeded:null"]);
+    expect(sent.filter(item => item.action === "snapshot")).toHaveLength(3);
+    expect(body).toMatchObject({ ok: true, status: "complete" });
+  });
+
+  it("reports gas-cap when even one lot is over the cap", async () => {
+    const { chain, sent } = fakeChain({ 1: closed() }, { quote: action => action.kind === "snapshot" ? { ...cheap, gasLimit: GAS_CAP.snapshot + 1n } : undefined });
+    const { body } = await call(chain);
+    expect(outcomes(body)).toEqual(["1:snapshot:gas-cap:null"]);
+    expect(sent).toEqual([]);
   });
 
   it("reports a step whose simulation keeps reverting as failed, so the run is not ok, and goes on", async () => {

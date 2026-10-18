@@ -1,6 +1,7 @@
 "use client";
-import { createPublicClient, http } from "viem";
+import { createPublicClient } from "viem";
 import { APPROVED_DEPLOYMENTS, LEGACY_RAFFLE } from "./deployment";
+import { browserReadTransport, SEPOLIA_HISTORY_RPC } from "./history-rpc";
 import { createRaffleService } from "./service";
 import { WalletSession } from "./wallet-session";
 import { BrowserWalletSession } from "./wallet-connectors";
@@ -40,7 +41,7 @@ export function configuredBrowserService(): BrowserService {
     if (!manifest) {
       configured = { kind: "unavailable", wallet, reason: selected && sameAddress(selected, LEGACY_RAFFLE) ? "The configured contract is historical. It does not support the current buyer protections." : "A reviewed raffle deployment has not been configured yet." };
     } else {
-      configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: http(rpc, { timeout: 15_000, retryCount: 1 }) }), manifest) };
+      configured = { kind: "configured", wallet, service: createRaffleService(createPublicClient({ transport: browserReadTransport(rpc, manifest.chainId === 11155111 ? SEPOLIA_HISTORY_RPC : null) }), manifest) };
       void wallet.restore();
     }
   } catch { configured = { kind: "unavailable", reason: "Deployment configuration is invalid.", wallet: new BrowserWalletSession(window.ethereum, 11155111, process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID, loadChooser) }; }

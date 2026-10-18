@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { erc20Abi, erc721Abi, keccak256, toBytes } from "viem";
+import { erc20Abi, erc721Abi, keccak256, numberToHex, toBytes } from "viem";
 import { hashCommitment } from "../lib/commitment";
 import { raffleAbi } from "../lib/chain/abi";
 import type { WalletSessionPort } from "../lib/chain/ports";
@@ -324,7 +324,7 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.locator("body").innerText()).not.toContain(secret);
     expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(secret);
     await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByText(/Preparation recovery is unavailable/).waitFor();
+    await fixture.page.getByText(/Your raffle setup couldn.t be restored right now/).waitFor();
     expect(posts).toBe(1);
     expect(await chain.client.getBlockNumber()).toBe(block.number);
     await fixture.page.unroute("**/api/reserve");
@@ -464,50 +464,6 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.getByRole("button", { name: /Approve NFT|Lock NFT|^Claim [\d.,]+ USDC$/ }).count()).toBe(0);
   }, 30_000);
 
-  it("keeps earlier activity through a later-page failure and an empty final retry", async () => {
-    await fixture.switchAccount(chain.seller);
-    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
-    expect(response?.status()).toBe(200);
-    await fixture.page.locator("summary").filter({ hasText: "Sales and payouts" }).click();
-    const activity = fixture.page.locator("section[aria-label='Sales and payouts']");
-    const purchased = `${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`;
-    await activity.getByText(purchased, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
-    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(1);
-
-    let failuresRemaining = 1;
-    await fixture.page.route(`${chain.url}/`, async (route: {
-      request(): { postDataJSON(): unknown };
-      continue(): Promise<void>;
-      fulfill(input: { status: number; contentType: string; body: string }): Promise<void>;
-    }) => {
-      const payload = route.request().postDataJSON();
-      if (failuresRemaining > 0 && payload && typeof payload === "object" && "method" in payload && payload.method === "eth_getLogs") {
-        failuresRemaining -= 1;
-        const id = "id" in payload ? payload.id : null;
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "transient activity RPC failure" } })
-        });
-        return;
-      }
-      await route.continue();
-    });
-
-    await activity.getByRole("button", { name: "Load more", exact: true }).click();
-    await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(failuresRemaining).toBe(0);
-    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
-    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
-
-    await activity.getByRole("button", { name: "Try again", exact: true }).click();
-    await expect.poll(async () => activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count(), { timeout: 15_000 }).toBe(0);
-    await expect.poll(async () => activity.getByRole("button", { name: "Load more", exact: true }).count(), { timeout: 15_000 }).toBe(0);
-    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
-    await fixture.page.unroute(`${chain.url}/`);
-  }, 45_000);
-
   it("keeps a seller's buyer refund on the public piece and out of seller-only controls", async () => {
     const beforeRefund = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] });
     await fixture.switchAccount(chain.seller);
@@ -524,6 +480,111 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(beforeRefund + 25_000_000n);
     expect((await chain.service.readAccount({ id: 2n, account: chain.seller })).principal).toBe(0n);
   }, 30_000);
+
+  type ActivityRead = { fromBlock: string; toBlock: string; failed: boolean };
+  /** Records the activity panel's log reads for one raffle and fails every read that `fail` picks. The panel can load twice as a page opens, so a single injected failure could land on the discarded load. */
+  async function routeActivity(id: bigint, fail: (read: ActivityRead) => boolean, hold: () => Promise<void> = async () => {}) {
+    const reads: ActivityRead[] = [];
+    await fixture.page.route(`${chain.url}/`, async (route: {
+      request(): { postDataJSON(): unknown };
+      continue(): Promise<void>;
+      fulfill(input: { status: number; contentType: string; body: string }): Promise<void>;
+    }) => {
+      const payload = route.request().postDataJSON() as { id?: unknown; method?: unknown; params?: [{ fromBlock?: string; toBlock?: string; topics?: unknown[] }] } | null;
+      const filter = payload?.method === "eth_getLogs" ? payload.params?.[0] : undefined;
+      if (!filter || filter.topics?.[1] !== numberToHex(id, { size: 32 }) || !filter.fromBlock || !filter.toBlock) return route.continue();
+      const read = { fromBlock: filter.fromBlock, toBlock: filter.toBlock, failed: false };
+      if (fail(read)) {
+        read.failed = true;
+        reads.push(read);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ jsonrpc: "2.0", id: payload?.id ?? null, error: { code: -32000, message: "transient activity RPC failure" } })
+        });
+        return;
+      }
+      reads.push(read);
+      await hold();
+      await route.continue();
+    });
+    return reads;
+  }
+  const range = ({ fromBlock, toBlock }: ActivityRead) => [fromBlock, toBlock];
+
+  it("keeps newer activity through an older-page failure and finishes on a retry of the same blocks", async () => {
+    // Runs after the refund: activity is newest first, so the first page holds the refund and the older page the purchase.
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
+    await fixture.page.locator("summary").filter({ hasText: "Sales and payouts" }).click();
+    const activity = fixture.page.locator("section[aria-label='Sales and payouts']");
+    const refunded = activity.getByText("Refund", { exact: true });
+    const purchased = activity.getByText(`${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`, { exact: true });
+    await refunded.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await refunded.count()).toBe(1);
+    expect(await purchased.count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(1);
+
+    let failing = true, release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reads = await routeActivity(2n, () => failing, () => held);
+    await activity.getByRole("button", { name: "Load more", exact: true }).click();
+    await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(reads.map(read => read.failed)).toEqual([true]);
+    failing = false;
+    expect(await refunded.count()).toBe(1);
+    expect(await purchased.count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+
+    await activity.getByRole("button", { name: "Try again", exact: true }).click();
+    // While the retry runs, the error gives way to a disabled Loading… button and the refund stays.
+    await activity.getByRole("button", { name: "Loading…", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await activity.getByRole("button", { name: "Loading…", exact: true }).isDisabled()).toBe(true);
+    expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
+    expect(await refunded.count()).toBe(1);
+    release();
+    await purchased.waitFor({ state: "visible", timeout: 15_000 });
+    expect(reads.map(range)).toEqual([range(reads[0]), range(reads[0])]);
+    expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+    expect(await activity.locator("li strong").allInnerTexts()).toEqual(["Refund", `${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`]);
+    await fixture.page.unroute(`${chain.url}/`);
+  }, 45_000);
+
+  it("reads past an empty newest page in one load and, after a failed first load, retries from the latest block to an empty end", async () => {
+    await fixture.switchAccount(chain.seller);
+    let failing = true;
+    const reads = await routeActivity(26n, read => failing && BigInt(read.fromBlock) === chain.manifest.deploymentBlock);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/26`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 26" }));
+    await fixture.page.locator("summary").filter({ hasText: "Sales and payouts" }).click();
+    const activity = fixture.page.locator("section[aria-label='Sales and payouts']");
+    await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    // A load read the empty newest window, then went on by itself to the adjacent older one, which failed.
+    const failedAt = reads.findIndex(read => read.failed);
+    expect(failedAt).toBeGreaterThan(0);
+    expect(BigInt(reads[failedAt - 1].fromBlock)).toBe(BigInt(reads[failedAt].toBlock) + 1n);
+    const failedHead = BigInt(reads[failedAt - 1].toBlock);
+    failing = false;
+    expect(await activity.getByText(/^(No sales or payouts yet\.|None found so far\.)$/).count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+
+    // A new block before the retry: nothing was shown yet, so the retry reads from the new head down to the deployment block.
+    await chain.rpc("anvil_mine", ["0x1"]);
+    await activity.getByRole("button", { name: "Try again", exact: true }).click();
+    await activity.getByText("No sales or payouts yet.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    const [newest, older] = reads.filter(read => !read.failed).slice(-2).map(read => ({ from: BigInt(read.fromBlock), to: BigInt(read.toBlock) }));
+    expect(newest.to).toBe(failedHead + 1n);
+    expect(newest.from).toBe(older.to + 1n);
+    expect(older.from).toBe(chain.manifest.deploymentBlock);
+    expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+    expect(await activity.locator("li").count()).toBe(0);
+    await fixture.page.unroute(`${chain.url}/`);
+  }, 45_000);
 
   it("keeps a seller-winner prize claim in the public flow after proceeds are claimed", async () => {
     await fixture.switchAccount(chain.seller);
