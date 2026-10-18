@@ -6,7 +6,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import { browserReadTransport } from "../lib/chain/history-rpc";
 import { createReader } from "../lib/chain/reader";
 import { createSellerReader } from "../lib/chain/seller-reader";
-import type { BlockRef, DeploymentManifest } from "../lib/chain/types";
+import type { BlockRef, DeploymentManifest, RaffleSnapshot } from "../lib/chain/types";
 import { fixtureTrust } from "./fixtures/deployment";
 
 const LABX = "0x1111111111111111111111111111111111111111";
@@ -108,8 +108,9 @@ const manifest: DeploymentManifest = { ...fixtureTrust, chainId: 11155111, addre
 /** The browser's public client, as browser.ts builds it, over the stub nodes. */
 const client = (history: "archive" | "down" | null) => createPublicClient({ transport: browserReadTransport(urls.configured, history && urls[history]) });
 const reader = (history: "archive" | "down" | null) => createReader(client(history), manifest);
-const sellerActivity = (history: "archive" | "down" | null) => createSellerReader(client(history), manifest, {
-  checkedBlock: async () => blockAt(HEAD), readRaffle: vi.fn(), listRaffles: vi.fn()
+/** Sales and payouts over the stub nodes, for a raffle created at `created` (the deployment block by default). */
+const sellerActivity = (history: "archive" | "down" | null, created = DEPLOYMENT) => createSellerReader(client(history), manifest, {
+  checkedBlock: async () => blockAt(HEAD), readRaffle: vi.fn(async () => ({ raffle: { createdAt: blockTime(created) } }) as unknown as RaffleSnapshot), listRaffles: vi.fn()
 });
 const logReads = () => calls.filter(call => call.method === "eth_getLogs").map(call => call.node);
 const headerReads = (number: bigint) => calls.filter(call => call.method === "eth_getBlockByNumber" && call.params[0] === numberToHex(number)).map(call => call.node);
@@ -285,6 +286,27 @@ describe("Sales and payouts", () => {
       { blocks: [OLD], windows: 1 },
       { blocks: [], windows: 7 }
     ]);
+  });
+
+  it("ends at the window holding the raffle's creation instead of the deployment block", async () => {
+    const activity = sellerActivity("archive", OLD - 100n);
+    const loads: bigint[][] = [];
+    let cursor: bigint | undefined;
+    do {
+      const page = await activity.listRaffleActivity({ id: 7n, cursor });
+      loads.push(page.items.map(item => item.blockNumber));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    expect(loads).toEqual([[...RECENT].reverse(), [], [], [], [OLD]]);
+  });
+
+  it("tells a raffle created within the newest window that it has no sales in one read", async () => {
+    const page = await sellerActivity(null, HEAD - 500n).listRaffleActivity({ id: 8n });
+
+    expect(page.items).toEqual([]);
+    expect(page.nextCursor).toBeNull();
+    expect(logReads()).toEqual(["configured"]);
   });
 
   it("fails a load whose later window fails, and a retry from the same cursor reads the same windows again", async () => {

@@ -38,7 +38,7 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
   /**
    * The raffle's financial events, newest first, ending at `cursor` (the checked block by default). Reads 2,000-block windows
    * back until one has activity, up to 10 windows (20,000 blocks), so an old raffle's sales appear without clicking through
-   * empty pages. `nextCursor` ends the next older window.
+   * empty pages. `nextCursor` ends the next older window, or is null once a window reaches the raffle's creation.
    */
   async function listRaffleActivity({ id, cursor, block }: {
     id: bigint;
@@ -47,13 +47,14 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
   }): Promise<Page<SellerRaffleActivity>> {
     positiveId(id);
     const at = await reader.checkedBlock(block);
-    await reader.readRaffle({ id, block: at });
+    const { raffle } = await reader.readRaffle({ id, block: at });
     let toBlock = cursor ?? at.number;
     if (toBlock < manifest.deploymentBlock || toBlock > at.number) throw new Error("Invalid activity block range.");
     for (let windows = 1; ; windows += 1) {
       const fromBlock = toBlock - 1_999n > manifest.deploymentBlock ? toBlock - 1_999n : manifest.deploymentBlock;
       const items = await readActivityWindow(id, fromBlock, toBlock);
-      const nextCursor = fromBlock > manifest.deploymentBlock ? fromBlock - 1n : null;
+      // Block times never decrease, so a window starting before the raffle's creation time holds its creation and nothing older is its activity.
+      const nextCursor = fromBlock > manifest.deploymentBlock && (await client.getBlock({ blockNumber: fromBlock })).timestamp >= raffle.createdAt ? fromBlock - 1n : null;
       if (items.length || nextCursor === null || windows === ACTIVITY_WINDOWS) {
         await reader.checkedBlock(at);
         return { items: items.reverse(), nextCursor, block: at };

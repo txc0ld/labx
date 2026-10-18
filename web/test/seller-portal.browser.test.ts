@@ -483,7 +483,7 @@ run("rendered seller portal on isolated Anvil", () => {
 
   type ActivityRead = { fromBlock: string; toBlock: string; failed: boolean };
   /** Records the activity panel's log reads for one raffle and fails every read that `fail` picks. The panel can load twice as a page opens, so a single injected failure could land on the discarded load. */
-  async function routeActivity(id: bigint, fail: (read: ActivityRead) => boolean) {
+  async function routeActivity(id: bigint, fail: (read: ActivityRead) => boolean, hold: () => Promise<void> = async () => {}) {
     const reads: ActivityRead[] = [];
     await fixture.page.route(`${chain.url}/`, async (route: {
       request(): { postDataJSON(): unknown };
@@ -505,6 +505,7 @@ run("rendered seller portal on isolated Anvil", () => {
         return;
       }
       reads.push(read);
+      await hold();
       await route.continue();
     });
     return reads;
@@ -526,8 +527,9 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await purchased.count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(1);
 
-    let failing = true;
-    const reads = await routeActivity(2n, () => failing);
+    let failing = true, release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reads = await routeActivity(2n, () => failing, () => held);
     await activity.getByRole("button", { name: "Load more", exact: true }).click();
     await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(reads.map(read => read.failed)).toEqual([true]);
@@ -537,6 +539,12 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
 
     await activity.getByRole("button", { name: "Try again", exact: true }).click();
+    // While the retry runs, the error gives way to a disabled Loading… button and the refund stays.
+    await activity.getByRole("button", { name: "Loading…", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await activity.getByRole("button", { name: "Loading…", exact: true }).isDisabled()).toBe(true);
+    expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
+    expect(await refunded.count()).toBe(1);
+    release();
     await purchased.waitFor({ state: "visible", timeout: 15_000 });
     expect(reads.map(range)).toEqual([range(reads[0]), range(reads[0])]);
     expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
@@ -545,7 +553,7 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
 
-  it("reads past an empty newest page in one load and ends empty after a failed older read is retried", async () => {
+  it("reads past an empty newest page in one load and, after a failed first load, retries from the latest block to an empty end", async () => {
     await fixture.switchAccount(chain.seller);
     let failing = true;
     const reads = await routeActivity(26n, read => failing && BigInt(read.fromBlock) === chain.manifest.deploymentBlock);
@@ -559,14 +567,19 @@ run("rendered seller portal on isolated Anvil", () => {
     const failedAt = reads.findIndex(read => read.failed);
     expect(failedAt).toBeGreaterThan(0);
     expect(BigInt(reads[failedAt - 1].fromBlock)).toBe(BigInt(reads[failedAt].toBlock) + 1n);
-    const newest = range(reads[failedAt - 1]), older = range(reads[failedAt]);
+    const failedHead = BigInt(reads[failedAt - 1].toBlock);
     failing = false;
     expect(await activity.getByText(/^(No sales or payouts yet\.|None found so far\.)$/).count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
 
+    // A new block before the retry: nothing was shown yet, so the retry reads from the new head down to the deployment block.
+    await chain.rpc("anvil_mine", ["0x1"]);
     await activity.getByRole("button", { name: "Try again", exact: true }).click();
     await activity.getByText("No sales or payouts yet.", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(reads.filter(read => !read.failed).map(range).slice(-2)).toEqual([newest, older]);
+    const [newest, older] = reads.filter(read => !read.failed).slice(-2).map(read => ({ from: BigInt(read.fromBlock), to: BigInt(read.toBlock) }));
+    expect(newest.to).toBe(failedHead + 1n);
+    expect(newest.from).toBe(older.to + 1n);
+    expect(older.from).toBe(chain.manifest.deploymentBlock);
     expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
     expect(await activity.locator("li").count()).toBe(0);

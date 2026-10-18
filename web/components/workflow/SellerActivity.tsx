@@ -20,7 +20,8 @@ export function SellerActivity({ service, id, refreshKey }: { service: RaffleSer
   async function load(cursor?: bigint, block?: BlockRef) {
     const version = ++request.current;
     if (cursor === undefined) setState({ kind: "loading" });
-    else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true } : current);
+    else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true }
+      : current.kind === "error" && current.block ? { kind: "ready", items: current.items, block: current.block, nextCursor: current.nextCursor, loadingMore: true } : current);
     try {
       const page = await service.listRaffleActivity({ id, cursor, block });
       if (version !== request.current) return;
@@ -33,6 +34,7 @@ export function SellerActivity({ service, id, refreshKey }: { service: RaffleSer
       }));
     } catch (error) {
       if (version !== request.current) return;
+      // A failed later page keeps its cursor and pinned block. A failed first load has shown nothing, so Try again starts from the latest block.
       setState((latest) => ({
         kind: "error",
         items: latest.kind === "ready" || latest.kind === "error" ? latest.items : [],
