@@ -192,6 +192,57 @@ describe("browser log reads past publicnode's pruned history", () => {
   });
 });
 
+describe("checking a dense page of old logs", () => {
+  const LIMIT = 4;
+  /**
+   * Reads a page of two logs in each of `blocks` old blocks from a configured RPC that has pruned every log, serves block headers
+   * in 10 ms and refuses, without a retryable code, any header read beyond LIMIT at once or for the `broken` block.
+   */
+  async function denseRead(blocks: number, broken: bigint | null = null) {
+    let active = 0, maximum = 0, headers = 0;
+    const dense = createServer((request, response) => {
+      let raw = "";
+      request.on("data", chunk => { raw += chunk; });
+      request.on("end", () => {
+        const { id, method, params } = JSON.parse(raw) as { id: number; method: string; params: [Hex] };
+        response.setHeader("content-type", "application/json");
+        if (method === "eth_getLogs") return void response.end(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "pruned history unavailable" } }));
+        headers++; active++; maximum = Math.max(maximum, active);
+        const refused = active > LIMIT || BigInt(params[0]) === broken;
+        setTimeout(() => {
+          active--;
+          response.end(JSON.stringify(refused ? { jsonrpc: "2.0", id, error: { code: -32000, message: "too many concurrent requests" } } : { jsonrpc: "2.0", id, result: rpcBlock(BigInt(params[0])) }));
+        }, 10);
+      });
+    });
+    await new Promise<void>(resolve => dense.listen(0, "127.0.0.1", resolve));
+    archiveAnswer = () => Array.from({ length: blocks }, (_, index) => purchase(OLD + BigInt(index))).flatMap(log => [log, { ...log, logIndex: "0x1" }]);
+    try {
+      const page = createPublicClient({ transport: browserReadTransport(`http://127.0.0.1:${(dense.address() as AddressInfo).port}`, urls.archive) })
+        .request({ method: "eth_getLogs", params: [{ address: LABX, fromBlock: numberToHex(OLD), toBlock: numberToHex(OLD + 1_999n) }] });
+      const logs = await page.catch((error: Error) => error);
+      // Header reads still running after the page settles would show up here.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return { logs, maximum, headers };
+    } finally { dense.closeAllConnections(); await new Promise(resolve => dense.close(resolve)); }
+  }
+
+  it("checks a valid page across 64 blocks without more header reads at once than the configured RPC allows", async () => {
+    const read = await denseRead(64);
+
+    expect(read.logs).toHaveLength(128);
+    expect(read.maximum).toBeLessThanOrEqual(LIMIT);
+    expect(read.headers).toBe(64);
+  });
+
+  it("stops reading headers once one fails", async () => {
+    const read = await denseRead(64, OLD + 63n);
+
+    expect(read.logs).toBeInstanceOf(Error);
+    expect(read.headers).toBeLessThanOrEqual(2 * LIMIT);
+  });
+});
+
 describe("Sales and payouts", () => {
   it("reads the newest page first, so the first page needs no old history", async () => {
     const page = await sellerActivity(null).listRaffleActivity({ id: 7n });

@@ -8,6 +8,8 @@ export function isPrunedHistoryError(error: unknown): boolean {
 }
 
 const MISMATCH = "Older activity from the full-history RPC did not match this network.";
+/** Block headers read at once while checking full-history logs, so a dense page stays within the configured RPC's limits. */
+const HEADER_READS = 4;
 
 /**
  * The browser's read transport. Every request goes to the configured RPC. Only an eth_getLogs for one contract and block range
@@ -47,10 +49,16 @@ async function canonicalLogs<T>(primary: EIP1193RequestFn, filter: RangeFilter, 
     if (number < filter.fromBlock || number > filter.toBlock) throw new Error(MISMATCH);
     return { number, hash: blockHash.toLowerCase() };
   });
-  const canonical = new Map(await Promise.all([...new Set(claimed.map(log => log.number))].map(async number => {
-    const block = await primary({ method: "eth_getBlockByNumber", params: [numberToHex(number), false] }) as { hash?: unknown } | null;
-    return [number, typeof block?.hash === "string" ? block.hash.toLowerCase() : null] as const;
-  })));
+  const unread = [...new Set(claimed.map(log => log.number))], canonical = new Map<bigint, string | null>();
+  const readHeaders = async () => {
+    try {
+      for (let number = unread.pop(); number !== undefined; number = unread.pop()) {
+        const block = await primary({ method: "eth_getBlockByNumber", params: [numberToHex(number), false] }) as { hash?: unknown } | null;
+        canonical.set(number, typeof block?.hash === "string" ? block.hash.toLowerCase() : null);
+      }
+    } catch (error) { unread.length = 0; throw error; }
+  };
+  await Promise.all(Array.from({ length: HEADER_READS }, readHeaders));
   if (claimed.some(log => canonical.get(log.number) !== log.hash)) throw new Error(MISMATCH);
   return logs;
 }
