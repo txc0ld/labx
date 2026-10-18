@@ -396,7 +396,8 @@ describe("seller next step", () => {
     expect(sellerNextStep(value, [cancel, open])).toEqual({ kind: "action", action: open });
     expect(sellerNextStep(value, [cancel, { ...open, enabled: false, reason: "Owner trust changed" }])).toMatchObject({ kind: "waiting", message: "Owner trust changed" });
     expect(sellerNextStep({ ...value, paused: true }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Listing paused" });
-    expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.raffle.salesEnd } }, [cancel, open])).toMatchObject({ kind: "waiting", title: "Sales deadline passed" });
+    expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.raffle.salesEnd } }, [cancel, open])).toMatchObject({ kind: "action", action: { kind: "cancel", label: "Cancel and get NFT back" } });
+    expect(sellerNextStep({ ...value, block: { ...value.block, timestamp: value.raffle.salesEnd } }, [{ ...cancel, enabled: false }, open])).toMatchObject({ kind: "waiting", title: "Sales deadline passed" });
   });
   it("does not promote refund or reveal controls while waiting for the deadline or randomness", () => {
     const actions = [cancel, { kind: "abortDrawing", enabled: true, label: "Enable refunds", reason: "" }, { kind: "reveal", enabled: true, label: "Confirm the draw", reason: "" }] as const;

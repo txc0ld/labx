@@ -9,9 +9,11 @@ export function localDeadlineInput(seconds: number | bigint): string {
 /**
  * Unix seconds for a `datetime-local` value read as the seller's local wall time.
  * Returns null for malformed values and for local times a clock change skips,
- * so the saved deadline is always the instant the seller sees.
+ * so the saved deadline is always the instant the seller sees. A value still
+ * showing `current` keeps it exactly, with its seconds and in a repeated clock-change hour.
  */
-export function localDeadlineSeconds(value: string): number | null {
+export function localDeadlineSeconds(value: string, current?: bigint): number | null {
+  if (current !== undefined && localDeadlineInput(current) === value) return Number(current);
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
   if (!match) return null;
   const [year, month, day, hour, minute] = match.slice(1).map(Number);

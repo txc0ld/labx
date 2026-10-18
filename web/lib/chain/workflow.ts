@@ -12,8 +12,10 @@ export function availableActions(snapshot: RaffleSnapshot, account: AccountRaffl
     add("revokeRaffleApproval", "Revoke draft approval", operator && snapshot.admission.record.approvedReviewHash !== "0x" + "0".repeat(64), "Only the current LABx owner can revoke an existing draft approval.");
     add("updateDraft", "Edit draft", seller, "Only the seller can edit this draft.");
     if (!r.escrowed) {
-      add("approvePrize", "Approve NFT", seller && !!account?.nftOwner && sameAddress(account.nftOwner, r.seller) && !account.nftApproved, "The seller must own this NFT; an existing approval needs no repeat.");
-      add("escrow", "Lock NFT", seller && !!account?.nftApproved, "Approve the NFT before locking it.");
+      // The contract would lock the NFT after the deadline, into a draft LABx can no longer approve or the seller list.
+      const expired = now >= r.salesEnd ? "The sales deadline has passed. Set a new one in Edit draft before locking the NFT." : "";
+      add("approvePrize", "Approve NFT", seller && !expired && !!account?.nftOwner && sameAddress(account.nftOwner, r.seller) && !account.nftApproved, expired || "The seller must own this NFT; an existing approval needs no repeat.");
+      add("escrow", "Lock NFT", seller && !expired && !!account?.nftApproved, expired || "Approve the NFT before locking it.");
     } else add("open", "List", seller && snapshot.admission.status === "approved" && !snapshot.paused && now < r.salesEnd, "LABx must approve this draft before you can list it.");
     add("cancel", "Cancel draft", seller || operator, "Only the seller or operator can cancel a draft.");
   }

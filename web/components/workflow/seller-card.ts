@@ -15,8 +15,8 @@ const CARD_STEPS: Partial<Record<SellerActionKind, (snapshot: RaffleSnapshot) =>
   reveal: () => ({ label: "Confirm the draw", status: "Winner drawn" }),
   settle: ({ raffle }) => ({ label: "Finish raffle", status: raffle.revealed ? "Draw confirmed" : "Winner drawn" }),
   claimProceeds: ({ raffle }) => ({ label: `Claim ${formatUsdcAmount(raffle.principalEscrow)} USDC`, status: "Raffle complete" }),
-  // The card only offers cancellation once no draw can happen.
-  cancel: snapshot => ({ label: snapshot.lotCount === 0n ? CANCEL_AND_RECLAIM : "Enable refunds", status: drawBlocker(snapshot) ?? "Sales ended" }),
+  // The card only offers cancellation once no draw can happen, or once a locked draft's deadline passed before listing.
+  cancel: snapshot => ({ label: snapshot.lotCount === 0n ? CANCEL_AND_RECLAIM : "Enable refunds", status: drawBlocker(snapshot) ?? "Sales deadline passed" }),
   abortDrawing: () => ({ label: "Enable refunds", status: "The draw timed out" }),
   reclaimPrize: () => ({ label: "Reclaim NFT", status: "Raffle cancelled" })
 };
