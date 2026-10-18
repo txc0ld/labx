@@ -1,6 +1,6 @@
 import { workflowRequestBody } from "@/lib/chain/request-body";
 import { activeStore } from "@/lib/store";
-import { serverWorkflow } from "@/lib/chain/server";
+import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { parseEnvelope, parsePreparationRecovery, recoverAuthenticatedPreparation } from "@/lib/workflow-records";
 import { workflowFailure, type WorkflowStage } from "@/lib/workflow-failure";
 export async function POST(request: Request) {
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     stage = "deployment";
     const { context, client } = await serverWorkflow();
     stage = "records";
-    const result = await recoverAuthenticatedPreparation(activeStore(), { ...body, input }, context, args => client.verifyMessage(args));
+    const result = await recoverAuthenticatedPreparation(activeStore(), { ...body, input }, context, signatureVerifier(client));
     return Response.json({ ok: true, ...result }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return workflowFailure("reserve/preparation", stage, error, {

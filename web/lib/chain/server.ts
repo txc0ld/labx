@@ -1,4 +1,5 @@
-import { createPublicClient, http, type Address, type Hex } from "viem";
+import { BaseError, createPublicClient, custom, ExecutionRevertedError, http, recoverMessageAddress, type Address, type Hex, type PublicClient } from "viem";
+import { getNodeError } from "viem/utils";
 import { APPROVED_DEPLOYMENTS, attestDeployment } from "./deployment";
 import { sameAddress } from "./validation";
 import { parseLocalManifest } from "./manifest";
@@ -7,9 +8,30 @@ import { publicSiteUrl } from "../operator";
 import type { WorkflowContext } from "./api-types";
 import { workflowMessage } from "./messages";
 import { WorkflowRefusal } from "../workflow-failure";
+import type { SignatureVerifier } from "../request-auth";
 /** Server reads never follow an off-chain lookup (CCIP-Read), so a contract named in a request cannot make LABx fetch a URL. */
 export function serverClient(rpc: string) {
   return createPublicClient({ ccipRead: false, transport: http(rpc, { timeout: 15_000, retryCount: 1 }) });
+}
+/**
+ * Checks a wallet signature. A plain wallet signature is recovered locally, with no RPC. Any other signature (ERC-1271,
+ * ERC-6492 or ERC-8010) needs the node, and viem reports a failed node call as an invalid signature, so this throws when the
+ * node gave no verdict (an answer or a revert), and refuses a signature that cannot be decoded.
+ */
+export function signatureVerifier(client: Pick<PublicClient, "request">): SignatureVerifier {
+  return async ({ address, message, signature }) => {
+    try { if (sameAddress(await recoverMessageAddress({ message, signature }), address)) return true; } catch { /* Not a plain wallet signature, so the node decides. */ }
+    let unanswered = false;
+    const observed = createPublicClient({ ccipRead: false, transport: custom({
+      async request(args) {
+        try { return await client.request(args); }
+        catch (error) { if (!(error instanceof BaseError && getNodeError(error, {}) instanceof ExecutionRevertedError)) unanswered = true; throw error; }
+      }
+    }, { retryCount: 0 }) });
+    const valid = await observed.verifyMessage({ address, message, signature }).catch(() => false);
+    if (!valid && unanswered) throw new Error("The node did not check the signature.");
+    return valid;
+  };
 }
 /** publicnode's US servers keep only about 25,000 blocks of logs ("pruned history unavailable"); this public gateway keeps all of Sepolia. */
 export const SEPOLIA_HISTORY_RPC = "https://sepolia.gateway.tenderly.co";

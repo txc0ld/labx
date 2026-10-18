@@ -1,6 +1,6 @@
 import { workflowRequestBody } from "@/lib/chain/request-body";
 import { activeStore } from "@/lib/store";
-import { serverWorkflow } from "@/lib/chain/server";
+import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { parseCommitmentInput, parseEnvelope, saveAuthenticatedCommitment } from "@/lib/workflow-records";
 import { erc721Abi } from "viem";
 import { sameAddress } from "@/lib/chain/validation";
@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     stage = "deployment";
     const { context, client, block } = await serverWorkflow();
     stage = "records";
-    const result = await saveAuthenticatedCommitment(activeStore(), { ...body, input }, context, args => client.verifyMessage(args), async signed => {
+    const result = await saveAuthenticatedCommitment(activeStore(), { ...body, input }, context, signatureVerifier(client), async signed => {
       const owner = await client.readContract({ address: signed.nft, abi: erc721Abi, functionName: "ownerOf", args: [BigInt(signed.tokenId)], blockNumber: block.number });
       if (!sameAddress(owner, body.address)) throw new WorkflowRefusal("The connected seller must own the NFT.");
     });

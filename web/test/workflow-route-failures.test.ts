@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { keccak256, toBytes, verifyMessage, type Address, type Hex } from "viem";
+import { createPublicClient, custom, encodeAbiParameters, keccak256, toBytes, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { workflowMessage } from "../lib/chain/messages";
 import type { WorkflowContext } from "../lib/chain/api-types";
@@ -33,13 +33,25 @@ let log: MockInstance;
 beforeEach(() => { log = vi.spyOn(console, "error").mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); vi.doUnmock("@/lib/chain/server"); vi.doUnmock("@/lib/store"); vi.resetModules(); });
 
-async function post(route: RouteName, input: unknown, options: { signer?: PrivateKeyAccount; deadline?: string; deployment?: "fails"; store?: Store; owner?: () => Promise<Address> } = {}) {
-  const { signer = seller, deadline = String(Math.floor(Date.now() / 1000) + 120), store = new MemoryStore(), owner = async () => seller.address } = options;
+/** A node that reads `owner` as the NFT's owner and, asked to check a signature on chain, finds it is not the claimed wallet's. */
+function node(owner: Address | "unavailable") {
+  return createPublicClient({ ccipRead: false, transport: custom({
+    async request({ method, params }: { method: string; params: [{ to?: Address }] }) {
+      if (method !== "eth_call") throw new Error(`Unexpected ${method}`);
+      if (!params[0].to) return "0x00";
+      if (owner === "unavailable") throw new Error(RAW_ERROR);
+      return encodeAbiParameters([{ type: "address" }], [owner]);
+    }
+  }, { retryCount: 0 }) });
+}
+
+async function post(route: RouteName, input: unknown, options: { signer?: PrivateKeyAccount; deadline?: string; deployment?: "fails"; store?: Store; owner?: Address | "unavailable" } = {}) {
+  const { signer = seller, deadline = String(Math.floor(Date.now() / 1000) + 120), store = new MemoryStore(), owner = seller.address } = options;
   vi.doMock("@/lib/chain/server", async original => ({
     ...await original<typeof import("../lib/chain/server")>(),
     serverWorkflow: async () => {
       if (options.deployment === "fails") throw new Error(RAW_ERROR);
-      return { context, block: { number: 1n }, client: { verifyMessage, readContract: owner } };
+      return { context, block: { number: 1n }, client: node(owner) };
     }
   }));
   vi.doMock("@/lib/store", () => ({ activeStore: () => store }));
@@ -146,9 +158,9 @@ describe("sibling signed workflow routes", () => {
   });
 
   it("reserve answers 401 when another wallet owns the NFT and 503 when the ownership read fails", async () => {
-    expect((await post("reserve", inputs.reserve, { owner: async () => other.address })).status).toBe(401);
+    expect((await post("reserve", inputs.reserve, { owner: other.address })).status).toBe(401);
     vi.resetModules();
-    const failed = await post("reserve", inputs.reserve, { owner: async () => { throw new Error(RAW_ERROR); } });
+    const failed = await post("reserve", inputs.reserve, { owner: "unavailable" });
     expect(failed.status).toBe(503);
   });
 

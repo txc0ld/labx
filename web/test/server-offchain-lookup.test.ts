@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createPublicClient, encodeErrorResult, erc721Abi, http, parseAbi, type Address } from "viem";
+import { createPublicClient, custom, encodeAbiParameters, encodeErrorResult, erc721Abi, http, parseAbi, type Address } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { serverClient } from "../lib/chain/server";
 import { workflowMessage } from "../lib/chain/messages";
@@ -58,10 +58,19 @@ describe("POST /api/reserve", () => {
   const seller = privateKeyToAccount(generatePrivateKey()), other = privateKeyToAccount(generatePrivateKey());
 
   async function post(signer = seller) {
-    const readContract = vi.fn(async () => seller.address);
+    // A node that names the seller as the NFT's owner and finds an on-chain signature check is not the claimed wallet's.
+    const readContract = vi.fn();
+    const client = createPublicClient({ ccipRead: false, transport: custom({
+      async request({ method, params }: { method: string; params: [{ to?: Address }] }) {
+        if (method !== "eth_call") throw new Error(`Unexpected ${method}`);
+        if (!params[0].to) return "0x00";
+        readContract();
+        return encodeAbiParameters([{ type: "address" }], [seller.address]);
+      }
+    }, { retryCount: 0 }) });
     vi.doMock("@/lib/chain/server", async original => ({
       ...await original<typeof import("../lib/chain/server")>(),
-      serverWorkflow: async () => ({ context, block: { number: 1n }, client: { readContract, verifyMessage: (await import("viem")).verifyMessage } })
+      serverWorkflow: async () => ({ context, block: { number: 1n }, client })
     }));
     vi.doMock("@/lib/store", () => ({ activeStore: () => new MemoryStore() }));
     const { POST } = await import("../app/api/reserve/route");

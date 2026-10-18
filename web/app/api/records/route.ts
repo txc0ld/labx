@@ -1,5 +1,5 @@
 import { workflowRequestBody } from "@/lib/chain/request-body";
-import { serverWorkflow } from "@/lib/chain/server";
+import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { parseEnvelope } from "@/lib/workflow-records";
 import { parseRecordsInput, privateRecords } from "@/lib/private-records";
 import { activeStore } from "@/lib/store";
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     stage = "deployment";
     const { context, client } = await serverWorkflow();
     stage = "records";
-    const records = await privateRecords(activeStore(), { ...body, input }, context, args => client.verifyMessage(args));
+    const records = await privateRecords(activeStore(), { ...body, input }, context, signatureVerifier(client));
     return Response.json({ ok: true, ...records }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return workflowFailure("records", stage, error, {
