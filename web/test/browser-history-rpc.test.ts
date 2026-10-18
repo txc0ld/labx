@@ -48,7 +48,7 @@ function logsIn(filter: Filter) {
     && (filter.topics ?? []).every((topic, index) => topic === null || (Array.isArray(topic) ? topic.includes(log.topics[index]) : topic === log.topics[index])));
 }
 
-const calls: { node: string; method: string }[] = [];
+const calls: { node: string; method: string; params: readonly unknown[] }[] = [];
 /** A JSON-RPC node over HTTP. A thrown error is answered as a JSON-RPC error with its message, code -32000 unless it has one, as publicnode answers pruned logs. */
 function node(name: string, answer: (method: string, params: readonly unknown[]) => unknown) {
   return createServer((request, response) => {
@@ -56,7 +56,7 @@ function node(name: string, answer: (method: string, params: readonly unknown[])
     request.on("data", chunk => { raw += chunk; });
     request.on("end", () => {
       const { id, method, params } = JSON.parse(raw) as { id: number; method: string; params: readonly unknown[] };
-      calls.push({ node: name, method });
+      calls.push({ node: name, method, params });
       let body: object;
       try { body = { jsonrpc: "2.0", id, result: answer(method, params) }; }
       catch (error) { body = { jsonrpc: "2.0", id, error: { code: (error as { code?: number }).code ?? -32000, message: (error as Error).message } }; }
@@ -86,9 +86,11 @@ const configured = node("configured", (method, params) => {
     default: throw new Error(`unexpected method ${method}`);
   }
 });
+/** How the full-history RPC changes the logs it answers with; unchanged by default. */
+let archiveAnswer = (logs: ReturnType<typeof logsIn>): readonly object[] => logs;
 const archive = node("archive", (method, params) => {
   if (method !== "eth_getLogs") throw new Error(`the full-history RPC was asked for ${method}`);
-  return logsIn(params[0] as Filter);
+  return archiveAnswer(logsIn(params[0] as Filter));
 });
 /** Answers with an internal error, which viem retries unless told not to. */
 const down = node("down", () => { throw Object.assign(new Error("backend unavailable"), { code: -32603 }); });
@@ -100,7 +102,7 @@ beforeAll(async () => {
   urls = Object.fromEntries(Object.entries(servers).map(([name, server]) => [name, `http://127.0.0.1:${(server.address() as AddressInfo).port}`])) as typeof urls;
 });
 afterAll(async () => { for (const server of [configured, archive, down] as Server[]) await new Promise(resolve => server.close(resolve)); });
-beforeEach(() => { calls.length = 0; });
+beforeEach(() => { calls.length = 0; archiveAnswer = logs => logs; });
 
 const manifest: DeploymentManifest = { ...fixtureTrust, chainId: 11155111, address: LABX, runtimeCodeHash: keccak256(CODE), version: 3, deploymentBlock: DEPLOYMENT, usdc: USDC };
 /** The browser's public client, as browser.ts builds it, over the stub nodes. */
@@ -110,6 +112,7 @@ const sellerActivity = (history: "archive" | "down" | null) => createSellerReade
   checkedBlock: async () => blockAt(HEAD), readRaffle: vi.fn(), listRaffles: vi.fn()
 });
 const logReads = () => calls.filter(call => call.method === "eth_getLogs").map(call => call.node);
+const headerReads = (number: bigint) => calls.filter(call => call.method === "eth_getBlockByNumber" && call.params[0] === numberToHex(number)).map(call => call.node);
 
 describe("browser log reads past publicnode's pruned history", () => {
   it("reads an old Profile history page through the full-history RPC once, with block checks on the configured RPC", async () => {
@@ -118,6 +121,35 @@ describe("browser log reads past publicnode's pruned history", () => {
     expect(page.items.map(item => item.blockNumber)).toEqual([OLD]);
     expect(logReads()).toEqual(["configured", "archive"]);
     expect(calls.filter(call => call.node === "archive").map(call => call.method)).toEqual(["eth_getLogs"]);
+    expect(headerReads(OLD)).toEqual(["configured"]);
+  });
+
+  it("checks each block of the full-history logs once against the configured RPC", async () => {
+    archiveAnswer = logs => logs.flatMap(log => [log, { ...log, logIndex: "0x1" }]);
+
+    const page = await reader("archive").history({ account: BUYER, toBlock: OLD + 1_000n });
+
+    expect(page.items.map(item => item.blockNumber)).toEqual([OLD, OLD]);
+    expect(headerReads(OLD)).toEqual(["configured"]);
+  });
+
+  it.each<{ name: string; change: (log: object) => object }>([
+    { name: "a block hash the configured RPC does not have", change: (log: object) => ({ ...log, blockHash: keccak256(toBytes("other-fork")) }) },
+    { name: "another contract's address", change: (log: object) => ({ ...log, address: USDC }) },
+    { name: "a block outside the requested range", change: (log: object) => ({ ...log, blockNumber: numberToHex(OLD + 5_000n), blockHash: blockHash(OLD + 5_000n) }) },
+    { name: "a removed log", change: (log: object) => ({ ...log, removed: true }) }
+  ])("rejects an old Profile history page when the full-history RPC answers with $name", async ({ change }) => {
+    archiveAnswer = logs => logs.map(change);
+
+    await expect(reader("archive").history({ account: BUYER, toBlock: OLD + 1_000n })).rejects.toThrow("Older activity from the full-history RPC did not match this network.");
+
+    expect(logReads()).toEqual(["configured", "archive"]);
+  });
+
+  it("rejects an old Sales and payouts page whose full-history log is on another fork", async () => {
+    archiveAnswer = logs => logs.map(log => ({ ...log, blockHash: keccak256(toBytes("other-fork")) }));
+
+    await expect(sellerActivity("archive").listRaffleActivity({ id: 7n, cursor: OLD + 1_000n })).rejects.toThrow("Older activity from the full-history RPC did not match this network.");
   });
 
   it("keeps a recent page on the configured RPC", async () => {
