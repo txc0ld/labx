@@ -353,7 +353,7 @@ export function pollStart(snapshot: RaffleSnapshot, mode: RaffleWorkspaceMode, a
   if (phase === 3 && now < r.vrfRequestedAt + snapshot.randomnessGrace) return now;
   if (mode === "seller") {
     if (drawRunnerEnabled() && sellerNextStep(snapshot, sellerPortalActions(availability), true, revealedAt).kind === "automatic") return now;
-    if (phase === 0 && r.escrowed && now < r.salesEnd && snapshot.admission.status !== "approved") return now;
+    // A draft is never re-read in the background: a fresh read remounts the edit form and would discard the seller's unsaved changes.
     return phase === 1 && now < r.salesEnd ? r.salesEnd - DEADLINE_POLL_WINDOW : null;
   }
   if (phase === 1 && now < r.salesEnd) {

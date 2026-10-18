@@ -147,14 +147,12 @@ describe("raffle page polling", () => {
     expect(poll(snapshot(1, {}, { paused: true }))).toBe(SALES_END - 15n * 60n);
   });
 
-  it("re-reads a draft waiting for LABx review, so List appears once it is approved", () => {
+  it("never re-reads a draft in the background, because a fresh read would discard the seller's unsaved edits", () => {
     vi.stubEnv("NEXT_PUBLIC_LABX_DRAW_RUNNER", "0");
     const waiting = snapshot(0);
-    expect(poll(waiting, "seller", { ...accountState(waiting), account: SELLER })).toBe(NOW);
+    expect(poll(waiting, "seller", { ...accountState(waiting), account: SELLER })).toBeNull();
     const approved = snapshot(0, {}, { admission: { status: "approved", reviewHash: zeroHash, record: waiting.admission.record } });
     expect(poll(approved, "seller", { ...accountState(approved), account: SELLER })).toBeNull();
-    const unlocked = snapshot(0, { escrowed: false });
-    expect(poll(unlocked, "seller", { ...accountState(unlocked), account: SELLER })).toBeNull();
   });
 });
 
