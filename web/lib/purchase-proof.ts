@@ -36,5 +36,5 @@ export async function verifiedPurchase(identity: PurchaseIdentity, context: Requ
 
 export function receiptChainReader(): PurchaseReader {
   // Only configured RPC, chain and contract are used; request bodies cannot choose a provider.
-  return createPublicClient({ chain: sepolia, transport: http(process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com", { timeout: 10_000, retryCount: 1 }) });
+  return createPublicClient({ chain: sepolia, ccipRead: false, transport: http(process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com", { timeout: 10_000, retryCount: 1 }) });
 }

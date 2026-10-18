@@ -6,6 +6,10 @@ import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../published-terms";
 import { publicSiteUrl } from "../operator";
 import type { WorkflowContext } from "./api-types";
 import { workflowMessage } from "./messages";
+/** Server reads never follow an off-chain lookup (CCIP-Read), so a contract named in a request cannot make LABx fetch a URL. */
+export function serverClient(rpc: string) {
+  return createPublicClient({ ccipRead: false, transport: http(rpc, { timeout: 15_000, retryCount: 1 }) });
+}
 export async function serverWorkflow() {
   let manifest = APPROVED_DEPLOYMENTS.find(item => item.chainId === 11155111 && process.env.NEXT_PUBLIC_RAFFLE_ADDRESS && sameAddress(item.address, process.env.NEXT_PUBLIC_RAFFLE_ADDRESS));
   let rpc = process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
@@ -21,7 +25,7 @@ export async function serverWorkflow() {
     rpc = localRpc.href; origin = localOrigin.origin;
   }
   if (!manifest) throw new Error("A reviewed raffle deployment is not configured.");
-  const client = createPublicClient({ transport: http(rpc, { timeout: 15_000, retryCount: 1 }) });
+  const client = serverClient(rpc);
   const attested = await attestDeployment(client, manifest);
   if (attested.kind !== "verified") throw new Error(attested.reason);
   const context: WorkflowContext = { origin, chainId: manifest.chainId, contract: manifest.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
