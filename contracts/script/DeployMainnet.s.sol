@@ -20,26 +20,48 @@ interface ISafeOwners {
 }
 
 /// @notice Chain-1 addresses and checks shared by both deployment stages.
+/// @dev Procedure. The deployer key signs these two scripts and nothing else until the Safe has accepted both transfers.
+///      Keep forge's broadcast/ run files from every run: both stages write run-latest.json in the same directory, so
+///      keep the timestamped run-<time>.json copies.
+///      1. Stage 1, CreateMainnetSubscription, creates the VRF subscription. Read its ID from the mined receipt, never
+///         from the simulation: `cast receipt <tx> --json`, the SubscriptionCreated log whose emitter is the
+///         coordinator and whose owner (the log data) is the deployer; the ID is topic 1. Write the stage 1 tx hash
+///         and the ID into the deployment record.
+///      2. Stage 2, DeployMainnet, with VRF_SUBSCRIPTION_ID, FUND_TARGET_WEI, TERMS_HASH, SAFE_ADDRESS and no
+///         RAFFLE_ADDRESS. A fresh run refuses a subscription that is not the deployer's, has a pending owner or has
+///         a consumer. Write the raffle address and every stage 2 tx hash into the record before anything else.
+///      3. If stage 2 stops part way, settle every pending transaction (mined or replaced), then rerun it with
+///         RAFFLE_ADDRESS from the record. A resume refuses a raffle whose code, settings or ownership differ from a
+///         fresh deployment, sends only the missing steps, and funds only up to FUND_TARGET_WEI.
+///      4. The Safe accepts both transfers, checks the state, and unpauses the raffle only at launch.
+///      Every check runs in forge's simulation, so a refusal stops the run before anything is sent.
 abstract contract MainnetDeployment is Script {
     error SafeNotDeployed(address safe);
     error SafeThresholdTooLow(address safe, uint256 threshold);
-    error CallbackGasOutOfRange(uint256 callbackGasLimit);
     error SubscriptionNotOwned(uint256 subId, address owner);
-    error RaffleMismatch(address raffle);
+    error CoordinatorLayoutChanged(uint256 subId);
 
     // Read on chain 1 on 19 October 2026: Circle USDC (6 decimals), the Chainlink VRF v2.5 coordinator and its 200 gwei
     // key hash (s_provingKeys returned exists with maxGas 200 gwei).
     address internal constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address internal constant VRF_COORDINATOR = 0xD7f86b4b8Cae7D942340FF628F82735b7a20893a;
     bytes32 internal constant VRF_KEY_HASH = 0x8077df514608a09f83e4e8d300645594e5d7234665448ba83f51a50f842bd3d9;
+    // Fixed, not an input: the costliest callback measured under Sepolia's October 2026 gas repricing used 264,740 gas,
+    // and 250,000 failed. It also sets the reserve Chainlink expects before answering a draw.
+    uint32 internal constant CALLBACK_GAS_LIMIT = 400_000;
+    uint16 internal constant REQUEST_CONFIRMATIONS = 3;
+    // The coordinator's s_subscriptionConfigs mapping (VRF v2.5 SubscriptionAPI): {owner, requestedOwner, consumers}.
+    uint256 private constant SUBSCRIPTION_CONFIGS_SLOT = 5;
+
+    struct Subscription {
+        uint96 nativeBalance;
+        address owner;
+        address requestedOwner;
+        address[] consumers;
+    }
 
     function _requireMainnet() internal view {
         if (block.chainid != 1) revert("LABx: mainnet only.");
-    }
-
-    /// @dev The contract's own bounds, checked before anything is broadcast.
-    function _validateCallbackGas(uint256 callbackGas) internal pure {
-        if (callbackGas < 200_000 || callbackGas > 2_500_000) revert CallbackGasOutOfRange(callbackGas);
     }
 
     /// @dev Refuses an EOA, an undeployed Safe, or a Safe that one key can control.
@@ -47,6 +69,22 @@ abstract contract MainnetDeployment is Script {
         if (safe.code.length == 0) revert SafeNotDeployed(safe);
         uint256 threshold = ISafeOwners(safe).getThreshold();
         if (threshold < 2) revert SafeThresholdTooLow(safe, threshold);
+    }
+
+    /// @dev getSubscription omits the pending owner, so this reads it from the coordinator's storage, and refuses if the
+    ///      owner and consumer count stored beside it disagree with getSubscription. Reverts InvalidSubscription for an
+    ///      ID that was never mined, such as one taken from a simulation.
+    function _subscription(uint256 subId) internal view returns (Subscription memory s) {
+        (, s.nativeBalance,, s.owner, s.consumers) = IVRFSubscriptionAdmin(VRF_COORDINATOR).getSubscription(subId);
+        uint256 base = uint256(keccak256(abi.encode(subId, SUBSCRIPTION_CONFIGS_SLOT)));
+        if (_coordinatorWord(base) != uint160(s.owner) || _coordinatorWord(base + 2) != s.consumers.length) {
+            revert CoordinatorLayoutChanged(subId);
+        }
+        s.requestedOwner = address(uint160(_coordinatorWord(base + 1)));
+    }
+
+    function _coordinatorWord(uint256 slot) private view returns (uint256) {
+        return uint256(vm.load(VRF_COORDINATOR, bytes32(slot)));
     }
 }
 
@@ -57,7 +95,9 @@ contract CreateMainnetSubscription is MainnetDeployment {
     function run() external {
         _requireMainnet();
         _create(vm.envUint("DEPLOYER_PRIVATE_KEY"));
-        console2.log("Read the subscription ID from SubscriptionCreated in the mined receipt, not from this simulation.");
+        console2.log(
+            "Read the subscription ID from SubscriptionCreated in the mined receipt, not from this simulation."
+        );
     }
 
     function _create(uint256 pk) internal {
@@ -68,21 +108,28 @@ contract CreateMainnetSubscription is MainnetDeployment {
     }
 }
 
-/// @notice Stage 2: deploys the raffle pinned to the mined subscription and hands both to the Safe. The raffle starts
-///         paused, so nothing can be admitted, opened or bought while the deployer still owns it; the Safe unpauses at
-///         launch. Every step checks chain state first, so rerunning with RAFFLE_ADDRESS after an interruption finishes the
-///         remaining steps without deploying again. Every other chain id is refused.
+/// @notice Stage 2: deploys the raffle pinned to the mined subscription, funds the subscription up to a target, and
+///         offers both to the Safe. The raffle starts paused from its constructor. A fresh run (no RAFFLE_ADDRESS) only
+///         accepts the untouched stage 1 subscription; a resume (RAFFLE_ADDRESS set) only accepts a raffle identical to
+///         a fresh deployment, and sends only the missing steps. Every other chain id is refused.
 contract DeployMainnet is MainnetDeployment {
+    error SubscriptionInUse(uint256 subId);
+    error RaffleCodeMismatch(address raffle);
+    error RaffleSettingMismatch(string setting);
+    error RaffleOwnershipUnexpected(address owner, address pendingOwner);
+    error SubscriptionOwnershipUnexpected(address owner, address requestedOwner);
+    error SubscriptionConsumersUnexpected(uint256 subId);
+    error SafeActionRequired(string action);
+
     struct Config {
         address safe;
         uint256 pk;
         bytes32 terms;
-        // A reviewed value: it sets the subscription reserve Chainlink expects before answering a draw.
-        uint256 callbackGas;
-        uint256 fundWei;
+        // The subscription's native balance after the run; only the shortfall is sent.
+        uint256 fundTarget;
         // The ID from the mined SubscriptionCreated event of stage 1.
         uint256 subId;
-        // Zero for a first run; the deployed raffle when resuming.
+        // Zero for a fresh run; the raffle from the deployment record when resuming.
         address existing;
     }
 
@@ -93,8 +140,7 @@ contract DeployMainnet is MainnetDeployment {
                 safe: vm.envAddress("SAFE_ADDRESS"),
                 pk: vm.envUint("DEPLOYER_PRIVATE_KEY"),
                 terms: vm.envBytes32("TERMS_HASH"),
-                callbackGas: vm.envUint("VRF_CALLBACK_GAS_LIMIT"),
-                fundWei: vm.envOr("VRF_FUND_WEI", uint256(0)),
+                fundTarget: vm.envUint("FUND_TARGET_WEI"),
                 subId: vm.envUint("VRF_SUBSCRIPTION_ID"),
                 existing: vm.envOr("RAFFLE_ADDRESS", address(0))
             })
@@ -104,51 +150,119 @@ contract DeployMainnet is MainnetDeployment {
     function _deploy(Config memory c) internal returns (LabxRaffle labx) {
         _requireMainnet();
         _validateSafe(c.safe);
-        _validateCallbackGas(c.callbackGas);
         address deployer = vm.addr(c.pk);
-        IVRFSubscriptionAdmin coordinator = IVRFSubscriptionAdmin(VRF_COORDINATOR);
-        // Reverts InvalidSubscription for an ID that was never mined, such as one taken from a simulation.
-        (,,, address subOwner, address[] memory consumers) = coordinator.getSubscription(c.subId);
-        if (subOwner != deployer && subOwner != c.safe) revert SubscriptionNotOwned(c.subId, subOwner);
-
-        vm.startBroadcast(c.pk);
+        Subscription memory sub = _subscription(c.subId);
+        if (sub.owner != deployer && sub.owner != c.safe) revert SubscriptionNotOwned(c.subId, sub.owner);
+        LabxRaffle.Init memory init = _init(c);
         if (c.existing == address(0)) {
-            labx = new LabxRaffle(
-                LabxRaffle.Init({
-                    treasury: c.safe,
-                    usdc: USDC,
-                    router: address(0),
-                    weth: address(0),
-                    ethUsdFeed: address(0),
-                    poolFee: 0,
-                    vrfCoordinator: VRF_COORDINATOR,
-                    keyHash: VRF_KEY_HASH,
-                    subscriptionId: c.subId,
-                    termsHash: c.terms,
-                    callbackGasLimit: uint32(c.callbackGas),
-                    requestConfirmations: 3
-                })
-            );
-        } else {
-            labx = LabxRaffle(payable(c.existing));
-            if (labx.subscriptionId() != c.subId || labx.vrfCoordinator() != VRF_COORDINATOR || labx.treasury() != c.safe) {
-                revert RaffleMismatch(c.existing);
+            // A used subscription means this is a resume that lost RAFFLE_ADDRESS; deploying again would add a second raffle.
+            if (sub.owner != deployer || sub.requestedOwner != address(0) || sub.consumers.length != 0) {
+                revert SubscriptionInUse(c.subId);
             }
+        } else {
+            _requireResumable(LabxRaffle(payable(c.existing)), init, c, deployer);
         }
-        if (labx.owner() == deployer) {
-            if (!labx.nativePayment()) labx.setNativePayment(true);
-            if (!labx.paused()) labx.setPaused(true);
+
+        IVRFSubscriptionAdmin coordinator = IVRFSubscriptionAdmin(VRF_COORDINATOR);
+        vm.startBroadcast(c.pk);
+        labx = c.existing == address(0) ? new LabxRaffle(init) : LabxRaffle(payable(c.existing));
+        if (labx.owner() == deployer && !labx.nativePayment()) labx.setNativePayment(true);
+        if (sub.owner == deployer && !_contains(sub.consumers, address(labx))) {
+            coordinator.addConsumer(c.subId, address(labx));
         }
-        if (subOwner == deployer && !_contains(consumers, address(labx))) coordinator.addConsumer(c.subId, address(labx));
-        if (c.fundWei > 0) coordinator.fundSubscriptionWithNative{value: c.fundWei}(c.subId);
+        if (sub.nativeBalance < c.fundTarget) {
+            coordinator.fundSubscriptionWithNative{value: c.fundTarget - sub.nativeBalance}(c.subId);
+        }
         if (labx.owner() == deployer && labx.pendingOwner() != c.safe) labx.transferOwnership(c.safe);
-        // Idempotent on the coordinator: an unchanged requested owner is a no-op.
-        if (subOwner == deployer) coordinator.requestSubscriptionOwnerTransfer(c.subId, c.safe);
+        if (sub.owner == deployer && sub.requestedOwner != c.safe) {
+            coordinator.requestSubscriptionOwnerTransfer(c.subId, c.safe);
+        }
         vm.stopBroadcast();
 
+        _requireHandoff(labx, c, deployer);
         console2.log("LabxRaffle", address(labx));
         console2.log("VRF subscription", c.subId);
-        console2.log("Safe must accept both transfers, then unpause the raffle at launch");
+        console2.log(
+            "Record the raffle address and every tx hash. The Safe accepts both transfers, then unpauses at launch."
+        );
+    }
+
+    function _init(Config memory c) private pure returns (LabxRaffle.Init memory) {
+        return LabxRaffle.Init({
+            treasury: c.safe,
+            usdc: USDC,
+            router: address(0),
+            weth: address(0),
+            ethUsdFeed: address(0),
+            poolFee: 0,
+            vrfCoordinator: VRF_COORDINATOR,
+            keyHash: VRF_KEY_HASH,
+            subscriptionId: c.subId,
+            termsHash: c.terms,
+            callbackGasLimit: CALLBACK_GAS_LIMIT,
+            requestConfirmations: REQUEST_CONFIRMATIONS
+        });
+    }
+
+    /// @dev The raffle must be what a fresh run of this script deploys, still owned by the deployer (with nothing or the
+    ///      Safe pending) or already by the Safe. The reference raffle is created outside the broadcast, so it exists
+    ///      only in the simulation; its code hash covers the compiled code and every immutable.
+    function _requireResumable(LabxRaffle labx, LabxRaffle.Init memory init, Config memory c, address deployer)
+        private
+    {
+        if (address(labx).codehash != address(new LabxRaffle(init)).codehash) {
+            revert RaffleCodeMismatch(address(labx));
+        }
+        _requireReviewedSettings(labx, c);
+        address owner = labx.owner();
+        address pending = labx.pendingOwner();
+        if (!_offeredTo(owner, pending, deployer, c.safe) && !(owner == deployer && pending == address(0))) {
+            revert RaffleOwnershipUnexpected(owner, pending);
+        }
+    }
+
+    /// @dev Every owner-settable default, as a fresh deployment has it. USDC, the unwired ETH route and the fee
+    ///      constants are part of the code, so the code hash covers them. Native billing is the one default this script
+    ///      changes, and _requireHandoff checks it.
+    function _requireReviewedSettings(LabxRaffle labx, Config memory c) private view {
+        _requireSetting(labx.treasury() == c.safe, "treasury");
+        _requireSetting(labx.vrfCoordinator() == VRF_COORDINATOR, "vrfCoordinator");
+        _requireSetting(labx.pendingCoordinator() == address(0) && labx.coordinatorEta() == 0, "pendingCoordinator");
+        _requireSetting(labx.keyHash() == VRF_KEY_HASH, "keyHash");
+        _requireSetting(labx.subscriptionId() == c.subId, "subscriptionId");
+        _requireSetting(labx.termsHash() == c.terms, "termsHash");
+        _requireSetting(labx.callbackGasLimit() == CALLBACK_GAS_LIMIT, "callbackGasLimit");
+        _requireSetting(labx.requestConfirmations() == REQUEST_CONFIRMATIONS, "requestConfirmations");
+        _requireSetting(!labx.ethPathEnabled(), "ethPathEnabled");
+        _requireSetting(labx.paused(), "paused");
+    }
+
+    /// @dev What the Safe should find before accepting: the reviewed settings, native billing, the raffle as the
+    ///      subscription's only consumer, and both resources owned by or offered to the Safe. A step the deployer can no
+    ///      longer take is named as a Safe action instead of being reported as done.
+    function _requireHandoff(LabxRaffle labx, Config memory c, address deployer) private view {
+        _requireReviewedSettings(labx, c);
+        Subscription memory sub = _subscription(c.subId);
+        if (!_contains(sub.consumers, address(labx))) {
+            revert SafeActionRequired("coordinator.addConsumer(subId, raffle)");
+        }
+        if (sub.consumers.length != 1) revert SubscriptionConsumersUnexpected(c.subId);
+        if (!labx.nativePayment()) revert SafeActionRequired("raffle.setNativePayment(true)");
+        if (!_offeredTo(labx.owner(), labx.pendingOwner(), deployer, c.safe)) {
+            revert RaffleOwnershipUnexpected(labx.owner(), labx.pendingOwner());
+        }
+        if (!_offeredTo(sub.owner, sub.requestedOwner, deployer, c.safe)) {
+            revert SubscriptionOwnershipUnexpected(sub.owner, sub.requestedOwner);
+        }
+    }
+
+    /// @dev The Safe owns it with nothing pending, or the deployer owns it with the Safe pending.
+    function _offeredTo(address owner, address pending, address deployer, address safe) private pure returns (bool) {
+        return (owner == safe && pending == address(0)) || (owner == deployer && pending == safe);
+    }
+
+    function _requireSetting(bool matches, string memory setting) private pure {
+        if (!matches) revert RaffleSettingMismatch(setting);
     }
 
     function _contains(address[] memory items, address item) private pure returns (bool) {
