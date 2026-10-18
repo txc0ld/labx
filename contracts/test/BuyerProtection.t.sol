@@ -64,6 +64,7 @@ contract BuyerProtectionTest is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        labx.setPaused(false);
         usdc.mint(alice, 1_000e6);
         usdc.mint(bob, 1_000e6);
         vm.prank(alice);

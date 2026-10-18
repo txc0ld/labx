@@ -337,7 +337,10 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         termsHash = init.termsHash;
         callbackGasLimit = init.callbackGasLimit;
         requestConfirmations = init.requestConfirmations;
+        // Every deployment starts paused, so nothing opens or sells until the owner unpauses.
+        paused = true;
         emit OwnershipTransferred(address(0), msg.sender);
+        emit PausedSet(true);
     }
 
     receive() external payable {

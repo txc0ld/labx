@@ -45,6 +45,7 @@ contract LabxRaffleTest is AdmissionFixture {
         router = new MockRouter(weth, usdc);
         vrf = new MockVRF();
         labx = _deploy(address(usdc));
+        labx.setPaused(false);
         nft.mint(seller, 1);
         vm.prank(seller);
         nft.approve(address(labx), 1);
@@ -146,6 +147,18 @@ contract LabxRaffleTest is AdmissionFixture {
     function test_constructor_deploysOnMainnet() public {
         vm.chainId(1);
         assertGt(address(_deploy(address(usdc))).code.length, 0);
+    }
+
+    function test_constructor_startsPausedUntilTheOwnerUnpauses() public {
+        vm.expectEmit();
+        emit LabxRaffle.PausedSet(true);
+        LabxRaffle fresh = _deploy(address(usdc));
+        assertTrue(fresh.paused());
+        vm.prank(seller);
+        vm.expectRevert(LabxRaffle.NotOwner.selector);
+        fresh.setPaused(false);
+        fresh.setPaused(false);
+        assertFalse(fresh.paused());
     }
 
     function test_constructor_revertsWhenUsdcIsNotSixDecimals() public {
@@ -768,6 +781,7 @@ contract LabxRaffleTest is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        pinned.setPaused(false);
         nft.mint(seller, 21);
         vm.prank(seller);
         nft.approve(address(pinned), 21);

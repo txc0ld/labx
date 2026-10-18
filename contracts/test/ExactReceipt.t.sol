@@ -43,6 +43,7 @@ contract ExactReceiptTest is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        labx.setPaused(false);
         nft.mint(address(this), 1);
         nft.approve(address(labx), 1);
         LabxRaffle.PackConfig[] memory packs = new LabxRaffle.PackConfig[](1);
