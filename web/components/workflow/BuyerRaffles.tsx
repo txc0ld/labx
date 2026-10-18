@@ -4,17 +4,15 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
-import type { BlockRef, HistoryItem } from "@/lib/chain/types";
+import type { HistoryItem } from "@/lib/chain/types";
 import { buyerRaffleRow, type BuyerRaffleRow } from "./buyer-raffles";
+import { readHistoryPages, type HistoryContinuation } from "./history-pages";
 import { useWalletSnapshot } from "./WalletGate";
 
-type Continuation = { cursor: bigint; block: BlockRef };
 type State =
   | { kind: "idle" | "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; purchases: readonly HistoryItem[]; rows: readonly BuyerRaffleRow[]; continuation: Continuation | null; loadingMore: boolean };
-
-const HISTORY_PAGES_PER_LOAD = 10;
+  | { kind: "ready"; purchases: readonly HistoryItem[]; rows: readonly BuyerRaffleRow[]; continuation: HistoryContinuation | null; loadingMore: boolean };
 
 /** The connected wallet's raffles, from its confirmed purchases and current raffle reads. No signature is requested. */
 export function BuyerRaffles({ browser }: { browser: BrowserService }) {
@@ -29,18 +27,8 @@ export function BuyerRaffles({ browser }: { browser: BrowserService }) {
     const account: Address = wallet.account;
     setState(previous ? { ...previous, loadingMore: true } : { kind: "loading" });
     try {
-      const purchases = previous ? [...previous.purchases] : [];
-      let fromBlock = previous?.continuation?.cursor;
-      let block = previous?.continuation?.block;
-      let continuation: Continuation | null = null;
-      for (let page = 0; page < HISTORY_PAGES_PER_LOAD; page += 1) {
-        const result = await browser.service.history({ account, fromBlock, block });
-        purchases.push(...result.items.filter(item => item.event === "PackPurchased"));
-        block = result.block;
-        if (result.nextCursor === null) { continuation = null; break; }
-        fromBlock = result.nextCursor;
-        continuation = { cursor: result.nextCursor, block };
-      }
+      const { items, continuation, block } = await readHistoryPages(browser.service, account, previous?.continuation ?? null);
+      const purchases = [...previous?.purchases ?? [], ...items.filter(item => item.event === "PackPurchased")];
       const byRaffle = new Map<bigint, HistoryItem[]>();
       for (const purchase of purchases) byRaffle.set(purchase.raffleId, [...byRaffle.get(purchase.raffleId) ?? [], purchase]);
       const accounts = await Promise.all([...byRaffle.keys()].map(id => browser.service.readAccount({ id, account, block })));

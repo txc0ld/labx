@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import { loadPrivateRecordBatches } from "./record-batches";
-import type { BlockRef, HistoryItem, WalletSnapshot } from "@/lib/chain/types";
+import { readHistoryPages, type HistoryContinuation } from "./history-pages";
+import type { HistoryItem, WalletSnapshot } from "@/lib/chain/types";
 import { sameAddress } from "@/lib/chain/validation";
 import { formatUsdcAmount } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
@@ -46,7 +47,7 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   const [state, setState] = useState<RecordsState>({ kind: "loading-history" });
   const [delivery, setDelivery] = useState<Record<string, "sending" | "delivered" | "error">>({});
   const [deliveryError, setDeliveryError] = useState("");
-  const [continuation, setContinuation] = useState<{ cursor: bigint; block: BlockRef } | null>(null);
+  const [continuation, setContinuation] = useState<HistoryContinuation | null>(null);
   const request = useRef(0);
   const mounted = useRef(false);
   const activeWallet = useRef(browser.wallet);
@@ -59,17 +60,9 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     const version = ++request.current;
     setState({ kind: "loading-history" });
     try {
-      const items: HistoryItem[] = more && "purchases" in state ? [...state.purchases] : [];
-      let fromBlock: bigint | undefined = more ? continuation?.cursor : undefined;
-      let block: BlockRef | undefined = more ? continuation?.block : undefined;
-      let next: { cursor: bigint; block: BlockRef } | null = null;
-      for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
-        const page = await browser.service.history({ account: wallet.account, fromBlock, block });
-        items.push(...page.items.filter((item) => item.event === "PackPurchased"));
-        if (page.nextCursor === null) { next = null; break; }
-        block = page.block; fromBlock = page.nextCursor; next = { cursor: page.nextCursor, block };
-      }
-      if (version === request.current) { setContinuation(next); setState({ kind: "ready-history", purchases: items }); }
+      const page = await readHistoryPages(browser.service, wallet.account, more ? continuation : null);
+      const items = [...more && "purchases" in state ? state.purchases : [], ...page.items.filter((item) => item.event === "PackPurchased")];
+      if (version === request.current) { setContinuation(page.continuation); setState({ kind: "ready-history", purchases: items }); }
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Purchase history could not be loaded." });
     }
@@ -149,7 +142,7 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
       {state.kind === "error" ? <div className="notice error stack" role="alert"><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void loadHistory()}>Retry</button></div> : null}
       {state.kind === "ready-history" && !state.purchases.length ? <div className="well pad stack"><h2>{continuation ? "No purchases found yet" : "No purchases yet"}</h2><Link className="btn btn-dark" href="/">Browse raffles</Link></div> : null}
       {(state.kind === "ready-history" || state.kind === "loading-records") && state.purchases.length ? <div className="well pad stack"><h2>See your receipts</h2><p>Signing is free and doesn’t send a transaction.{signatures > 1 ? ` You’ll sign ${signatures} times.` : ""}</p><button className="btn" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadRecords(state.purchases)}>{state.kind === "loading-records" ? "Opening wallet…" : "Sign to see receipts"}</button></div> : null}
-      {continuation && state.kind !== "loading-history" ? <div className="stack"><p className="muted" role="status">Newer purchases aren’t shown yet.</p><button className="btn btn-dark" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadHistory(true)}>Load more</button></div> : null}
+      {continuation && state.kind !== "loading-history" ? <div className="stack"><p className="muted" role="status">Older purchases aren’t shown yet.</p><button className="btn btn-dark" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadHistory(true)}>Load more</button></div> : null}
       {state.kind === "ready" ? (
         <div className="workflow-grid">
           <section className="pearl pad stack"><h2>Your purchases</h2>{email ? <p className="notice">Receipts go to {email}. <Link href="/profile#email-preferences">Change</Link></p> : <p className="notice warning">Add your email to get receipts. <Link href="/profile#email-preferences">Add email</Link></p>}<ol className="private-record-list">{state.purchases.map((purchase) => {

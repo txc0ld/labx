@@ -136,10 +136,12 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     const items = await Promise.all(indexes.map(index => client.readContract({ address: manifest.address, abi: raffleAbi, functionName: "lotAt", args: [id, index], blockNumber: snapshot.block.number })));
     return { items, nextCursor: end < snapshot.lotCount ? end : null, block: snapshot.block };
   }
-  async function history({ account, fromBlock = manifest.deploymentBlock, block }: { account: Address; fromBlock?: bigint; block?: BlockRef }) {
+  /** One 2,000-block page of the account's events, newest first, ending at `toBlock` (the checked block by default). `nextCursor` ends the next older page. */
+  async function history({ account, toBlock, block }: { account: Address; toBlock?: bigint; block?: BlockRef }) {
     const at = await checkedBlock(block);
-    if (fromBlock < manifest.deploymentBlock || fromBlock > at.number) throw new Error("Invalid history block range.");
-    const toBlock = fromBlock + 1_999n < at.number ? fromBlock + 1_999n : at.number;
+    toBlock ??= at.number;
+    if (toBlock < manifest.deploymentBlock || toBlock > at.number) throw new Error("Invalid history block range.");
+    const fromBlock = toBlock - 1_999n > manifest.deploymentBlock ? toBlock - 1_999n : manifest.deploymentBlock;
     const logs = await client.getLogs({ address: manifest.address, fromBlock, toBlock });
     if (logs.length > 5_000) throw new Error("Too many events in this block range. Use a smaller range.");
     const items: HistoryItem[] = [];
@@ -160,7 +162,7 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
         if (sameAddress(holder, account)) items.push({ raffleId: event.args.id, event: event.eventName, account: holder, principal, fee, quantity, bonusEntries, transactionHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber });
       } catch { throw new Error("Contract event data could not be decoded."); }
     }
-    return { items, nextCursor: toBlock < at.number ? toBlock + 1n : null, block: at };
+    return { items: items.reverse(), nextCursor: fromBlock > manifest.deploymentBlock ? fromBlock - 1n : null, block: at };
   }
   /**
    * Block time of raffle `id`'s Revealed event at or before `block`. The contract records no reveal time or draw block, so this

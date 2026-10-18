@@ -58,7 +58,8 @@ describe("account data boundaries", () => {
     expect(eligibility).toMatch(/does not save it or confirm that you are eligible/i);
     expect(history).toMatch(/LiveAccountHistory/);
     expect(receipts).toMatch(/LivePrivateRecords/);
-    expect(read("components/workflow/AccountHistory.tsx")).toMatch(/service\.history/);
+    expect(read("components/workflow/AccountHistory.tsx")).toMatch(/readHistoryPages\(browser\.service/);
+    expect(read("components/workflow/history-pages.ts")).toMatch(/service\.history/);
     expect(read("components/workflow/PrivateRecordsPanel.tsx")).toMatch(/readRecords/);
     expect(`${history}\n${receipts}`).not.toMatch(/receipt #|purchased on/i);
   });
