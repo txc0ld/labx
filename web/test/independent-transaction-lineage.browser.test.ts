@@ -75,7 +75,14 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
     await chain.mine();
     await chain.mine();
     await tabA.clock.fastForward(121_000);
-    await tabA.getByRole("alert").filter({ hasText: /Creation stopped|canonical confirmation|replaced/ }).waitFor({ state: "visible", timeout: 15_000 });
+    // A confirmation poll still waiting on the node when the clock jumps schedules its next timer afterwards, so keep
+    // advancing in small steps until the page reports the replacement (this wait failed intermittently in CI).
+    const stopped = tabA.getByRole("alert").filter({ hasText: /Creation stopped|canonical confirmation|replaced/ });
+    await expect.poll(async () => {
+      if (await stopped.isVisible()) return true;
+      await tabA.clock.fastForward(5_000);
+      return stopped.isVisible();
+    }, { timeout: 30_000, intervals: [500] }).toBe(true);
 
     const createRecord = await tabA.evaluate(account => {
       const key = Object.keys(localStorage).find(candidate => candidate.startsWith("labx:create:v1:") && candidate.endsWith(account.toLowerCase()));
