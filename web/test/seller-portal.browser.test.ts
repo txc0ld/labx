@@ -464,15 +464,36 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(await fixture.page.getByRole("button", { name: /Approve NFT|Lock NFT|^Claim [\d.,]+ USDC$/ }).count()).toBe(0);
   }, 30_000);
 
-  it("keeps earlier activity through a later-page failure and an empty final retry", async () => {
+  it("keeps a seller's buyer refund on the public piece and out of seller-only controls", async () => {
+    const beforeRefund = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] });
+    await fixture.switchAccount(chain.seller);
+    let response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
+    expect(await fixture.page.getByRole("button", { name: /^Claim [\d.,]+ USDC refund$/ }).count()).toBe(0);
+
+    response = await fixture.page.goto(`${fixture.baseUrl}/piece/2`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    await connectWallet(fixture.page, fixture.page.getByRole("button", { name: "Claim 25.00 USDC refund", exact: true }).first());
+    expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [802n] })).toBe(chain.seller);
+    await transact("Claim 25.00 USDC refund");
+    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(beforeRefund + 25_000_000n);
+    expect((await chain.service.readAccount({ id: 2n, account: chain.seller })).principal).toBe(0n);
+  }, 30_000);
+
+  it("keeps newer activity through an older-page failure and finishes on retry", async () => {
+    // Runs after the refund: activity is newest first, so the first page holds the refund and the older page the purchase.
     await fixture.switchAccount(chain.seller);
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
+    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
     await fixture.page.locator("summary").filter({ hasText: "Sales and payouts" }).click();
     const activity = fixture.page.locator("section[aria-label='Sales and payouts']");
-    const purchased = `${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`;
-    await activity.getByText(purchased, { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
+    const refunded = activity.getByText("Refund", { exact: true });
+    const purchased = activity.getByText(`${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`, { exact: true });
+    await refunded.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await refunded.count()).toBe(1);
+    expect(await purchased.count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(1);
 
     let failuresRemaining = 1;
@@ -498,32 +519,18 @@ run("rendered seller portal on isolated Anvil", () => {
     await activity.getByRole("button", { name: "Load more", exact: true }).click();
     await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     expect(failuresRemaining).toBe(0);
-    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
+    expect(await refunded.count()).toBe(1);
+    expect(await purchased.count()).toBe(0);
     expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
 
     await activity.getByRole("button", { name: "Try again", exact: true }).click();
-    await expect.poll(async () => activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count(), { timeout: 15_000 }).toBe(0);
-    await expect.poll(async () => activity.getByRole("button", { name: "Load more", exact: true }).count(), { timeout: 15_000 }).toBe(0);
-    expect(await activity.getByText(purchased, { exact: true }).count()).toBe(1);
+    await purchased.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await activity.getByText("Couldn’t load all sales and payouts", { exact: true }).count()).toBe(0);
+    expect(await activity.getByRole("button", { name: "Load more", exact: true }).count()).toBe(0);
+    expect(await refunded.count()).toBe(1);
+    expect(await activity.locator("li strong").allInnerTexts()).toEqual(["Refund", `${chain.seller.slice(0, 6)}…${chain.seller.slice(-4)} bought 1 membership`]);
     await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
-
-  it("keeps a seller's buyer refund on the public piece and out of seller-only controls", async () => {
-    const beforeRefund = await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] });
-    await fixture.switchAccount(chain.seller);
-    let response = await fixture.page.goto(`${fixture.baseUrl}/seller/2`, { waitUntil: "domcontentloaded" });
-    expect(response?.status()).toBe(200);
-    await connectWallet(fixture.page, fixture.page.getByRole("heading", { name: "Seller portfolio 2" }));
-    expect(await fixture.page.getByRole("button", { name: /^Claim [\d.,]+ USDC refund$/ }).count()).toBe(0);
-
-    response = await fixture.page.goto(`${fixture.baseUrl}/piece/2`, { waitUntil: "domcontentloaded" });
-    expect(response?.status()).toBe(200);
-    await connectWallet(fixture.page, fixture.page.getByRole("button", { name: "Claim 25.00 USDC refund", exact: true }).first());
-    expect(await chain.client.readContract({ address: chain.nft.address, abi: erc721Abi, functionName: "ownerOf", args: [802n] })).toBe(chain.seller);
-    await transact("Claim 25.00 USDC refund");
-    expect(await chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "balanceOf", args: [chain.seller] })).toBe(beforeRefund + 25_000_000n);
-    expect((await chain.service.readAccount({ id: 2n, account: chain.seller })).principal).toBe(0n);
-  }, 30_000);
 
   it("keeps a seller-winner prize claim in the public flow after proceeds are claimed", async () => {
     await fixture.switchAccount(chain.seller);
