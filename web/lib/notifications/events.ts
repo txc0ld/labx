@@ -1,4 +1,5 @@
 import {
+  BaseError,
   decodeEventLog,
   isAddress,
   isHex,
@@ -221,7 +222,14 @@ export function adaptNotificationWorkflow(workflow: Awaited<ReturnType<typeof se
         return { number: block.number, hash: block.hash, timestamp: block.timestamp, gasLimit: block.gasLimit };
       },
       async getLogs(args) {
-        return workflow.history.getLogs(args);
+        try {
+          return await workflow.client.getLogs(args);
+        } catch (error) {
+          // Only pruned history goes to the full-history RPC; range-size and other errors still reach the reader's own handling.
+          const text = error instanceof BaseError ? `${error.message} ${error.details}` : String(error);
+          if (!workflow.history || !/pruned history/i.test(text)) throw error;
+          return workflow.history.getLogs(args);
+        }
       }
     }
   };

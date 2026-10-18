@@ -11,8 +11,10 @@ const log = {
   blockNumber: "0xb54747", blockHash: `0x${"11".repeat(32)}`, transactionHash: `0x${"22".repeat(32)}`, transactionIndex: "0x0", logIndex: "0x0", removed: false
 };
 const calls: string[] = [];
+const PRUNED_BELOW = 11_917_000n;
+const DENSE_FROM = 11_930_000n;
 
-/** A node that answers like publicnode's US servers: recent calls work, old log ranges are pruned. */
+/** A node that answers like publicnode's US servers: old log ranges are pruned, and one recent range is too dense. */
 function node(name: string, logs: (from: bigint) => unknown) {
   return createServer((request, response) => {
     let raw = "";
@@ -27,39 +29,48 @@ function node(name: string, logs: (from: bigint) => unknown) {
     });
   });
 }
-const PRUNED_BELOW = 11_917_000n;
-const pruned = node("pruned", from => from < PRUNED_BELOW ? new Error("pruned history unavailable") : []);
+const pruned = node("pruned", from => from < PRUNED_BELOW ? new Error("pruned history unavailable") : from === DENSE_FROM ? new Error("query returned more than 10000 results") : []);
 const archive = node("archive", () => [log]);
-let prunedUrl = "", archiveUrl = "";
+const down = node("down", () => new Error("backend unavailable"));
+let urls: Record<"pruned" | "archive" | "down", string>;
 
 beforeAll(async () => {
-  for (const server of [pruned, archive]) await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  prunedUrl = `http://127.0.0.1:${(pruned.address() as AddressInfo).port}`;
-  archiveUrl = `http://127.0.0.1:${(archive.address() as AddressInfo).port}`;
+  const servers = { pruned, archive, down };
+  for (const server of Object.values(servers)) await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  urls = Object.fromEntries(Object.entries(servers).map(([name, server]) => [name, `http://127.0.0.1:${(server.address() as AddressInfo).port}`])) as typeof urls;
 });
-afterAll(async () => { for (const server of [pruned, archive] as Server[]) await new Promise(resolve => server.close(resolve)); });
+afterAll(async () => { for (const server of [pruned, archive, down] as Server[]) await new Promise(resolve => server.close(resolve)); });
 
-describe("server history reads", () => {
-  const old = { address: LABX, fromBlock: 11_870_000n, toBlock: 11_894_999n } as const;
+/** The notification reader's view of a server workflow whose configured RPC is `primary` and whose full-history RPC is `history`. */
+function reader(primary: string, history: string | null) {
+  const server = { client: createPublicClient({ transport: http(primary, { retryCount: 1 }) }), history: history ? historyClient(history) : null } as unknown as Awaited<ReturnType<typeof serverWorkflow>>;
+  return adaptNotificationWorkflow(server).client;
+}
+const range = (fromBlock: bigint) => ({ address: LABX, events: undefined as never, fromBlock, toBlock: fromBlock + 24_999n, strict: false as const });
 
-  it("a client on the pruned RPC alone cannot read old logs, which is what broke the production feed", async () => {
-    await expect(createPublicClient({ transport: http(prunedUrl, { retryCount: 0 }) }).getLogs(old)).rejects.toThrow(/pruned history unavailable/);
+describe("notification log reads", () => {
+  it("cannot read old logs from the pruned RPC alone, which is what broke the production feed", async () => {
+    await expect(reader(urls.pruned, null).getLogs(range(11_870_000n))).rejects.toThrow(/pruned history unavailable/);
   });
 
-  it("falls back to the full-history RPC for old logs and stays on the configured RPC for recent ones", async () => {
+  it("asks the full-history RPC once for pruned logs and keeps recent reads on the configured RPC", async () => {
     calls.length = 0;
-    const client = historyClient(prunedUrl, archiveUrl);
-    expect(await client.getLogs(old)).toHaveLength(1);
+    expect((await reader(urls.pruned, urls.archive).getLogs(range(11_870_000n))).map(item => (item as { blockNumber: bigint }).blockNumber)).toEqual([BigInt(log.blockNumber)]);
     expect(calls).toEqual(["pruned:eth_getLogs", "archive:eth_getLogs"]);
     calls.length = 0;
-    expect(await client.getLogs({ address: LABX, fromBlock: 11_918_000n, toBlock: 11_942_999n })).toEqual([]);
+    expect(await reader(urls.pruned, urls.archive).getLogs(range(11_918_000n))).toEqual([]);
     expect(calls).toEqual(["pruned:eth_getLogs"]);
   });
 
-  it("sends the notification reader's log reads to the history client", async () => {
-    const refuse = async () => { throw new Error("pruned history unavailable"); };
-    const server = { client: { getLogs: refuse }, history: { getLogs: async () => [log] } } as unknown as Awaited<ReturnType<typeof serverWorkflow>>;
-    const logs = await adaptNotificationWorkflow(server).client.getLogs({ address: LABX, events: [] as never, fromBlock: 1n, toBlock: 2n, strict: false });
-    expect(logs).toEqual([log]);
+  it("keeps a range-size error from the configured RPC, so the reader can still split the range", async () => {
+    calls.length = 0;
+    await expect(reader(urls.pruned, urls.down).getLogs(range(DENSE_FROM))).rejects.toThrow(/more than 10000 results/);
+    expect(calls).toEqual(["pruned:eth_getLogs"]);
+  });
+
+  it("makes one attempt at the full-history RPC, with no retry", async () => {
+    calls.length = 0;
+    await expect(reader(urls.pruned, urls.down).getLogs(range(11_870_000n))).rejects.toThrow(/backend unavailable/);
+    expect(calls).toEqual(["pruned:eth_getLogs", "down:eth_getLogs"]);
   });
 });
