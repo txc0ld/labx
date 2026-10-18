@@ -33,6 +33,7 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     return reader.listRaffles({ cursor, limit, block, seller });
   }
 
+  /** One 2,000-block page of the raffle's financial events, newest first, ending at `cursor` (the checked block by default). `nextCursor` ends the next older page. */
   async function listRaffleActivity({ id, cursor, block }: {
     id: bigint;
     cursor?: bigint;
@@ -41,9 +42,9 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     positiveId(id);
     const at = await reader.checkedBlock(block);
     await reader.readRaffle({ id, block: at });
-    const fromBlock = cursor ?? manifest.deploymentBlock;
-    if (fromBlock < manifest.deploymentBlock || fromBlock > at.number) throw new Error("Invalid activity block range.");
-    const toBlock = fromBlock + 1_999n < at.number ? fromBlock + 1_999n : at.number;
+    const toBlock = cursor ?? at.number;
+    if (toBlock < manifest.deploymentBlock || toBlock > at.number) throw new Error("Invalid activity block range.");
+    const fromBlock = toBlock - 1_999n > manifest.deploymentBlock ? toBlock - 1_999n : manifest.deploymentBlock;
     const rawLogs = await client.request({
       method: "eth_getLogs",
       params: [{
@@ -93,7 +94,7 @@ export function createSellerReader(client: PublicClient, manifest: DeploymentMan
     }
 
     await reader.checkedBlock(at);
-    return { items, nextCursor: toBlock < at.number ? toBlock + 1n : null, block: at };
+    return { items: items.reverse(), nextCursor: fromBlock > manifest.deploymentBlock ? fromBlock - 1n : null, block: at };
   }
 
   return { listSellerRaffles, listRaffleActivity };

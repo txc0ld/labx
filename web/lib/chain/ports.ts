@@ -30,6 +30,7 @@ export interface RaffleService {
   assertActionTrust(input: ActionTrustInput): Promise<void>;
   listRaffles(input?: { cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
   listSellerRaffles(input: { seller: Address; cursor?: bigint; limit?: number; block?: BlockRef }): Promise<Page<RaffleSnapshot>>;
+  /** Newest first: one 2,000-block page ending at `cursor`, the latest block by default. */
   listRaffleActivity(input: { id: bigint; cursor?: bigint; block?: BlockRef }): Promise<Page<SellerRaffleActivity>>;
   readOwner(input?: { block?: BlockRef }): Promise<{ owner: Address; block: BlockRef }>;
   readNftOwner(input: { nft: Address; tokenId: bigint }): Promise<{ owner: Address; block: BlockRef }>;

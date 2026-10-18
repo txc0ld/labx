@@ -1,5 +1,4 @@
 import {
-  BaseError,
   decodeEventLog,
   isAddress,
   isHex,
@@ -7,6 +6,7 @@ import {
   type Address,
   type Hex
 } from "viem";
+import { isPrunedHistoryError } from "../chain/history-rpc";
 import { serverWorkflow } from "../chain/server";
 import type { BlockRef, DeploymentManifest } from "../chain/types";
 import { sameAddress } from "../chain/validation";
@@ -261,10 +261,6 @@ async function fetchLogs(
     if (fromBlock !== toBlock && isRangeLimitError(error)) throw new NotificationRangeTooDenseError();
     throw error;
   }
-}
-
-function isPrunedHistoryError(error: unknown): boolean {
-  return error instanceof BaseError && /pruned history/i.test(`${error.message} ${error.details}`);
 }
 
 function isRangeLimitError(error: unknown): boolean {
