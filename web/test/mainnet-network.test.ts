@@ -300,7 +300,7 @@ describe("wallet chain", () => {
 
   it.each([[1, "0xaa36a7"], [11155111, "0x1"]] as const)("a chain %s session asks to switch to its chain and refuses %s", async (chainId, walletChain) => {
     const wrong = provider(walletChain);
-    await expect(new WalletSession(wrong.result, chainId).connect()).rejects.toThrow(/requested test network/);
+    await expect(new WalletSession(wrong.result, chainId).connect()).rejects.toThrow(`Connect your wallet to ${chainName(chainId)} to continue.`);
     expect(wrong.calls[0]).toBe("wallet_switchEthereumChain");
     const right = provider(`0x${chainId.toString(16)}`), session = new WalletSession(right.result, chainId);
     const connected = await session.connect();

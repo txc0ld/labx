@@ -3,7 +3,7 @@ import { keccak256, toBytes, type Hex } from "viem";
 import { PreparationNotDispatchedError } from "./submission-errors";
 import { configuredBrowserService } from "./browser";
 import { address, hash, sameAddress } from "./validation";
-import { isSupportedChainId, isSupportedChainText } from "./networks";
+import { chainName, configuredChainId, isSupportedChainId, isSupportedChainText } from "./networks";
 import { workflowMessage } from "./messages";
 import { agreementMessage } from "../agreement-record";
 import { receiptAuthorizationMessage } from "../receipt-delivery";
@@ -30,13 +30,13 @@ async function request(path: string, input?: unknown) {
 }
 async function contextFor(wallet: WalletSessionPort) {
   const expected = wallet.getSnapshot();
-  if (expected.kind !== "connected") throw new Error("Connect the configured test network.");
+  if (expected.kind !== "connected") throw new Error(`Connect your wallet to ${chainName(configuredChainId())}.`);
   const browser = configuredBrowserService();
   if (browser.kind !== "configured") throw new Error(browser.reason);
   const raw = record((await request("/api/workflow/context")).context);
   const context: WorkflowContext = { origin: text(raw.origin), chainId: isSupportedChainId(raw.chainId) ? raw.chainId : (() => { throw new Error("Invalid workflow network."); })(), contract: address(raw.contract), termsHash: hash(raw.termsHash), termsVersion: text(raw.termsVersion) };
   if (context.origin !== window.location.origin || context.chainId !== browser.service.manifest.chainId || !sameAddress(context.contract, browser.service.manifest.address) || context.termsHash !== PUBLISHED_TERMS_HASH || context.termsVersion !== TERMS_VERSION) throw new Error("The workflow origin, deployment or published terms do not match this website.");
-  if (expected.chainId !== context.chainId) throw new Error("Connect the configured test network.");
+  if (expected.chainId !== context.chainId) throw new Error(`Connect your wallet to ${chainName(context.chainId)}.`);
   await wallet.assertCurrent(expected);
   return { context, expected, deadline: String(Math.floor(Date.now() / 1000) + 300) };
 }
