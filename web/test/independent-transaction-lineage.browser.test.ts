@@ -62,7 +62,8 @@ run("rendered creation replacement lineage on isolated Anvil", () => {
       const key = Object.keys(localStorage).find(candidate => candidate.startsWith("labx:pending:v1:") && candidate.includes(account.toLowerCase()));
       return key ? localStorage.getItem(key) : null;
     }, chain.seller);
-    await expect.poll(readJournal, { timeout: 15_000 }).toMatch(/^\{.+\}$/);
+    // The journal is written before the wallet request with hash null, then again with the hash, so wait for the hash.
+    await expect.poll(readJournal, { timeout: 15_000 }).toMatch(/"hash":"0x[0-9a-fA-F]{64}"/);
     const journal = await readJournal();
     if (journal === null) throw new Error("Pending Create journal missing.");
     const parsed: unknown = JSON.parse(journal);
