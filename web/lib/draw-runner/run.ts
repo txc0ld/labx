@@ -1,7 +1,7 @@
 import { parseEther, parseGwei, type Address, type Hex } from "viem";
 import type { Store } from "../points";
 import type { PreparedAction, RaffleSnapshot } from "../chain/types";
-import { assertRunnerCall, nextRunnerAction, type RunnerAction, type ScanResult } from "./decide";
+import { assertRunnerCall, nextRunnerAction, SNAPSHOT_BATCH, type RunnerAction, type ScanResult } from "./decide";
 import { errorCategory, within, type ErrorCategory } from "./errors";
 
 export const RUN_MS = 56_000;
@@ -116,11 +116,15 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
       progressed = true;
       report.items.push({ id: id.toString(), action: action.kind, hash, outcome, error });
     };
+    // Counting costs gas per lot (about 230,000 each on Sepolia after its October 2026 repricing), so a batch whose
+    // quote is over the cap is halved until it fits, down to one lot, and the size that fits is kept for this raffle.
+    let batch = SNAPSHOT_BATCH;
     try {
       for (;;) {
         if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
-        const action = nextRunnerAction(await bounded(chain.read(id)), chain.runner);
-        if (!action) { progressed = true; break; }
+        const next = nextRunnerAction(await bounded(chain.read(id)), chain.runner);
+        if (!next) { progressed = true; break; }
+        const action: RunnerAction = next.kind === "snapshot" ? { ...next, maxSteps: batch } : next;
         if (report.sends >= MAX_SENDS) { stop("send-cap", id); break raffles; }
         let prepared: PreparedAction;
         try {
@@ -152,7 +156,10 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
           stop("interrupted", id + 1n); break raffles;
         }
         if (quote.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
-        if (quote.gasLimit > GAS_CAP[action.kind]) { record(action, null, "gas-cap", null); break; }
+        if (quote.gasLimit > GAS_CAP[action.kind]) {
+          if (action.kind === "snapshot" && batch > 1n) { batch /= 2n; continue; }
+          record(action, null, "gas-cap", null); break;
+        }
         // An unaffordable step is left for a later run. Cheaper steps on later raffles still go ahead.
         if (await bounded(chain.balance()) < requiredBalance(quote)) { record(action, null, "low-funds", null); break; }
         const nonce = await bounded(chain.nonces());
