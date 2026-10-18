@@ -6,6 +6,10 @@ import {LabxRaffle} from "../src/LabxRaffle.sol";
 
 interface IVRFSubscriptionAdmin {
     function createSubscription() external returns (uint256 subId);
+    function getSubscription(uint256 subId)
+        external
+        view
+        returns (uint96 balance, uint96 nativeBalance, uint64 reqCount, address subOwner, address[] memory consumers);
     function addConsumer(uint256 subId, address consumer) external;
     function fundSubscriptionWithNative(uint256 subId) external payable;
     function requestSubscriptionOwnerTransfer(uint256 subId, address newOwner) external;
@@ -15,13 +19,13 @@ interface ISafeOwners {
     function getThreshold() external view returns (uint256);
 }
 
-/// @notice Deploys LABx to Ethereum mainnet in one broadcast: a new VRF subscription, the raffle pinned to it, the raffle
-///         as its consumer, optional native funding, and ownership transfers of both the raffle and the subscription to
-///         the Safe. The Safe then accepts both in one transaction. Every other chain id is refused.
-contract DeployMainnet is Script {
+/// @notice Chain-1 addresses and checks shared by both deployment stages.
+abstract contract MainnetDeployment is Script {
     error SafeNotDeployed(address safe);
     error SafeThresholdTooLow(address safe, uint256 threshold);
     error CallbackGasOutOfRange(uint256 callbackGasLimit);
+    error SubscriptionNotOwned(uint256 subId, address owner);
+    error RaffleMismatch(address raffle);
 
     // Read on chain 1 on 19 October 2026: Circle USDC (6 decimals), the Chainlink VRF v2.5 coordinator and its 200 gwei
     // key hash (s_provingKeys returned exists with maxGas 200 gwei).
@@ -29,46 +33,8 @@ contract DeployMainnet is Script {
     address internal constant VRF_COORDINATOR = 0xD7f86b4b8Cae7D942340FF628F82735b7a20893a;
     bytes32 internal constant VRF_KEY_HASH = 0x8077df514608a09f83e4e8d300645594e5d7234665448ba83f51a50f842bd3d9;
 
-    function run() external returns (LabxRaffle labx, uint256 subId) {
+    function _requireMainnet() internal view {
         if (block.chainid != 1) revert("LABx: mainnet only.");
-        address safe = vm.envAddress("SAFE_ADDRESS");
-        _validateSafe(safe);
-        uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        bytes32 terms = vm.envBytes32("TERMS_HASH");
-        // A reviewed value, not a default: it sets the subscription balance Chainlink requires before answering a draw.
-        uint256 callbackGas = vm.envUint("VRF_CALLBACK_GAS_LIMIT");
-        _validateCallbackGas(callbackGas);
-        uint256 fundWei = vm.envOr("VRF_FUND_WEI", uint256(0));
-
-        IVRFSubscriptionAdmin coordinator = IVRFSubscriptionAdmin(VRF_COORDINATOR);
-        vm.startBroadcast(pk);
-        subId = coordinator.createSubscription();
-        labx = new LabxRaffle(
-            LabxRaffle.Init({
-                treasury: safe,
-                usdc: USDC,
-                router: address(0),
-                weth: address(0),
-                ethUsdFeed: address(0),
-                poolFee: 0,
-                vrfCoordinator: VRF_COORDINATOR,
-                keyHash: VRF_KEY_HASH,
-                subscriptionId: subId,
-                termsHash: terms,
-                callbackGasLimit: uint32(callbackGas),
-                requestConfirmations: 3
-            })
-        );
-        labx.setNativePayment(true);
-        coordinator.addConsumer(subId, address(labx));
-        if (fundWei > 0) coordinator.fundSubscriptionWithNative{value: fundWei}(subId);
-        labx.transferOwnership(safe);
-        coordinator.requestSubscriptionOwnerTransfer(subId, safe);
-        vm.stopBroadcast();
-
-        console2.log("LabxRaffle", address(labx));
-        console2.log("VRF subscription", subId);
-        console2.log("Safe must call acceptOwnership on LabxRaffle and acceptSubscriptionOwnerTransfer on the coordinator");
     }
 
     /// @dev The contract's own bounds, checked before anything is broadcast.
@@ -81,5 +47,114 @@ contract DeployMainnet is Script {
         if (safe.code.length == 0) revert SafeNotDeployed(safe);
         uint256 threshold = ISafeOwners(safe).getThreshold();
         if (threshold < 2) revert SafeThresholdTooLow(safe, threshold);
+    }
+}
+
+/// @notice Stage 1: creates the VRF subscription, owned by the deployer. The coordinator derives the ID from the mined
+///         block and its subscription nonce, so a simulated ID can differ from the real one. Read the ID from the
+///         SubscriptionCreated event in the mined receipt and pass that to DeployMainnet; never reuse this script's output.
+contract CreateMainnetSubscription is MainnetDeployment {
+    function run() external {
+        _requireMainnet();
+        _create(vm.envUint("DEPLOYER_PRIVATE_KEY"));
+        console2.log("Read the subscription ID from SubscriptionCreated in the mined receipt, not from this simulation.");
+    }
+
+    function _create(uint256 pk) internal {
+        _requireMainnet();
+        vm.startBroadcast(pk);
+        IVRFSubscriptionAdmin(VRF_COORDINATOR).createSubscription();
+        vm.stopBroadcast();
+    }
+}
+
+/// @notice Stage 2: deploys the raffle pinned to the mined subscription and hands both to the Safe. The raffle starts
+///         paused, so nothing can be admitted, opened or bought while the deployer still owns it; the Safe unpauses at
+///         launch. Every step checks chain state first, so rerunning with RAFFLE_ADDRESS after an interruption finishes the
+///         remaining steps without deploying again. Every other chain id is refused.
+contract DeployMainnet is MainnetDeployment {
+    struct Config {
+        address safe;
+        uint256 pk;
+        bytes32 terms;
+        // A reviewed value: it sets the subscription reserve Chainlink expects before answering a draw.
+        uint256 callbackGas;
+        uint256 fundWei;
+        // The ID from the mined SubscriptionCreated event of stage 1.
+        uint256 subId;
+        // Zero for a first run; the deployed raffle when resuming.
+        address existing;
+    }
+
+    function run() external returns (LabxRaffle labx) {
+        _requireMainnet();
+        return _deploy(
+            Config({
+                safe: vm.envAddress("SAFE_ADDRESS"),
+                pk: vm.envUint("DEPLOYER_PRIVATE_KEY"),
+                terms: vm.envBytes32("TERMS_HASH"),
+                callbackGas: vm.envUint("VRF_CALLBACK_GAS_LIMIT"),
+                fundWei: vm.envOr("VRF_FUND_WEI", uint256(0)),
+                subId: vm.envUint("VRF_SUBSCRIPTION_ID"),
+                existing: vm.envOr("RAFFLE_ADDRESS", address(0))
+            })
+        );
+    }
+
+    function _deploy(Config memory c) internal returns (LabxRaffle labx) {
+        _requireMainnet();
+        _validateSafe(c.safe);
+        _validateCallbackGas(c.callbackGas);
+        address deployer = vm.addr(c.pk);
+        IVRFSubscriptionAdmin coordinator = IVRFSubscriptionAdmin(VRF_COORDINATOR);
+        // Reverts InvalidSubscription for an ID that was never mined, such as one taken from a simulation.
+        (,,, address subOwner, address[] memory consumers) = coordinator.getSubscription(c.subId);
+        if (subOwner != deployer && subOwner != c.safe) revert SubscriptionNotOwned(c.subId, subOwner);
+
+        vm.startBroadcast(c.pk);
+        if (c.existing == address(0)) {
+            labx = new LabxRaffle(
+                LabxRaffle.Init({
+                    treasury: c.safe,
+                    usdc: USDC,
+                    router: address(0),
+                    weth: address(0),
+                    ethUsdFeed: address(0),
+                    poolFee: 0,
+                    vrfCoordinator: VRF_COORDINATOR,
+                    keyHash: VRF_KEY_HASH,
+                    subscriptionId: c.subId,
+                    termsHash: c.terms,
+                    callbackGasLimit: uint32(c.callbackGas),
+                    requestConfirmations: 3
+                })
+            );
+        } else {
+            labx = LabxRaffle(payable(c.existing));
+            if (labx.subscriptionId() != c.subId || labx.vrfCoordinator() != VRF_COORDINATOR || labx.treasury() != c.safe) {
+                revert RaffleMismatch(c.existing);
+            }
+        }
+        if (labx.owner() == deployer) {
+            if (!labx.nativePayment()) labx.setNativePayment(true);
+            if (!labx.paused()) labx.setPaused(true);
+        }
+        if (subOwner == deployer && !_contains(consumers, address(labx))) coordinator.addConsumer(c.subId, address(labx));
+        if (c.fundWei > 0) coordinator.fundSubscriptionWithNative{value: c.fundWei}(c.subId);
+        if (labx.owner() == deployer && labx.pendingOwner() != c.safe) labx.transferOwnership(c.safe);
+        // Idempotent on the coordinator: an unchanged requested owner is a no-op.
+        if (subOwner == deployer) coordinator.requestSubscriptionOwnerTransfer(c.subId, c.safe);
+        vm.stopBroadcast();
+
+        console2.log("LabxRaffle", address(labx));
+        console2.log("VRF subscription", c.subId);
+        console2.log("Safe must accept both transfers, then unpause the raffle at launch");
+    }
+
+    function _contains(address[] memory items, address item) private pure returns (bool) {
+        for (uint256 i = 0; i < items.length; i++) {
+            if (items[i] == item) return true;
+        }
+        return false;
     }
 }

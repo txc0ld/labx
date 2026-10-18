@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {MockERC721} from "./mocks/Mocks.sol";
-import {DeployMainnet} from "../script/DeployMainnet.s.sol";
+import {CreateMainnetSubscription, DeployMainnet, MainnetDeployment} from "../script/DeployMainnet.s.sol";
 
 interface ICoordinatorView {
     function getSubscription(uint256 subId)
         external
         view
         returns (uint96 balance, uint96 nativeBalance, uint64 reqCount, address subOwner, address[] memory consumers);
+    function createSubscription() external returns (uint256 subId);
     function acceptSubscriptionOwnerTransfer(uint256 subId) external;
 }
 
@@ -19,7 +20,17 @@ interface IUsdc {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
+contract CreateMainnetSubscriptionHarness is CreateMainnetSubscription {
+    function create(uint256 pk) external {
+        _create(pk);
+    }
+}
+
 contract DeployMainnetHarness is DeployMainnet {
+    function deploy(Config memory c) external returns (LabxRaffle) {
+        return _deploy(c);
+    }
+
     function validateSafe(address safe) external view {
         _validateSafe(safe);
     }
@@ -29,7 +40,7 @@ contract DeployMainnetHarness is DeployMainnet {
     }
 }
 
-/// @notice Refusals that happen before anything is broadcast. They need no fork, and read no environment variables,
+/// @notice Refusals that happen before anything is broadcast. They need no fork and read no environment variables,
 ///         which other test contracts running in parallel also set.
 contract DeployMainnetRefusalTest is Test {
     address internal safe = makeAddr("mainnet-safe-fixture");
@@ -39,40 +50,43 @@ contract DeployMainnetRefusalTest is Test {
         vm.chainId(11155111);
         vm.expectRevert("LABx: mainnet only.");
         script.run();
+        CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
+        vm.expectRevert("LABx: mainnet only.");
+        stage1.create(0xB0B);
     }
 
     function test_refusesASafeWithoutCodeOrBelowTwoSignatures() public {
-        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.SafeNotDeployed.selector, safe));
+        vm.expectRevert(abi.encodeWithSelector(MainnetDeployment.SafeNotDeployed.selector, safe));
         script.validateSafe(safe);
         vm.etch(safe, hex"00");
         vm.mockCall(safe, abi.encodeWithSignature("getThreshold()"), abi.encode(uint256(1)));
-        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.SafeThresholdTooLow.selector, safe, uint256(1)));
+        vm.expectRevert(abi.encodeWithSelector(MainnetDeployment.SafeThresholdTooLow.selector, safe, uint256(1)));
         script.validateSafe(safe);
         vm.mockCall(safe, abi.encodeWithSignature("getThreshold()"), abi.encode(uint256(2)));
         script.validateSafe(safe);
     }
 
     function test_refusesACallbackGasLimitTheContractWouldReject() public {
-        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.CallbackGasOutOfRange.selector, uint256(199_999)));
+        vm.expectRevert(abi.encodeWithSelector(MainnetDeployment.CallbackGasOutOfRange.selector, uint256(199_999)));
         script.validateCallbackGas(199_999);
-        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.CallbackGasOutOfRange.selector, uint256(2_500_001)));
+        vm.expectRevert(abi.encodeWithSelector(MainnetDeployment.CallbackGasOutOfRange.selector, uint256(2_500_001)));
         script.validateCallbackGas(2_500_001);
-        script.validateCallbackGas(250_000);
+        script.validateCallbackGas(400_000);
     }
 }
 
-/// @notice The full mainnet deployment and one raffle lifecycle against real chain-1 state: Circle USDC, the Chainlink
-///         VRF v2.5 coordinator and the LABx Safe. Opt in with MAINNET_FORK_RPC_URL; skipped otherwise.
+/// @notice Both deployment stages and one raffle lifecycle against real chain-1 state: Circle USDC, the Chainlink VRF v2.5
+///         coordinator and the LABx Safe. Opt in with MAINNET_FORK_RPC_URL; skipped otherwise.
 contract DeployMainnetForkTest is Test {
     address internal constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address internal constant COORDINATOR = 0xD7f86b4b8Cae7D942340FF628F82735b7a20893a;
     address internal constant SAFE = 0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1;
+    bytes32 internal constant SUBSCRIPTION_CREATED = keccak256("SubscriptionCreated(uint256,address)");
     uint256 internal constant TEST_KEY = 0xB0B;
-    uint256 internal constant CALLBACK_GAS = 250_000;
-    uint256 internal constant FUND = 0.2 ether;
+    uint256 internal constant CALLBACK_GAS = 400_000;
+    uint256 internal constant FUND = 0.35 ether;
 
-    LabxRaffle internal labx;
-    uint256 internal subId;
+    DeployMainnetHarness internal stage2;
     address internal deployer = vm.addr(TEST_KEY);
     address internal seller = makeAddr("seller");
     address internal buyer = makeAddr("buyer");
@@ -85,20 +99,49 @@ contract DeployMainnetForkTest is Test {
         }
         vm.createSelectFork(rpc);
         vm.deal(deployer, 1 ether);
-        vm.setEnv("SAFE_ADDRESS", vm.toString(SAFE));
-        vm.setEnv("DEPLOYER_PRIVATE_KEY", vm.toString(TEST_KEY));
-        vm.setEnv("TERMS_HASH", vm.toString(keccak256("labx mainnet rehearsal terms")));
-        vm.setEnv("VRF_CALLBACK_GAS_LIMIT", vm.toString(CALLBACK_GAS));
-        vm.setEnv("VRF_FUND_WEI", vm.toString(FUND));
-        (labx, subId) = new DeployMainnet().run();
+        stage2 = new DeployMainnetHarness();
     }
 
-    function test_deploysPinnedToMainnetAndHandsEverythingToTheSafe() public {
+    /// @dev Runs stage 1 and returns the ID from the mined SubscriptionCreated log, as the operator reads it from the receipt.
+    function _minedSubscription() internal returns (uint256 subId) {
+        CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
+        vm.recordLogs();
+        stage1.create(TEST_KEY);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter == COORDINATOR && logs[i].topics[0] == SUBSCRIPTION_CREATED) return uint256(logs[i].topics[1]);
+        }
+        revert("no SubscriptionCreated log");
+    }
+
+    function _config(uint256 subId, address existing) internal pure returns (DeployMainnet.Config memory) {
+        return DeployMainnet.Config({
+            safe: SAFE,
+            pk: TEST_KEY,
+            terms: keccak256("labx mainnet rehearsal terms"),
+            callbackGas: CALLBACK_GAS,
+            fundWei: FUND,
+            subId: subId,
+            existing: existing
+        });
+    }
+
+    function _accept(LabxRaffle labx, uint256 subId) internal {
+        vm.startPrank(SAFE);
+        labx.acceptOwnership();
+        ICoordinatorView(COORDINATOR).acceptSubscriptionOwnerTransfer(subId);
+        vm.stopPrank();
+    }
+
+    function test_deploysPausedOnTheMinedSubscriptionAndHandsEverythingToTheSafe() public {
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
         assertEq(address(labx.usdc()), USDC);
         assertEq(labx.vrfCoordinator(), COORDINATOR);
         assertEq(labx.subscriptionId(), subId);
         assertEq(labx.callbackGasLimit(), CALLBACK_GAS);
         assertTrue(labx.nativePayment());
+        assertTrue(labx.paused());
         assertFalse(labx.ethPathEnabled());
         assertEq(labx.treasury(), SAFE);
         assertEq(labx.owner(), deployer);
@@ -109,20 +152,81 @@ contract DeployMainnetForkTest is Test {
         assertEq(consumers.length, 1);
         assertEq(consumers[0], address(labx));
 
-        vm.startPrank(SAFE);
-        labx.acceptOwnership();
-        ICoordinatorView(COORDINATOR).acceptSubscriptionOwnerTransfer(subId);
-        vm.stopPrank();
+        _accept(labx, subId);
         assertEq(labx.owner(), SAFE);
+        assertEq(labx.pendingOwner(), address(0));
         (,,, subOwner,) = ICoordinatorView(COORDINATOR).getSubscription(subId);
         assertEq(subOwner, SAFE);
     }
 
+    /// @dev The original single-script bug: a subscription ID from a simulation that was never mined. Stage 2 must refuse
+    ///      it before deploying anything.
+    function test_refusesAnUnminedSubscriptionIdBeforeDeploying() public {
+        uint256 subId = _minedSubscription();
+        uint64 nonce = vm.getNonce(deployer);
+        vm.expectRevert();
+        stage2.deploy(_config(subId + 1, address(0)));
+        assertEq(vm.getNonce(deployer), nonce);
+    }
+
+    function test_refusesASubscriptionSomeoneElseOwns() public {
+        address other = makeAddr("other");
+        vm.prank(other);
+        uint256 subId = ICoordinatorView(COORDINATOR).createSubscription();
+        uint64 nonce = vm.getNonce(deployer);
+        vm.expectRevert(abi.encodeWithSelector(MainnetDeployment.SubscriptionNotOwned.selector, subId, other));
+        stage2.deploy(_config(subId, address(0)));
+        assertEq(vm.getNonce(deployer), nonce);
+    }
+
+    /// @dev An interruption right after the raffle deployed: rerunning with RAFFLE_ADDRESS finishes every remaining step
+    ///      and deploys nothing new.
+    function test_resumesAfterAnInterruptedDeploymentWithoutDeployingAgain() public {
+        uint256 subId = _minedSubscription();
+        DeployMainnet.Config memory c = _config(subId, address(0));
+        vm.prank(deployer);
+        LabxRaffle labx = new LabxRaffle(
+            LabxRaffle.Init({
+                treasury: SAFE,
+                usdc: USDC,
+                router: address(0),
+                weth: address(0),
+                ethUsdFeed: address(0),
+                poolFee: 0,
+                vrfCoordinator: COORDINATOR,
+                keyHash: 0x8077df514608a09f83e4e8d300645594e5d7234665448ba83f51a50f842bd3d9,
+                subscriptionId: subId,
+                termsHash: c.terms,
+                callbackGasLimit: uint32(CALLBACK_GAS),
+                requestConfirmations: 3
+            })
+        );
+        address next = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
+        c.existing = address(labx);
+        c.fundWei = 0;
+        assertEq(address(stage2.deploy(c)), address(labx));
+        assertEq(next.code.length, 0);
+        assertTrue(labx.paused());
+        assertTrue(labx.nativePayment());
+        assertEq(labx.pendingOwner(), SAFE);
+        (,,,, address[] memory consumers) = ICoordinatorView(COORDINATOR).getSubscription(subId);
+        assertEq(consumers.length, 1);
+        assertEq(consumers[0], address(labx));
+        // A second rerun changes nothing and still succeeds.
+        stage2.deploy(c);
+        (,,,, consumers) = ICoordinatorView(COORDINATOR).getSubscription(subId);
+        assertEq(consumers.length, 1);
+        _accept(labx, subId);
+        assertEq(labx.owner(), SAFE);
+    }
+
     /// @dev Measures counting under chain-1 gas rules today; Sepolia's October 2026 repricing made it about 230,000 gas a lot.
     function test_measuresCountingAndPurchaseGasForTwentyLots() public {
-        vm.startPrank(SAFE);
-        labx.acceptOwnership();
-        vm.stopPrank();
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
+        _accept(labx, subId);
+        vm.prank(SAFE);
+        labx.setPaused(false);
         MockERC721 nft = new MockERC721();
         nft.mint(seller, 1);
         LabxRaffle.PackConfig[] memory packs = new LabxRaffle.PackConfig[](1);
@@ -157,10 +261,9 @@ contract DeployMainnetForkTest is Test {
     }
 
     function test_runsOneRaffleThroughTheRealCoordinatorAndUsdc() public {
-        vm.startPrank(SAFE);
-        labx.acceptOwnership();
-        ICoordinatorView(COORDINATOR).acceptSubscriptionOwnerTransfer(subId);
-        vm.stopPrank();
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
+        _accept(labx, subId);
 
         MockERC721 nft = new MockERC721();
         nft.mint(seller, 1);
@@ -182,6 +285,12 @@ contract DeployMainnetForkTest is Test {
         bytes32 digest = labx.draftReviewHash(id);
         vm.prank(SAFE);
         labx.approveRaffle(id, digest);
+        // Deployed paused: nothing can open until the Safe unpauses at launch.
+        vm.prank(seller);
+        vm.expectRevert();
+        labx.open(id);
+        vm.prank(SAFE);
+        labx.setPaused(false);
         vm.prank(seller);
         labx.open(id);
 
