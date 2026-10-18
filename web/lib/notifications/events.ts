@@ -47,6 +47,8 @@ export type NotificationChainReader = {
   getChainId(): Promise<number>;
   getBlock(args: { blockTag: "finalized" } | { blockNumber: bigint }): Promise<{ number: bigint | null; hash: Hex | null; timestamp: bigint; gasLimit?: bigint }>;
   getLogs(args: { address: Address; events: typeof notificationAbi; fromBlock: bigint; toBlock: bigint; strict: false }): Promise<readonly unknown[]>;
+  /** The same read from a full-history RPC, for ranges the configured RPC has pruned. */
+  getHistoryLogs?(args: { address: Address; events: typeof notificationAbi; fromBlock: bigint; toBlock: bigint; strict: false }): Promise<readonly unknown[]>;
 };
 export type NotificationWorkflow = {
   context: { chainId: number; contract: Address; origin: string };
@@ -209,6 +211,7 @@ export async function notificationWorkflow(): Promise<NotificationWorkflow> {
 }
 
 export function adaptNotificationWorkflow(workflow: Awaited<ReturnType<typeof serverWorkflow>>): NotificationWorkflow {
+  const history = workflow.history;
   return {
     context: workflow.context,
     manifest: workflow.manifest,
@@ -222,15 +225,9 @@ export function adaptNotificationWorkflow(workflow: Awaited<ReturnType<typeof se
         return { number: block.number, hash: block.hash, timestamp: block.timestamp, gasLimit: block.gasLimit };
       },
       async getLogs(args) {
-        try {
-          return await workflow.client.getLogs(args);
-        } catch (error) {
-          // Only pruned history goes to the full-history RPC; range-size and other errors still reach the reader's own handling.
-          const text = error instanceof BaseError ? `${error.message} ${error.details}` : String(error);
-          if (!workflow.history || !/pruned history/i.test(text)) throw error;
-          return workflow.history.getLogs(args);
-        }
-      }
+        return workflow.client.getLogs(args);
+      },
+      ...(history ? { getHistoryLogs: args => history.getLogs(args) } : {})
     }
   };
 }
@@ -249,14 +246,25 @@ async function fetchLogs(
   toBlock: bigint,
   budget: NotificationReadBudget
 ): Promise<readonly unknown[]> {
+  const args = { address, events: notificationAbi, fromBlock, toBlock, strict: false } as const;
   try {
-    return await rpcRead(budget, () => client.getLogs({ address, events: notificationAbi, fromBlock, toBlock, strict: false }));
+    try {
+      return await rpcRead(budget, () => client.getLogs(args));
+    } catch (error) {
+      // Only pruned history goes to the full-history RPC, as one more read inside the same budget and deadline.
+      if (!client.getHistoryLogs || !isPrunedHistoryError(error)) throw error;
+      return await rpcRead(budget, () => client.getHistoryLogs!(args));
+    }
   } catch (error) {
     if (error instanceof NotificationRpcTimeoutError || error instanceof NotificationReadBudgetError) throw error;
     if (isTimeoutError(error)) throw new NotificationRpcTimeoutError();
     if (fromBlock !== toBlock && isRangeLimitError(error)) throw new NotificationRangeTooDenseError();
     throw error;
   }
+}
+
+function isPrunedHistoryError(error: unknown): boolean {
+  return error instanceof BaseError && /pruned history/i.test(`${error.message} ${error.details}`);
 }
 
 function isRangeLimitError(error: unknown): boolean {
