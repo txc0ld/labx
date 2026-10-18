@@ -67,16 +67,23 @@ export function changeReviewAttestation(current: ReviewAttestationState, reviewH
 export async function readAdmissionFrom(service: Pick<RaffleService, "readAdmission">, id: bigint, minBlock?: bigint, wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms)), attempts = 5): Promise<AdmissionReview> {
   for (let attempt = 1; ; attempt++) {
     const review = await service.readAdmission({ id });
-    if (minBlock === undefined || review.snapshot.block.number >= minBlock || attempt >= attempts) return review;
+    if (minBlock === undefined || review.snapshot.block.number >= minBlock) return review;
+    // Never show a review older than an approval this page has already confirmed.
+    if (attempt >= attempts) throw new Error("The network hasn’t caught up with the recorded approval yet. Retry in a moment.");
     await wait(2_000);
   }
 }
 
-/** Rounds wei to three decimals of ETH, up when `up`, so a required amount is never shown below what Chainlink needs. */
-function ether(value: bigint, up = false) {
-  const step = 10n ** 15n;
-  const rounded = up ? (value + step - 1n) / step * step : value / step * step;
-  return formatEther(rounded);
+/**
+ * Balance rounded down and requirement rounded up, with the fewest decimals (three or more) at which the shown numbers
+ * agree with the exact comparison, so a funded subscription never reads as holding less than it needs.
+ */
+export function etherPair(balance: bigint, required: bigint): [string, string] {
+  for (let decimals = 3; ; decimals++) {
+    const step = 10n ** BigInt(18 - decimals);
+    const shownBalance = balance / step * step, shownRequired = (required + step - 1n) / step * step;
+    if (balance < required || shownBalance >= shownRequired || decimals === 18) return [formatEther(shownBalance), formatEther(shownRequired)];
+  }
 }
 
 export function drawFundingMessage(funding: DrawFunding | "loading" | "error"): { tone: "info" | "warning"; text: string } {
@@ -84,8 +91,9 @@ export function drawFundingMessage(funding: DrawFunding | "loading" | "error"): 
   if (funding === "error") return { tone: "warning", text: "The draw funding couldn’t be read. Check the VRF subscription in Chainlink’s app before approving." };
   if (!funding.consumer) return { tone: "warning", text: "This raffle contract isn’t on the VRF subscription, so its draw request would fail. Add it as a consumer before approving." };
   if (funding.required === null) return { tone: "info", text: "This raffle pays for its draw in LINK. Check the subscription’s LINK balance in Chainlink’s app." };
-  if (funding.nativeBalance < funding.required) return { tone: "warning", text: `Draw funding is short. The VRF subscription holds ${ether(funding.nativeBalance)} ETH, and Chainlink answers this raffle’s draw only once it holds at least ${ether(funding.required, true)} ETH. Top it up before sales end.` };
-  return { tone: "info", text: `Draw funding: the VRF subscription holds ${ether(funding.nativeBalance)} ETH. This raffle’s draw needs at least ${ether(funding.required, true)} ETH.` };
+  const [balance, required] = etherPair(funding.nativeBalance, funding.required);
+  if (funding.nativeBalance < funding.required) return { tone: "warning", text: `Draw funding looks short. The VRF subscription holds ${balance} ETH, below Chainlink’s estimated ${required} ETH for this raffle’s draw, so the draw may wait. Top it up before sales end.` };
+  return { tone: "info", text: `Draw funding: the VRF subscription holds ${balance} ETH, at least Chainlink’s estimated ${required} ETH for this raffle’s draw.` };
 }
 
 function DrawFundingNotice({ service, policy, block }: { service: RaffleService; policy: RafflePolicy; block: BlockRef }) {
@@ -299,15 +307,17 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
   const id = idFromRoute(rawId);
   const [state, setState] = useState<DetailState>(() => id === null ? { kind: "invalid", message: "This raffle ID is invalid." } : { kind: "loading" });
   const request = useRef(0);
-  const loadScope = useRef({ browser, id, mounted: false });
+  // minBlock is the newest approval block this page has confirmed; every later load waits for it, including a manual refresh.
+  const loadScope = useRef({ browser, id, mounted: false, minBlock: 0n });
   if (loadScope.current.browser !== browser || loadScope.current.id !== id) {
-    loadScope.current = { browser, id, mounted: false };
+    loadScope.current = { browser, id, mounted: false, minBlock: 0n };
     request.current += 1;
   }
 
   async function load(showLoading = true, minBlock?: bigint) {
     const scope = loadScope.current;
     if (!scope.mounted || scope.browser !== browser || scope.id !== id || id === null) return;
+    if (minBlock !== undefined && minBlock > scope.minBlock) scope.minBlock = minBlock;
     if (browser.kind !== "configured") {
       setState({ kind: "error", message: browser.reason });
       return;
@@ -318,7 +328,7 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
       const deployment = await browser.service.attest();
       if (loadScope.current !== scope || !scope.mounted || version !== request.current) return;
       if (deployment.kind !== "verified") throw new Error(deployment.reason);
-      const review = await readAdmissionFrom(browser.service, id, minBlock);
+      const review = await readAdmissionFrom(browser.service, id, scope.minBlock > 0n ? scope.minBlock : undefined);
       if (loadScope.current === scope && scope.mounted && version === request.current) setState({ kind: "ready", review });
     } catch (error) {
       if (loadScope.current === scope && scope.mounted && version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "The review record could not be loaded." });

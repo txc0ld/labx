@@ -10,13 +10,13 @@ const policy = {
   coordinator: "0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B", keyHash: zeroHash, subscriptionId: 87872268328198099397228888276383491550742527734296569403303774370612241641662n,
   callbackGasLimit: 500000, nativePayment: true
 } as unknown as RafflePolicy;
-const sepolia = { gasAfterPaymentCalculation: 38_900, flatFeePpm: 0, premium: 24, maxGas: 500_000_000_000n };
+const sepolia = { flatFeePpm: 0, premium: 24, maxGas: 500_000_000_000n };
 
 function coordinator(nativeBalance: bigint, consumers: readonly Address[], exists = true) {
   return {
     async readContract({ functionName }: { functionName: string }) {
       if (functionName === "getSubscription") return [0n, nativeBalance, 0n, OTHER, consumers];
-      if (functionName === "s_config") return [3, 2_500_000, false, 172_800, sepolia.gasAfterPaymentCalculation, sepolia.flatFeePpm, 0, sepolia.premium, 20];
+      if (functionName === "s_config") return [3, 2_500_000, false, 172_800, 38_900, sepolia.flatFeePpm, 0, sepolia.premium, 20];
       if (functionName === "s_provingKeys") return [exists, sepolia.maxGas];
       throw new Error(functionName);
     }
@@ -24,18 +24,23 @@ function coordinator(nativeBalance: bigint, consumers: readonly Address[], exist
 }
 
 describe("VRF draw funding", () => {
-  it("needs 0.334118 ETH for 500,000 callback gas on Sepolia's 500 gwei lane", () => {
-    expect(vrfMinimumNativeBalance({ callbackGasLimit: 500_000n, gasAfterPaymentCalculation: 38_900n, maxGasPrice: 500_000_000_000n, premiumPercentage: 24n, flatFeePpm: 0n })).toBe(334_118_000_000_000_000n);
+  // Chainlink's documented estimate: (callback + 200,000 verification gas) × lane maximum × (100 + premium)%, plus the flat fee.
+  it("estimates 0.434 ETH for 500,000 callback gas on Sepolia's 500 gwei lane", () => {
+    expect(vrfMinimumNativeBalance({ callbackGasLimit: 500_000n, maxGasPrice: 500_000_000_000n, premiumPercentage: 24n, flatFeePpm: 0n })).toBe(434_000_000_000_000_000n);
+  });
+
+  it("estimates 0.1116 ETH for 250,000 callback gas on mainnet's 200 gwei lane", () => {
+    expect(vrfMinimumNativeBalance({ callbackGasLimit: 250_000n, maxGasPrice: 200_000_000_000n, premiumPercentage: 24n, flatFeePpm: 0n })).toBe(111_600_000_000_000_000n);
   });
 
   it("adds the flat native fee, a millionth of a token per ppm", () => {
-    expect(vrfMinimumNativeBalance({ callbackGasLimit: 0n, gasAfterPaymentCalculation: 0n, maxGasPrice: 0n, premiumPercentage: 0n, flatFeePpm: 5n })).toBe(5_000_000_000_000n);
+    expect(vrfMinimumNativeBalance({ callbackGasLimit: 0n, maxGasPrice: 0n, premiumPercentage: 0n, flatFeePpm: 5n })).toBe(5_000_000_000_000n);
   });
 
-  it("reports the 0.1 ETH subscription that stalled raffle 3 as short, and the topped-up one as enough", async () => {
+  it("reports the 0.1 ETH subscription that stalled raffle 3 as short, and a 0.5 ETH one as enough", async () => {
     const short = await readDrawFunding(coordinator(parseEther("0.1"), [RAFFLE]), policy, RAFFLE, 1n);
-    expect(short).toEqual({ nativeBalance: parseEther("0.1"), required: 334_118_000_000_000_000n, consumer: true });
-    const funded = await readDrawFunding(coordinator(parseEther("0.35"), [RAFFLE]), policy, RAFFLE, 1n);
+    expect(short).toEqual({ nativeBalance: parseEther("0.1"), required: 434_000_000_000_000_000n, consumer: true });
+    const funded = await readDrawFunding(coordinator(parseEther("0.5"), [RAFFLE]), policy, RAFFLE, 1n);
     expect(funded.nativeBalance >= funded.required!).toBe(true);
   });
 
@@ -43,8 +48,11 @@ describe("VRF draw funding", () => {
     expect((await readDrawFunding(coordinator(parseEther("1"), [OTHER]), policy, RAFFLE, 1n)).consumer).toBe(false);
   });
 
-  it("does not price LINK billing", async () => {
-    expect((await readDrawFunding(coordinator(parseEther("1"), [RAFFLE]), { ...policy, nativePayment: false }, RAFFLE, 1n)).required).toBeNull();
+  it("does not price LINK billing, and reads only the subscription for it", async () => {
+    const reads: string[] = [];
+    const client = { async readContract(args: { functionName: string }) { reads.push(args.functionName); return coordinator(parseEther("1"), [RAFFLE]).readContract(args as never); } } as unknown as Parameters<typeof readDrawFunding>[0];
+    expect((await readDrawFunding(client, { ...policy, nativePayment: false }, RAFFLE, 1n)).required).toBeNull();
+    expect(reads).toEqual(["getSubscription"]);
   });
 
   it("refuses a key hash the coordinator does not know", async () => {
