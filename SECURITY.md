@@ -34,7 +34,9 @@ The pinned coordinator, USDC, prize token, RPC, optional router/oracle and serve
 
 The ETH route is off unless router, WETH and the feed are wired at deployment. Their addresses and pool fee are immutable. It checks oracle freshness, slippage and a short transaction deadline, swaps into USDC and refunds change. Refunds after cancellation are denominated in USDC, including for purchases funded with ETH. Keep this route disabled until its actual liquidity and dependencies are verified.
 
-Ethereum mainnet, chain ID 1, is rejected by the contract constructor. The deployment script accepts Sepolia only. The only approved manifest is the Sepolia v3 deployment in `web/lib/chain/deployment.ts`. Local Anvil overrides require development mode and loopback configuration.
+The contract source no longer rejects Ethereum mainnet, chain ID 1. The deployed Sepolia contract was built from earlier source that does. A mainnet deployment goes only through the two stages of `contracts/script/DeployMainnet.s.sol`, described in `LAUNCH.md`. `DeploySepolia` accepts Sepolia only. The only approved manifest is the Sepolia v3 deployment in `web/lib/chain/deployment.ts`. Local Anvil overrides require development mode and loopback configuration.
+
+Every new deployment starts paused. Pause blocks opening and purchases, not administration: `approveRaffle`, the owner setters, coordinator proposals and ownership transfer still work while paused. The deployer owns a new mainnet raffle until the Safe accepts ownership, and can unpause it until then. The gate is operational: the deployer key runs only the deployment script, and the Safe accepts ownership before anything else, then verifies the state and unpauses at launch. Acceptance voids approvals the deployer gave to unopened drafts.
 
 ## Website and server
 

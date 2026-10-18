@@ -23,7 +23,7 @@ Existing bytecode does not acquire v3 rules. Do not import old entries, balances
 ## 3. Verify authority and dependencies
 
 - Verify the intended Safe implementation, owners, threshold, modules and intended authority. The script's code-presence check alone does not prove it is a correctly configured Safe.
-- Review the exact USDC, coordinator, key hash, subscription, confirmations, callback gas, billing mode and treasury for the deployment. `DeploySepolia` explicitly sets `nativePayment=true` before proposing Safe ownership. Fund the subscription with native Sepolia ETH through the user's secure wallet flow and check the coordinator's required reservation for these request parameters. A recorded balance such as 0.05 ETH alone does not prove sufficient funding.
+- Review the exact USDC, coordinator, key hash, subscription, confirmations, callback gas, billing mode and treasury for the deployment. `DeploySepolia` explicitly sets `nativePayment=true` before proposing Safe ownership, then unpauses the raffle, which starts paused. Fund the subscription with native Sepolia ETH through the user's secure wallet flow and check the coordinator's required reservation for these request parameters. A recorded balance such as 0.05 ETH alone does not prove sufficient funding.
 - The subscription owner must register the new raffle as a consumer. Recheck `getSubscription` to identify that owner; the current inventory identifies the deployer, not the intended Safe. `AddVrfConsumer` uses `DEPLOYER_PRIVATE_KEY` and only works when that signer owns the subscription. The Safe separately calls `acceptOwnership` on the raffle.
 - Publish and approve the exact versioned terms used by the app. `TERMS_HASH` must equal the canonical published document hash. A nonzero arbitrary hash is insufficient.
 - Keep `WIRE_ETH_PATH=false` unless the optional ETH membership-purchase route's immutable router, token, feed, pool liquidity, quote, deadline and surplus-refund paths have passed the required checks. Native VRF billing does not enable ETH purchases; membership purchases remain in USDC.
@@ -34,7 +34,22 @@ No AMOE signer, CAPTCHA or verified-person provider is part of v3. Membership pu
 
 Present the frozen candidate, test/review evidence, deployment constructor values, intended Safe, subscription details, old-state inventory and remaining risks. The user must separately approve the new deployment and any funding/ownership operations. Credentials and real wallet confirmations remain in the user's secure flow; never print keys or store them in reports.
 
-`DeploySepolia` accepts chain 11155111 only. `DeployLocal` accepts 31337 only and is for isolated fixtures. Mainnet is not a release target. A dry run is not a broadcast, and proposing ownership does not complete acceptance.
+`DeploySepolia` accepts chain 11155111 only. `DeployLocal` accepts 31337 only and is for isolated fixtures. Mainnet uses only the two stages of `DeployMainnet.s.sol` below, under its own release decision. A dry run is not a broadcast, and proposing ownership does not complete acceptance.
+
+### Mainnet procedure
+
+`contracts/script/DeployMainnet.s.sol` is the only mainnet path. Its NatSpec carries the same steps.
+
+1. The deployer key runs these two scripts and signs nothing else until the Safe has accepted both transfers.
+2. Stage 1, `CreateMainnetSubscription`, creates the VRF subscription. Read the ID from the mined receipt, never from the simulation: run `cast receipt <tx> --json` and take the `SubscriptionCreated` log whose emitter is the coordinator `0xD7f86b4b8Cae7D942340FF628F82735b7a20893a` and whose data (the owner) is the deployer. The ID is topic 1.
+3. Start the deployment record before stage 2: chain, deployer, stage 1 tx hash and subscription ID. Keep forge's `broadcast/` run files from every run. Both stages write `broadcast/DeployMainnet.s.sol/1/run-latest.json`, so the timestamped `run-<time>.json` files are the copies to keep.
+4. Stage 2, `DeployMainnet`, takes `SAFE_ADDRESS`, `TERMS_HASH`, `VRF_SUBSCRIPTION_ID`, `FUND_TARGET_WEI` and no `RAFFLE_ADDRESS`. It deploys the raffle with callback gas fixed at 400,000, turns on native billing, adds the raffle as the subscription's only consumer, funds the subscription up to the target, and offers the raffle and the subscription to the Safe. A fresh run refuses a subscription that the deployer does not own, that has a pending owner or that has any consumer. Write the raffle address and every stage 2 tx hash into the record before anything else.
+5. If stage 2 stops part way, settle every pending transaction first (mined or replaced), then rerun it with `RAFFLE_ADDRESS` from the record. A resume refuses a raffle whose code, immutables, settings or ownership differ from a fresh deployment. It sends only the missing steps and only the funding shortfall. When a remaining step needs the Safe, such as adding the consumer to a subscription the Safe already owns, it stops with `SafeActionRequired` and names the call. Every refusal happens in forge's simulation, so nothing is sent.
+6. The Safe accepts both transfers before anything else happens. It then checks owner, pending owner, subscription owner and requested owner, the sole consumer, native balance, native billing, pause and every pinned setting, and unpauses only at launch.
+
+A rerun of stage 1 creates another subscription. It is owned by the deployer and holds no funds and no consumers, so it can be left unused or cancelled.
+
+Every deployment starts paused. Pause blocks opening and purchases only. Administration still works while paused, including `approveRaffle`, the owner setters, coordinator proposals and ownership transfer. Until the Safe accepts ownership, the deployer is the owner and can unpause. The gate is therefore operational: the deployer key runs only this script, and the Safe accepts ownership first. Acceptance voids any approval the deployer gave to an unopened draft, because an approval binds the owner and its generation.
 
 ## 5. Verify the deployed instance before enabling writes
 
