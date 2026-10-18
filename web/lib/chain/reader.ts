@@ -162,6 +162,8 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
         if (sameAddress(holder, account)) items.push({ raffleId: event.args.id, event: event.eventName, account: holder, principal, fee, quantity, bonusEntries, transactionHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber });
       } catch { throw new Error("Contract event data could not be decoded."); }
     }
+    // The pinned block may have been replaced while the logs were read.
+    await checkedBlock(at);
     return { items: items.reverse(), nextCursor: fromBlock > manifest.deploymentBlock ? fromBlock - 1n : null, block: at };
   }
   /**

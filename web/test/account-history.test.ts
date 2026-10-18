@@ -34,8 +34,8 @@ function activityLog({ event, id, block }: Activity) {
   };
 }
 
-/** A node at HEAD with the reviewed contract code and the buyer's events. Records each eth_getLogs range. */
-function fakeNode(activity: readonly Activity[]) {
+/** A node at HEAD with the reviewed contract code and the buyer's events. Records each eth_getLogs range. `changed` swaps every block hash, as a reorg would. */
+function fakeNode(activity: readonly Activity[], options: { beforeLogs?: () => void; changed?: () => boolean } = {}) {
   const ranges: [bigint, bigint][] = [];
   const client = createPublicClient({ transport: custom({ async request({ method, params }: { method: string; params?: unknown }) {
     const args = (params ?? []) as readonly unknown[];
@@ -43,7 +43,7 @@ function fakeNode(activity: readonly Activity[]) {
       case "eth_chainId": return numberToHex(31337);
       case "eth_getBlockByNumber": {
         const number = args[0] === "latest" ? HEAD : BigInt(args[0] as Hex);
-        return { number: numberToHex(number), hash: blockHash(number), timestamp: numberToHex(1_800_000_000n + number * 12n) };
+        return { number: numberToHex(number), hash: options.changed?.() ? keccak256(toBytes(`reorg-${number}`)) : blockHash(number), timestamp: numberToHex(1_800_000_000n + number * 12n) };
       }
       case "eth_getCode": return CODE;
       case "eth_call": {
@@ -53,6 +53,7 @@ function fakeNode(activity: readonly Activity[]) {
         throw new Error(`Unexpected call ${functionName}`);
       }
       case "eth_getLogs": {
+        options.beforeLogs?.();
         const filter = args[0] as { fromBlock: Hex; toBlock: Hex };
         const from = BigInt(filter.fromBlock), to = BigInt(filter.toBlock);
         ranges.push([from, to]);
@@ -72,6 +73,18 @@ const ACTIVITY: readonly Activity[] = [
 ];
 
 describe("account history", () => {
+  it("rejects a page when the pinned block is replaced during its log read", async () => {
+    let changed = false;
+    const { reader } = fakeNode([{ event: "PackPurchased", id: 1n, block: HEAD }], { changed: () => changed, beforeLogs: () => { changed = true; } });
+    await expect(reader.history({ account: BUYER })).rejects.toThrow(/Chain state changed/);
+  });
+
+  it("publishes nothing from a load whose pinned block is replaced during its tenth page", async () => {
+    let changed = false, reads = 0;
+    const { reader } = fakeNode([{ event: "PackPurchased", id: 1n, block: HEAD }], { changed: () => changed, beforeLogs: () => { if (++reads === 10) changed = true; } });
+    await expect(readHistoryPages(reader, BUYER, null)).rejects.toThrow(/Chain state changed/);
+  });
+
   it("shows the newest activity on the first page, newest first", async () => {
     const { reader, ranges } = fakeNode(ACTIVITY);
     const page = await reader.history({ account: BUYER });
