@@ -3,14 +3,15 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserService } from "@/lib/chain/ports";
-import type { BlockRef, HistoryItem } from "@/lib/chain/types";
+import type { HistoryItem } from "@/lib/chain/types";
 import { formatUsdcAmount } from "./format";
+import { readHistoryPages, type HistoryContinuation } from "./history-pages";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
 
 type HistoryState =
   | { kind: "idle" | "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; items: readonly HistoryItem[]; nextCursor: bigint | null; loadingMore: boolean; block: BlockRef };
+  | { kind: "ready"; items: readonly HistoryItem[]; continuation: HistoryContinuation | null; loadingMore: boolean };
 
 const EVENT_COPY: Record<HistoryItem["event"], { title: string; detail: string }> = {
   PackPurchased: { title: "Membership purchased", detail: "Membership price + processing fee" },
@@ -28,19 +29,19 @@ export function AccountHistory({ browser, loading = false }: { browser: BrowserS
   const [state, setState] = useState<HistoryState>({ kind: "idle" });
   const request = useRef(0);
 
-  async function load(fromBlock?: bigint) {
+  async function load(from: HistoryContinuation | null = null) {
     if (browser.kind !== "configured" || wallet.kind !== "connected") return;
     const version = ++request.current;
-    if (fromBlock === undefined) setState({ kind: "loading" });
+    if (from === null) setState({ kind: "loading" });
     else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true } : current);
     try {
-      const page = await browser.service.history({ account: wallet.account, fromBlock, block: fromBlock !== undefined && state.kind === "ready" ? state.block : undefined });
+      const page = await readHistoryPages(browser.service, wallet.account, from);
       if (version !== request.current) return;
       setState((current) => ({
         kind: "ready",
-        items: fromBlock !== undefined && current.kind === "ready" ? [...current.items, ...page.items] : page.items,
-        nextCursor: page.nextCursor,
-        loadingMore: false, block: page.block
+        items: from !== null && current.kind === "ready" ? [...current.items, ...page.items] : page.items,
+        continuation: page.continuation,
+        loadingMore: false
       }));
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "History could not be loaded." });
@@ -61,7 +62,7 @@ export function AccountHistory({ browser, loading = false }: { browser: BrowserS
     <WalletGate wallet={browser.wallet}>
       {state.kind === "idle" || state.kind === "loading" ? <p className="notice" role="status">Loading your activity…</p> : null}
       {state.kind === "error" ? <div className="notice error stack" role="alert"><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void load()}>Try again</button></div> : null}
-      {state.kind === "ready" && !state.items.length ? <div className="well pad stack"><h2>{state.nextCursor !== null ? "No activity found yet" : "No activity yet"}</h2><Link className="btn btn-dark" href="/">Browse raffles</Link></div> : null}
+      {state.kind === "ready" && !state.items.length ? <div className="well pad stack"><h2>{state.continuation ? "No activity found yet" : "No activity yet"}</h2><Link className="btn btn-dark" href="/">Browse raffles</Link></div> : null}
       {state.kind === "ready" && state.items.length ? (
         <div className="stack">
           <ol className="history-list">
@@ -72,7 +73,7 @@ export function AccountHistory({ browser, loading = false }: { browser: BrowserS
           </ol>
         </div>
       ) : null}
-      {state.kind === "ready" && state.nextCursor !== null ? <div className="stack"><p className="muted">Newer activity isn’t shown yet.</p><button className="btn load-more" type="button" disabled={state.loadingMore} onClick={() => void load(state.nextCursor ?? undefined)}>{state.loadingMore ? "Loading…" : "Load more"}</button></div> : null}
+      {state.kind === "ready" && state.continuation ? <div className="stack"><p className="muted">Older activity isn’t shown yet.</p><button className="btn load-more" type="button" disabled={state.loadingMore} onClick={() => void load(state.continuation)}>{state.loadingMore ? "Loading…" : "Load more"}</button></div> : null}
     </WalletGate>
   );
 }

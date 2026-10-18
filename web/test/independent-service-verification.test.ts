@@ -395,7 +395,7 @@ run("independent service verification on isolated Anvil", () => {
     await expect(service.listRaffles({ limit: 0 })).rejects.toThrow(/range/);
     await expect(service.listRaffles({ limit: 25 })).rejects.toThrow(/range/);
     await expect(service.listLots({ id: 1n, limit: 101 })).rejects.toThrow(/range/);
-    await expect(service.history({ account: chain.buyer, fromBlock: chain.manifest.deploymentBlock - 1n })).rejects.toThrow(
+    await expect(service.history({ account: chain.buyer, toBlock: chain.manifest.deploymentBlock - 1n })).rejects.toThrow(
       /range/
     );
     await expect(
