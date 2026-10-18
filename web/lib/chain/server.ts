@@ -1,5 +1,6 @@
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { APPROVED_DEPLOYMENTS, attestDeployment } from "./deployment";
+import { SEPOLIA_HISTORY_RPC } from "./history-rpc";
 import { sameAddress } from "./validation";
 import { parseLocalManifest } from "./manifest";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../published-terms";
@@ -10,8 +11,6 @@ import { workflowMessage } from "./messages";
 export function serverClient(rpc: string) {
   return createPublicClient({ ccipRead: false, transport: http(rpc, { timeout: 15_000, retryCount: 1 }) });
 }
-/** publicnode's US servers keep only about 25,000 blocks of logs ("pruned history unavailable"); this public gateway keeps all of Sepolia. */
-export const SEPOLIA_HISTORY_RPC = "https://sepolia.gateway.tenderly.co";
 /** Asked only for logs the configured RPC has pruned, once per read with no retry. Transactions never use this client. */
 export function historyClient(historyRpc: string) {
   return createPublicClient({ ccipRead: false, transport: http(historyRpc, { timeout: 8_000, retryCount: 0 }) });

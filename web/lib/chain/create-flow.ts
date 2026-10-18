@@ -105,6 +105,24 @@ export async function retireStaleCreate({ service, wallet, storage, key, expecte
   archiveCreate(storage, key, raw);
   return true;
 }
+/**
+ * The record Create continues on raffle `id`'s page, under the Create lock: Studio's record when it holds this exact draft,
+ * otherwise the raffle's own record, which starts from the displayed draft. A raffle record left from an earlier version of
+ * the draft, such as after a rejected approval and another edit, is replaced once retireStaleCreate retires it.
+ */
+export async function raffleCreateRecord({ service, wallet, storage, baseKey, id, draft, assertIntent }: {
+  service: RaffleService; wallet: WalletSessionPort; storage: Storage; baseKey: string; id: bigint; draft: DraftInput; assertIntent: () => void;
+}): Promise<{ key: string; record: DraftRecord }> {
+  const data = encodeDraft(draft);
+  const active = readCreateRecord(storage, baseKey);
+  const key = active?.kind === "draft" && active.data === data && (active.id === null || active.id === id.toString()) ? baseKey : `${baseKey}:raffle:${id}`;
+  const fresh: DraftRecord = { kind: "draft", data, id: id.toString(), creationHash: null, pending: null };
+  let record = readCreateRecord(storage, key) ?? fresh;
+  if (record.kind !== "draft") throw new Error("Recover the saved draw setup first.");
+  if (record.data !== data && await retireStaleCreate({ service, wallet, storage, key, expected: record, assertIntent })) record = fresh;
+  writeCreateRecord(storage, key, record);
+  return { key, record };
+}
 function archiveCreate(storage: Storage, key: string, raw: string) {
   const archive = `${key}:retired:${crypto.randomUUID()}`;
   storage.setItem(archive, raw);

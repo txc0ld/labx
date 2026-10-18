@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { captureCreateGeneration, assertCreateGeneration, recoverCreateTransaction, createStorageKey, encodeDraft, finishCreate, readCreateRecord, writeCreateRecord, retireCompletedCreate } from "@/lib/chain/create-flow";
+import { captureCreateGeneration, assertCreateGeneration, recoverCreateTransaction, createStorageKey, finishCreate, raffleCreateRecord, readCreateRecord, writeCreateRecord, retireCompletedCreate } from "@/lib/chain/create-flow";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import type { Hex } from "viem";
@@ -33,11 +33,7 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
         assertCreateGeneration(localStorage, `${baseKey}:raffle:${snapshot.id}`, raffleClicked);
         const r = snapshot.raffle;
         const draft = { nft: r.nft, tokenId: r.tokenId, salesEnd: r.salesEnd, reserveNonce: r.reserveNonce, reserveCommit: r.reserveCommit, title: r.title, packs: snapshot.packs };
-        const active = readCreateRecord(localStorage, baseKey);
-        const key = active?.kind === "draft" && active.data === encodeDraft(draft) && (active.id === null || active.id === snapshot.id.toString()) ? baseKey : `${baseKey}:raffle:${snapshot.id}`;
-        const record = readCreateRecord(localStorage, key) ?? { kind: "draft", data: encodeDraft(draft), id: snapshot.id.toString(), creationHash: null, pending: null };
-        if (record.kind !== "draft") throw new Error("Recover the saved draw setup first.");
-        writeCreateRecord(localStorage, key, record);
+        const { key, record } = await raffleCreateRecord({ service, wallet, storage: localStorage, baseKey, id: snapshot.id, draft, assertIntent });
         if (recoveryHash) {
           setState({ kind: "busy", message: "Checking the saved creation transaction…" });
           await recoverCreateTransaction({ service, wallet, record, save: next => writeCreateRecord(localStorage, key, next), assertIntent, hash: recoveryHash });
