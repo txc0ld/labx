@@ -11,7 +11,7 @@ import { automaticCommitmentKey, prepareAutomaticCommitment } from "@/lib/automa
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { STANDARD_MEMBERSHIP_TIERS, type MembershipTierName } from "@/lib/membership-tiers";
 import { canApplyWalletNftSelection, fetchWalletNfts, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
-import { captureCreateGeneration, assertCreateGeneration, advanceCreateGeneration, retireUnsentCreate, recoverCreateTransaction, createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, serializeCreateRecord, writeCreateRecord, retireCompletedCreate, type CreateRecord } from "@/lib/chain/create-flow";
+import { captureCreateGeneration, assertCreateGeneration, advanceCreateGeneration, retireUnsentCreate, retireStaleCreate, recoverCreateTransaction, createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, serializeCreateRecord, writeCreateRecord, retireCompletedCreate, type CreateRecord } from "@/lib/chain/create-flow";
 import { recoverPreparation } from "@/lib/chain/api";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
 import { TransactionFlow } from "./TransactionFlow";
@@ -72,14 +72,14 @@ function positiveInteger(value: string, label: string, maximum: number) {
   return parsed;
 }
 
-function actionFromForm(form: FormDraft): Omit<DraftInput, "reserveNonce" | "reserveCommit"> {
+function actionFromForm(form: FormDraft, salesEnd?: bigint): Omit<DraftInput, "reserveNonce" | "reserveCommit"> {
   if (!form.nft && !form.tokenId) throw new Error("Choose the NFT for this raffle.");
   if (!isAddress(form.nft)) throw new Error("Enter a valid NFT contract address.");
   if (!/^\d{1,78}$/.test(form.tokenId) || BigInt(form.tokenId) >= 2n ** 256n) throw new Error("Enter a valid NFT token ID.");
   const title = form.title.trim();
   if (!title) throw new Error("Enter a title.");
   if (new TextEncoder().encode(title).length > 80) throw new Error("Title is too long (80 characters max).");
-  const closeSeconds = localDeadlineSeconds(form.closing);
+  const closeSeconds = localDeadlineSeconds(form.closing, salesEnd);
   if (closeSeconds === null) throw new Error(form.closing ? DEADLINE_SKIPPED : "Choose when sales end.");
   if (closeSeconds * 1000 <= Date.now()) throw new Error("Choose a future closing date.");
   if (form.packs.length < 1 || form.packs.length > 8) throw new Error("Configure 1–8 memberships.");
@@ -98,6 +98,7 @@ function actionFromForm(form: FormDraft): Omit<DraftInput, "reserveNonce" | "res
 
 const UNSUPPORTED_BROWSER = "This browser isn't supported. Try a current Chrome, Safari or Firefox.";
 const DEADLINE_SKIPPED = "That time doesn't exist in your time zone because of a clock change. Choose another time.";
+const STALE_CREATE = "Your last raffle changed or passed its deadline, so it can't be finished here. Find it in Your raffles, or create a new one below.";
 
 function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
   if (!snapshot) return INITIAL;
@@ -132,6 +133,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const walletSnapshot = useWalletSnapshot(wallet);
   const [creation, setCreation] = useState<{ kind: "idle" } | { kind: "busy"; message: string } | { kind: "error"; message: string } | { kind: "done"; id: bigint }>({ kind: "idle" });
   const [savedCreation, setSavedCreation] = useState<CreateRecord | null>(null);
+  const [notice, setNotice] = useState("");
   const createLifetime = useRef({ mounted: false, generation: 0, busy: false, operation: 0, service, wallet, revision: walletSnapshot.revision });
   if (createLifetime.current.service !== service || createLifetime.current.wallet !== wallet || createLifetime.current.revision !== walletSnapshot.revision) {
     Object.assign(createLifetime.current, { service, wallet, revision: walletSnapshot.revision, generation: createLifetime.current.generation + 1 });
@@ -173,7 +175,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const titleEditGeneration = useRef(0);
   const autoTitle = useRef<string | null>(null);
 
-  const closingSeconds = localDeadlineSeconds(form.closing);
+  const closingSeconds = localDeadlineSeconds(form.closing, existing?.raffle.salesEnd);
   const deadlineNote = !form.closing ? "" : closingSeconds === null ? DEADLINE_SKIPPED : `(${formatDate(BigInt(closingSeconds))} UTC)`;
 
   function replaceForm(update: (current: FormDraft) => FormDraft) {
@@ -449,6 +451,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         }
         const saved = readCreateRecord(localStorage, key);
         if (saved?.kind !== "draft") throw new Error("Draw setup recovery is incomplete.");
+        if (mode === "resume") {
+          status("Checking your raffle…");
+          if (await retireStaleCreate({ service, wallet, storage: localStorage, key, expected: saved, assertIntent })) {
+            setSavedCreation(null); setCreation({ kind: "idle" }); setNotice(STALE_CREATE); return;
+          }
+        }
         if (recoveryHash) {
           status("Checking the saved creation transaction…");
           await recoverCreateTransaction({ service, wallet, record: saved, save: persist, assertIntent, hash: recoveryHash });
@@ -519,7 +527,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     setSelectionError("");
     setSelectionStatus("");
     try {
-      const action = actionFromForm(form);
+      const action = actionFromForm(form, existing?.raffle.salesEnd);
       const key = automaticCommitmentKey(action.nft, action.tokenId);
       focusAfterRender.current = "review";
       if (existing && key === automaticCommitmentKey(existing.raffle.nft, existing.raffle.tokenId)) {
@@ -613,6 +621,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   return (
     <form className={`${formStyles.form} studio-form`} onSubmit={existing ? review : event => void create(event)}>
+      {notice ? <p className={`${formStyles.formError} notice`} role="status">{notice}</p> : null}
       <fieldset className={formStyles.formSection} ref={editStage}>
         <legend><span>01</span> Raffle details</legend>
         <div className={`${formStyles.fieldGrid} ${formStyles.detailsGrid}`}>

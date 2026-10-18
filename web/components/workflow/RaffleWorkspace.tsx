@@ -10,7 +10,7 @@ import { raffleAbi } from "@/lib/chain/abi";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { FEE_DENOMINATOR, sellerAccounting } from "@/lib/chain/fees";
 import type { ActionAvailability, AccountRaffleState, Confirmation, MembershipQuote, RaffleSnapshot, SubmittedAction, WorkflowAction } from "@/lib/chain/types";
-import { cancelGuidance, cancelReclaimsPrize, drawBlocker, RECLAIM_GUIDANCE, runnerLateTimes, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
+import { cancelGuidance, cancelReclaimsPrize, drawBlocker, purchasesToCount, RECLAIM_GUIDANCE, runnerLateTimes, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import { sameAddress } from "@/lib/chain/validation";
@@ -707,7 +707,7 @@ const STATE_ONLY_KINDS = new Set<SellerActionKind>(["close", "snapshot", "reques
 function sellerActionFact(snapshot: RaffleSnapshot, kind: SellerActionKind) {
   const r = snapshot.raffle;
   switch (kind) {
-    case "snapshot": return `${plural(snapshot.lotCount, "purchase", "purchases")} to count.`;
+    case "snapshot": return purchasesToCount(snapshot);
     case "requestRandomness": return `${plural(r.snapshotTotal, "entry is", "entries are")} in the draw.`;
     case "settle": return `Your share after the ${formatBps(snapshot.policy.sellerFeeBps)} fee: ${formatUsdcAmount(snapshot.accounting.grossPrincipal - snapshot.accounting.grossPrincipal * BigInt(snapshot.policy.sellerFeeBps) / FEE_DENOMINATOR)} USDC.`;
     case "claimProceeds": return `Sends ${formatUsdcAmount(r.principalEscrow)} USDC to ${shortAddress(r.seller)}.`;

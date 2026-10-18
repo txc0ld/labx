@@ -79,6 +79,33 @@ export async function retireUnsentCreate({ service, wallet, storage, key, expect
   if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before editing.");
   assertIntent();
   if (storage.getItem(key) !== raw) throw new Error("The saved creation changed. Reload before editing.");
+  archiveCreate(storage, key, raw);
+}
+/**
+ * Retires a created raffle's record once Create can no longer finish it: the draft was edited, cancelled or listed on its own page,
+ * or its deadline passed before the NFT was locked. The raffle stays on chain and in the seller's list. A record with its own send
+ * saved is left to transaction recovery, and any unresolved wallet transaction keeps the record. Returns whether it was retired.
+ */
+export async function retireStaleCreate({ service, wallet, storage, key, expected, assertIntent }: {
+  service: RaffleService; wallet: WalletSessionPort; storage: Storage; key: string; expected: CreateRecord; assertIntent: () => void;
+}) {
+  if (expected.kind !== "draft" || expected.id === null || expected.pending !== null) return false;
+  const session = wallet.getSnapshot();
+  if (session.kind !== "connected") throw new Error("Connect the seller wallet.");
+  const snapshot = await service.readRaffle({ id: BigInt(expected.id) });
+  assertIntent();
+  const r = snapshot.raffle;
+  const data = encodeDraft({ nft: r.nft, tokenId: r.tokenId, salesEnd: r.salesEnd, reserveNonce: r.reserveNonce, reserveCommit: r.reserveCommit, title: r.title, packs: snapshot.packs });
+  if (r.phase === 0 && sameAddress(r.seller, session.account) && data === expected.data && (r.escrowed || snapshot.block.timestamp < r.salesEnd)) return false;
+  if (await service.pending({ wallet })) throw new Error("Finish your pending wallet transaction first.");
+  assertIntent();
+  const raw = storage.getItem(key);
+  const saved = readCreateRecord(storage, key);
+  if (raw === null || saved === null || serializeCreateRecord(saved) !== serializeCreateRecord(expected)) throw new Error("The saved creation changed. Review it before continuing.");
+  archiveCreate(storage, key, raw);
+  return true;
+}
+function archiveCreate(storage: Storage, key: string, raw: string) {
   const archive = `${key}:retired:${crypto.randomUUID()}`;
   storage.setItem(archive, raw);
   if (storage.getItem(archive) !== raw) throw new Error("Creation recovery could not be retained.");

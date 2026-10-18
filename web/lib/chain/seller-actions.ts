@@ -67,7 +67,12 @@ export const RECLAIM_GUIDANCE = "The raffle is cancelled. Reclaim your NFT.";
 export const CANCEL_AND_RECLAIM = "Cancel and get NFT back";
 
 export function cancelReclaimsPrize(snapshot: RaffleSnapshot): boolean {
-  return snapshot.lotCount === 0n && drawBlocker(snapshot) !== null;
+  return snapshot.lotCount === 0n && (drawBlocker(snapshot) !== null || expiredLockedDraft(snapshot));
+}
+
+/** A draft whose NFT is locked but whose sales deadline passed before it was listed. */
+function expiredLockedDraft({ raffle, block }: RaffleSnapshot) {
+  return raffle.phase === 0 && raffle.escrowed && block.timestamp >= raffle.salesEnd;
 }
 
 const RUNNER_DRAW = "LABx closes sales and starts the draw automatically. This usually takes a few minutes.";
@@ -123,6 +128,12 @@ export function sellerStepText(snapshot: RaffleSnapshot, kind: SellerActionKind)
   }
 }
 
+/** The purchases Count entries still has to count, so a partly counted raffle shows what is left. */
+export function purchasesToCount({ raffle, lotCount }: RaffleSnapshot): string {
+  const total = `${lotCount} ${lotCount === 1n ? "purchase" : "purchases"}`;
+  return raffle.lotCursor === 0n ? `${total} to count.` : `${lotCount - raffle.lotCursor} of ${total} left to count.`;
+}
+
 /**
  * The seller's next step. With the draw runner on, LABx's own draw steps become automatic until they are 30 minutes overdue by
  * block time. revealedAt is the block time of the draw confirmation, from its Revealed event, or a later time when that event
@@ -159,12 +170,15 @@ function manualNextStep(snapshot: RaffleSnapshot, actions: readonly SellerAction
       : { kind: "action", action: cancel, message: cancelGuidance(snapshot, blocker) };
   }
   switch (raffle.phase) {
-    case 0:
+    case 0: {
+      const cancel = expiredLockedDraft(snapshot) ? enabled("cancel") : undefined;
+      if (cancel) return { kind: "action", action: { ...cancel, label: CANCEL_AND_RECLAIM }, message: "The sales deadline passed before listing. Cancel the draft and get your NFT back. Your wallet asks you to confirm twice. To keep the raffle, set a new deadline in Edit draft instead." };
       if (block.timestamp >= raffle.salesEnd) return waiting("Sales deadline passed", "Set a new deadline in Edit draft. LABx will review the change.");
       if (!raffle.escrowed) return next(["approvePrize", "escrow"], "NFT not locked yet", "Refresh to check the NFT in your wallet.");
-      if (snapshot.admission.status !== "approved") return waiting("Waiting for LABx review", snapshot.admission.status === "changed" ? "Your NFT is locked in. LABx needs to review your changes before you can list it." : "Your NFT is locked in. Once LABx approves, you can list it here.");
+      if (snapshot.admission.status !== "approved") return waiting("Waiting for LABx review", snapshot.admission.status === "changed" ? "Your NFT is locked in. LABx needs to review this raffle again before you can list it." : "Your NFT is locked in. Once LABx approves, you can list it here.");
       if (snapshot.paused) return waiting("Listing paused", "Your raffle is approved. You can list it when LABx resumes listings.");
       return next(["open"], "Listing unavailable", "Refresh to check the listing requirements.");
+    }
     case 1:
       if (block.timestamp < raffle.salesEnd) return snapshot.paused ? waiting("Sales paused", "LABx has paused new sales for now.") : waiting("Your raffle is live", "Buyers can join until sales end. This page moves to the next step when they do.");
       return next(["close"], "Sales have ended", "Refresh to close sales.");
