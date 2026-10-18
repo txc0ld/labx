@@ -29,11 +29,14 @@ export function signatureVerifier(client: Pick<PublicClient, "request">): Signat
         try { result = await client.request(args); }
         catch (error) { if (!reverted(error)) unanswered = true; throw error; }
         // Every answer this check reads (eth_call, eth_getCode) is hex data. A missing or null result is no answer.
+        // Hex the wallet contract's isValidSignature cannot decode (ERC-1271, or a delegated ERC-8010 wallet) stays a refusal:
+        // viem reads it as invalid, and a corrupted provider answer cannot be told from the contract's own, so this fails closed.
         if (!isHex(result)) { unanswered = true; throw new Error("The node returned no result."); }
         return result;
       }
     }, { retryCount: 0 }) });
     // viem throws, rather than answering false, for a signature it cannot decode, before any node request, and for node data it cannot read.
+    // Accepted: a crafted ERC-8010 authorization that fails recovery (r = s = 0) only does so after eth_getCode, so it answers 503.
     const valid = await observed.verifyMessage({ address, message, signature }).catch(() => asked ? undefined : false);
     if (valid === undefined || !valid && unanswered) throw new Error("The node did not check the signature.");
     return valid;

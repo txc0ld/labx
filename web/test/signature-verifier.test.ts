@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { keccak256, toBytes, type Address, type Hex } from "viem";
+import { concat, encodeAbiParameters, keccak256, numberToHex, parseAbiParameters, serializeErc8010Signature, size, toBytes, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { serverClient } from "../lib/chain/server";
 import { workflowMessage } from "../lib/chain/messages";
@@ -35,7 +35,8 @@ const replies = {
   "a gateway error naming a revert": { status: 502, json: { error: "upstream execution reverted endpoint unavailable" } }
 } satisfies Record<string, NodeReply>;
 type NodeAnswer = keyof typeof replies;
-let node: Server, nodeUrl = "", answer: NodeAnswer = "invalid";
+/** `code` is what eth_getCode returns for every account: "0x" for a plain wallet, or an ERC-7702 delegation marker. */
+let node: Server, nodeUrl = "", answer: NodeAnswer = "invalid", code: Hex = "0x";
 const calls: string[] = [];
 
 beforeAll(async () => {
@@ -45,7 +46,8 @@ beforeAll(async () => {
     request.on("end", () => {
       const { id, method } = JSON.parse(raw) as { id: number; method: string };
       calls.push(method);
-      const reply: NodeReply = method === "eth_call" ? replies[answer] : { json: { error: { code: -32601, message: "unsupported" } } };
+      const reply: NodeReply = method === "eth_call" ? replies[answer]
+        : method === "eth_getCode" ? { json: { result: code } } : { json: { error: { code: -32601, message: "unsupported" } } };
       response.statusCode = reply.status ?? 200;
       if (reply.text !== undefined) return response.end(reply.text);
       response.setHeader("content-type", "application/json");
@@ -58,7 +60,7 @@ beforeAll(async () => {
 afterAll(async () => { await new Promise(resolve => node.close(resolve)); });
 
 let log: MockInstance;
-beforeEach(() => { calls.length = 0; log = vi.spyOn(console, "error").mockImplementation(() => {}); });
+beforeEach(() => { calls.length = 0; code = "0x"; log = vi.spyOn(console, "error").mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); vi.doUnmock("@/lib/chain/server"); vi.doUnmock("@/lib/store"); vi.resetModules(); });
 
 const routes = {
@@ -128,5 +130,25 @@ describe("signature verification with the production server client", () => {
     answer = "down";
     const result = await post(route, contractWallet, CONTRACT_SIGNATURE);
     expect(result).toMatchObject({ status: 503, logs: [[`workflow-request ${route} 503 records-unavailable`]] });
+  });
+});
+
+describe("ERC-8010 signatures from delegated wallets (decided edge cases)", () => {
+  const delegate: Address = "0x6666666666666666666666666666666666666666";
+
+  it("refuses a delegated wallet whose isValidSignature answer is malformed, failing closed", async () => {
+    code = `0xef0100${delegate.slice(2)}`;
+    answer = "a malformed result";
+    const authorization = await seller.signAuthorization({ contractAddress: delegate, chainId: 11155111, nonce: 0 });
+    const result = await post("records", seller.address, serializeErc8010Signature({ authorization, signature: CONTRACT_SIGNATURE }));
+    expect(result).toMatchObject({ status: 401, calls: ["eth_getCode", "eth_call"], logs: [["workflow-request records 401 refused"]] });
+  });
+
+  it("answers 503 for a crafted authorization with r = s = 0, found only after the node reports no delegation", async () => {
+    // ERC-8010's layout (signature, ABI suffix, suffix length, magic) built by hand, because viem's serializer refuses r = 0.
+    const suffix = encodeAbiParameters(parseAbiParameters("(uint256 chainId, address delegation, uint256 nonce, uint8 yParity, uint256 r, uint256 s), address to, bytes data"), [{ chainId: 11155111n, delegation: delegate, nonce: 0n, yParity: 0, r: 0n, s: 0n }, seller.address, "0x"]);
+    const crafted = concat([CONTRACT_SIGNATURE, suffix, numberToHex(size(suffix), { size: 32 }), ERC8010_MAGIC_ONLY]);
+    const result = await post("records", seller.address, crafted);
+    expect(result).toMatchObject({ status: 503, calls: ["eth_getCode"], logs: [["workflow-request records 503 records-unavailable"]] });
   });
 });
