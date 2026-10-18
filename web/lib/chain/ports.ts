@@ -5,6 +5,7 @@ import type {
   MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
+import type { DrawFunding } from "./vrf-funding";
 import type { OwnerExecutionDiscoveryCursor, OwnerExecutionDiscoveryPage } from "./owner-execution-discovery";
 
 import type { ConnectionOption, ConnectionStatus, WalletConnectOptions } from "./wallet-connectors";
@@ -49,6 +50,8 @@ export interface RaffleService {
   /** Block time of the raffle's Revealed event at or before `block`. Rejects when it cannot find or check one. */
   readRevealTime(input: { id: bigint; block: BlockRef }): Promise<bigint>;
   openingPolicy(input?: { block?: BlockRef }): Promise<{ policy: RafflePolicy; hash: Hex; block: BlockRef }>;
+  /** The VRF subscription's native balance against what Chainlink needs before it answers a draw under `policy`. */
+  drawFunding(input: { policy: RafflePolicy; block?: BlockRef }): Promise<DrawFunding>;
   quoteMembership(input: { id: bigint; packId: number; quantity: number; slippageBps?: number }): Promise<MembershipQuote>;
   prepare(input: { action: WorkflowAction; wallet: WalletSessionPort; expectedDraft?: DraftInput }): Promise<PreparedAction>;
   submit(input: { prepared: PreparedAction; wallet: WalletSessionPort; assertIntent?: () => void; beforeRequest?: (checkpoint: SubmissionCheckpoint) => void; onNotDispatched?: (checkpoint: SubmissionCheckpoint) => void }): Promise<SubmittedAction>;
