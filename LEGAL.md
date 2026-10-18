@@ -23,3 +23,16 @@ The v3 contract runs on Sepolia only, at `0x8b0332D0ca48908e174F42eA1b3123e63f3F
 Before non-test operation, qualified counsel must review the actual membership benefits, promotion structure, entry conditions, eligibility, jurisdiction restrictions, fees, cancellation/refund terms, privacy and partner offers. Calling a payment a membership does not itself determine its legal treatment. No legal conclusion has been supplied for this product.
 
 The user-facing routes are `/legal`, `/rules`, `/privacy`, `/about` and `/guide`; `/terms` redirects to `/legal`. Receipt emails require configured delivery and a verified finalized purchase.
+
+## Mainnet launch: counsel items
+
+A build with `NEXT_PUBLIC_CHAIN_ID=1` publishes terms version `labx-membership-2026-10-19-mainnet-v1`. Its text equals the Sepolia v3 terms except the Network section, which states facts for Ethereum mainnet. The pages' network facts follow the configured chain. A Sepolia build is unchanged.
+
+These legal characterizations still read as they do on Sepolia. On a mainnet build each is shown under a "Pending counsel review" label until counsel decides the wording:
+
+- About: "These pages are a product draft for counsel, not a legal opinion and not a consumer promotion."
+- Privacy, opening paragraph: "It is a product draft for counsel, not a legal opinion."
+- Privacy, Who we are: "This deployment is a test bench. It is not a consumer promotion."
+- Terms: the mainnet terms keep every legal characterization of the Sepolia terms, including "These terms are a product draft for counsel, not a legal opinion." The Terms page carries one label saying so, because the published text itself is hashed.
+
+These statements are the same on both networks and also need counsel's review before mainnet operation: the Privacy Act 1988 and APP 3 and APP 6 basis, the 18-or-older eligibility, the statement that no government identity document is requested, the pages' description of LABx as a "bench", and the fees, cancellation and refund terms.

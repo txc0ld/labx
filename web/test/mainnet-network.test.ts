@@ -1,13 +1,13 @@
 import React, { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { keccak256, toBytes, verifyMessage, type Address } from "viem";
+import { keccak256, toBytes, verifyMessage, type Address, type Hex, type PublicClient } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowContext } from "../lib/chain/api-types";
 import { workflowMessage } from "../lib/chain/messages";
 import { chainName, configuredChainId, explorerAddress, explorerToken, NETWORKS, safeQueue } from "../lib/chain/networks";
 import type { WalletSessionPort } from "../lib/chain/ports";
-import type { BlockRef, DeploymentManifest, WalletProvider, WalletSnapshot } from "../lib/chain/types";
+import type { BlockRef, DeploymentManifest, RaffleSnapshot, WalletProvider, WalletSnapshot } from "../lib/chain/types";
 import { BrowserWalletSession, type WalletChooser } from "../lib/chain/wallet-connectors";
 import { consentKey, readWalletConsent, saveWalletConsent } from "../lib/chain/wallet-consent";
 import { WalletSession } from "../lib/chain/wallet-session";
@@ -32,6 +32,11 @@ const MAINNET_FIXTURE: DeploymentManifest = {
   usdc: "0x2000000000000000000000000000000000000002"
 };
 const SEPOLIA_ADDRESS = "0x8b0332D0ca48908e174F42eA1b3123e63f3F4327";
+/** The terms hash the live Sepolia v3 contract pins. */
+const SEPOLIA_TERMS_HASH: Hex = "0x653a59619128ccbd7b75b40db072ff9aab5c5a547caf1ccaf9de67079c463f25";
+const V2_TERMS_HASH: Hex = "0xb3c83a96bc5e11afd2758d8b515bd495d83294a24d44c15c42b9aa970f4a75d1";
+/** The mainnet publication's hash, pinned so any change to its text is deliberate. */
+const MAINNET_TERMS_HASH: Hex = "0x9c18460c2ec38f0ea8d84e789c910e3a922fa88434c1bdf05e6077e836cadcb2";
 const block: BlockRef = { number: 21_000_100n, hash: keccak256(toBytes("block")), timestamp: 1_800_000_000n };
 const account: Address = "0x1111111111111111111111111111111111111111";
 
@@ -131,7 +136,7 @@ describe("deployment selection", () => {
     expect(browser.service.manifest).toBe(MAINNET_FIXTURE);
     const server = await serverWorkflow();
     expect(server.manifest).toBe(MAINNET_FIXTURE);
-    expect(server.context).toEqual({ origin: "https://labx.example", chainId: 1, contract: MAINNET_FIXTURE.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION });
+    expect(server.context).toEqual({ origin: "https://labx.example", chainId: 1, contract: MAINNET_FIXTURE.address, termsHash: MAINNET_TERMS_HASH, termsVersion: "labx-membership-2026-10-19-mainnet-v1" });
     expect(server.client.transport.url).toBe("https://ethereum-rpc.publicnode.com");
     expect(server.history?.transport.url).toBe("https://mainnet.gateway.tenderly.co");
   });
@@ -159,12 +164,81 @@ describe("deployment selection", () => {
   });
 });
 
+describe("published terms by chain", () => {
+  /** An open raffle whose policy pins termsHash, as the catalog and the purchase builder read it. */
+  function openRaffle(termsHash: `0x${string}`): RaffleSnapshot {
+    return {
+      id: 1n, block, policy: { ...fixtureTrust.expectedPolicy, termsHash },
+      raffle: {
+        seller: account, nft: MAINNET_FIXTURE.usdc, tokenId: 7n, salesEnd: block.timestamp + 3_600n, createdAt: 1n, drawnAt: 0n, vrfRequestedAt: 0n, phase: 1,
+        escrowed: true, snapshotted: false, revealed: false, reserveNonce: block.hash, reserveCommit: block.hash, publicHash: block.hash,
+        lotCursor: 0n, snapshotTotal: 0n, principalEscrow: 0n, feeEscrow: 0n, vrfRequestId: 0n, randomWord: 0n, winner: MAINNET_FIXTURE.usdc, packCount: 1, title: "Night garden"
+      },
+      packs: [{ name: "Entry", priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 10, sold: 0, active: true }],
+      admission: { status: "opened", reviewHash: null, record: { reviewRevision: 1n, approvedReviewHash: block.hash, approvedBy: fixtureTrust.expectedOwner, approvedAtOpening: true } },
+      accounting: { grossPrincipal: 0n, buyerFees: 0n }, lotCount: 0n, paused: false, owner: fixtureTrust.expectedOwner, ethEnabled: false,
+      drawStartGrace: 604_800n, randomnessGrace: 604_800n, revealGrace: 604_800n
+    } as RaffleSnapshot;
+  }
+  /** Builds a purchase of raffle 1 on the build's modules, with a reader that reports the given raffle. */
+  async function buy(snapshot: RaffleSnapshot) {
+    const { actionBuilder } = await import("../lib/chain/actions");
+    const reader = { checkedBlock: async () => block, readAccount: async () => ({ snapshot }), assertActionTrust: vi.fn(async () => {}) };
+    const build = actionBuilder({} as PublicClient, MAINNET_FIXTURE, reader as unknown as Parameters<typeof actionBuilder>[2]);
+    return build({ kind: "buyMembership", id: 1n, packId: 0, quantity: 1, acceptedTerms: snapshot.policy.termsHash, agreements: { terms: true, rules: true, age: true }, payment: { kind: "usdc" } }, { kind: "connected", account, chainId: 1, revision: 1 });
+  }
+
+  it("keeps the Sepolia build's terms byte-identical to the hash the live contract pins", async () => {
+    const terms = await import("../lib/published-terms");
+    expect(terms.PUBLISHED_TERMS_HASH).toBe(SEPOLIA_TERMS_HASH);
+    expect(keccak256(toBytes(terms.PUBLISHED_TERMS_CONTENT))).toBe(SEPOLIA_TERMS_HASH);
+    expect(terms.TERMS_VERSION).toBe("labx-membership-2026-10-07-v3");
+    expect(terms.PUBLISHED_TERMS_CONTENT).toContain("The v3 contract blocks Ethereum mainnet chain 1.");
+    expect(() => terms.requirePublishedTerms(SEPOLIA_TERMS_HASH)).not.toThrow();
+    expect(() => terms.requirePublishedTerms(MAINNET_TERMS_HASH)).toThrow(/do not match/);
+    const { catalogAvailability } = await import("../components/workflow/format");
+    expect(catalogAvailability(openRaffle(SEPOLIA_TERMS_HASH)).label).toBe("Open");
+    expect(catalogAvailability(openRaffle(MAINNET_TERMS_HASH)).label).toBe("Terms unavailable");
+  });
+
+  it("publishes the mainnet terms on a mainnet build, changing only the Network section", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    const terms = await import("../lib/published-terms");
+    expect(terms.TERMS_VERSION).toBe("labx-membership-2026-10-19-mainnet-v1");
+    expect(terms.PUBLISHED_TERMS_HASH).toBe(MAINNET_TERMS_HASH);
+    expect(keccak256(toBytes(terms.PUBLISHED_TERMS_CONTENT))).toBe(MAINNET_TERMS_HASH);
+    const sepolia = terms.publishedTermsByHash(SEPOLIA_TERMS_HASH);
+    expect(terms.DRAW_RULES).toEqual(sepolia.rules);
+    expect(terms.MEMBERSHIP_TERMS.map(section => section.heading)).toEqual(sepolia.terms.map(section => section.heading));
+    expect(terms.MEMBERSHIP_TERMS.filter(section => section.heading !== "Network")).toEqual(sepolia.terms.filter(section => section.heading !== "Network"));
+    expect(terms.MEMBERSHIP_TERMS.find(section => section.heading === "Network")?.paragraphs).toEqual(["These terms describe the LABx v3 contract on Ethereum mainnet, chain ID 1. The website permits only approved Ethereum mainnet deployments. Ethereum mainnet is not a test network."]);
+    expect(terms.PUBLISHED_TERMS_CONTENT).toContain("These terms are a product draft for counsel, not a legal opinion.");
+    expect(terms.PUBLISHED_TERMS_CONTENT).not.toMatch(/Sepolia|5-USDC|blocks Ethereum mainnet|unpublished/);
+  });
+
+  it.each([undefined, "1"])("resolves the Sepolia v3, mainnet and historical v2 publications on a NEXT_PUBLIC_CHAIN_ID=%s build", async value => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", value);
+    const { publishedTermsByHash } = await import("../lib/published-terms");
+    expect([SEPOLIA_TERMS_HASH, MAINNET_TERMS_HASH, V2_TERMS_HASH].map(hash => publishedTermsByHash(hash).version))
+      .toEqual(["labx-membership-2026-10-07-v3", "labx-membership-2026-10-19-mainnet-v1", "labx-membership-2026-10-06-v2"]);
+  });
+
+  it("refuses to sell a raffle pinned to the Sepolia terms on a mainnet build", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    const terms = await import("../lib/published-terms");
+    expect(() => terms.requirePublishedTerms(SEPOLIA_TERMS_HASH)).toThrow(/do not match/);
+    expect(() => terms.requirePublishedTerms(MAINNET_TERMS_HASH)).not.toThrow();
+    const { catalogAvailability } = await import("../components/workflow/format");
+    expect(catalogAvailability(openRaffle(SEPOLIA_TERMS_HASH))).toMatchObject({ label: "Terms unavailable", purchasable: false });
+    expect(catalogAvailability(openRaffle(MAINNET_TERMS_HASH))).toMatchObject({ label: "Open", purchasable: true });
+    await expect(buy(openRaffle(SEPOLIA_TERMS_HASH))).rejects.toThrow(/do not match the published membership terms/);
+  });
+});
+
 describe("request authorization context", () => {
   const signer = privateKeyToAccount(generatePrivateKey());
-  const mainnet: WorkflowContext = { origin: "https://labx.example", chainId: 1, contract: MAINNET_FIXTURE.address, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
-  const sepolia: WorkflowContext = { ...mainnet, chainId: 11155111 };
 
-  it("binds signed workflow requests to the deployment's chain", async () => {
+  it("binds signed workflow requests to the deployment's chain and the mainnet terms", async () => {
     vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
     vi.stubEnv("NEXT_PUBLIC_RAFFLE_ADDRESS", MAINNET_FIXTURE.address);
     const { serverWorkflow } = await withMainnetRegistry();
@@ -175,8 +249,10 @@ describe("request authorization context", () => {
     expect(message).toContain('"chainId":1,');
     const verify = (args: Parameters<typeof verifyMessage>[0]) => verifyMessage(args);
     const sign = (scope: WorkflowContext) => signer.signMessage({ message: workflowMessage("commitment recovery", scope, signer.address, input, deadline) });
-    await expect(verifyWorkflowAuthorization({ operation: "commitment recovery", context, account: signer.address, input, deadline, signature: await sign(mainnet), verify })).resolves.toBe(message);
-    await expect(verifyWorkflowAuthorization({ operation: "commitment recovery", context, account: signer.address, input, deadline, signature: await sign(sepolia), verify })).rejects.toThrow(/refused/);
+    await expect(verifyWorkflowAuthorization({ operation: "commitment recovery", context, account: signer.address, input, deadline, signature: await sign(context), verify })).resolves.toBe(message);
+    for (const other of [{ ...context, chainId: 11155111 as const }, { ...context, termsHash: SEPOLIA_TERMS_HASH, termsVersion: "labx-membership-2026-10-07-v3" }]) {
+      await expect(verifyWorkflowAuthorization({ operation: "commitment recovery", context, account: signer.address, input, deadline, signature: await sign(other), verify })).rejects.toThrow(/refused/);
+    }
   });
 
   it.each([["1", 1], ["11155111", 11155111]] as const)("reads the private-record context for NEXT_PUBLIC_CHAIN_ID %s", (value, chainId) => {

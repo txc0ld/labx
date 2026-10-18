@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CounselPending } from "@/components/CounselPending";
 import { LegalNav } from "@/components/LegalNav";
 import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
 import { BUYER_FEE_BPS, SELLER_FEE_BPS } from "@/lib/chain/fees";
+import { configuredChainId, NETWORKS } from "@/lib/chain/networks";
+
+const chainId = configuredChainId(), network = NETWORKS[chainId], mainnet = chainId === 1;
 
 export const metadata: Metadata = {
   title: "About",
-  description: "LABx is the Sepolia membership bench operated by Fantom Labs Pty Ltd. Escrowed pieces, membership packs, Chainlink VRF."
+  description: mainnet
+    ? `LABx is the ${network.shortName} membership bench operated by Fantom Labs Pty Ltd. Escrowed pieces, membership packs, Chainlink VRF.`
+    : "LABx is the Sepolia membership bench operated by Fantom Labs Pty Ltd. Escrowed pieces, membership packs, Chainlink VRF."
 };
 
 export default function AboutPage() {
@@ -31,7 +37,9 @@ export default function AboutPage() {
         </article>
         <article className="terminal pad stack">
           <h2>Network</h2>
-          <p>LABx is being tested on {OPERATOR.network}, chain ID {OPERATOR.chainId}. The website only enables approved test deployments. Ethereum mainnet is blocked by the contract constructor.</p>
+          {mainnet
+            ? <p>LABx runs on {network.name} mainnet, chain ID {chainId}. The website only enables approved {network.name} mainnet deployments.</p>
+            : <p>LABx is being tested on {OPERATOR.network}, chain ID {OPERATOR.chainId}. The website only enables approved test deployments. Ethereum mainnet is blocked by the contract constructor.</p>}
         </article>
         <article className="well pad stack">
           <h2>Know your piece</h2>
@@ -47,7 +55,9 @@ export default function AboutPage() {
           <li><strong>Draw.</strong> Sales close, eligible entries freeze, and Chainlink VRF supplies randomness.</li>
           <li><strong>Finish.</strong> The winner, seller and treasury claim their respective assets. Cancellation enables buyer refunds and NFT recovery.</li>
         </ol>
-        <p>These pages are a product draft for counsel, not a legal opinion and not a consumer promotion.</p>
+        {mainnet
+          ? <p><CounselPending>These pages are a product draft for counsel, not a legal opinion and not a consumer promotion.</CounselPending></p>
+          : <p>These pages are a product draft for counsel, not a legal opinion and not a consumer promotion.</p>}
         <div className="btn-row">
           <Link className="btn" href="/guide">Follow the walkthrough</Link>
           <Link className="text-link" href="/fairness">Review draw protections</Link>

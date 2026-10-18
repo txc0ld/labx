@@ -1,33 +1,49 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CounselPending } from "@/components/CounselPending";
 import { LegalNav } from "@/components/LegalNav";
 import { OPERATOR, OPERATOR_LINE, publicSiteHost } from "@/lib/operator";
+import { configuredChainId, NETWORKS } from "@/lib/chain/networks";
+
+const chainId = configuredChainId(), network = NETWORKS[chainId], mainnet = chainId === 1;
 
 export const metadata: Metadata = {
   title: "Privacy",
-  description: "Privacy policy for the LABx Sepolia bench operated by Fantom Labs Pty Ltd."
+  description: `Privacy policy for the LABx ${network.shortName} bench operated by Fantom Labs Pty Ltd.`
 };
 
 export default function PrivacyPage() {
   return (
     <section className="section stack page-frame">
       <h1 className="page-title">Your data</h1>
-      <p className="lede legal-copy">
-        This notice describes records created when you use the {OPERATOR.brand} bench at {publicSiteHost()}. It is a product draft for counsel, not a legal opinion.
-      </p>
+      {mainnet
+        ? <p className="lede legal-copy">
+            This notice describes records created when you use the {OPERATOR.brand} bench at {publicSiteHost()}. <CounselPending>It is a product draft for counsel, not a legal opinion.</CounselPending>
+          </p>
+        : <p className="lede legal-copy">
+            This notice describes records created when you use the {OPERATOR.brand} bench at {publicSiteHost()}. It is a product draft for counsel, not a legal opinion.
+          </p>}
       <LegalNav />
       <div className="piece-grid legal-surfaces">
         <article className="pearl pad stack legal-copy">
           <h2>Who we are</h2>
-          <p>
-            {OPERATOR.brand} is operated by {OPERATOR_LINE}. This Sepolia deployment is a test bench. It is not a mainnet product and it is not a consumer promotion.
-          </p>
+          {mainnet
+            ? <p>
+                {OPERATOR.brand} is operated by {OPERATOR_LINE}. This deployment runs on {network.name} mainnet. <CounselPending>This deployment is a test bench. It is not a consumer promotion.</CounselPending>
+              </p>
+            : <p>
+                {OPERATOR.brand} is operated by {OPERATOR_LINE}. This Sepolia deployment is a test bench. It is not a mainnet product and it is not a consumer promotion.
+              </p>}
         </article>
         <article className="terminal pad stack legal-copy">
-          <h2>This Sepolia bench</h2>
-          <p>
-            Version 3 is intended for {OPERATOR.network} only. The website refuses a mainnet wallet and enables actions only for a reviewed deployment. Do not send real-value assets or treat Sepolia balances as cash.
-          </p>
+          <h2>This {network.shortName} bench</h2>
+          {mainnet
+            ? <p>
+                Version 3 is intended for {network.name} mainnet only. The website refuses a wallet on any other network and enables actions only for a reviewed deployment. Assets on {network.name} have real value, and a confirmed transaction cannot be reversed.
+              </p>
+            : <p>
+                Version 3 is intended for {OPERATOR.network} only. The website refuses a mainnet wallet and enables actions only for a reviewed deployment. Do not send real-value assets or treat Sepolia balances as cash.
+              </p>}
         </article>
       </div>
       <article className="well pad stack legal-copy">
@@ -44,7 +60,7 @@ export default function PrivacyPage() {
         <p>We do not ask for a government identity document on this bench. We do not sell personal information.</p>
         <h2>Why we collect it</h2>
         <p>
-          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the current Sepolia site: connecting a wallet when you ask, showing existing account records, saving your local email preference, recovering pending transactions without accidental repeat submissions, stopping automated abuse, and keeping the wallet gate on Sepolia.
+          The Privacy Act 1988 (Cth) applies to this operator. We collect this information under Australian Privacy Principle 3 because it is reasonably necessary for the current {network.shortName} site: connecting a wallet when you ask, showing existing account records, saving your local email preference, recovering pending transactions without accidental repeat submissions, stopping automated abuse, and keeping the wallet gate on {network.shortName}.
         </p>
         <p>
           We use and disclose it under Australian Privacy Principle 6 for that primary purpose. A secondary purpose is limited to security, abuse prevention, and a legal obligation. We do not use these records for unrelated marketing.
@@ -57,14 +73,14 @@ export default function PrivacyPage() {
         <p>Saving an email preference does not send it to the server. The address is sent only when you explicitly request a receipt for a verified purchase.</p>
 
         <h2>On-chain and public data</h2>
-        <p>Anything you send to {OPERATOR.network} is public. Wallet addresses, pack events, escrow, snapshots, VRF words, and settlement are visible to anyone who reads the chain. Do not treat a wallet as private correspondence.</p>
+        <p>Anything you send to {network.name} is public. Wallet addresses, pack events, escrow, snapshots, VRF words, and settlement are visible to anyone who reads the chain. Do not treat a wallet as private correspondence.</p>
         <p>Public pages show commitment hashes, not the private commercial number and not the salt.</p>
 
         <h2>Cookies and local storage</h2>
         <p>The bench uses local storage for your email preference and pending-transaction recovery. Session storage remembers whether the introductory film has been handled, so it does not repeat during ordinary navigation. It does not use advertising cookies and it does not run a third-party ad pixel. Hosting may set a strictly necessary cookie for the application.</p>
 
         <h2>Who else sees a record</h2>
-        <p>Infrastructure that may process data on our behalf includes the site host, an optional Redis store, an optional email sender, a wallet you install, and public Sepolia infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
+        <p>Infrastructure that may process data on our behalf includes the site host, an optional Redis store, an optional email sender, a wallet you install, and public {network.shortName} infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
         <p>We do not publish a country-by-country storage map. Hosting, optional persistence, and optional mail may process a record outside Australia. Use of the bench is use of those processors.</p>
 
         <h2>Retention</h2>
@@ -78,12 +94,12 @@ export default function PrivacyPage() {
         <p>The bench is for people 18 or older. A membership purchase requires that confirmation. Do not use the bench if you are under 18.</p>
 
         <h2>Changes</h2>
-        <p>We may update this notice as the Sepolia bench changes. The date below is the current draft. Material changes will be posted on this page.</p>
+        <p>We may update this notice as the {network.shortName} bench changes. The date below is the current draft. Material changes will be posted on this page.</p>
 
         <h2>Contact</h2>
         {/* TODO: add a published privacy mailbox when counsel assigns one. Do not invent an address. */}
         <p>Privacy contact via the site operator (Fantom Labs Pty Ltd). Use the operator published on {publicSiteHost()}. Do not send wallet keys, seed phrases, or a private commitment in that correspondence.</p>
-        <p className="muted">Last updated 7 October 2026. {OPERATOR_LINE}.</p>
+        <p className="muted">Last updated {mainnet ? "19 October 2026" : "7 October 2026"}. {OPERATOR_LINE}.</p>
         <div className="btn-row">
           <Link className="btn" href="/legal">Terms</Link>
           <Link className="btn btn-dark" href="/about">About</Link>
