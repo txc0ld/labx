@@ -118,6 +118,44 @@ contract DeployMainnetForkTest is Test {
         assertEq(subOwner, SAFE);
     }
 
+    /// @dev Measures counting under chain-1 gas rules today; Sepolia's October 2026 repricing made it about 230,000 gas a lot.
+    function test_measuresCountingAndPurchaseGasForTwentyLots() public {
+        vm.startPrank(SAFE);
+        labx.acceptOwnership();
+        vm.stopPrank();
+        MockERC721 nft = new MockERC721();
+        nft.mint(seller, 1);
+        LabxRaffle.PackConfig[] memory packs = new LabxRaffle.PackConfig[](1);
+        packs[0] = LabxRaffle.PackConfig({name: "Entry", priceUsdc: 1e6, bonusEntries: 1, maxSupply: 1000});
+        vm.startPrank(seller);
+        uint256 id = labx.createRaffle(address(nft), 1, uint64(block.timestamp + 1 days), bytes32(uint256(1)), keccak256("c"), "Gas", packs);
+        nft.approve(address(labx), 1);
+        labx.escrow(id);
+        vm.stopPrank();
+        bytes32 digest = labx.draftReviewHash(id);
+        vm.prank(SAFE);
+        labx.approveRaffle(id, digest);
+        vm.prank(seller);
+        labx.open(id);
+        uint256 purchaseGas;
+        for (uint256 i = 0; i < 20; i++) {
+            address b = address(uint160(0x1000 + i));
+            deal(USDC, b, 10e6);
+            vm.startPrank(b);
+            IUsdc(USDC).approve(address(labx), type(uint256).max);
+            uint256 g = gasleft();
+            labx.buyPack(id, 0, 1, labx.termsHash());
+            purchaseGas = g - gasleft();
+            vm.stopPrank();
+        }
+        emit log_named_uint("gas for the 20th purchase", purchaseGas);
+        vm.warp(block.timestamp + 1 days);
+        labx.close(id);
+        uint256 before = gasleft();
+        labx.snapshot(id, 20);
+        emit log_named_uint("gas to count 20 lots", before - gasleft());
+    }
+
     function test_runsOneRaffleThroughTheRealCoordinatorAndUsdc() public {
         vm.startPrank(SAFE);
         labx.acceptOwnership();
