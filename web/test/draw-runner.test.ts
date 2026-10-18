@@ -399,7 +399,10 @@ type FakeOptions = {
   privileged?: readonly Address[] | Error;
   balance?: bigint;
   pending?: number;
+  /** Another caller takes the step just before the runner's pinned simulation, which then reverts. */
   prepareFails?: Set<string>;
+  /** The step still applies, but its simulation reverts every time, as after a removed VRF consumer. */
+  prepareReverts?: Set<string>;
   /** Changes to raffle 1's prepared call, so it differs from the step the runner chose. */
   prepareWrong?: Partial<PreparedAction>;
   read?: (id: bigint) => Promise<never> | undefined;
@@ -441,7 +444,8 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
       return current(id);
     },
     async prepare(action) {
-      if (options.prepareFails?.has(action.id.toString())) throw new Error("execution reverted: BadPhase()");
+      if (options.prepareFails?.has(action.id.toString())) { advance(raffles[action.id.toString()], action.kind); throw new Error("execution reverted: BadPhase()"); }
+      if (options.prepareReverts?.has(action.id.toString())) throw new Error("execution reverted: InvalidConsumer()");
       return prepared(action, action.id === 1n ? options.prepareWrong : {});
     },
     async balance() { return options.balance ?? parseEther("1"); },
@@ -459,13 +463,7 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
       options.onSend?.();
       sent.push({ id: action.id.toString(), action: action.kind, nonce: at });
       nonce++;
-      const r = raffles[action.id.toString()];
-      if ((options.wait ?? "succeeded") === "succeeded") {
-        if (action.kind === "close") r.phase = 2;
-        if (action.kind === "snapshot") { r.cursor += 100n; if (r.cursor >= r.lots) r.snapshotted = true; }
-        if (action.kind === "requestRandomness") r.phase = 3;
-        if (action.kind === "settle") r.phase = 5;
-      }
+      if ((options.wait ?? "succeeded") === "succeeded") advance(raffles[action.id.toString()], action.kind);
       return { kind: "sent", hash: pad(toHex(sent.length), { size: 32 }) };
     },
     async wait() {
@@ -476,6 +474,12 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
     }
   };
   return { chain, sent, attempts, scanned };
+}
+function advance(r: FakeRaffle, kind: RunnerAction["kind"]) {
+  if (kind === "close") r.phase = 2;
+  if (kind === "snapshot") { r.cursor += 100n; if (r.cursor >= r.lots) r.snapshotted = true; }
+  if (kind === "requestRandomness") r.phase = 3;
+  if (kind === "settle") r.phase = 5;
 }
 function open(lots = 2n): FakeRaffle { return { phase: 1, lots, cursor: 0n, snapshotted: false, revealed: false }; }
 function closed(lots = 2n): FakeRaffle { return { phase: 2, lots, cursor: 0n, snapshotted: false, revealed: false }; }
@@ -696,6 +700,13 @@ describe("draw runner cron handler", () => {
     expect(await store.get("draw-runner:cursor")).toBe("4");
   });
 
+  it("still reports a failed scan read when the run later stops at the send cap", async () => {
+    const { chain, sent } = fakeChain({ 1: open(1_000n), 2: open(), 3: open() }, { scanRead: id => id === 2n ? Promise.reject(new Error("rpc failed")) : undefined });
+    const { body } = await call(chain);
+    expect(sent).toHaveLength(6);
+    expect(body).toMatchObject({ ok: false, status: "interrupted", sends: 6, nextCursor: "1" });
+  });
+
   it("stops reading raffles after the scan time, acts on what it read and resumes at the first unread raffle", async () => {
     vi.useFakeTimers({ now: START });
     const store = new MemoryStore();
@@ -878,6 +889,16 @@ describe("draw runner cron handler", () => {
     expect(body.items[0]).toEqual({ id: "1", action: "close", hash: null, outcome: "skipped", error: null });
     expect(sent.map(item => item.id)).toEqual(["2", "2", "2"]);
     expect(body).toMatchObject({ ok: true, status: "complete", sends: 3 });
+  });
+
+  it("reports a step whose simulation keeps reverting as failed, so the run is not ok, and goes on", async () => {
+    for (let run = 0; run < 2; run++) {
+      const { chain, sent } = fakeChain({ 1: open(), 2: open() }, { prepareReverts: new Set(["1"]) });
+      const { body } = await call(chain);
+      expect(body.items[0]).toEqual({ id: "1", action: "close", hash: null, outcome: "failed", error: null });
+      expect(sent.map(item => item.id)).toEqual(["2", "2", "2"]);
+      expect(body).toMatchObject({ ok: false, status: "complete", sends: 3 });
+    }
   });
 
   it.each([

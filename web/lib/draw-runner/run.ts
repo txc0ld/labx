@@ -106,7 +106,8 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
   let progressed = scan.candidates.length === 0 && scan.readCount > 0;
   // A scan that ran out of time or hit a failed read still hands over the raffles it read; the cursor resumes after them.
   if (scan.stop) report.status = scan.stop;
-  const stop = (status: RunStatus, id: bigint) => { report.status = status; nextCursor = id; };
+  // A failed scan read stays in the report even when the run later stops for another reason.
+  const stop = (status: RunStatus, id: bigint) => { if (HEALTHY.has(report.status)) report.status = status; nextCursor = id; };
   raffles: for (const id of scan.candidates) {
     const record = (action: RunnerAction, hash: Hex | null, outcome: RunOutcome, error: RunItem["error"]) => {
       progressed = true;
@@ -124,7 +125,9 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         } catch (error) {
           // The step no longer applies, or it could not be checked. A revert carries no label.
           const category = errorCategory(error);
-          record(action, null, "skipped", category === "Other" ? null : category);
+          // When a fresh read still calls for the same step, the revert will repeat every run, so the report is not ok.
+          const repeats = nextRunnerAction(await bounded(chain.read(id)), chain.runner)?.kind === action.kind;
+          record(action, null, repeats ? "failed" : "skipped", category === "Other" ? null : category);
           break;
         }
         try {
