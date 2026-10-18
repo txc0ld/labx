@@ -5,13 +5,14 @@ import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { useActionTrust } from "../workflow/useActionTrust";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { isHex, zeroAddress, zeroHash, type Address, type Hex } from "viem";
+import { formatEther, isHex, zeroAddress, zeroHash, type Address, type Hex } from "viem";
 import { useBench } from "@/lib/bench";
 import { parseOwnerExecutionIntent, serializeOwnerExecutionIntent } from "@/lib/chain/owner-execution";
 import type { OwnerExecutionDiscoveryCursor } from "@/lib/chain/owner-execution-discovery";
 import { safeTransactionFile } from "@/lib/chain/safe-transaction";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
-import type { AdmissionReview, BlockRef, OwnerAction, OwnerExecutionConfirmation, OwnerExecutionIntent, RaffleSnapshot, WalletSnapshot } from "@/lib/chain/types";
+import type { AdmissionReview, BlockRef, OwnerAction, OwnerExecutionConfirmation, OwnerExecutionIntent, RafflePolicy, RaffleSnapshot, WalletSnapshot } from "@/lib/chain/types";
+import type { DrawFunding } from "@/lib/chain/vrf-funding";
 import { sameAddress } from "@/lib/chain/validation";
 import { formatDate, formatUsdc, shortAddress } from "@/components/workflow/format";
 import { useWalletSnapshot, WalletGate } from "@/components/workflow/WalletGate";
@@ -57,6 +58,46 @@ const EMPTY_REVIEW_ATTESTATIONS: ReviewAttestationState = { ...EMPTY_ATTESTATION
 
 export function changeReviewAttestation(current: ReviewAttestationState, reviewHash: Hex | null, key: keyof Attestations, value: boolean): ReviewAttestationState {
   return { ...(current.attestedDigest === reviewHash ? current : EMPTY_REVIEW_ATTESTATIONS), attestedDigest: reviewHash, [key]: value };
+}
+
+/**
+ * Reads the admission until its block is at least `minBlock`. A load-balanced RPC can answer "latest" from a node a block
+ * behind the approval that was just confirmed, which left the header on "Pending review" (Sepolia raffle 3).
+ */
+export async function readAdmissionFrom(service: Pick<RaffleService, "readAdmission">, id: bigint, minBlock?: bigint, wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms)), attempts = 5): Promise<AdmissionReview> {
+  for (let attempt = 1; ; attempt++) {
+    const review = await service.readAdmission({ id });
+    if (minBlock === undefined || review.snapshot.block.number >= minBlock || attempt >= attempts) return review;
+    await wait(2_000);
+  }
+}
+
+/** Rounds wei to three decimals of ETH, up when `up`, so a required amount is never shown below what Chainlink needs. */
+function ether(value: bigint, up = false) {
+  const step = 10n ** 15n;
+  const rounded = up ? (value + step - 1n) / step * step : value / step * step;
+  return formatEther(rounded);
+}
+
+export function drawFundingMessage(funding: DrawFunding | "loading" | "error"): { tone: "info" | "warning"; text: string } {
+  if (funding === "loading") return { tone: "info", text: "Checking the draw funding…" };
+  if (funding === "error") return { tone: "warning", text: "The draw funding couldn’t be read. Check the VRF subscription in Chainlink’s app before approving." };
+  if (!funding.consumer) return { tone: "warning", text: "This raffle contract isn’t on the VRF subscription, so its draw request would fail. Add it as a consumer before approving." };
+  if (funding.required === null) return { tone: "info", text: "This raffle pays for its draw in LINK. Check the subscription’s LINK balance in Chainlink’s app." };
+  if (funding.nativeBalance < funding.required) return { tone: "warning", text: `Draw funding is short. The VRF subscription holds ${ether(funding.nativeBalance)} ETH, and Chainlink answers this raffle’s draw only once it holds at least ${ether(funding.required, true)} ETH. Top it up before sales end.` };
+  return { tone: "info", text: `Draw funding: the VRF subscription holds ${ether(funding.nativeBalance)} ETH. This raffle’s draw needs at least ${ether(funding.required, true)} ETH.` };
+}
+
+function DrawFundingNotice({ service, policy, block }: { service: RaffleService; policy: RafflePolicy; block: BlockRef }) {
+  const [funding, setFunding] = useState<DrawFunding | "loading" | "error">("loading");
+  useEffect(() => {
+    let live = true;
+    setFunding("loading");
+    service.drawFunding({ policy, block }).then(value => { if (live) setFunding(value); }, () => { if (live) setFunding("error"); });
+    return () => { live = false; };
+  }, [service, policy, block]);
+  const message = drawFundingMessage(funding);
+  return <p className={message.tone === "warning" ? "notice warning" : "notice"} role="status">{message.text}</p>;
 }
 
 export function admissionLabel(snapshot: RaffleSnapshot) {
@@ -264,7 +305,7 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
     request.current += 1;
   }
 
-  async function load(showLoading = true) {
+  async function load(showLoading = true, minBlock?: bigint) {
     const scope = loadScope.current;
     if (!scope.mounted || scope.browser !== browser || scope.id !== id || id === null) return;
     if (browser.kind !== "configured") {
@@ -277,7 +318,7 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
       const deployment = await browser.service.attest();
       if (loadScope.current !== scope || !scope.mounted || version !== request.current) return;
       if (deployment.kind !== "verified") throw new Error(deployment.reason);
-      const review = await browser.service.readAdmission({ id });
+      const review = await readAdmissionFrom(browser.service, id, minBlock);
       if (loadScope.current === scope && scope.mounted && version === request.current) setState({ kind: "ready", review });
     } catch (error) {
       if (loadScope.current === scope && scope.mounted && version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "The review record could not be loaded." });
@@ -307,7 +348,7 @@ function OwnerReviewDetail({ browser, rawId }: { browser: BrowserService; rawId:
   }
   if (state.review.snapshot.raffle.phase !== 0 || state.review.snapshot.admission.reviewHash === null) return <section className="section stack missing-state"><h1 className="page-title">This raffle is no longer a draft.</h1><p>Owner approval and revocation are available only while the raffle remains in Draft.</p><Link className="btn btn-dark" href={`/piece/${state.review.snapshot.id.toString()}`}>View public raffle</Link></section>;
 
-  return <OwnerReviewRecord service={browser.service} wallet={browser.wallet} review={state.review} onRefresh={() => load(false)} />;
+  return <OwnerReviewRecord service={browser.service} wallet={browser.wallet} review={state.review} onRefresh={minBlock => load(false, minBlock)} />;
 }
 
 function AddressFact({ chainId, value, children }: { chainId: number; value: Address; children?: React.ReactNode }) {
@@ -315,7 +356,7 @@ function AddressFact({ chainId, value, children }: { chainId: number; value: Add
   return href ? <a href={href} target="_blank" rel="noreferrer">{children ?? value} <span aria-hidden="true">↗</span></a> : <>{children ?? value}</>;
 }
 
-function OwnerReviewRecord({ service, wallet, review, onRefresh }: { service: RaffleService; wallet: WalletSessionPort; review: AdmissionReview; onRefresh: () => Promise<void> }) {
+function OwnerReviewRecord({ service, wallet, review, onRefresh }: { service: RaffleService; wallet: WalletSessionPort; review: AdmissionReview; onRefresh: (minBlock?: bigint) => Promise<void> }) {
   const { snapshot, policy } = review;
   const admission = snapshot.admission;
   if (admission.reviewHash === null) return null;
@@ -374,6 +415,7 @@ function OwnerReviewRecord({ service, wallet, review, onRefresh }: { service: Ra
         </dl>
       </details>
 
+      <DrawFundingNotice service={service} policy={policy} block={snapshot.block} />
       <OwnerExecutionFlow service={service} wallet={wallet} review={review} onRecorded={onRefresh} />
     </section>
   );
@@ -424,7 +466,7 @@ function DiscoveryStatus({ state, busy, onRetry }: { state: DiscoveryState; busy
   </div>;
 }
 
-function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: RaffleService; wallet: WalletSessionPort; review: AdmissionReview; onRecorded: () => Promise<void> }) {
+function OwnerExecutionFlow({ service, wallet, review, onRecorded }: { service: RaffleService; wallet: WalletSessionPort; review: AdmissionReview; onRecorded: (minBlock?: bigint) => Promise<void> }) {
   const currentWallet = useWalletSnapshot(wallet);
   const identity = useRef({ service, wallet, epoch: 0 });
   if (identity.current.service !== service || identity.current.wallet !== wallet) {
@@ -442,7 +484,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
   wallet: WalletSessionPort;
   currentWallet: WalletSnapshot;
   review: AdmissionReview;
-  onRecorded: () => Promise<void>;
+  onRecorded: (minBlock?: bigint) => Promise<void>;
 }) {
   const trustReason = useActionTrust(service, review.snapshot);
   const admission = review.snapshot.admission;
@@ -619,7 +661,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
           setHashInput(confirmation.hash);
           discoveryOperation.current = null;
           setState({ kind: "executed", confirmation });
-          await onRecorded();
+          await onRecorded(confirmation.blockNumber);
           return;
         } catch (error) {
           candidateError = error instanceof Error ? error.message : "A discovered execution could not be verified.";
@@ -815,7 +857,7 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         setDiscoveryBusy(false);
         setState({ kind: "executed", confirmation });
         if (!isCurrent(operation)) return;
-        await onRecorded();
+        await onRecorded(confirmation.blockNumber);
       }
     } catch (error) {
       if (isCurrent(operation)) {

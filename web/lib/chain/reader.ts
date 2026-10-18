@@ -5,7 +5,8 @@ import { buyerFee } from "./fees";
 import { requirePublishedTerms } from "../published-terms";
 import { raffleAbi } from "./abi";
 import { attestDeployment, blockRef } from "./deployment";
-import type { ActionTrustInput, AccountRaffleState, AdmissionReview, AdmissionStatus, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RaffleSnapshot } from "./types";
+import type { ActionTrustInput, AccountRaffleState, AdmissionReview, AdmissionStatus, BlockRef, DeploymentManifest, HistoryItem, MembershipQuote, Page, Raffle, RafflePolicy, RaffleSnapshot } from "./types";
+import { readDrawFunding } from "./vrf-funding";
 import { CATALOG_PAGE_LIMIT } from "./types";
 import { boundedNumber, positiveId, sameAddress } from "./validation";
 
@@ -187,6 +188,11 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     }
     throw new Error("The draw confirmation was not found.");
   }
+  /** The VRF subscription's native balance against what Chainlink needs before it answers a draw under `policy`. */
+  async function drawFunding({ policy, block }: { policy: RafflePolicy; block?: BlockRef }) {
+    const at = await checkedBlock(block);
+    return readDrawFunding(client, policy, manifest.address, at.number);
+  }
   async function openingPolicy({ block }: { block?: BlockRef } = {}) {
     const at = await checkedBlock(block); const base = { address: manifest.address, abi: raffleAbi, blockNumber: at.number };
     const [coordinator, treasury, termsHash, keyHash, subscriptionId, callbackGasLimit, requestConfirmations, nativePayment, buyerFeeBps, sellerFeeBps, minBuyerFeeUsdc, hash] = await Promise.all([
@@ -264,5 +270,5 @@ export function createReader(client: PublicClient, manifest: DeploymentManifest)
     await checkedBlock(snapshot.block);
     return { ...basic, eth };
   }
-  return { checkedBlock, assertActionTrust, readOwner, readNftOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, readRevealTime, openingPolicy, quoteMembership };
+  return { checkedBlock, assertActionTrust, readOwner, readNftOwner, readAdmission, listOwnerQueue, readRaffle, readArtwork, listRaffles, readAccount, listLots, history, readRevealTime, drawFunding, openingPolicy, quoteMembership };
 }
