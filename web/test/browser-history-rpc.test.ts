@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createPublicClient, decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionResult, keccak256, numberToHex, toBytes, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { browserReadTransport } from "../lib/chain/history-rpc";
+import { NETWORKS } from "../lib/chain/networks";
 import { createReader } from "../lib/chain/reader";
 import { createSellerReader } from "../lib/chain/seller-reader";
 import type { BlockRef, DeploymentManifest, RaffleSnapshot } from "../lib/chain/types";
@@ -105,8 +106,10 @@ afterAll(async () => { for (const server of [configured, archive, down] as Serve
 beforeEach(() => { calls.length = 0; archiveAnswer = logs => logs; });
 
 const manifest: DeploymentManifest = { ...fixtureTrust, chainId: 11155111, address: LABX, runtimeCodeHash: keccak256(CODE), version: 3, deploymentBlock: DEPLOYMENT, usdc: USDC };
+/** Sepolia's full-history facts with the RPC replaced by a stub node. */
+const sepoliaHistory = (rpc: string) => ({ rpc, refusal: NETWORKS[11155111].history!.refusal });
 /** The browser's public client, as browser.ts builds it, over the stub nodes. */
-const client = (history: "archive" | "down" | null) => createPublicClient({ transport: browserReadTransport(urls.configured, history && urls[history]) });
+const client = (history: "archive" | "down" | null) => createPublicClient({ transport: browserReadTransport(urls.configured, history && sepoliaHistory(urls[history])) });
 const reader = (history: "archive" | "down" | null) => createReader(client(history), manifest);
 /** Sales and payouts over the stub nodes, for a raffle created at `created` (the deployment block by default). */
 const sellerActivity = (history: "archive" | "down" | null, created = DEPLOYMENT) => createSellerReader(client(history), manifest, {
@@ -219,7 +222,7 @@ describe("checking a dense page of old logs", () => {
     await new Promise<void>(resolve => dense.listen(0, "127.0.0.1", resolve));
     archiveAnswer = () => Array.from({ length: blocks }, (_, index) => purchase(OLD + BigInt(index))).flatMap(log => [log, { ...log, logIndex: "0x1" }]);
     try {
-      const page = createPublicClient({ transport: browserReadTransport(`http://127.0.0.1:${(dense.address() as AddressInfo).port}`, urls.archive) })
+      const page = createPublicClient({ transport: browserReadTransport(`http://127.0.0.1:${(dense.address() as AddressInfo).port}`, sepoliaHistory(urls.archive)) })
         .request({ method: "eth_getLogs", params: [{ address: LABX, fromBlock: numberToHex(OLD), toBlock: numberToHex(OLD + 1_999n) }] });
       const logs = await page.catch((error: Error) => error);
       // Header reads still running after the page settles would show up here.

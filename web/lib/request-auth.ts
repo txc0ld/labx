@@ -1,14 +1,15 @@
 import { isAddress, isHex, verifyMessage, type Address, type Hex } from "viem";
 import { publicSiteUrl } from "./operator";
+import { publicChainId, type SupportedChainId } from "./chain/networks";
 
-export type RequestContext = { origin: string; chainId: 11155111 | 31337; contract: Address };
+export type RequestContext = { origin: string; chainId: SupportedChainId; contract: Address };
 
 export function requestContext(env = process.env): RequestContext {
-  const contract = env.NEXT_PUBLIC_RAFFLE_ADDRESS;
-  if (env.NEXT_PUBLIC_CHAIN_ID !== "11155111" || !contract || !isAddress(contract)) {
-    throw new Error("Sepolia request authorization is not configured.");
+  const contract = env.NEXT_PUBLIC_RAFFLE_ADDRESS, chainId = publicChainId(env.NEXT_PUBLIC_CHAIN_ID);
+  if (!chainId || !contract || !isAddress(contract)) {
+    throw new Error("Request authorization is not configured.");
   }
-  return { origin: new URL(publicSiteUrl()).origin, chainId: 11155111, contract: contract.toLowerCase() as Address };
+  return { origin: new URL(publicSiteUrl()).origin, chainId, contract: contract.toLowerCase() as Address };
 }
 
 export function authorizationMessage(operation: string, context: RequestContext, fields: Record<string, unknown>): string {

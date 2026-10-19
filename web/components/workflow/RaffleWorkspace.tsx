@@ -9,6 +9,7 @@ import { decodeFunctionData, formatEther, zeroAddress, type Hex } from "viem";
 import { raffleAbi } from "@/lib/chain/abi";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import { FEE_DENOMINATOR, sellerAccounting } from "@/lib/chain/fees";
+import { chainName, explorerAddress, explorerToken } from "@/lib/chain/networks";
 import type { ActionAvailability, AccountRaffleState, Confirmation, MembershipQuote, RaffleSnapshot, SubmittedAction, WorkflowAction } from "@/lib/chain/types";
 import { cancelGuidance, cancelReclaimsPrize, drawBlocker, purchasesToCount, RECLAIM_GUIDANCE, runnerLateTimes, sellerNextStep, sellerOwnsRaffle, sellerPortalActions, sellerSecondaryActions, sellerStepText, type SellerActionAvailability, type SellerActionKind } from "@/lib/chain/seller-actions";
 import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
@@ -48,14 +49,6 @@ function formatBps(bps: number) {
 
 function plural(count: bigint | number, one: string, many: string) {
   return `${count.toString()} ${count.toString() === "1" ? one : many}`;
-}
-
-function explorerAddress(chainId: number, value: string) {
-  return chainId === 11155111 ? `https://sepolia.etherscan.io/address/${value}` : null;
-}
-
-function explorerToken(chainId: number, value: string, tokenId: bigint) {
-  return chainId === 11155111 ? `https://sepolia.etherscan.io/token/${value}?a=${tokenId.toString()}` : null;
 }
 
 function admissionCopy(snapshot: RaffleSnapshot) {
@@ -330,7 +323,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
             <div><dt>LABx review</dt><dd>{admissionCopy(snapshot)}. This records review of the exact prize and draw-funding use; it is not proof of authenticity or future transferability.</dd></div>
             <div><dt>Processing fee</dt><dd>{formatBps(snapshot.policy.buyerFeeBps)} or {formatUsdcAmount(snapshot.policy.minBuyerFeeUsdc)} USDC per purchase, whichever is more. Not refunded, including on cancellation.</dd></div>
             <div><dt>Seller fee</dt><dd>{formatBps(snapshot.policy.sellerFeeBps)} of sales, charged only when the raffle finishes</dd></div>
-            <div><dt>Network</dt><dd>{chainId === 11155111 ? "Ethereum Sepolia" : "Isolated local chain"} ({chainId})</dd></div>
+            <div><dt>Network</dt><dd>{chainName(chainId)} ({chainId})</dd></div>
             <div><dt>Raffle contract</dt><dd className="hash">{explorerAddress(chainId, browser.service.manifest.address) ? <a href={explorerAddress(chainId, browser.service.manifest.address) ?? undefined} target="_blank" rel="noreferrer">{browser.service.manifest.address} ↗</a> : browser.service.manifest.address}</dd></div>
             <div><dt>Collection contract</dt><dd className="hash">{explorerAddress(chainId, r.nft) ? <a href={explorerAddress(chainId, r.nft) ?? undefined} target="_blank" rel="noreferrer">{r.nft} ↗</a> : r.nft}</dd></div>
             <div><dt>Token</dt><dd>{explorerToken(chainId, r.nft, r.tokenId) ? <a href={explorerToken(chainId, r.nft, r.tokenId) ?? undefined} target="_blank" rel="noreferrer">#{r.tokenId.toString()} on explorer ↗</a> : `#${r.tokenId.toString()}`}</dd></div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { configuredChainId, NETWORKS } from "@/lib/chain/networks";
 import type { WalletSessionPort } from "@/lib/chain/ports";
 import type { ConnectionStatus, WalletConnector } from "@/lib/chain/wallet-connectors";
 
@@ -65,7 +66,7 @@ export function WalletConnectionControls({ wallet }: { wallet: WalletSessionPort
           else wallet.disconnect();
         }}>Cancel connection</button> : null}
       </div>
-      {status.kind === "pending" ? <p role="status">Choose an installed wallet or scan the QR code, then approve Ethereum Sepolia in that wallet.</p> : null}
+      {status.kind === "pending" ? <p role="status">Choose an installed wallet or scan the QR code, then approve {NETWORKS[configuredChainId()].name} in that wallet.</p> : null}
       {snapshot.kind === "disconnected" ? options.filter(option => option.unavailable).map(option => <p className="muted" key={option.connector}>{option.unavailable}</p>) : null}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </div>

@@ -10,11 +10,12 @@ import { ownerExecutionDiscoverer } from "./owner-execution-discovery";
 import { isWalletRequestRejected } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { hash, sameAddress } from "./validation";
+import { chainName } from "./networks";
 import type { RaffleService, WalletSessionPort } from "./ports";
 import type { DraftInput, BlockRef, CanonicalReceipt, OutcomeLineage, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
 function connected(wallet: WalletSessionPort, chainId: number) {
   const session = wallet.getSnapshot();
-  if (session.kind !== "connected" || session.chainId !== chainId) throw new Error("Connect the approved test network before continuing.");
+  if (session.kind !== "connected" || session.chainId !== chainId) throw new Error(`Connect your wallet to ${chainName(chainId)} before continuing.`);
   return session;
 }
 function sameTransaction(a: { to: Address; data: Hex; value: bigint }, b: { to: Address; data: Hex; value: bigint }) {

@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     return json({ ok: true, ...result });
   } catch (error) {
     // Do not expose RPC/provider URLs, headers or upstream error bodies.
-    const safe = error instanceof Error && /^(A valid|A purchase|A finalized|Receipt |Sepolia request|Persistent Redis|Store )/.test(error.message);
+    const safe = error instanceof Error && /^(A valid|A purchase|A finalized|Receipt |Request authorization|Persistent Redis|Store )/.test(error.message);
     return fail(new Error(safe ? (error as Error).message : "Receipt request could not be completed."));
   }
 }

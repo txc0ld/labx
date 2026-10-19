@@ -7,6 +7,7 @@ import {
   type Hex
 } from "viem";
 import { isPrunedHistoryError } from "../chain/history-rpc";
+import { NETWORKS, type FullHistory } from "../chain/networks";
 import { serverWorkflow } from "../chain/server";
 import type { BlockRef, DeploymentManifest } from "../chain/types";
 import { sameAddress } from "../chain/validation";
@@ -139,7 +140,7 @@ export async function readFinalizedEvents(args: {
     throw new Error("Notification range is not finalized.");
   }
 
-  const rawLogs = await fetchLogs(workflow.client, workflow.manifest.address, args.fromBlock, args.toBlock, budget);
+  const rawLogs = await fetchLogs(workflow.client, workflow.manifest.address, args.fromBlock, args.toBlock, budget, NETWORKS[workflow.manifest.chainId].history);
   if (rawLogs.length > MAX_LOGS_PER_RANGE) {
     if (args.fromBlock !== args.toBlock) throw new NotificationRangeTooDenseError();
   }
@@ -244,7 +245,8 @@ async function fetchLogs(
   address: Address,
   fromBlock: bigint,
   toBlock: bigint,
-  budget: NotificationReadBudget
+  budget: NotificationReadBudget,
+  history: FullHistory | null
 ): Promise<readonly unknown[]> {
   const args = { address, events: notificationAbi, fromBlock, toBlock, strict: false } as const;
   try {
@@ -252,7 +254,7 @@ async function fetchLogs(
       return await rpcRead(budget, () => client.getLogs(args));
     } catch (error) {
       // Only pruned history goes to the full-history RPC, as one more read inside the same budget and deadline.
-      if (!client.getHistoryLogs || !isPrunedHistoryError(error)) throw error;
+      if (!client.getHistoryLogs || !isPrunedHistoryError(error, history)) throw error;
       return await rpcRead(budget, () => client.getHistoryLogs!(args));
     }
   } catch (error) {

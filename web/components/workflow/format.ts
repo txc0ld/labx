@@ -1,5 +1,6 @@
 import { PUBLISHED_TERMS_HASH } from "@/lib/published-terms";
 import { buyerFee } from "@/lib/chain/fees";
+import { isSupportedChainId, NETWORKS } from "@/lib/chain/networks";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 
 const USDC_DECIMALS = 6n;
@@ -65,7 +66,7 @@ export function formatLocalDate(timestamp: bigint, short = false) {
 }
 
 export function networkName(chainId: number) {
-  return chainId === 11155111 ? "Ethereum Sepolia" : "the local test network";
+  return isSupportedChainId(chainId) && chainId !== 31337 ? NETWORKS[chainId].name : "the local test network";
 }
 
 export const PHASE_LABELS = ["Draft", "Open", "Closed", "Drawing", "Drawn", "Complete", "Cancelled"] as const;

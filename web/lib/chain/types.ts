@@ -1,5 +1,6 @@
 import type { Address, Hex, ContractFunctionReturnType } from "viem";
 import type { raffleAbi } from "./abi";
+import type { SupportedChainId } from "./networks";
 
 export type Raffle = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffle">;
 export type RaffleAccounting = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffleAccounting">;
@@ -30,7 +31,7 @@ export type RafflePolicy = ContractFunctionReturnType<typeof raffleAbi, "view", 
 export type Lot = ContractFunctionReturnType<typeof raffleAbi, "view", "lotAt">;
 export type BlockRef = { number: bigint; hash: Hex; timestamp: bigint };
 export type DeploymentManifest = {
-  chainId: 11155111 | 31337;
+  chainId: SupportedChainId;
   address: Address;
   runtimeCodeHash: Hex;
   version: 3;

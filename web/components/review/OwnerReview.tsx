@@ -9,6 +9,7 @@ import { formatEther, isHex, zeroAddress, zeroHash, type Address, type Hex } fro
 import { useBench } from "@/lib/bench";
 import { parseOwnerExecutionIntent, serializeOwnerExecutionIntent } from "@/lib/chain/owner-execution";
 import type { OwnerExecutionDiscoveryCursor } from "@/lib/chain/owner-execution-discovery";
+import { chainName, explorerAddress, explorerToken, safeQueue } from "@/lib/chain/networks";
 import { safeTransactionFile } from "@/lib/chain/safe-transaction";
 import type { BrowserService, RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { AdmissionReview, BlockRef, OwnerAction, OwnerExecutionConfirmation, OwnerExecutionIntent, RafflePolicy, RaffleSnapshot, WalletSnapshot } from "@/lib/chain/types";
@@ -137,22 +138,6 @@ export async function loadOwnerQueuePage({ service, account, cursor, block }: {
   const identity = await service.readOwner({ block });
   if (!sameAddress(identity.owner, account)) throw new Error("This route is available only to the current on-chain raffle owner.");
   return service.listOwnerQueue({ cursor, limit: 24, block: identity.block });
-}
-
-function chainName(chainId: number) {
-  return chainId === 11155111 ? "Ethereum Sepolia" : chainId === 31337 ? "Isolated local chain" : `Chain ${chainId}`;
-}
-
-function explorerAddress(chainId: number, address: Address) {
-  return chainId === 11155111 ? `https://sepolia.etherscan.io/address/${address}` : null;
-}
-
-function explorerToken(chainId: number, address: Address, tokenId: bigint) {
-  return chainId === 11155111 ? `https://sepolia.etherscan.io/token/${address}?a=${tokenId.toString()}` : null;
-}
-
-function safeQueue(chainId: number, owner: Address) {
-  return chainId === 11155111 ? `https://app.safe.global/transactions/queue?safe=sep:${owner}` : null;
 }
 
 function SafeConnectionHelp({ service, wallet, snapshot, owner, headingLevel = "h1" }: {

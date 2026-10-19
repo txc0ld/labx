@@ -2,13 +2,14 @@
 
 import { getAddress, isAddress, type Address } from "viem";
 import { safeArtworkUrl } from "./chain/metadata";
+import { configuredChainId } from "./chain/networks";
 import { MAX_RESPONSE_BYTES, boundedWalletNftText, isValidWalletNftCursor, nftTitle, normalizeTokenId, objectRecord, type WalletNft, type WalletNftPage } from "./wallet-nfts-shared";
 
 export { canApplyWalletNftSelection, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft, type WalletNftPage } from "./wallet-nfts-shared";
 
 function parseClientPage(value: unknown): WalletNftPage {
-  const root = objectRecord(value);
-  if (!root || root.ok !== true || root.chainId !== 11155111 || !Array.isArray(root.items)) throw new Error(typeof root?.error === "string" ? root.error : "Wallet NFT inventory returned an invalid response.");
+  const root = objectRecord(value), chainId = configuredChainId();
+  if (!root || root.ok !== true || root.chainId !== chainId || !Array.isArray(root.items)) throw new Error(typeof root?.error === "string" ? root.error : "Wallet NFT inventory returned an invalid response.");
   const items: WalletNft[] = root.items.map(raw => {
     const item = objectRecord(raw);
     if (!item || typeof item.contract !== "string" || !isAddress(item.contract) || /^0x0{40}$/i.test(item.contract)) throw new Error("Wallet NFT inventory returned an invalid response.");
@@ -19,7 +20,7 @@ function parseClientPage(value: unknown): WalletNftPage {
     return { contract: getAddress(item.contract), tokenId, name: boundedWalletNftText(item.name, 160), collection: boundedWalletNftText(item.collection, 160), image };
   });
   if (items.length > 24 || root.nextCursor !== null && !isValidWalletNftCursor(root.nextCursor)) throw new Error("Wallet NFT inventory returned an invalid response.");
-  return { items, nextCursor: root.nextCursor, chainId: 11155111 };
+  return { items, nextCursor: root.nextCursor, chainId };
 }
 
 export async function fetchWalletNfts(input: { owner: Address; cursor?: string; signal: AbortSignal }): Promise<WalletNftPage> {

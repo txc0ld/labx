@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useSyncExternalStore, useState } from "react";
 import { formatEther, isHex, type Address, type Hex } from "viem";
+import { chainName } from "@/lib/chain/networks";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { Confirmation, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "@/lib/chain/types";
 import { useSavedHashCheck, useTransactionOutcomes } from "./useTransactionOutcomes";
@@ -70,10 +71,6 @@ function shortAddress(value: string) {
   return `${value.slice(0, 6)}…${value.slice(-4)}`;
 }
 
-function networkName(chainId: number) {
-  return chainId === 11155111 ? "Ethereum Sepolia" : chainId === 31337 ? "Isolated local chain" : `Chain ${chainId}`;
-}
-
 function stableValue(value: unknown): string {
   if (typeof value === "bigint") return `bigint:${value.toString()}`;
   if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
@@ -112,7 +109,7 @@ function reviewRows(prepared: PreparedAction, raffle: Address, formatUsdc: Amoun
     : sameAddress(value, prepared.account) ? `Your wallet ${shortAddress(value)}` : shortAddress(value);
   const amount = `${formatUsdc(prepared.amountUsdc)} USDC`;
   const kind = prepared.action.kind;
-  const rows: [string, string][] = [["Wallet", shortAddress(prepared.account)], ["Network", networkName(prepared.chainId)]];
+  const rows: [string, string][] = [["Wallet", shortAddress(prepared.account)], ["Network", chainName(prepared.chainId)]];
   if (kind === "approveUsdc") rows.push(["Approval", `Lets ${party(prepared.recipient)} take up to ${amount}`]);
   else if (kind === "approvePrize") rows.push(["Approval", `Lets ${party(prepared.recipient)} take this NFT`]);
   else {
