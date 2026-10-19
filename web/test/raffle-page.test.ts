@@ -87,7 +87,7 @@ async function buyerBrowser(saved?: "confirmed" | "unknown") {
 function renderBuyer(browser: Awaited<ReturnType<typeof buyerBrowser>>["browser"], value: RaffleSnapshot, account: AccountRaffleState | null) {
   return renderToStaticMarkup(createElement(BuyerActions, {
     browser, snapshot: value, account, availability: availableActions(value, account), termsHash: PUBLISHED_TERMS_HASH,
-    onConfirmed: async () => {}, writesEnabled: true, updating: false
+    onConfirmed: async () => {}, reloadFailed: false, writesEnabled: true, updating: false
   }));
 }
 

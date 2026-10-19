@@ -11,6 +11,8 @@ export type Network = {
   name: string;
   /** Short name for copy, as in "Recorded on Sepolia". */
   shortName: string;
+  /** The coin that pays network fees, as in "Your wallet needs about 0.0004 Sepolia ETH for the network fee." */
+  currency: string;
   explorer: string | null;
   /** Network prefix in Safe app links, as in "safe=sep:0x…". */
   safePrefix: string | null;
@@ -27,6 +29,7 @@ export const NETWORKS: Readonly<Record<SupportedChainId, Network>> = {
   1: {
     name: "Ethereum",
     shortName: "Ethereum",
+    currency: "ETH",
     explorer: "https://etherscan.io",
     safePrefix: "eth",
     rpc: "https://ethereum-rpc.publicnode.com",
@@ -38,6 +41,7 @@ export const NETWORKS: Readonly<Record<SupportedChainId, Network>> = {
   11155111: {
     name: "Ethereum Sepolia",
     shortName: "Sepolia",
+    currency: "Sepolia ETH",
     explorer: "https://sepolia.etherscan.io",
     safePrefix: "sep",
     rpc: "https://ethereum-sepolia-rpc.publicnode.com",
@@ -49,6 +53,7 @@ export const NETWORKS: Readonly<Record<SupportedChainId, Network>> = {
   31337: {
     name: "Isolated local chain",
     shortName: "the local chain",
+    currency: "ETH",
     explorer: null,
     safePrefix: null,
     rpc: "http://127.0.0.1:8545",
@@ -83,6 +88,11 @@ export function configuredChainId(): PublicChainId {
   const chainId = publicChainId(value);
   if (chainId === null) throw new Error("NEXT_PUBLIC_CHAIN_ID must be 1 (Ethereum) or 11155111 (Sepolia).");
   return chainId;
+}
+
+/** The coin that pays network fees on a chain, "ETH" when LABx does not support it. */
+export function feeCurrency(chainId: number): string {
+  return isSupportedChainId(chainId) ? NETWORKS[chainId].currency : "ETH";
 }
 
 /** The display name of a chain, or its number when LABx does not support it. */

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { Address, Hex } from "viem";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
+import type { OutcomeJournal, PendingSettlement } from "@/lib/chain/types";
 import { transactionIntent } from "@/lib/chain/pending-journal";
 import { transactionOutcomes, type TransactionOutcome, type TransactionOutcomes } from "@/lib/chain/transaction-outcomes";
 import { useWalletSnapshot } from "./WalletGate";
@@ -159,4 +160,112 @@ export function useSavedHashCheck(service: RaffleService, wallet: WalletSessionP
   }, [entry, owner, service, wallet, account, hash]);
   if (!status || !account || !hash) return null;
   return status === "checking" && ownCheckFailed(owner.getSnapshot(account), hash) ? "attention" : status;
+}
+
+/**
+ * For a pending record without a hash: "checking" until the first chain read, then "waiting" (something is pending that
+ * may be the send) or "unsent" (nothing is at its nonce), and "unknown" after two failed reads in a row. "spent" and
+ * "settled" are final: the record was cleared, after a send at its nonce was mined for "spent", or it changed.
+ */
+export type PendingSendStatus = "checking" | "waiting" | "unsent" | "unknown" | "spent" | "settled";
+export const PENDING_SEND_POLL_MS = 4_000;
+
+/**
+ * Settles a pending record without a hash from the chain: once now, then while the page is visible. It only reads and
+ * clears that exact record through service.settlePending; it never prepares, signs, sends, connects or switches networks.
+ * continueUnsent is the person's Continue: it also clears the record when nothing is at its nonce.
+ */
+export function startPendingSendCheck({ service, wallet, expected, onStatus, visibility = documentVisibility, intervalMs = PENDING_SEND_POLL_MS }: {
+  service: Pick<RaffleService, "settlePending">;
+  wallet: WalletSessionPort;
+  expected: OutcomeJournal;
+  onStatus(status: PendingSendStatus): void;
+  visibility?: PageVisibility;
+  intervalMs?: number;
+}) {
+  let running: Promise<void> | null = null, stopped = false, failures = 0, last: PendingSendStatus | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const report = (status: PendingSendStatus) => { if (status !== last) { last = status; onStatus(status); } };
+  function apply(result: PendingSettlement) {
+    failures = 0;
+    if (result.kind === "waiting" || result.kind === "unsent") { report(result.kind); return; }
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    report(result.kind === "spent" ? "spent" : "settled");
+  }
+  function read(continueUnsent: boolean) {
+    const work = (async () => {
+      try {
+        const result = await service.settlePending({ wallet, expected, continueUnsent });
+        if (!stopped) apply(result);
+      } catch {
+        if (!stopped && ++failures >= 2) report("unknown");
+      }
+    })();
+    running = work;
+    void work.finally(() => { if (running === work) running = null; });
+    return work;
+  }
+  async function tick(always = false) {
+    timer = undefined;
+    if (stopped || running) return;
+    if (!always && !visibility.visible()) return;
+    await read(false);
+    if (!stopped && !timer && visibility.visible()) timer = setTimeout(() => void tick(), intervalMs);
+  }
+  const stopListening = visibility.onVisible(() => { if (!stopped && !running && !timer) void tick(); });
+  void tick(true);
+  return {
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      stopListening();
+    },
+    async continueUnsent() {
+      while (running) await running;
+      if (!stopped) await read(true);
+    }
+  };
+}
+
+type SendEntry = { status: PendingSendStatus; users: number; listeners: Set<() => void>; check: ReturnType<typeof startPendingSendCheck> | null };
+const pendingSendChecks = new WeakMap<TransactionOutcomes, Map<string, SendEntry>>();
+function sendEntry(owner: TransactionOutcomes, key: string) {
+  let entries = pendingSendChecks.get(owner);
+  if (!entries) { entries = new Map(); pendingSendChecks.set(owner, entries); }
+  let entry = entries.get(key);
+  if (!entry) { entry = { status: "checking", users: 0, listeners: new Set(), check: null }; entries.set(key, entry); }
+  return entry;
+}
+
+/** Shares one chain check per wallet session and pending record without a hash across every component that shows it. */
+export function usePendingSend(service: RaffleService, wallet: WalletSessionPort, pending: Pick<OutcomeJournal, "id" | "hash" | "nonce"> | null) {
+  const snapshot = useWalletSnapshot(wallet);
+  const owner = transactionOutcomes(service);
+  const account = snapshot.kind === "connected" && snapshot.chainId === service.manifest.chainId ? snapshot.account : null;
+  const id = pending && pending.hash === null ? pending.id : null, nonce = pending?.nonce ?? null;
+  const key = account && id !== null ? `${account.toLowerCase()}:${snapshot.revision}:${id}:${nonce}` : null;
+  const entry = key ? sendEntry(owner, key) : null;
+  const subscribe = useCallback((listener: () => void) => {
+    entry?.listeners.add(listener);
+    return () => { entry?.listeners.delete(listener); };
+  }, [entry]);
+  const getStatus = useCallback(() => entry?.status ?? null, [entry]);
+  const status = useSyncExternalStore(subscribe, getStatus, getStatus);
+  useEffect(() => {
+    if (!entry || !account || id === null || nonce === null) return;
+    const publish = (next: PendingSendStatus) => {
+      if (entry.status === next) return;
+      entry.status = next;
+      for (const listener of entry.listeners) listener();
+    };
+    if (entry.users++ === 0) entry.check = startPendingSendCheck({ service, wallet, expected: { id, hash: null, nonce }, onStatus: publish });
+    return () => {
+      if (--entry.users > 0) return;
+      entry.check?.stop();
+      entry.check = null;
+    };
+  }, [entry, service, wallet, account, id, nonce]);
+  const continueUnsent = useCallback(() => entry?.check?.continueUnsent() ?? Promise.resolve(), [entry]);
+  return { status, continueUnsent };
 }

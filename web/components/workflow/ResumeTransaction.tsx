@@ -1,19 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
+import type { OutcomeJournal } from "@/lib/chain/types";
 import { transactionMeaning, type TransactionOutcome } from "@/lib/chain/transaction-outcomes";
 import { useWalletSnapshot } from "./WalletGate";
-import { useSavedHashCheck, useTransactionOutcomes } from "./useTransactionOutcomes";
+import { usePendingSend, useSavedHashCheck, useTransactionOutcomes } from "./useTransactionOutcomes";
 
 export function isTransactionHistory(outcome: TransactionOutcome, journalClear: boolean): boolean {
   return outcome.kind === "terminal" || outcome.kind === "rejected"
     || outcome.kind === "error" && outcome.submitted === null && outcome.id !== "storage-error" && journalClear;
 }
 
-/** showWait adds the visible "Confirming your last transaction…" line to a normal wait. Pages whose own transaction controls show the wait turn it off. */
+/** showWait adds the visible "Confirming your last transaction…" or "Waiting for your last transaction to confirm…" line to a normal wait. Pages whose own transaction controls show the wait turn it off. */
 type Props = { browser: BrowserService; onConfirmed?: () => void | Promise<void>; pendingOnly?: boolean; scope?: string; confirmedThroughBlock?: bigint; deferRefresh?: boolean; showWait?: boolean };
 export function ResumeTransaction(props: Props) {
   return props.browser.kind === "configured" ? <ConfiguredResume {...props} browser={props.browser} /> : null;
@@ -25,7 +26,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const [hash, setHash] = useState("");
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
-  const [pending, setPending] = useState<{ hash: Hex | null; nonce: number } | null>(null);
+  const [pending, setPending] = useState<OutcomeJournal | null>(null);
   const [clearJournal, setClearJournal] = useState<{ service: typeof browser.service; wallet: typeof browser.wallet; revision: number; activity: string } | null>(null);
   const generation = useRef(0);
   const inFlight = useRef<number | null>(null);
@@ -36,6 +37,9 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const journalActivity = outcomes.filter(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending").map(item => `${item.id}:${item.kind}`).join("|");
   const connected = wallet.kind === "connected" && wallet.chainId === browser.service.manifest.chainId;
   const savedCheck = useSavedHashCheck(browser.service, browser.wallet, pending?.hash ?? null);
+  // This tab's own wallet request is open: its result settles the record, so the chain check waits.
+  const ownRequestOpen = outcomes.some(item => item.kind === "submitting");
+  const pendingSend = usePendingSend(browser.service, browser.wallet, ownRequestOpen ? null : pending);
 
   useEffect(() => {
     const version = ++generation.current;
@@ -59,7 +63,16 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
       if (active && version === generation.current) setError(reason instanceof Error ? reason.message : "Pending wallet activity could not be read.");
     });
     return () => { active = false; };
-  }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck]);
+  }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck, pendingSend.status]);
+
+  // A send at the record's nonce was mined and the record cleared: the page reads the chain again.
+  useEffect(() => {
+    if (pendingSend.status !== "spent" || deferRefresh || !callback.current) return;
+    const version = generation.current;
+    void Promise.resolve(callback.current()).catch(reason => {
+      if (version === generation.current) setError(reason instanceof Error ? reason.message : "Refresh the current state before another action.");
+    });
+  }, [pendingSend.status, deferRefresh]);
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;
@@ -121,18 +134,36 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const waiting = (outcome: TransactionOutcome) => normalWait && (outcome.kind === "submitting"
     || pending?.hash != null && outcomeTransactionHash(outcome)?.toLowerCase() === pending.hash.toLowerCase());
   if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error) return null;
-  const form = pending || !pendingOnly ? <form className="well pad stack" onSubmit={submit}>
-    {pending ? <div><h2>Your last transaction needs a check</h2><p>Open your wallet’s activity. When it shows that transaction as done, failed or replaced, check its hash here. New actions stay paused until then.</p></div>
-      : <div><h2>Resume after reload</h2><p>Use a transaction hash from this connected wallet to check its on-chain result. A submitted hash is not treated as success.</p></div>}
+  const form = (heading: ReactNode) => <form className="well pad stack" onSubmit={submit}>
+    {heading}
     <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => { editedHash.current = true; setHash(event.target.value.trim()); }} placeholder="0x…" /></label>
     <button className="btn btn-dark" type="submit" disabled={checking}>{checking ? "Checking confirmation…" : "Check transaction"}</button>
-    {pending ? <details><summary>Details</summary><p>Unresolved transaction at nonce {pending.nonce}. {pending.hash ? "Its saved hash is filled in above." : "Check wallet activity for the actual transaction or a same-nonce replacement or cancellation hash."}</p></details> : null}
-  </form> : null;
+  </form>;
+  const progress = (text: string) => <p className="transaction-progress" role="status"><span className="transaction-spinner" aria-hidden="true" />{text}</p>;
+  const rejectFirst = <p>If your wallet still shows a request from LABx, reject it first.</p>;
+  let panel: ReactNode = null;
+  if (normalWait) {
+    // A normal wait: this tab's wallet request is open, or the saved hash is being checked automatically. Its outcome
+    // rows and the manual form stay one click away instead of filling the page.
+    panel = <>{showWait ? progress("Confirming your last transaction…") : null}<details className="workflow-details"><summary>Transaction details</summary><div className="stack">{unresolved.filter(waiting).map(renderOutcome)}{form(null)}</div></details></>;
+  } else if (pending && pending.hash === null) {
+    // No hash was saved: the chain decides. Only when it cannot be read does the manual form appear, behind Details.
+    panel = pendingSend.status === "unsent"
+      ? <div className="well pad stack" role="status"><h2>Your wallet didn’t send your last transaction.</h2><button className="btn btn-dark" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button><details><summary>Details</summary>{rejectFirst}</details></div>
+      : pendingSend.status === "unknown"
+        ? <div className="stack">{progress("Can’t reach the network to check your last transaction. Trying again…")}<details className="workflow-details"><summary>Details</summary><div className="stack">{form(null)}{rejectFirst}</div></details></div>
+        : showWait ? progress(pendingSend.status === "waiting" ? "Waiting for your last transaction to confirm…" : "Checking your last transaction…") : null;
+  } else if (pending && pending.hash) {
+    const saved = pending.hash;
+    panel = <div className="well pad stack" role="status"><h2>Your last transaction hasn’t settled yet.</h2><button className="btn btn-dark" type="button" disabled={checking} onClick={() => void check(saved)}>{checking ? "Checking confirmation…" : "Check again"}</button><details><summary>Details</summary><div className="stack">{form(null)}<p>Unresolved transaction at nonce {pending.nonce}. Its saved hash is filled in above.</p></div></details></div>;
+  } else if (!pendingOnly) {
+    panel = form(<div><h2>Resume after reload</h2><p>Use a transaction hash from this connected wallet to check its on-chain result. A submitted hash is not treated as success.</p></div>);
+  }
   return (
     <section className="stack resume-transaction" aria-label="Wallet transaction outcomes">
       {unresolved.filter(outcome => !waiting(outcome)).map(renderOutcome)}
       {history.length ? <details className="workflow-details"><summary>Activity ({history.length})</summary><div className="stack">{history.map(renderOutcome)}</div></details> : null}
-      {normalWait ? <>{showWait ? <p className="transaction-progress" role="status"><span className="transaction-spinner" aria-hidden="true" />Confirming your last transaction…</p> : null}<details className="workflow-details"><summary>Transaction details</summary><div className="stack">{unresolved.filter(waiting).map(renderOutcome)}{form}</div></details></> : form}
+      {panel}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </section>
   );

@@ -4,6 +4,7 @@ import type { RaffleService, WalletSessionPort } from "./ports";
 import type { Confirmation, PreparedAction, SubmittedAction, ObservedTransaction, OutcomeLineage } from "./types";
 import { sameAddress } from "./validation";
 import { isWalletRequestRejected } from "./wallet-errors";
+import { isNotSent } from "./submission-errors";
 
 type TerminalConfirmation = Exclude<Confirmation, { kind: "pending" }>;
 export type TransactionOutcome = { id: string; account: Address } & (
@@ -14,7 +15,7 @@ export type TransactionOutcome = { id: string; account: Address } & (
   | { kind: "unverified"; hash: Hex; message: string }
   | { kind: "checking" | "pending"; submitted: SubmittedAction }
   | { kind: "terminal"; submitted: SubmittedAction; confirmation: TerminalConfirmation }
-  | { kind: "error"; message: string; submitted: SubmittedAction | null }
+  | { kind: "error"; message: string; submitted: SubmittedAction | null; /** Nothing was sent and no pending record remains; the message is one plain sentence. */ notSent?: true }
 );
 export type OutcomeStorage = Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem">;
 const EMPTY: readonly TransactionOutcome[] = [];
@@ -338,6 +339,11 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       try { onSubmitted?.(Object.freeze({ ...submitted })); } catch { /* A detached UI cannot interrupt the owned confirmation. */ }
       return await watch(submitted, submittedId, true);
     } catch (error) {
+      if (isNotSent(error) && error instanceof Error) {
+        // Nothing was sent and no pending record remains, so nothing joins the activity list.
+        records.set(key, getSnapshot(prepared.account).filter(item => item.id !== id)); notify();
+        return { id, account: prepared.account, kind: "error", submitted: null, message: error.message, notSent: true };
+      }
       return isWalletRequestRejected(error)
         ? put({ id, account: prepared.account, kind: "rejected", message: "The wallet request was rejected. No transaction was submitted." })
         : put({ id, account: prepared.account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "The wallet response could not be checked. Review wallet activity before retrying." });

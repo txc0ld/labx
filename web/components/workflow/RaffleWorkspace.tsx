@@ -33,7 +33,6 @@ import checkout from "./BuyerCheckout.module.css";
 
 export type AvailabilityReader = (snapshot: RaffleSnapshot, account: AccountRaffleState | null, trustReason?: string | null) => readonly ActionAvailability[];
 export type RecoverCommitment = (commit: Hex) => Promise<ReserveRecord>;
-export type RecordAgreement = (raffleId: bigint) => Promise<void>;
 export type RaffleWorkspaceMode = "public" | "seller";
 
 /** How often a waiting raffle page re-reads the contract while visible. */
@@ -95,14 +94,13 @@ function sameWorkspace(left: WorkspaceScope, right: WorkspaceScope) {
     : left.kind === "unavailable" && right.kind === "unavailable" && left.reason === right.reason;
 }
 
-export function RaffleWorkspace({ browser, id, termsHash, availableActions, saveCommitment, recoverCommitment, recordAgreement, mode = "public" }: {
+export function RaffleWorkspace({ browser, id, termsHash, availableActions, saveCommitment, recoverCommitment, mode = "public" }: {
   browser: BrowserService;
   id: bigint;
   termsHash: Hex;
   availableActions: AvailabilityReader;
   saveCommitment?: SaveCommitment;
   recoverCommitment?: RecoverCommitment;
-  recordAgreement?: RecordAgreement;
   mode?: RaffleWorkspaceMode;
 }) {
   const [state, setState] = useState<WorkspaceState>({ kind: "loading" });
@@ -182,10 +180,10 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
   }
 
   if (browser.kind !== "configured") return null;
-  return <LoadedRaffle browser={browser} snapshot={scopedState.snapshot} revealedAt={revealedAt} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} recordAgreement={recordAgreement} refresh={refresh} poll={poll} refreshState={scopedState.refresh} mode={mode} />;
+  return <LoadedRaffle browser={browser} snapshot={scopedState.snapshot} revealedAt={revealedAt} termsHash={termsHash} availableActions={availableActions} saveCommitment={saveCommitment} recoverCommitment={recoverCommitment} refresh={refresh} poll={poll} refreshState={scopedState.refresh} mode={mode} />;
 }
 
-function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActions, saveCommitment, recoverCommitment, recordAgreement, refresh, poll, refreshState, mode }: {
+function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActions, saveCommitment, recoverCommitment, refresh, poll, refreshState, mode }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   /** Block time LABx's finish step is timed from after the draw is confirmed, from useRevealTime. */
@@ -194,7 +192,6 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   availableActions: AvailabilityReader;
   saveCommitment?: SaveCommitment;
   recoverCommitment?: RecoverCommitment;
-  recordAgreement?: RecordAgreement;
   refresh: () => Promise<void>;
   poll: (canApply: () => boolean) => Promise<void>;
   refreshState: Extract<WorkspaceState, { kind: "ready" }>["refresh"];
@@ -312,7 +309,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
             ? <SellerActions browser={browser} snapshot={snapshot} revealedAt={revealedAt} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} onUnavailable={recheck} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
-            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} recordAgreement={recordAgreement} onConfirmed={reload} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
+            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} onConfirmed={reload} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
           {mode === "seller" && phase >= 1 ? <SellerProgress snapshot={snapshot} /> : null}
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Earnings</summary><SellerEarnings snapshot={snapshot} /></details> : null}
           {phase >= 1 ? <DrawProgress service={browser.service} snapshot={snapshot} /> : null}
@@ -482,17 +479,19 @@ function purchaseRecap(snapshot: RaffleSnapshot, submitted: SubmittedAction) {
   } catch { return null; }
 }
 
-type Consent = { order: string | null; account: string | null; terms: boolean; rules: boolean; age: boolean };
-const NO_CONSENT: Consent = { order: null, account: null, terms: false, rules: false, age: false };
+/** One tick for the terms, the draw rules and the age requirement. It belongs to the wallet that ticked it, not to one order. */
+type Consent = { account: string | null; checked: boolean };
+const NO_CONSENT: Consent = { account: null, checked: false };
 
-export function BuyerActions({ browser, snapshot, account, availability, termsHash, recordAgreement, onConfirmed, writesEnabled, writeDisabledReason, updating }: {
+export function BuyerActions({ browser, snapshot, account, availability, termsHash, onConfirmed, reloadFailed, writesEnabled, writeDisabledReason, updating }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
   termsHash: Hex;
-  recordAgreement?: RecordAgreement;
   onConfirmed: () => Promise<void>;
+  /** The last read of the raffle or of this wallet's account failed. */
+  reloadFailed: boolean;
   writesEnabled: boolean;
   writeDisabledReason?: string;
   /** The raffle or this wallet's account is being re-read. */
@@ -503,11 +502,10 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const [payment, setPayment] = useState<"usdc" | "eth">("usdc");
   const [consent, setConsent] = useState<Consent>(NO_CONSENT);
   const [consentNotice, setConsentNotice] = useState("");
-  const [agreementState, setAgreementState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [agreementError, setAgreementError] = useState("");
-  const agreementInFlight = useRef<{ generation: number; id: number } | null>(null);
-  const agreementSequence = useRef(0);
-  const agreementGeneration = useRef(0);
+  // The order whose exact USDC approval this page just confirmed from the buyer's own click, so its purchase opens in the
+  // wallet next, once. Kept only in memory: a reload never resumes it. block is the approval's block, revision the wallet session.
+  const [buyAfterApproval, setBuyAfterApproval] = useState<{ order: string; revision: number; block: bigint } | null>(null);
+  const orderGeneration = useRef(0);
   const [quote, setQuote] = useState<MembershipQuote | null>(null);
   const [quoteState, setQuoteState] = useState<"idle" | "loading" | "error">("idle");
   const [quoteError, setQuoteError] = useState("");
@@ -536,7 +534,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
     if (selected?.active && selected.sold < selected.maxSupply) return;
     const fallback = snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply);
     if (fallback >= 0 && fallback !== packId) {
-      setSelectionNotice(`The selected pack is no longer available. ${snapshot.packs[fallback].name} is now selected. Check the new total and tick the boxes again.`);
+      setSelectionNotice(`The selected pack is no longer available. ${snapshot.packs[fallback].name} is now selected. Check the new total.`);
       setPackId(fallback);
     }
   }, [packId, selected, snapshot.packs]);
@@ -544,9 +542,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   useEffect(() => {
     const version = ++quoteRequest.current;
     setQuote(null);
-    agreementGeneration.current += 1;
-    setAgreementState("idle");
-    setAgreementError("");
+    orderGeneration.current += 1;
     if (!selected || !quantityValid || !selected.active || selected.sold >= selected.maxSupply || !salesOpen) {
       setQuoteState("idle");
       return;
@@ -558,42 +554,37 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
     }).catch((error: unknown) => {
       if (version === quoteRequest.current) { setQuoteError(error instanceof Error ? error.message : "A current quote is unavailable."); setQuoteState("error"); }
     });
-    return () => { quoteRequest.current += 1; agreementGeneration.current += 1; };
+    return () => { quoteRequest.current += 1; orderGeneration.current += 1; };
   }, [browser.service, buyerWallet.revision, packId, quantity, quantityValid, salesOpen, selected, snapshot.id]);
 
-  // The three ticks belong to one order (pack, quantity, total, terms, payment) and one account.
-  // They survive refreshes and Buy again while those stay the same; a real change clears them and says why.
-  const order = quote && selected ? `${packId}:${quantity}:${quote.totalUsdc}:${termsHash.toLowerCase()}:${payment}` : null;
+  // The tick survives refreshes, Buy again and a changed pack or quantity. Another wallet ticks again.
   useEffect(() => {
-    if (!consent.terms && !consent.rules && !consent.age) return;
-    const accountChanged = buyerAccount !== null && consent.account !== null && consent.account !== buyerAccount;
-    const orderChanged = order !== null && consent.order !== null && consent.order !== order;
-    if (accountChanged || orderChanged) {
+    if (!consent.checked) return;
+    if (buyerAccount !== null && consent.account !== null && consent.account !== buyerAccount) {
       setConsent(NO_CONSENT);
-      setConsentNotice(accountChanged ? "You switched wallets, so tick the boxes again." : "Your order changed, so tick the boxes again.");
-    } else if (consent.order === null && order !== null || consent.account === null && buyerAccount !== null) {
-      setConsent({ ...consent, order: consent.order ?? order, account: consent.account ?? buyerAccount });
-    }
-  }, [consent, order, buyerAccount]);
-  const consentCurrent = order !== null && consent.order === order && (consent.account === null || consent.account === buyerAccount);
-  const tick = (field: "terms" | "rules" | "age", checked: boolean) => {
+      setConsentNotice("You switched wallets, so tick the box again.");
+    } else if (consent.account === null && buyerAccount !== null) setConsent({ ...consent, account: buyerAccount });
+  }, [consent, buyerAccount]);
+  const agreed = consent.checked && (consent.account === null || consent.account === buyerAccount);
+  const tick = (checked: boolean) => {
     setConsentNotice("");
-    setConsent(current => ({ ...current, [field]: checked, order: current.order ?? order, account: current.account ?? buyerAccount }));
+    setConsent({ checked, account: checked ? buyerAccount : null });
   };
 
   const byKind = (kind: WorkflowAction["kind"]) => availability.find((item) => item.kind === kind);
   const termsMatch = snapshot.policy.termsHash.toLowerCase() === termsHash.toLowerCase();
-  const allAgreed = consentCurrent && consent.terms && consent.rules && consent.age;
   const needsApproval = quote !== null && account !== null && account.usdcAllowance < quote.totalUsdc;
   const insufficientUsdc = payment === "usdc" && quote !== null && account !== null && account.usdcBalance < quote.totalUsdc;
-  const approval = byKind("approveUsdc");
-  const purchase = byKind("buyMembership");
+  // USDC with too small an allowance starts with the exact approval; otherwise the purchase is the only wallet step.
+  const approvalFirst = payment === "usdc" && needsApproval;
+  const nextStep = byKind(approvalFirst ? "approveUsdc" : "buyMembership");
   const selectedPayment = payment === "usdc"
     ? { kind: "usdc" as const }
     : quote?.eth.kind === "available"
       ? { kind: "eth" as const, maxEth: quote.eth.maxEth, slippageBps: quote.eth.slippageBps, deadline: quote.eth.deadline }
       : null;
-  const purchaseAction: WorkflowAction | null = quote && selected && allAgreed && termsMatch && selectedPayment
+  // The purchase records acceptance on-chain: acceptedTerms must equal the raffle's pinned published terms.
+  const purchaseAction: WorkflowAction | null = quote && selected && agreed && termsMatch && selectedPayment
     ? {
         kind: "buyMembership", id: snapshot.id, packId, quantity, acceptedTerms: termsHash,
         agreements: { terms: true, rules: true, age: true },
@@ -604,45 +595,30 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const mainActions = recovery.filter(item => !HELP_KINDS.has(item.kind));
   const helpActions = recovery.filter(item => HELP_KINDS.has(item.kind));
   const total = quote ? formatUsdcAmount(quote.totalUsdc) : null;
-  const steps = account && quote && termsMatch && !insufficientUsdc ? [
-    ...(payment === "usdc" ? [{ label: needsApproval ? `Approve ${total} USDC` : `${total} USDC approved`, done: !needsApproval }] : []),
-    { label: agreementState === "saved" ? "Agreement signed" : "Tick the boxes and sign the agreement", done: agreementState === "saved" },
-    { label: "Purchase membership", done: false }
-  ] : null;
-  const currentStep = steps?.findIndex(step => !step.done) ?? -1;
+  const buyLabel = payment === "eth" && quote?.eth.kind === "available" ? `Buy for up to ${formatEther(quote.eth.maxEth)} ETH` : `Buy for ${total} USDC`;
 
-  async function recordReviewedAgreement() {
-    if (!recordAgreement || !writesEnabled) return;
-    const generation = agreementGeneration.current;
-    if (agreementInFlight.current?.generation === generation) return;
-    const active = { generation, id: ++agreementSequence.current };
-    agreementInFlight.current = active;
-    setAgreementState("saving");
-    setAgreementError("");
-    try {
-      await recordAgreement(snapshot.id);
-      if (generation === agreementGeneration.current) setAgreementState("saved");
-    } catch (error) {
-      if (generation === agreementGeneration.current) {
-        setAgreementError(error instanceof Error ? error.message : "Agreement storage was not acknowledged.");
-        setAgreementState("error");
-      }
-    } finally {
-      if (agreementInFlight.current?.generation === active.generation && agreementInFlight.current.id === active.id) agreementInFlight.current = null;
-    }
-  }
+  // After the approval confirms, the page re-reads the raffle and this wallet. The first fresh read decides once: with the
+  // allowance in place the purchase opens in the wallet; anything else ends the sequence and the button waits for a click.
+  const order = quote && selected ? `${packId}:${quantity}:${quote.totalUsdc}` : null;
+  const buyReady = buyAfterApproval !== null && account !== null && quote !== null
+    && account.snapshot.block.number >= buyAfterApproval.block && quote.block.number >= buyAfterApproval.block;
+  const autoBuy = buyReady && buyAfterApproval.order === order && buyAfterApproval.revision === buyerWallet.revision && payment === "usdc" && !needsApproval;
+  useEffect(() => {
+    if (buyAfterApproval && (buyReady || reloadFailed || quoteState === "error" || buyerWallet.revision !== buyAfterApproval.revision || order !== null && order !== buyAfterApproval.order)) setBuyAfterApproval(null);
+  }, [buyAfterApproval, buyReady, reloadFailed, quoteState, buyerWallet.revision, order]);
+  const approved = async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, direct: boolean) => {
+    if (direct && order) setBuyAfterApproval({ order, revision: buyerWallet.revision, block: confirmation.blockNumber });
+    await onConfirmed();
+  };
 
   async function buyAgain() {
     if ((!canBuyAgain && !canArchivePurchase) || !purchaseOutcome) return;
-    const expected = browser.wallet.getSnapshot(), version = agreementGeneration.current;
+    const expected = browser.wallet.getSnapshot(), version = orderGeneration.current;
     try {
       await owner.acknowledge(purchaseOutcome, browser.wallet);
-      if (browser.wallet.getSnapshot().revision !== expected.revision || agreementGeneration.current !== version) return;
-      // Ticks stay for an unchanged order; the agreement is signed again for every purchase.
-      setAgreementState("idle");
-      agreementGeneration.current += 1;
+      if (browser.wallet.getSnapshot().revision !== expected.revision || orderGeneration.current !== version) return;
       setReceiptError("");
-    } catch (error) { if (browser.wallet.getSnapshot().revision === expected.revision && agreementGeneration.current === version) setReceiptError(error instanceof Error ? error.message : "The receipt could not be acknowledged."); }
+    } catch (error) { if (browser.wallet.getSnapshot().revision === expected.revision && orderGeneration.current === version) setReceiptError(error instanceof Error ? error.message : "The receipt could not be acknowledged."); }
   }
 
   const status = !salesOpen && mainActions.length === 0 ? buyerStatus(snapshot, account, buyerAccount) : null;
@@ -682,26 +658,27 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
           </div>
           {!quantityValid ? <p id="membership-qty-error" className="notice error" role="alert">Quantity must be a whole number from 1 to 20.</p> : null}
           {quoteState === "error" ? <p className="notice error" role="alert">{quoteError}</p> : null}
-          {payment === "eth" && quote?.eth.kind === "unavailable" ? <div className="notice warning stack" role="status"><p>ETH payment is no longer available for this quote. Choose USDC and review the total again.</p><button className="btn" type="button" onClick={() => { setPayment("usdc"); setConsent(NO_CONSENT); setAgreementState("idle"); agreementGeneration.current += 1; }}>Use USDC</button></div> : null}
+          {payment === "eth" && quote?.eth.kind === "unavailable" ? <div className="notice warning stack" role="status"><p>ETH payment is no longer available for this quote. Choose USDC and review the total again.</p><button className="btn" type="button" onClick={() => setPayment("usdc")}>Use USDC</button></div> : null}
           {quote?.eth.kind === "available" ? <><fieldset className="payment-choice"><legend>Payment</legend><label><input type="radio" name="payment" checked={payment === "usdc"} onChange={() => setPayment("usdc")} /> USDC</label><label><input type="radio" name="payment" checked={payment === "eth"} onChange={() => setPayment("eth")} /> ETH quote</label></fieldset>{payment === "eth" ? <dl className="review-list"><div><dt>Current quote</dt><dd>{formatEther(quote.eth.requiredEth)} ETH</dd></div><div><dt>Maximum sent</dt><dd>{formatEther(quote.eth.maxEth)} ETH</dd></div><div><dt>Slippage cap</dt><dd>{quote.eth.slippageBps / 100}%</dd></div><div><dt>Expires</dt><dd><LocalTime at={quote.eth.deadline} /></dd></div></dl> : null}</> : null}
           {!termsMatch ? <p className="notice error" role="alert">The raffle’s published terms do not match this website version. Purchasing is blocked.</p> : (
             <fieldset className={`agreements ${checkout.agreements}`}>
               <legend>Before you buy</legend>
-              <label><input type="checkbox" checked={consent.terms} onChange={(event) => tick("terms", event.target.checked)} /><span>I agree to the <Link href="/legal">membership terms</Link>.</span></label>
-              <label><input type="checkbox" checked={consent.rules} onChange={(event) => tick("rules", event.target.checked)} /><span>I agree to the <Link href="/rules">draw rules</Link>.</span></label>
-              <label><input type="checkbox" checked={consent.age} onChange={(event) => tick("age", event.target.checked)} /><span>I confirm I am at least 18.</span></label>
+              <label><input type="checkbox" checked={agreed} onChange={(event) => tick(event.target.checked)} /><span>I’m 18 or older and agree to the <Link href="/legal">membership terms</Link> and <Link href="/rules">draw rules</Link>.</span></label>
             </fieldset>
           )}
           {consentNotice ? <p className="notice" role="status">{consentNotice}</p> : null}
-          {steps ? <ol className={checkout.steps} aria-label="Purchase steps">{steps.map((step, index) => <li key={step.label} data-state={step.done ? "done" : index === currentStep ? "current" : "upcoming"} aria-current={index === currentStep ? "step" : undefined}><span aria-hidden="true">{step.done ? "✓" : index + 1}</span><span>{step.label}</span>{step.done ? <span className="sr"> (done)</span> : null}</li>)}</ol> : null}
           <div className={`${checkout.action} checkout-bar`}>
           {total && selected ? <p className={checkout.barTotal}><span>{selected.name} × {quantity}</span><strong>{total} USDC</strong></p> : null}
           <WalletGate wallet={browser.wallet} goal="buy">
-            {!account ? <p className="notice" role="status">Checking your USDC balance…</p> : !quote ? <p className="notice" role="status">{quoteState === "loading" ? "Updating total…" : "Choose an available membership."}</p> : insufficientUsdc ? <p className="notice warning" role="status">Not enough USDC. You need {total} USDC.</p> : needsApproval && payment === "usdc" ? (
-              approval?.enabled ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label={`Approve ${total} USDC`} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{approval?.reason || "USDC approval is not available."}</p>
-            ) : !allAgreed ? <p className="notice warning" role="status">Tick the three boxes to continue.</p>
-              : agreementState !== "saved" ? <div className="stack"><button className="btn" type="button" disabled={!recordAgreement || agreementState === "saving" || !writesEnabled} title={!writesEnabled ? writeDisabledReason : undefined} onClick={() => void recordReviewedAgreement()}>{agreementState === "saving" ? "Waiting for signature…" : "Sign agreement"}</button>{!recordAgreement ? <p className="notice warning" role="status">Purchases are unavailable right now.</p> : null}{agreementState === "error" ? <p className="notice error" role="alert">{agreementError}</p> : null}</div>
-                : purchaseAction && purchase?.enabled ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label="Purchase membership" formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">{purchase?.reason || "Purchase is not available."}</p>}
+            {!termsMatch ? null
+              : buyAfterApproval && !buyReady ? <button className="btn" type="button" aria-busy="true" disabled>Approved. Opening your purchase…</button>
+              : !account ? <p className="notice" role="status">Checking your USDC balance…</p>
+              : !quote ? <p className="notice" role="status">{quoteState === "loading" ? "Updating total…" : "Choose an available membership."}</p>
+              : insufficientUsdc ? <p className="notice warning" role="status">Not enough USDC. You need {total} USDC.</p>
+              : !nextStep?.enabled ? <p className="notice warning" role="status">{nextStep?.reason || "Purchase is not available."}</p>
+              : !agreed ? <><button className="btn" type="button" disabled>{buyLabel}</button><p className={checkout.hint}>Tick the box above to continue.</p></>
+              : approvalFirst ? <><TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label={buyLabel} submitOnClick formatUsdc={formatUsdcAmount} onConfirmed={approved} disabled={!writesEnabled} disabledReason={writeDisabledReason} /><p className={checkout.hint}>Your wallet asks twice: first to approve exactly {total} USDC, then to buy.</p></>
+              : purchaseAction ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label={buyLabel} submitOnClick submitOnMount={autoBuy} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">Purchase is not available.</p>}
           </WalletGate>
           </div>
           </section>

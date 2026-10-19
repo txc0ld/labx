@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 
-/** For a transaction request: its call, the latest block when the wallet was asked, and the hash it returned. */
-export type WalletRequest = { method: string; to?: string; data?: string; block?: string; hash?: string };
+/** For a transaction request: its sender, call and suggested fees, the latest block when the wallet was asked, and the hash it returned. */
+export type WalletRequest = { method: string; from?: string; to?: string; data?: string; maxFeePerGas?: string; maxPriorityFeePerGas?: string; block?: string; hash?: string };
 type Recorder = { reviews: number; requests: WalletRequest[]; reject: string[] };
 type Provider = { request(input: { method: string; params?: readonly unknown[] }): Promise<unknown> };
 type Scope = Window & { __labxWalletWatch?: Recorder; ethereum: Provider };
@@ -29,9 +29,9 @@ export async function watchWallet(page: Page) {
     provider.request = async input => {
       if (input.method === "personal_sign") recorder.requests.push({ method: input.method });
       if (input.method === "eth_sendTransaction") {
-        const call = input.params?.[0] as { to?: string; data?: string } | undefined;
+        const call = input.params?.[0] as { from?: string; to?: string; data?: string; maxFeePerGas?: string; maxPriorityFeePerGas?: string } | undefined;
         const data = call?.data?.toLowerCase();
-        const request: WalletRequest = { method: input.method, to: call?.to?.toLowerCase(), data, block: BigInt(String(await original({ method: "eth_blockNumber" }))).toString() };
+        const request: WalletRequest = { method: input.method, from: call?.from?.toLowerCase(), to: call?.to?.toLowerCase(), data, maxFeePerGas: call?.maxFeePerGas, maxPriorityFeePerGas: call?.maxPriorityFeePerGas, block: BigInt(String(await original({ method: "eth_blockNumber" }))).toString() };
         recorder.requests.push(request);
         const rejected = data === undefined ? -1 : recorder.reject.findIndex(prefix => data.startsWith(prefix));
         if (rejected >= 0) {

@@ -129,17 +129,18 @@ run("independent wallet review repairs", () => {
       expect(journal.read(chain.buyer)).toEqual(otherIntent);
     });
 
-    it("retains a known hash after numeric rejection and retains nested ambiguous failures", async () => {
+    it("retains a known hash after numeric rejection and retains nested ambiguous failures while a send is at their nonce", async () => {
       const cases = [
-        { name: "known hash plus direct 4001", failure: Object.assign(new Error("late refusal"), { code: 4001 }), knownHash: keccak256("0x2222") },
-        { name: "nested ambiguous 5000", failure: { code: -32603, data: { originalError: { code: 5000 } } }, knownHash: null }
+        { name: "known hash plus direct 4001", failure: Object.assign(new Error("late refusal"), { code: 4001 }), knownHash: keccak256("0x2222"), sendAtNonce: false },
+        // The wallet's -32603 class counts as pre-broadcast only while nothing is pending at the nonce; here a send is.
+        { name: "nested ambiguous 5000", failure: { code: -32603, data: { originalError: { code: 5000 } } }, knownHash: null, sendAtNonce: true }
       ];
       for (const scenario of cases) {
         const journal = memoryPendingJournal();
         const service = createRaffleService(chain.client, chain.manifest, journal);
         const wallet = chain.wallet(chain.seller).session;
         await wallet.connect();
-        vi.spyOn(wallet, "requestTransaction").mockImplementationOnce(async (_expected, _transaction, beforeRequest, onProviderRequest) => {
+        vi.spyOn(wallet, "requestTransaction").mockImplementationOnce(async (_expected, transaction, beforeRequest, onProviderRequest) => {
           await beforeRequest?.();
           onProviderRequest?.();
           if (scenario.knownHash !== null) {
@@ -147,6 +148,7 @@ run("independent wallet review repairs", () => {
             if (current === null) throw new Error("Current recovery intent was not recorded.");
             journal.write(chain.seller, { ...current, hash: scenario.knownHash });
           }
+          if (scenario.sendAtNonce) await chain.rpc("eth_sendTransaction", [{ from: chain.seller, to: chain.seller, value: "0x0", nonce: `0x${(transaction.nonce ?? 0).toString(16)}`, gas: "0x5208" }]);
           throw scenario.failure;
         });
         const prepared = await service.prepare({ action: { kind: "approvePrize", id: 1n }, wallet });

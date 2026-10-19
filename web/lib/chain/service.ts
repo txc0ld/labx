@@ -1,18 +1,19 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
 import { decodeEventLog, encodeFunctionData, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
-import { SubmissionNotDispatchedError } from "./submission-errors";
+import { NotSentError, SubmissionNotDispatchedError } from "./submission-errors";
+import { checkNetworkFee } from "./network-fee";
 import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
 import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
 import { ownerExecutionConfirmer } from "./owner-execution";
 import { ownerExecutionDiscoverer } from "./owner-execution-discovery";
-import { isWalletRequestRejected } from "./wallet-errors";
+import { isPreBroadcastError, isWalletRequestRejected, notSentReason } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { hash, sameAddress } from "./validation";
-import { chainName } from "./networks";
+import { chainName, feeCurrency } from "./networks";
 import type { RaffleService, WalletSessionPort } from "./ports";
-import type { DraftInput, BlockRef, CanonicalReceipt, OutcomeLineage, DeploymentManifest, OwnerExecutionIntent, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
+import type { DraftInput, BlockRef, CanonicalReceipt, OutcomeLineage, DeploymentManifest, OwnerExecutionIntent, PendingSettlement, PreparedAction, SubmittedAction, WalletSnapshot, WorkflowAction } from "./types";
 function connected(wallet: WalletSessionPort, chainId: number) {
   const session = wallet.getSnapshot();
   if (session.kind !== "connected" || session.chainId !== chainId) throw new Error(`Connect your wallet to ${chainName(chainId)} before continuing.`);
@@ -21,6 +22,8 @@ function connected(wallet: WalletSessionPort, chainId: number) {
 function sameTransaction(a: { to: Address; data: Hex; value: bigint }, b: { to: Address; data: Hex; value: bigint }) {
   return sameAddress(a.to, b.to) && a.data.toLowerCase() === b.data.toLowerCase() && a.value === b.value;
 }
+/** Blocks after a record's starting block before a send with nothing at its nonce is treated as never sent. */
+export const UNSENT_CLEAR_BLOCKS = 25n;
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
   const sellerReader = createSellerReader(client, manifest, reader);
@@ -133,9 +136,10 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       const fresh = await build(entry.action, entry.session);
       await assertDraft(entry.action, entry.expectedDraft, account, fresh.block);
       if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
+      const fees = await checkNetworkFee(client, manifest.chainId, { account, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value, blockNumber: fresh.block.number });
       const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
       await wallet.assertCurrent(entry.session);
-      const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce }, async () => {
+      const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce, ...fees }, async () => {
         await journal.exclusive(account, async () => {
           assertIntent?.();
           if (journal.read(account)) throw new Error(unresolved);
@@ -164,9 +168,55 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
           }
         }
       });
+      // The wallet's own fee or gas check failed before it broadcast. With nothing pending at this nonce, the send is retired here.
+      let notSent = false;
+      if (walletRequested && !refused && broadcastHash === null && isPreBroadcastError(error)) {
+        await journal.exclusive(account, async () => {
+          const current = journal.read(account);
+          if (!current || current.id !== intent?.id || current.hash !== null) return;
+          if (await client.getTransactionCount({ address: account, blockTag: "pending" }) > current.nonce) return;
+          const latest = journal.read(account);
+          if (!latest || latest.id !== current.id || latest.hash !== null) return;
+          onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
+          journal.remove(account);
+          notSent = true;
+        }).catch(() => { /* An unreadable nonce keeps the record; the page settles it from the chain. */ });
+      }
+      if (notSent) throw new NotSentError(notSentReason(error, feeCurrency(manifest.chainId)));
       if (walletRequested && !refused) throw new Error("The wallet response is uncertain. Check its activity and reconcile the transaction hash before retrying.");
       throw error;
     } finally { submitting.delete(key); }
+  }
+
+  async function nonceState(account: Address, entry: Readonly<PendingIntent>) {
+    const [latest, pendingNonce, block] = await Promise.all([
+      client.getTransactionCount({ address: account, blockTag: "latest" }),
+      client.getTransactionCount({ address: account, blockTag: "pending" }),
+      client.getBlockNumber({ cacheTime: 0 })
+    ]);
+    if (pendingNonce < latest) throw new Error("The network returned inconsistent nonces. Check again.");
+    if (latest > entry.nonce) return pendingNonce === latest ? "spent" : "waiting";
+    if (pendingNonce > entry.nonce) return "waiting";
+    return block >= BigInt(entry.startedBlock) + UNSENT_CLEAR_BLOCKS ? "expired" : "unsent";
+  }
+  async function settlePending({ wallet, expected, continueUnsent = false }: Parameters<RaffleService["settlePending"]>[0]): Promise<PendingSettlement> {
+    const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
+    const account = session.account;
+    const inspected = (current: PendingIntent | null): current is PendingIntent => current !== null && expected.hash === null
+      && current.hash === null && current.id === expected.id && current.nonce === expected.nonce;
+    if (!inspected(journal.read(account))) return { kind: "changed" };
+    // This tab's own wallet request is still open: its result decides, not the chain.
+    if (submitting.has(account.toLowerCase())) return { kind: "waiting" };
+    return journal.exclusive(account, async (): Promise<PendingSettlement> => {
+      const current = journal.read(account);
+      if (!inspected(current)) return { kind: "changed" };
+      if (submitting.has(account.toLowerCase())) return { kind: "waiting" };
+      const state = await nonceState(account, current);
+      if (state === "waiting" || state === "unsent" && !continueUnsent) return { kind: state };
+      if (!inspected(journal.read(account))) return { kind: "changed" };
+      journal.remove(account);
+      return { kind: state === "spent" ? "spent" : "dropped" };
+    });
   }
 
   async function validateReceipt(receipt: TransactionReceipt, account: Address): Promise<CanonicalReceipt> {
@@ -331,5 +381,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     return current ? { id: current.id, hash: current.hash, nonce: current.nonce, ...(expectedIntent ? { checkpoint: { id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock } } : {}) } : null;
   }
   return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, requestOwnerExecution, resolveCreatedDraft,
-    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume };
+    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume, settlePending };
 }

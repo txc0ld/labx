@@ -36,11 +36,31 @@ run("wallet review repairs", () => {
     expect((await service.confirm({ transaction, timeoutMs: 2000 })).kind).toBe("confirmed");
   });
 
-  it.each([new Error("user rejected"), { code: "4001" }, { cause: { code: 4001 } }, { code: -32603, data: { code: 5000 } }])("retains uncertain responses %j", async failure => {
+  it.each([new Error("user rejected"), { code: "4001" }, { cause: { code: 4001 } }])("retains uncertain responses %j", async failure => {
     const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);
     const wallet = c.wallet(c.seller).session; await wallet.connect();
     vi.spyOn(wallet, "requestTransaction").mockImplementationOnce(async (_expected, _tx, before, started) => { await before?.(); started?.(); throw failure; });
     await expect(service.submit({ prepared: await service.prepare({ action: { kind: "approvePrize", id: 1n }, wallet }), wallet })).rejects.toThrow(/uncertain/);
+    expect(journal.read(c.seller)?.hash).toBeNull();
+    await expect(service.submit({ prepared: await service.prepare({ action: { kind: "approvePrize", id: 1n }, wallet }), wallet })).rejects.toThrow(/unresolved/);
+  });
+
+  // The wallet's own -32603 class is a pre-broadcast failure: retired only when the chain shows nothing pending at its nonce.
+  it.each([false, true])("handles a nested rejection inside -32603 by the pending nonce (a send at its nonce: %s)", async sentAtNonce => {
+    const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);
+    const wallet = c.wallet(c.seller).session; await wallet.connect();
+    vi.spyOn(wallet, "requestTransaction").mockImplementationOnce(async (_expected, tx, before, started) => {
+      await before?.(); started?.();
+      if (sentAtNonce) await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.seller, value: "0x0", nonce: `0x${(tx.nonce ?? 0).toString(16)}`, gas: "0x5208" }]);
+      throw { code: -32603, data: { code: 5000 } };
+    });
+    const sending = service.submit({ prepared: await service.prepare({ action: { kind: "approvePrize", id: 1n }, wallet }), wallet });
+    if (!sentAtNonce) {
+      await expect(sending).rejects.toThrow("Your wallet couldn't send this transaction. Nothing was sent.");
+      expect(journal.read(c.seller)).toBeNull();
+      return;
+    }
+    await expect(sending).rejects.toThrow(/uncertain/);
     expect(journal.read(c.seller)?.hash).toBeNull();
     await expect(service.submit({ prepared: await service.prepare({ action: { kind: "approvePrize", id: 1n }, wallet }), wallet })).rejects.toThrow(/unresolved/);
   });

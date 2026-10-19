@@ -117,7 +117,8 @@ export class WalletSession implements WalletSessionPort {
     onProviderRequest?.();
     this.assertProvider(provider, epoch);
     this.assertSnapshot(expected);
-    const result = await provider.request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId), ...(transaction.nonce === undefined ? {} : { nonce: toHex(transaction.nonce) }) }] });
+    const fees = transaction.maxFeePerGas === undefined || transaction.maxPriorityFeePerGas === undefined ? {} : { maxFeePerGas: toHex(transaction.maxFeePerGas), maxPriorityFeePerGas: toHex(transaction.maxPriorityFeePerGas) };
+    const result = await provider.request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId), ...(transaction.nonce === undefined ? {} : { nonce: toHex(transaction.nonce) }), ...fees }] });
     return hash(result);
   }
   async requestExternalExecution(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: `0x${string}`; data: `0x${string}`; value: bigint }, beforeRequest: () => Promise<void>, onProviderRequest: () => void) {
