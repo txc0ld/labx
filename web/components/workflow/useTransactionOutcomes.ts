@@ -25,8 +25,8 @@ export function useTransactionOutcomes(service: RaffleService, wallet: WalletSes
  */
 export type SavedHashCheck = "checking" | "attention" | "settled";
 export type PageVisibility = { visible(): boolean; onVisible(listener: () => void): () => void };
-type CheckService = Pick<RaffleService, "pending" | "inspectOutcome" | "settlePending">;
-type CheckOwner = Pick<TransactionOutcomes, "getSnapshot" | "resume">;
+type CheckService = Pick<RaffleService, "pending" | "inspectOutcome">;
+type CheckOwner = Pick<TransactionOutcomes, "getSnapshot" | "resume" | "settlePending">;
 
 const FIRST_RETRY_MS = 2_000, MAX_RETRY_MS = 15_000;
 export const SAVED_HASH_ATTENTION_MS = 180_000;
@@ -50,9 +50,10 @@ function ownCheckFailed(outcomes: readonly TransactionOutcome[], hash: Hex) {
  * It only reads: it never prepares, signs, sends, connects or switches networks. The journal is cleared only through
  * owner.resume, the same canonical path as the manual check, and only after a read-only inspection finds a successful
  * receipt for this exact hash with the required confirmations and the journal's own intent. A hash the chain no longer
- * knows was replaced or dropped, so service.settlePending decides that record from the account's nonces and clears only
- * that record. A reverted receipt, a different intent, an unknown hash the nonces cannot settle, a failed confirmation in
- * this tab, or a send still pending after three minutes calls onAttention and leaves the decision to the person.
+ * knows was replaced or dropped, so owner.settlePending decides that record from the account's nonces and clears only
+ * that record and the hash's own unfinished outcomes. A reverted receipt, a different intent, an unknown hash the nonces
+ * cannot settle, a failed confirmation in this tab, or a send still pending after three minutes calls onAttention and
+ * leaves the decision to the person.
  * onSettled reports that the journal no longer holds the hash.
  */
 export function startSavedHashCheck({ owner, service, wallet, account, hash, onAttention, onSettled, visibility = documentVisibility, now = Date.now }: {
@@ -88,7 +89,7 @@ export function startSavedHashCheck({ owner, service, wallet, account, hash, onA
         failures = 0;
         if (now() - started >= SAVED_HASH_ATTENTION_MS) attention();
       } else if (inspection.kind === "unknown") {
-        const settled = await service.settlePending({ wallet, expected: pending });
+        const settled = await owner.settlePending({ wallet, expected: pending });
         if (stopped) return;
         if (settled.kind === "spent" || settled.kind === "dropped") { onSettled(); return; }
         if (++failures >= 2) attention();

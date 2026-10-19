@@ -67,9 +67,10 @@ export interface RaffleService {
   /**
    * Reads the chain for `expected`, the pending record, and clears exactly that record when the chain shows its send can no
    * longer be mined. A record with a saved hash is read this way only once the chain no longer knows that hash. continueUnsent
-   * also clears a record without a hash when nothing is at its nonce.
+   * also clears a record without a hash when nothing is at its nonce. beforeJournalClear runs under the journal lock just
+   * before the record is removed; if it throws, the record stays.
    */
-  settlePending(input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean }): Promise<PendingSettlement>;
+  settlePending(input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean; beforeJournalClear?: (input: { account: Address; pending: OutcomeJournal }) => void }): Promise<PendingSettlement>;
 }
 
 export type BrowserService =

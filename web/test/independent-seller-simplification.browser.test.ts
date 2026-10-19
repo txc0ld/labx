@@ -76,7 +76,9 @@ run("independent seller simplification boundaries", () => {
     expect(response?.status()).toBe(200);
     // Started at the current block, so the chain check cannot retire it by age while the test looks.
     const startedBlock = (await chain.client.getBlockNumber()).toString();
-    await fixture.page.evaluate(({ key, intentHash, startedBlock }) => localStorage.setItem(key, JSON.stringify({ id: "held-before-create", intentHash, nonce: 77, startedBlock, hash: null })), { key: pendingKey(chain.seller), intentHash: zeroHash, startedBlock });
+    // At the seller's next nonce, so nothing is at it. A nonce above that leaves a gap below it, and the record keeps waiting.
+    const nonce = await chain.client.getTransactionCount({ address: chain.seller, blockTag: "pending" });
+    await fixture.page.evaluate(({ key, intentHash, startedBlock, nonce }) => localStorage.setItem(key, JSON.stringify({ id: "held-before-create", intentHash, nonce, startedBlock, hash: null })), { key: pendingKey(chain.seller), intentHash: zeroHash, startedBlock, nonce });
     await instrumentProvider();
     const advanced = fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Cancel draft" });
     await connectWallet(fixture.page, advanced);

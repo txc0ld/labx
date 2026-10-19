@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { keccak256, toBytes, type Address, type Hex } from "viem";
+import { keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { createRaffleService } from "../lib/chain/service";
-import { memoryPendingJournal, type PendingIntent } from "../lib/chain/pending-journal";
+import { memoryPendingJournal, transactionIntent, type PendingIntent } from "../lib/chain/pending-journal";
 import { NotSentError } from "../lib/chain/submission-errors";
+import { createTransactionOutcomes, type OutcomeStorage } from "../lib/chain/transaction-outcomes";
 import { WalletSession } from "../lib/chain/wallet-session";
 import type { RaffleService } from "../lib/chain/ports";
 import type { SubmissionCheckpoint, WalletProvider } from "../lib/chain/types";
@@ -119,6 +120,9 @@ run("buyer sends: fee suggestion, gas pre-check and pending records on isolated 
       if (!pending) throw new Error("The record was not kept.");
       expect(await service.settlePending({ wallet: lying.session, expected: pending, continueUnsent: true })).toEqual({ kind: "waiting" });
       await chain.mine();
+      // One confirmation is not yet a canonical receipt's two.
+      expect(await service.settlePending({ wallet: lying.session, expected: pending })).toEqual({ kind: "waiting" });
+      await chain.mine();
       expect(await service.settlePending({ wallet: lying.session, expected: pending })).toEqual({ kind: "spent" });
       expect(journal.read(chain.buyer)).toBeNull();
     } finally {
@@ -144,7 +148,7 @@ run("buyer sends: fee suggestion, gas pre-check and pending records on isolated 
       await expect(service.submit({ prepared: await service.prepare({ action: approval(), wallet: late.session }), wallet: late.session })).rejects.toThrow(/unresolved/);
       expect(late.requests).toHaveLength(1);
       expect(await service.settlePending({ wallet: late.session, expected: pending, continueUnsent: true })).toEqual({ kind: "waiting" });
-      await chain.mine();
+      await chain.mine(); await chain.mine();
       expect(await service.settlePending({ wallet: late.session, expected: pending })).toEqual({ kind: "spent" });
       expect(journal.read(chain.buyer)).toBeNull();
     } finally {
@@ -270,5 +274,121 @@ run("buyer sends: fee suggestion, gas pre-check and pending records on isolated 
     reject();
     await expect(sending).rejects.toMatchObject({ code: 4001 });
     expect(journal.read(chain.buyer)).toBeNull();
+  });
+
+  /** A plain transfer from `from` at an explicit nonce, as a wallet or another app sends it. */
+  const transfer = (from: Address, nonce: number, to: Address = from, value = 0n) => chain.rpc("eth_sendTransaction", [{ from, to, value: toHex(value), gas: "0x5208", nonce: toHex(nonce) }]) as Promise<Hex>;
+  const queuedCount = async () => Number((await chain.rpc("txpool_status") as { queued: string }).queued);
+
+  it.each([true, false])("keeps the record of a send queued behind a dropped earlier nonce until it is mined and two blocks deep, Continue=%s", async continueUnsent => {
+    const { service, journal } = await fresh();
+    const buyer = await wallet(chain.buyer, broadcast);
+    const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
+    await chain.rpc("evm_setAutomine", [false]);
+    try {
+      // The earlier send drops while the wallet is open; the wallet's send at the next nonce then waits in the node's queue.
+      await chain.rpc("anvil_dropTransaction", [await transfer(chain.buyer, nonce)]);
+      const queued = await transfer(chain.buyer, nonce + 1, chain.stranger, 1n);
+      const record = { id: "queued-send", nonce: nonce + 1, startedBlock: (await chain.client.getBlockNumber()).toString(), hash: null, intentHash: transactionIntent({ to: chain.stranger, data: "0x", value: 1n }) };
+      journal.write(chain.buyer, record);
+      expect(await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "latest" })).toBe(nonce);
+      expect(await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" })).toBe(nonce);
+      expect(await queuedCount()).toBe(1);
+      if (!continueUnsent) await chain.rpc("anvil_mine", ["0x19"]);
+      expect(await service.settlePending({ wallet: buyer.session, expected: record, continueUnsent })).toEqual({ kind: "waiting" });
+      expect(journal.read(chain.buyer)?.id).toBe("queued-send");
+      // Filling the gap mines the queued send, which the record still guards.
+      await transfer(chain.buyer, nonce);
+      await chain.mine();
+      expect((await chain.client.getTransactionReceipt({ hash: queued })).status).toBe("success");
+      expect(await service.settlePending({ wallet: buyer.session, expected: record })).toEqual({ kind: "waiting" });
+      await chain.mine();
+      expect(await service.settlePending({ wallet: buyer.session, expected: record })).toEqual({ kind: "spent" });
+      expect(journal.read(chain.buyer)).toBeNull();
+    } finally {
+      await chain.rpc("evm_setAutomine", [true]);
+    }
+  });
+
+  it("keeps the record after a pre-broadcast-looking failure when an earlier nonce dropped and the send waits queued", async () => {
+    const { service, journal } = await fresh();
+    const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
+    await chain.rpc("evm_setAutomine", [false]);
+    try {
+      const earlier = await transfer(chain.buyer, nonce);
+      let queued: Hex | null = null;
+      // While the wallet is open the earlier send drops. The wallet's RPC still takes this send, then the wallet reports a fee error.
+      const failing = await wallet(chain.buyer, async params => {
+        await chain.rpc("anvil_dropTransaction", [earlier]);
+        queued = await broadcast(params) as Hex;
+        throw { code: -32603, message: "Internal JSON-RPC error.", data: { code: -32000, message: "insufficient funds for gas * price + value" } };
+      });
+      const prepared = await service.prepare({ action: approval(), wallet: failing.session });
+      await expect(service.submit({ prepared, wallet: failing.session })).rejects.toThrow(/uncertain/);
+      expect(failing.requests.map(request => request.nonce)).toEqual([toHex(nonce + 1)]);
+      expect(await queuedCount()).toBe(1);
+      const pending = await service.pending({ wallet: failing.session });
+      expect(pending).toMatchObject({ nonce: nonce + 1, hash: null });
+      if (!pending || !queued) throw new Error("The record was not kept.");
+      expect(await service.settlePending({ wallet: failing.session, expected: pending, continueUnsent: true })).toEqual({ kind: "waiting" });
+      await transfer(chain.buyer, nonce);
+      await chain.mine();
+      expect((await chain.client.getTransactionReceipt({ hash: queued })).status).toBe("success");
+      await chain.mine();
+      expect(await service.settlePending({ wallet: failing.session, expected: pending })).toEqual({ kind: "spent" });
+      expect(journal.read(chain.buyer)).toBeNull();
+    } finally {
+      await chain.rpc("evm_setAutomine", [true]);
+    }
+  });
+
+  it("clears a record whose nonce was mined only once the send has a canonical receipt's two confirmations", async () => {
+    const { service, journal } = await fresh();
+    const stranger = await wallet(chain.stranger, broadcast);
+    const nonce = await chain.client.getTransactionCount({ address: chain.stranger });
+    const record = { id: "mined-once", nonce, startedBlock: (await chain.client.getBlockNumber()).toString(), hash: null, intentHash: transactionIntent({ to: chain.stranger, data: "0x", value: 0n }) };
+    journal.write(chain.stranger, record);
+    const tx = await transfer(chain.stranger, nonce);
+    await chain.client.waitForTransactionReceipt({ hash: tx });
+    expect(await service.inspectOutcome({ hash: tx, account: chain.stranger })).toMatchObject({ kind: "pending", reason: "confirmations" });
+    expect(await service.settlePending({ wallet: stranger.session, expected: record })).toEqual({ kind: "waiting" });
+    expect(journal.read(chain.stranger)?.id).toBe("mined-once");
+    await chain.mine();
+    expect(await service.inspectOutcome({ hash: tx, account: chain.stranger })).toMatchObject({ kind: "confirmed" });
+    expect(await service.settlePending({ wallet: stranger.session, expected: record })).toEqual({ kind: "spent" });
+    expect(journal.read(chain.stranger)).toBeNull();
+  });
+
+  it("retires a dropped saved hash's outcome checkpoint with its record, so a reload can buy", async () => {
+    const { service, journal } = await fresh();
+    const buyer = await wallet(chain.buyer, broadcast);
+    const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
+    await chain.rpc("evm_setAutomine", [false]);
+    let dropped: Hex;
+    try {
+      dropped = await transfer(chain.buyer, nonce);
+      await chain.rpc("anvil_dropTransaction", [dropped]);
+    } finally {
+      await chain.rpc("evm_setAutomine", [true]);
+    }
+    const record = { id: "dropped-saved", nonce, startedBlock: (await chain.client.getBlockNumber()).toString(), hash: dropped, intentHash: transactionIntent({ to: chain.buyer, data: "0x", value: 0n }) };
+    journal.write(chain.buyer, record);
+    const prefix = `labx:outcome:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}:`;
+    const unrelated = keccak256(toBytes("unrelated-outcome"));
+    const map = new Map([[`${prefix}${dropped.toLowerCase()}`, dropped.toLowerCase()], [`${prefix}${unrelated}`, unrelated]]);
+    const storage: OutcomeStorage = { get length() { return map.size; }, key: index => [...map.keys()][index] ?? null,
+      getItem: key => map.get(key) ?? null, setItem: (key, value) => { map.set(key, value); }, removeItem: key => { map.delete(key); } };
+    const kinds = (owner: ReturnType<typeof createTransactionOutcomes>) => owner.getSnapshot(chain.buyer).map(item => `${item.kind}:${"hash" in item ? item.hash.toLowerCase() : ""}`);
+    const tab = createTransactionOutcomes(service, () => storage);
+    await tab.recover(chain.buyer);
+    expect(kinds(tab)).toEqual([`unverified:${dropped.toLowerCase()}`, `unverified:${unrelated}`]);
+    await chain.rpc("anvil_mine", ["0x19"]);
+    expect(await tab.settlePending({ wallet: buyer.session, expected: record })).toEqual({ kind: "dropped" });
+    expect(journal.read(chain.buyer)).toBeNull();
+    expect([...map.keys()]).toEqual([`${prefix}${unrelated}`]);
+    expect(kinds(tab)).toEqual([`unverified:${unrelated}`]);
+    const reloaded = createTransactionOutcomes(service, () => storage);
+    await reloaded.recover(chain.buyer);
+    expect(kinds(reloaded)).toEqual([`unverified:${unrelated}`]);
   });
 });

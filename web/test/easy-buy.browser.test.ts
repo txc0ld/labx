@@ -3,6 +3,7 @@ import { decodeFunctionData, encodeFunctionData, erc20Abi, keccak256, parseEther
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { formatUsdcAmount } from "../components/workflow/format";
+import { PENDING_SEND_POLL_MS } from "../components/workflow/useTransactionOutcomes";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
 import { browserChain } from "./fixtures/browser-chain";
@@ -228,11 +229,33 @@ run("one-click membership purchase in a rendered browser", () => {
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(saved, { timeout: 20_000 }).toBeNull();
 
-    // A saved hash the chain never saw, as after a wallet's speed-up or cancel, at a spent nonce: it clears by itself too.
-    await write({ id: "replaced", nonce: nonce - 1, startedBlock: await chain.client.getBlockNumber(), hash: keccak256(toBytes("easy-buy-replaced")) });
+    // A gap below its nonce, as when an earlier send dropped and this one may wait in the node's queue: it keeps waiting,
+    // with no Continue, even 25 blocks after it started.
+    await write({ id: "gap", nonce: nonce + 1, startedBlock: await chain.client.getBlockNumber() - 25n });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    await waitingLine.waitFor({ state: "visible", timeout: 20_000 });
+    await fixture.page.waitForTimeout(2 * PENDING_SEND_POLL_MS + 1_000);
+    expect(await saved()).not.toBeNull();
+    expect(await visible(waitingLine)).toBe(1);
+    expect(await fixture.page.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
+    await fixture.page.evaluate((key: string) => localStorage.removeItem(key), journalKey(chain.buyer));
+
+    // A saved hash the chain never saw, as after a wallet's speed-up or cancel, at a spent nonce, with the outcome checkpoint
+    // the page saved for it: both clear by themselves, and Buy works before and after a reload.
+    const replaced = keccak256(toBytes("easy-buy-replaced"));
+    const checkpoint = `labx:outcome:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}:${replaced}`;
+    await write({ id: "replaced", nonce: nonce - 1, startedBlock: await chain.client.getBlockNumber(), hash: replaced });
+    await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: checkpoint, value: replaced });
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(saved, { timeout: 30_000 }).toBeNull();
+    expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), checkpoint)).toBeNull();
     expect(await hashField.count()).toBe(0);
+    for (const reload of [false, true]) {
+      if (reload) await fixture.page.reload({ waitUntil: "domcontentloaded" });
+      await agreement().check();
+      await expect.poll(() => buy(total(PRICES.Entry)).isEnabled(), { timeout: 15_000 }).toBe(true);
+      expect(await fixture.page.getByText(/needs attention|needs verification/).count()).toBe(0);
+    }
 
     // Something is pending at its nonce: the page says so on load, before the box is ticked, then clears once it is mined.
     await chain.rpc("evm_setAutomine", [false]);
@@ -247,6 +270,11 @@ run("one-click membership purchase in a rendered browser", () => {
       await expect.poll(() => visible(waitingLine), { timeout: 10_000 }).toBe(1);
       expect(await saved()).not.toBeNull();
       await chain.mine();
+      // Mined once is not yet a canonical receipt's two confirmations, so it keeps waiting.
+      await fixture.page.waitForTimeout(2 * PENDING_SEND_POLL_MS + 1_000);
+      expect(await saved()).not.toBeNull();
+      expect(await visible(waitingLine)).toBe(1);
+      await chain.mine();
     } finally {
       await chain.rpc("evm_setAutomine", [true]);
     }
@@ -255,7 +283,7 @@ run("one-click membership purchase in a rendered browser", () => {
     expect(await hashField.count()).toBe(0);
     // Only the test's own sends went out: the page never asked the wallet for anything.
     expect(await chain.client.getTransactionCount({ address: chain.buyer })).toBe(nonce + 1);
-  }, 150_000);
+  }, 180_000);
 
   it("does not open the wallet when it cannot pay the network fee, and says how much it needs", async () => {
     await chain.rpc("anvil_setBalance", [chain.stranger, "0x3e8"]);

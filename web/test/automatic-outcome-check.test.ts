@@ -32,17 +32,17 @@ function harness({ inspection = confirmed, journalIntent = intent, outcomes = []
       return journal;
     }),
     inspectOutcome: vi.fn(async (_input: { hash: Hex; account: Address; timeoutMs?: number }) => inspection),
-    // The account's nonces for a saved hash the chain no longer knows; "spent" and "dropped" clear the record.
-    settlePending: vi.fn(async (_input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean }) => {
-      if (settlement.kind === "spent" || settlement.kind === "dropped") journal = null;
-      return settlement;
-    }),
     prepare: vi.fn(forbidden), submit: vi.fn(forbidden), confirm: vi.fn(forbidden), resume: vi.fn(forbidden)
   };
   const terminal: TransactionOutcome = { id: hash, account, kind: "terminal", submitted: receipt, confirmation: { kind: "confirmed", hash, blockNumber: 20n, replacedHash: null, receipt } };
   const owner = {
     getSnapshot: vi.fn(() => outcomes),
-    resume: vi.fn(async (_hash: Hex, _wallet: WalletSessionPort): Promise<TransactionOutcome> => { journal = null; return terminal; })
+    resume: vi.fn(async (_hash: Hex, _wallet: WalletSessionPort): Promise<TransactionOutcome> => { journal = null; return terminal; }),
+    // The account's nonces for a saved hash the chain no longer knows; "spent" and "dropped" clear the record.
+    settlePending: vi.fn(async (_input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean }) => {
+      if (settlement.kind === "spent" || settlement.kind === "dropped") journal = null;
+      return settlement;
+    })
   };
   const visibility: PageVisibility = { visible: () => visible, onVisible(listener) { onVisible = listener; return () => { onVisible = () => {}; }; } };
   const onAttention = vi.fn(), onSettled = vi.fn();
@@ -130,7 +130,7 @@ describe("automatic check of a saved transaction hash", () => {
     expect(h.onAttention).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.service.inspectOutcome).toHaveBeenCalledTimes(2);
-    expect(h.service.settlePending).toHaveBeenCalledWith({ wallet: h.wallet, expected: { id: "saved", hash, nonce: 4 } });
+    expect(h.owner.settlePending).toHaveBeenCalledWith({ wallet: h.wallet, expected: { id: "saved", hash, nonce: 4 } });
     expect(h.onAttention).toHaveBeenCalledTimes(1);
     expect(h.owner.resume).not.toHaveBeenCalled();
     expect(h.journal).not.toBeNull();
@@ -140,8 +140,8 @@ describe("automatic check of a saved transaction hash", () => {
   it.each(["spent", "dropped"] as const)("settles a saved hash the chain no longer knows once the account's nonces show it %s", async kind => {
     const h = harness({ inspection: { kind: "unknown", hash, reason: "Transaction not found." }, settlement: { kind } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.service.settlePending).toHaveBeenCalledTimes(1);
-    expect(h.service.settlePending.mock.calls[0][0].continueUnsent).toBeUndefined();
+    expect(h.owner.settlePending).toHaveBeenCalledTimes(1);
+    expect(h.owner.settlePending.mock.calls[0][0].continueUnsent).toBeUndefined();
     expect(h.journal).toBeNull();
     expect(h.onSettled).toHaveBeenCalled();
     expect(h.onAttention).not.toHaveBeenCalled();

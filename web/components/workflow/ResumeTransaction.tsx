@@ -102,7 +102,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
       if (isTransactionNotFound(reason)) {
         // The chain no longer knows the saved hash: the account's nonces decide, as in the automatic check.
         const saved = record?.hash?.toLowerCase() === transactionHash.toLowerCase() ? record : null;
-        const settled = saved ? await browser.service.settlePending({ wallet: browser.wallet, expected: saved }).catch(() => null) : null;
+        const settled = saved ? await owner.settlePending({ wallet: browser.wallet, expected: saved }).catch(() => null) : null;
         if (version === generation.current && settled?.kind !== "spent" && settled?.kind !== "dropped") setError("That transaction isn’t on the network right now. LABx keeps checking.");
       } else if (version === generation.current) setError(reason instanceof Error ? reason.message : "The transaction could not be checked.");
     } finally {

@@ -148,6 +148,7 @@ run("independent final transaction outcome repairs", () => {
       resume: vi.fn<(_: Parameters<RaffleService["resume"]>[0]) => Promise<SubmittedAction | null>>(),
       confirm: vi.fn<(_: Parameters<RaffleService["confirm"]>[0]) => ReturnType<RaffleService["confirm"]>>(),
       pending: vi.fn<(_: { wallet: WalletSessionPort }) => ReturnType<RaffleService["pending"]>>(),
+      settlePending: vi.fn<(_: Parameters<RaffleService["settlePending"]>[0]) => ReturnType<RaffleService["settlePending"]>>(),
       acknowledgeOutcome: vi.fn(async (input: Parameters<RaffleService["acknowledgeOutcome"]>[0]) => input.acknowledge()),
       captureOutcomeLineage: vi.fn(({ hash }: { account: Address; hash: Hex }) => journalHash?.toLowerCase() === hash.toLowerCase() ? lineage : null),
       inspectOutcome: vi.fn(async ({ hash }: { hash: Hex; account: Address; timeoutMs?: number }): Promise<OutcomeInspection> => {
@@ -163,7 +164,7 @@ run("independent final transaction outcome repairs", () => {
         expect(receipt.hash).toBe(h2);
         retain({ priorHash: supplied === lineage ? h1 : null });
       })
-    } satisfies Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "pending" | "acknowledgeOutcome" | "captureOutcomeLineage" | "inspectOutcome" | "retainOutcome">;
+    } satisfies Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "pending" | "settlePending" | "acknowledgeOutcome" | "captureOutcomeLineage" | "inspectOutcome" | "retainOutcome">;
 
     map.set(checkpoint, h1);
     const owner = createTransactionOutcomes(service, () => storage);
@@ -215,6 +216,7 @@ run("independent final transaction outcome repairs", () => {
       resume: vi.fn<(_: Parameters<RaffleService["resume"]>[0]) => Promise<SubmittedAction | null>>(),
       confirm: vi.fn<(_: Parameters<RaffleService["confirm"]>[0]) => ReturnType<RaffleService["confirm"]>>(),
       pending: vi.fn<(_: { wallet: WalletSessionPort }) => ReturnType<RaffleService["pending"]>>(),
+      settlePending: vi.fn<(_: Parameters<RaffleService["settlePending"]>[0]) => ReturnType<RaffleService["settlePending"]>>(),
       captureOutcomeLineage: vi.fn(() => null),
       inspectOutcome: vi.fn(async ({ hash }: { hash: Hex; account: Address; timeoutMs?: number }): Promise<OutcomeInspection> => {
         if (hash.toLowerCase() === h2.toLowerCase()) return { kind: "confirmed", hash: h2, blockNumber: h2Receipt.blockNumber, replacedHash: null, receipt: h2Receipt };
@@ -224,7 +226,7 @@ run("independent final transaction outcome repairs", () => {
       }),
       retainOutcome: vi.fn(async ({ retain }: Parameters<RaffleService["retainOutcome"]>[0]) => retain({ priorHash: null })),
       acknowledgeOutcome: vi.fn(async ({ acknowledge }: Parameters<RaffleService["acknowledgeOutcome"]>[0]) => acknowledge())
-    } satisfies Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "pending" | "captureOutcomeLineage" | "inspectOutcome" | "retainOutcome" | "acknowledgeOutcome">;
+    } satisfies Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "pending" | "settlePending" | "captureOutcomeLineage" | "inspectOutcome" | "retainOutcome" | "acknowledgeOutcome">;
 
     map.set(checkpoint, h1);
     const owner = createTransactionOutcomes(service, () => storage);

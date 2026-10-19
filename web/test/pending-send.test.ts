@@ -7,6 +7,7 @@ import { notSentReason, preBroadcastEvidence } from "../lib/chain/wallet-errors"
 import { isNotSent, NotSentError, SubmissionNotDispatchedError } from "../lib/chain/submission-errors";
 import { WalletSession } from "../lib/chain/wallet-session";
 import { startPendingSendCheck, type PageVisibility, type PendingSendStatus } from "../components/workflow/useTransactionOutcomes";
+import { createTransactionOutcomes, type OutcomeStorage, type TransactionOutcome } from "../lib/chain/transaction-outcomes";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DeploymentManifest, PendingSettlement, WalletProvider, WalletSnapshot } from "../lib/chain/types";
 import { fixtureTrust } from "./fixtures/deployment";
@@ -22,12 +23,16 @@ function entry(overrides: Partial<PendingIntent> = {}): PendingIntent {
   return { id: "stuck-purchase", intentHash: DIGEST, nonce: 18, startedBlock: STARTED.toString(), hash: null, ...overrides };
 }
 
-/** A chain that answers only the reads the pending check makes: latest and pending nonces, the block number and, for a saved hash, whether it is known. */
-function chainReads(initial: { latest: number; pending: number; block: bigint; known?: boolean }) {
-  const state = { known: false, ...initial, reads: 0, onRead: undefined as (() => void) | undefined };
+/**
+ * A chain that answers only the reads the pending check makes: latest and pending nonces, the nonce at the block below the
+ * head (`deep`, the latest nonce unless set), the block number and, for a saved hash, whether it is known.
+ */
+function chainReads(initial: { latest: number; pending: number; block: bigint; known?: boolean; deep?: number }) {
+  const state = { known: false, ...initial, reads: 0, deepReads: [] as bigint[], onRead: undefined as (() => void) | undefined };
   const client = {
-    async getTransactionCount({ blockTag }: { blockTag: "latest" | "pending" }) {
+    async getTransactionCount({ blockTag, blockNumber }: { blockTag?: "latest" | "pending"; blockNumber?: bigint }) {
       state.reads += 1; state.onRead?.();
+      if (blockNumber !== undefined) { state.deepReads.push(blockNumber); return state.deep ?? state.latest; }
       return blockTag === "latest" ? state.latest : state.pending;
     },
     async getBlockNumber() { return state.block; },
@@ -65,7 +70,7 @@ function connectedWallet(account: `0x${string}` = ACCOUNT): WalletSessionPort {
   };
 }
 
-function setup(chain: { latest: number; pending: number; block: bigint }, journal: PendingJournal = memoryPendingJournal()) {
+function setup(chain: { latest: number; pending: number; block: bigint; deep?: number }, journal: PendingJournal = memoryPendingJournal()) {
   const reads = chainReads(chain);
   const service = createRaffleService(reads.client, manifest, journal);
   journal.write(ACCOUNT, entry());
@@ -73,10 +78,38 @@ function setup(chain: { latest: number; pending: number; block: bigint }, journa
 }
 
 describe("a pending send without a hash settles from the account's nonces", () => {
-  it("clears the record once nonce 18 is spent and nothing is pending (L > N, P == L)", async () => {
-    const { service, wallet, expected, journal } = setup({ latest: 19, pending: 19, block: STARTED + 1n });
+  it("clears the record once nonce 18 is spent with two confirmations and nothing is pending (L > N, P == L)", async () => {
+    const { service, wallet, expected, journal, state } = setup({ latest: 19, pending: 19, block: STARTED + 1n });
     expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "spent" });
     expect(journal.read(ACCOUNT)).toBeNull();
+    // The nonce is read at the block below the head: a send mined there has its own block and one more.
+    expect(state.deepReads).toEqual([STARTED]);
+  });
+
+  it("waits while nonce 18 has only one confirmation, then clears it as spent at two", async () => {
+    const { service, wallet, expected, journal, state } = setup({ latest: 19, pending: 19, deep: 18, block: STARTED + 1n });
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "waiting" });
+    expect(await service.settlePending({ wallet, expected, continueUnsent: true })).toEqual({ kind: "waiting" });
+    expect(journal.read(ACCOUNT)?.id).toBe("stuck-purchase");
+    state.block = STARTED + 2n; state.deep = 19;
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "spent" });
+    expect(journal.read(ACCOUNT)).toBeNull();
+  });
+
+  it("waits while a later mined nonce has only one confirmation, since a wallet may have sent this one at another nonce", async () => {
+    const { service, wallet, expected, journal } = setup({ latest: 20, pending: 20, deep: 19, block: STARTED + 100n });
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "waiting" });
+    expect(journal.read(ACCOUNT)?.id).toBe("stuck-purchase");
+  });
+
+  it.each([
+    ["an earlier nonce dropped, so the send may sit in the node's queue (L < N, P < N)", { latest: 17, pending: 17 }],
+    ["an earlier nonce is still pending (L < N, P == N)", { latest: 17, pending: 18 }]
+  ])("keeps the record and waits when %s, even on Continue and after 25 blocks", async (_name, nonces) => {
+    const { service, wallet, expected, journal } = setup({ ...nonces, block: STARTED + UNSENT_CLEAR_BLOCKS + 5n });
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "waiting" });
+    expect(await service.settlePending({ wallet, expected, continueUnsent: true })).toEqual({ kind: "waiting" });
+    expect(journal.read(ACCOUNT)?.id).toBe("stuck-purchase");
   });
 
   it("waits while something is pending at nonce 18 (P > N >= L)", async () => {
@@ -183,7 +216,7 @@ describe("a pending send without a hash settles from the account's nonces", () =
 
 describe("a pending send whose saved hash the chain no longer knows", () => {
   const SAVED = `0x${"cd".repeat(32)}` as const;
-  function saved(chain: { latest: number; pending: number; block: bigint; known?: boolean }) {
+  function saved(chain: { latest: number; pending: number; block: bigint; known?: boolean; deep?: number }) {
     const setupResult = setup(chain);
     setupResult.journal.write(ACCOUNT, entry({ hash: SAVED }));
     return { ...setupResult, expected: { id: "stuck-purchase", hash: SAVED, nonce: 18 } };
@@ -208,6 +241,15 @@ describe("a pending send whose saved hash the chain no longer knows", () => {
     expect(journal.read(ACCOUNT)?.hash).toBe(SAVED);
   });
 
+  it("waits while its spent nonce has one confirmation, or while a gap below its nonce can hold it queued", async () => {
+    const shallow = saved({ latest: 19, pending: 19, deep: 18, block: STARTED + 100n });
+    expect(await shallow.service.settlePending({ wallet: shallow.wallet, expected: shallow.expected })).toEqual({ kind: "waiting" });
+    expect(shallow.journal.read(ACCOUNT)?.hash).toBe(SAVED);
+    const gap = saved({ latest: 17, pending: 17, block: STARTED + UNSENT_CLEAR_BLOCKS + 5n });
+    expect(await gap.service.settlePending({ wallet: gap.wallet, expected: gap.expected })).toEqual({ kind: "waiting" });
+    expect(gap.journal.read(ACCOUNT)?.hash).toBe(SAVED);
+  });
+
   it("clears a dropped send only after 25 blocks with nothing at its nonce, never on Continue", async () => {
     const early = saved({ latest: 18, pending: 18, block: STARTED + UNSENT_CLEAR_BLOCKS - 1n });
     expect(await early.service.settlePending({ wallet: early.wallet, expected: early.expected, continueUnsent: true })).toEqual({ kind: "unsent" });
@@ -222,6 +264,68 @@ describe("a pending send whose saved hash the chain no longer knows", () => {
     expect(await service.settlePending({ wallet, expected: { id: "stuck-purchase", hash: `0x${"ef".repeat(32)}`, nonce: 18 } })).toEqual({ kind: "changed" });
     expect(await service.settlePending({ wallet, expected: { id: "stuck-purchase", hash: null, nonce: 18 } })).toEqual({ kind: "changed" });
     expect(journal.read(ACCOUNT)?.hash).toBe(SAVED);
+  });
+});
+
+describe("settling a saved hash through the page's outcome owner", () => {
+  const SAVED = `0x${"cd".repeat(32)}` as const;
+  const OTHER = `0x${"ef".repeat(32)}` as const;
+  const prefix = `labx:outcome:v1:${manifest.chainId}:${CONTRACT.toLowerCase()}:${DIGEST}:${ACCOUNT.toLowerCase()}:`;
+  function outcomes(removeItem?: (key: string) => void) {
+    const reads = chainReads({ latest: 19, pending: 19, deep: 18, block: STARTED + 100n });
+    const journal = memoryPendingJournal();
+    const service = createRaffleService(reads.client, manifest, journal);
+    journal.write(ACCOUNT, entry({ hash: SAVED }));
+    // A dropped saved hash and an unrelated one, each with its durable outcome checkpoint, as a reload finds them.
+    const map = new Map<string, string>([[`${prefix}${SAVED}`, SAVED], [`${prefix}${OTHER}`, OTHER]]);
+    const storage: OutcomeStorage = { get length() { return map.size; }, key: index => [...map.keys()][index] ?? null, getItem: key => map.get(key) ?? null,
+      setItem: (key, value) => { map.set(key, value); }, removeItem: removeItem ?? (key => { map.delete(key); }) };
+    return { ...reads, journal, service, map, storage, expected: { id: "stuck-purchase", hash: SAVED, nonce: 18 } };
+  }
+  const shown = (items: readonly TransactionOutcome[]) => items.map(item => `${item.kind}:${"hash" in item ? item.hash : ""}`);
+
+  it("removes that hash's checkpoint and row with the record, so nothing blocks Buy after a reload, and keeps other outcomes", async () => {
+    const { service, journal, map, storage, state, expected } = outcomes();
+    const tab = createTransactionOutcomes(service, () => storage);
+    await tab.recover(ACCOUNT);
+    expect(shown(tab.getSnapshot(ACCOUNT))).toEqual([`unverified:${SAVED}`, `unverified:${OTHER}`]);
+    // One confirmation: nothing is cleared yet.
+    expect(await tab.settlePending({ wallet: connectedWallet(), expected })).toEqual({ kind: "waiting" });
+    expect(map.size).toBe(2);
+    state.deep = 19;
+    expect(await tab.settlePending({ wallet: connectedWallet(), expected })).toEqual({ kind: "spent" });
+    expect(journal.read(ACCOUNT)).toBeNull();
+    expect([...map.keys()]).toEqual([`${prefix}${OTHER}`]);
+    expect(shown(tab.getSnapshot(ACCOUNT))).toEqual([`unverified:${OTHER}`]);
+    const reloaded = createTransactionOutcomes(service, () => storage);
+    await reloaded.recover(ACCOUNT);
+    expect(shown(reloaded.getSnapshot(ACCOUNT))).toEqual([`unverified:${OTHER}`]);
+  });
+
+  it("does not bring the row back when a recovery read that started before the settlement finishes after it", async () => {
+    const { service, map, storage, state, expected } = outcomes();
+    state.deep = 19;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const slow = { ...service, async inspectOutcome(input: Parameters<RaffleService["inspectOutcome"]>[0]) { await gate; return service.inspectOutcome(input); } };
+    const tab = createTransactionOutcomes(slow, () => storage);
+    const recovering = tab.recover(ACCOUNT);
+    expect(shown(tab.getSnapshot(ACCOUNT))).toEqual([`recovery:${SAVED}`, `recovery:${OTHER}`]);
+    expect(await tab.settlePending({ wallet: connectedWallet(), expected })).toEqual({ kind: "spent" });
+    expect(shown(tab.getSnapshot(ACCOUNT))).toEqual([`recovery:${OTHER}`]);
+    release();
+    await recovering;
+    expect(shown(tab.getSnapshot(ACCOUNT))).toEqual([`unverified:${OTHER}`]);
+    expect(map.size).toBe(1);
+  });
+
+  it("keeps the record when its checkpoint cannot be removed", async () => {
+    const { service, journal, map, storage, state, expected } = outcomes(() => {});
+    state.deep = 19;
+    const tab = createTransactionOutcomes(service, () => storage);
+    await expect(tab.settlePending({ wallet: connectedWallet(), expected })).rejects.toThrow("The recovery checkpoint could not be cleared.");
+    expect(journal.read(ACCOUNT)?.hash).toBe(SAVED);
+    expect(map.size).toBe(2);
   });
 });
 

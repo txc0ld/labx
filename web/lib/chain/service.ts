@@ -29,8 +29,10 @@ export function isTransactionNotFound(error: unknown): boolean {
 }
 /** Blocks after a record's starting block before a send with nothing at its nonce is treated as never sent. */
 export const UNSENT_CLEAR_BLOCKS = 25n;
-/** Waits between the pending-nonce reads after a wallet failure that only a -32603 or -32000 code marks as pre-broadcast. */
+/** Waits between the nonce reads after a wallet failure that only a -32603 or -32000 code marks as pre-broadcast. */
 export const CODE_ONLY_RECHECK_MS = [2_000, 2_000] as const;
+/** Confirmations a canonical receipt needs: its own block and one more. A pending record's nonce is spent at the same depth. */
+export const RECEIPT_CONFIRMATIONS = 2;
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
   const sellerReader = createSellerReader(client, manifest, reader);
@@ -180,23 +182,23 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
             }
           }
         });
-        // The wallet's own fee or gas check failed before it broadcast. With nothing pending at this nonce, the send is retired here.
+        // The wallet's own fee or gas check failed before it broadcast. With nothing at this nonce, the send is retired here.
         let notSent = false;
         const evidence = walletRequested && !refused && broadcastHash === null ? preBroadcastEvidence(error) : null;
         if (evidence) {
-          const quiet = async (nonce: number) => await client.getTransactionCount({ address: account, blockTag: "pending" }) <= nonce;
+          const quiet = async (record: PendingIntent) => { const state = await nonceState(account, record); return state === "unsent" || state === "expired"; };
           await (async () => {
             const sent = intent;
             if (!sent) return;
             // A bare code is weaker evidence: LABx's RPC reads again over a few seconds, so a send the wallet's own RPC took can arrive.
             if (evidence === "code") for (const wait of CODE_ONLY_RECHECK_MS) {
-              if (!await quiet(sent.nonce)) return;
+              if (!await quiet(sent)) return;
               await new Promise(resolve => setTimeout(resolve, wait));
             }
             await journal.exclusive(account, async () => {
               const current = journal.read(account);
               if (!current || current.id !== sent.id || current.hash !== null) return;
-              if (!await quiet(current.nonce)) return;
+              if (!await quiet(current)) return;
               const latest = journal.read(account);
               if (!latest || latest.id !== current.id || latest.hash !== null) return;
               onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
@@ -212,6 +214,13 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     }); } finally { submitting.delete(key); }
   }
 
+  /**
+   * What the account's latest nonce L and pending nonce P say about a send at the record's nonce N. "unsent": L == N and
+   * P == N, so every earlier nonce is mined and nothing is pending at N; "expired" once 25 blocks have also passed since the
+   * record started. "spent": N and every later mined nonce have the receipt's confirmation depth, and nothing is pending.
+   * Anything else is "waiting": something is pending, a mined nonce is not yet that deep, or a gap below N (L < N or P < N)
+   * can hold the send in the node's queue until the gap fills.
+   */
   async function nonceState(account: Address, entry: Readonly<PendingIntent>) {
     const [latest, pendingNonce, block] = await Promise.all([
       client.getTransactionCount({ address: account, blockTag: "latest" }),
@@ -219,16 +228,17 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       client.getBlockNumber({ cacheTime: 0 })
     ]);
     if (pendingNonce < latest) throw new Error("The network returned inconsistent nonces. Check again.");
-    if (latest > entry.nonce) return pendingNonce === latest ? "spent" : "waiting";
-    if (pendingNonce > entry.nonce) return "waiting";
-    return block >= BigInt(entry.startedBlock) + UNSENT_CLEAR_BLOCKS ? "expired" : "unsent";
+    if (latest === entry.nonce && pendingNonce === entry.nonce) return block >= BigInt(entry.startedBlock) + UNSENT_CLEAR_BLOCKS ? "expired" : "unsent";
+    if (latest <= entry.nonce || pendingNonce > latest) return "waiting";
+    const deep = await client.getTransactionCount({ address: account, blockNumber: block - BigInt(RECEIPT_CONFIRMATIONS - 1) });
+    return deep === latest ? "spent" : "waiting";
   }
   /** Whether the chain knows the transaction, mined or pending. Read failures other than "not found" are thrown. */
   async function knownTransaction(txHash: Hex) {
     try { await client.getTransaction({ hash: txHash }); return true; }
     catch (error) { if (isTransactionNotFound(error)) return false; throw error; }
   }
-  async function settlePending({ wallet, expected, continueUnsent = false }: Parameters<RaffleService["settlePending"]>[0]): Promise<PendingSettlement> {
+  async function settlePending({ wallet, expected, continueUnsent = false, beforeJournalClear }: Parameters<RaffleService["settlePending"]>[0]): Promise<PendingSettlement> {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const account = session.account;
     const inspected = (current: PendingIntent | null): current is PendingIntent => current !== null && current.id === expected.id && current.nonce === expected.nonce
@@ -247,6 +257,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       // A saved hash was broadcast once, and its wallet may broadcast it again, so only 25 blocks with nothing at its nonce clear it.
       if (state === "waiting" || state === "unsent" && (!continueUnsent || current.hash !== null)) return { kind: state };
       if (!inspected(journal.read(account))) return { kind: "changed" };
+      beforeJournalClear?.({ account, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
       journal.remove(account);
       return { kind: state === "spent" ? "spent" : "dropped" };
     });
@@ -259,7 +270,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       client.getBlockNumber({ cacheTime: 0 })
     ]);
     if (actual.hash.toLowerCase() !== receipt.transactionHash.toLowerCase() || actual.blockNumber !== receipt.blockNumber || actual.blockHash !== receipt.blockHash || block.hash !== receipt.blockHash) throw new Error("The transaction block changed. Refresh its confirmation.");
-    if (latest < receipt.blockNumber + 1n) throw new Error("The receipt does not yet have two canonical confirmations.");
+    if (latest < receipt.blockNumber + BigInt(RECEIPT_CONFIRMATIONS - 1)) throw new Error("The receipt does not yet have two canonical confirmations.");
     if (!sameAddress(actual.from, account) || !sameAddress(receipt.from, account)) throw new Error("Transaction sender does not match this wallet.");
     const result: CanonicalReceipt = { hash: receipt.transactionHash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value,
       nonce: actual.nonce, blockNumber: receipt.blockNumber, status: receipt.status };
@@ -267,7 +278,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     return Object.freeze(result);
   }
   async function canonicalReceipt(txHash: Hex, account: Address, timeoutMs: number, onReplaced?: () => void): Promise<CanonicalReceipt> {
-    return validateReceipt(await client.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: Math.max(1, Math.min(timeoutMs, 120_000)), onReplaced }), account);
+    return validateReceipt(await client.waitForTransactionReceipt({ hash: txHash, confirmations: RECEIPT_CONFIRMATIONS, timeout: Math.max(1, Math.min(timeoutMs, 120_000)), onReplaced }), account);
   }
   function timedOut(error: unknown) {
     return error instanceof Error && /Timeout|timed out/i.test(error.name + error.message);
@@ -286,7 +297,7 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       } else {
         const mined = await client.getTransactionReceipt({ hash: txHash });
         if (mined.transactionHash.toLowerCase() !== txHash.toLowerCase() || mined.blockNumber !== requested.blockNumber || mined.blockHash !== requested.blockHash) throw new Error("The receipt does not match the requested transaction's canonical block.");
-        if (await client.getBlockNumber({ cacheTime: 0 }) < mined.blockNumber + 1n) return { kind: "pending", hash: txHash, reason: "confirmations", transaction: observed };
+        if (await client.getBlockNumber({ cacheTime: 0 }) < mined.blockNumber + BigInt(RECEIPT_CONFIRMATIONS - 1)) return { kind: "pending", hash: txHash, reason: "confirmations", transaction: observed };
         receipt = await validateReceipt(mined, account);
       }
       if (receipt.nonce !== requested.nonce) throw new Error("The canonical receipt does not match the requested transaction nonce.");

@@ -40,6 +40,7 @@ function fixture() {
     acknowledgeOutcome: vi.fn(async (input: Parameters<RaffleService["acknowledgeOutcome"]>[0]) => { input.acknowledge(); }),
     manifest, submit: vi.fn(async () => submitted),
     pending: vi.fn(async (): ReturnType<RaffleService["pending"]> => null),
+    settlePending: vi.fn(async (_input: Parameters<RaffleService["settlePending"]>[0]): ReturnType<RaffleService["settlePending"]> => ({ kind: "changed" })),
     inspectOutcome: vi.fn(async (_input: Parameters<RaffleService["inspectOutcome"]>[0]): Promise<OutcomeInspection> => confirmed),
     resume: vi.fn(async (input: Parameters<RaffleService["resume"]>[0]) => { input.beforeJournalUpdate?.({ transaction: submitted, nonce: 1, pending: { id: "test-journal", hash, nonce: 1 } }); return submitted; }),
     confirm: async (input: Parameters<RaffleService["confirm"]>[0]): Promise<Confirmation> => {
