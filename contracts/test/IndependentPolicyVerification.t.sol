@@ -292,6 +292,7 @@ contract IndependentPolicyVerificationTest is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        target.setPaused(false);
     }
 
     function _packs() internal pure returns (LabxRaffle.PackConfig[] memory configs) {

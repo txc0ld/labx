@@ -11,8 +11,8 @@ import {VRFV2PlusClient} from "./vendor/VRFV2PlusClient.sol";
 import {IVRFCoordinatorV2Plus, ISwapRouter02, IWETH9, AggregatorV3Interface} from "./interfaces/External.sol";
 
 /// @title LabxRaffle
-/// @notice Sepolia membership-pack draws for LABx. Bonus entries are not tickets.
-///         Ethereum mainnet (chain id 1) cannot be deployed. Admin configuration needs independent review.
+/// @notice Membership-pack draws for LABx. Bonus entries are not tickets.
+///         Mainnet deployment goes through script/DeployMainnet.s.sol's two stages. Admin configuration needs independent review.
 /// @dev Prize NFTs are escrowed and pulled after settlement or cancellation. USDC principal
 ///      and protocol fees are pulled separately, so a reverting receiver cannot freeze them.
 ///      A server-side commitment is stored as a hash and never decoded on-chain.
@@ -167,7 +167,6 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         uint16 requestConfirmations;
     }
 
-    error MainnetDisabled();
     error ZeroAddress();
     error NotOwner();
     error NotPendingOwner();
@@ -306,7 +305,6 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     }
 
     constructor(Init memory init) {
-        if (block.chainid == 1) revert MainnetDisabled();
         if (init.treasury == address(0) || init.usdc == address(0) || init.vrfCoordinator == address(0)) {
             revert ZeroAddress();
         }
@@ -339,7 +337,10 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         termsHash = init.termsHash;
         callbackGasLimit = init.callbackGasLimit;
         requestConfirmations = init.requestConfirmations;
+        // Every deployment starts paused, so nothing opens or sells until the owner unpauses.
+        paused = true;
         emit OwnershipTransferred(address(0), msg.sender);
+        emit PausedSet(true);
     }
 
     receive() external payable {

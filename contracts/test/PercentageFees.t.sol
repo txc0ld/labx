@@ -48,6 +48,7 @@ abstract contract PercentageFeeFixture is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        raffle.setPaused(false);
     }
 
     function _open(uint128 price) internal returns (uint256 id) {
