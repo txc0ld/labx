@@ -38,13 +38,17 @@ contract DeployMainnetHarness is DeployMainnet {
         _validateSafe(safe);
     }
 
+    function config() external view returns (Config memory) {
+        return _config();
+    }
+
     function subscription(uint256 subId) external view returns (Subscription memory) {
         return _subscription(subId);
     }
 }
 
-/// @notice Refusals that happen before anything is broadcast. They need no fork and read no environment variables,
-///         which other test contracts running in parallel also set.
+/// @notice Refusals that happen before anything is broadcast. They need no fork and read no environment variable that
+///         another test contract, running in parallel, sets.
 contract DeployMainnetRefusalTest is Test {
     address internal safe = makeAddr("mainnet-safe-fixture");
     DeployMainnetHarness internal script = new DeployMainnetHarness();
@@ -68,6 +72,39 @@ contract DeployMainnetRefusalTest is Test {
         vm.mockCall(safe, abi.encodeWithSignature("getThreshold()"), abi.encode(uint256(2)));
         script.validateSafe(safe);
     }
+
+    /// @dev DEPLOY_MODE is read before any other variable and only this test sets it. Unset reads as "".
+    function test_refusesAMissingOrUnknownDeployMode() public {
+        vm.setEnv("DEPLOY_MODE", "");
+        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.DeployModeInvalid.selector, ""));
+        script.config();
+        vm.setEnv("DEPLOY_MODE", "Fresh");
+        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.DeployModeInvalid.selector, "Fresh"));
+        script.config();
+        vm.setEnv("DEPLOY_MODE", "redeploy");
+        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.DeployModeInvalid.selector, "redeploy"));
+        script.config();
+    }
+
+    function test_refusesAResumeWithoutAnAddressAndAFreshRunWithOne() public {
+        vm.chainId(1);
+        DeployMainnet.Config memory c = DeployMainnet.Config({
+            safe: safe,
+            pk: 0xB0B,
+            terms: bytes32(uint256(1)),
+            fundTarget: 0,
+            subId: 1,
+            fresh: false,
+            expectedNonce: 0,
+            existing: address(0)
+        });
+        vm.expectRevert(DeployMainnet.RaffleAddressMissing.selector);
+        script.deploy(c);
+        c.fresh = true;
+        c.existing = address(0x1234);
+        vm.expectRevert(abi.encodeWithSelector(DeployMainnet.RaffleAddressUnexpected.selector, address(0x1234)));
+        script.deploy(c);
+    }
 }
 
 /// @notice Both deployment stages and one raffle lifecycle against real chain-1 state: Circle USDC, the Chainlink VRF v2.5
@@ -86,6 +123,8 @@ contract DeployMainnetForkTest is Test {
     DeployMainnetHarness internal stage2;
     ICoordinatorView internal coordinator = ICoordinatorView(COORDINATOR);
     address internal deployer = vm.addr(TEST_KEY);
+    // EXPECTED_NONCE from the deployment record of the latest stage 1 run.
+    uint256 internal recordedNonce;
     address internal seller = makeAddr("seller");
     address internal buyer = makeAddr("buyer");
 
@@ -101,10 +140,13 @@ contract DeployMainnetForkTest is Test {
     }
 
     /// @dev Runs stage 1 and returns the ID from the mined SubscriptionCreated log, as the operator reads it from the receipt.
+    ///      Records EXPECTED_NONCE as the deployment record would: the stage 1 nonce + 1.
     function _minedSubscription() internal returns (uint256 subId) {
         CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
         vm.recordLogs();
+        uint256 stage1Nonce = vm.getNonce(deployer);
         stage1.create(TEST_KEY);
+        recordedNonce = stage1Nonce + 1;
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].emitter == COORDINATOR && logs[i].topics[0] == SUBSCRIPTION_CREATED) {
@@ -114,10 +156,34 @@ contract DeployMainnetForkTest is Test {
         revert("no SubscriptionCreated log");
     }
 
-    function _config(uint256 subId, address existing) internal pure returns (DeployMainnet.Config memory) {
+    function _fresh(uint256 subId) internal view returns (DeployMainnet.Config memory) {
         return DeployMainnet.Config({
-            safe: SAFE, pk: TEST_KEY, terms: TERMS, fundTarget: FUND, subId: subId, existing: existing
+            safe: SAFE,
+            pk: TEST_KEY,
+            terms: TERMS,
+            fundTarget: FUND,
+            subId: subId,
+            fresh: true,
+            expectedNonce: recordedNonce,
+            existing: address(0)
         });
+    }
+
+    function _resume(uint256 subId, address raffle) internal pure returns (DeployMainnet.Config memory) {
+        return DeployMainnet.Config({
+            safe: SAFE,
+            pk: TEST_KEY,
+            terms: TERMS,
+            fundTarget: FUND,
+            subId: subId,
+            fresh: false,
+            expectedNonce: 0,
+            existing: raffle
+        });
+    }
+
+    function _nonceMoved() internal view returns (bytes memory) {
+        return abi.encodeWithSelector(DeployMainnet.NonceMoved.selector, recordedNonce, vm.getNonce(deployer));
     }
 
     function _raffleFrom(address from, uint256 subId, uint24 poolFee, uint32 callbackGas)
@@ -183,7 +249,7 @@ contract DeployMainnetForkTest is Test {
 
     function test_deploysPausedOnTheMinedSubscriptionAndHandsEverythingToTheSafe() public {
         uint256 subId = _minedSubscription();
-        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
         assertEq(address(labx.usdc()), USDC);
         assertEq(labx.vrfCoordinator(), COORDINATOR);
         assertEq(labx.subscriptionId(), subId);
@@ -215,7 +281,7 @@ contract DeployMainnetForkTest is Test {
         uint256 subId = _minedSubscription();
         uint64 nonce = vm.getNonce(deployer);
         vm.expectRevert();
-        stage2.deploy(_config(subId + 1, address(0)));
+        stage2.deploy(_fresh(subId + 1));
         assertEq(vm.getNonce(deployer), nonce);
     }
 
@@ -223,31 +289,28 @@ contract DeployMainnetForkTest is Test {
         address other = makeAddr("other");
         vm.prank(other);
         uint256 subId = coordinator.createSubscription();
-        _refused(
-            _config(subId, address(0)),
-            abi.encodeWithSelector(MainnetDeployment.SubscriptionNotOwned.selector, subId, other)
-        );
+        _refused(_fresh(subId), abi.encodeWithSelector(MainnetDeployment.SubscriptionNotOwned.selector, subId, other));
     }
 
-    /// @dev A fresh run only takes the untouched stage 1 subscription, so a rerun that lost RAFFLE_ADDRESS cannot deploy
-    ///      and register a second raffle.
+    /// @dev A fresh run only takes the recorded nonce and the untouched stage 1 subscription, so a rerun cannot deploy and
+    ///      register a second raffle. The subscription check holds even if the nonce is recorded again.
     function test_freshRunRefusesASubscriptionAlreadyInUse() public {
         uint256 subId = _minedSubscription();
-        stage2.deploy(_config(subId, address(0)));
-        _refused(_config(subId, address(0)), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, subId));
+        stage2.deploy(_fresh(subId));
+        _refused(_fresh(subId), _nonceMoved());
+        recordedNonce = vm.getNonce(deployer);
+        _refused(_fresh(subId), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, subId));
         assertEq(_consumers(subId).length, 1);
 
         uint256 offered = _minedSubscription();
         vm.prank(deployer);
         coordinator.requestSubscriptionOwnerTransfer(offered, SAFE);
-        _refused(
-            _config(offered, address(0)), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, offered)
-        );
+        _refused(_fresh(offered), _nonceMoved());
+        recordedNonce = vm.getNonce(deployer);
+        _refused(_fresh(offered), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, offered));
         vm.prank(SAFE);
         coordinator.acceptSubscriptionOwnerTransfer(offered);
-        _refused(
-            _config(offered, address(0)), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, offered)
-        );
+        _refused(_fresh(offered), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, offered));
     }
 
     /// @dev An interruption right after the raffle deployed: rerunning with RAFFLE_ADDRESS finishes every remaining step
@@ -256,7 +319,7 @@ contract DeployMainnetForkTest is Test {
         uint256 subId = _minedSubscription();
         LabxRaffle labx = _interrupted(subId);
         address next = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
-        assertEq(address(stage2.deploy(_config(subId, address(labx)))), address(labx));
+        assertEq(address(stage2.deploy(_resume(subId, address(labx)))), address(labx));
         assertEq(next.code.length, 0);
         assertTrue(labx.paused());
         assertTrue(labx.nativePayment());
@@ -266,10 +329,10 @@ contract DeployMainnetForkTest is Test {
         assertEq(_consumers(subId)[0], address(labx));
 
         uint64 nonce = vm.getNonce(deployer);
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(vm.getNonce(deployer), nonce);
         _accept(labx, subId);
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(vm.getNonce(deployer), nonce);
         assertEq(_nativeBalance(subId), FUND);
         assertEq(labx.owner(), SAFE);
@@ -278,9 +341,9 @@ contract DeployMainnetForkTest is Test {
     /// @dev Funding is a target, not an amount: a rerun adds nothing, and a resume after partial funding sends the shortfall.
     function test_fundsOnlyUpToTheTarget() public {
         uint256 subId = _minedSubscription();
-        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
         assertEq(_nativeBalance(subId), FUND);
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(_nativeBalance(subId), FUND);
 
         uint256 partlyFunded = _minedSubscription();
@@ -288,9 +351,40 @@ contract DeployMainnetForkTest is Test {
         vm.prank(deployer);
         coordinator.fundSubscriptionWithNative{value: 0.1 ether}(partlyFunded);
         uint256 before = deployer.balance;
-        stage2.deploy(_config(partlyFunded, address(interrupted)));
+        stage2.deploy(_resume(partlyFunded, address(interrupted)));
         assertEq(_nativeBalance(partlyFunded), FUND);
         assertEq(before - deployer.balance, FUND - 0.1 ether);
+    }
+
+    /// @dev Codex round 3: a stage 2 run that stopped after its CREATE, or after setNativePayment(true), leaves the
+    ///      subscription untouched. The deployer nonce has moved past the record, so a fresh rerun is refused, and
+    ///      resuming with the recorded CREATE address finishes the run.
+    function _interruptedFreshRunMustResume(bool nativeBillingMined) internal {
+        uint256 subId = _minedSubscription();
+        address recorded = vm.computeCreateAddress(deployer, recordedNonce);
+        LabxRaffle labx = _interrupted(subId);
+        assertEq(address(labx), recorded);
+        if (nativeBillingMined) {
+            vm.prank(deployer);
+            labx.setNativePayment(true);
+        }
+        _refused(_fresh(subId), _nonceMoved());
+        assertEq(_consumers(subId).length, 0);
+
+        assertEq(address(stage2.deploy(_resume(subId, recorded))), recorded);
+        assertEq(_consumers(subId).length, 1);
+        assertEq(_consumers(subId)[0], recorded);
+        assertTrue(labx.nativePayment());
+        assertEq(labx.pendingOwner(), SAFE);
+        assertEq(_nativeBalance(subId), FUND);
+    }
+
+    function test_freshRerunAfterAnInterruptedCreateIsRefusedAndResumeFinishes() public {
+        _interruptedFreshRunMustResume(false);
+    }
+
+    function test_freshRerunAfterInterruptedNativeBillingIsRefusedAndResumeFinishes() public {
+        _interruptedFreshRunMustResume(true);
     }
 
     /// @dev Pause blocks opening from the moment of deployment, but not administration, and the Safe's acceptance voids
@@ -317,7 +411,7 @@ contract DeployMainnetForkTest is Test {
         vm.expectRevert(LabxRaffle.Paused.selector);
         labx.open(id);
 
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         _accept(labx, subId);
         vm.prank(SAFE);
         labx.setPaused(false);
@@ -333,18 +427,18 @@ contract DeployMainnetForkTest is Test {
         vm.prank(deployer);
         labx.transferOwnership(foreign);
         _refused(
-            _config(subId, address(labx)),
+            _resume(subId, address(labx)),
             abi.encodeWithSelector(DeployMainnet.RaffleOwnershipUnexpected.selector, deployer, foreign)
         );
         vm.prank(foreign);
         labx.acceptOwnership();
         _refused(
-            _config(subId, address(labx)),
+            _resume(subId, address(labx)),
             abi.encodeWithSelector(DeployMainnet.RaffleOwnershipUnexpected.selector, foreign, address(0))
         );
         LabxRaffle theirs = _raffleFrom(foreign, subId, 0, CALLBACK_GAS);
         _refused(
-            _config(subId, address(theirs)),
+            _resume(subId, address(theirs)),
             abi.encodeWithSelector(DeployMainnet.RaffleOwnershipUnexpected.selector, foreign, address(0))
         );
         assertEq(_consumers(subId).length, 0);
@@ -353,7 +447,7 @@ contract DeployMainnetForkTest is Test {
     function test_resumeRefusesChangedSettings() public {
         uint256 subId = _minedSubscription();
         LabxRaffle labx = _interrupted(subId);
-        DeployMainnet.Config memory c = _config(subId, address(labx));
+        DeployMainnet.Config memory c = _resume(subId, address(labx));
         uint256 untouched = vm.snapshotState();
 
         vm.prank(deployer);
@@ -383,14 +477,14 @@ contract DeployMainnetForkTest is Test {
         uint256 subId = _minedSubscription();
         LabxRaffle otherPoolFee = _raffleFrom(deployer, subId, 500, CALLBACK_GAS);
         _refused(
-            _config(subId, address(otherPoolFee)),
+            _resume(subId, address(otherPoolFee)),
             abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, address(otherPoolFee))
         );
         LabxRaffle lowGas = _raffleFrom(deployer, subId, 0, 250_000);
-        _refused(_config(subId, address(lowGas)), _settingMismatch("callbackGasLimit"));
-        _refused(_config(subId, USDC), abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, USDC));
+        _refused(_resume(subId, address(lowGas)), _settingMismatch("callbackGasLimit"));
+        _refused(_resume(subId, USDC), abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, USDC));
         address empty = makeAddr("empty");
-        _refused(_config(subId, empty), abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, empty));
+        _refused(_resume(subId, empty), abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, empty));
     }
 
     function test_resumeRefusesASubscriptionWithAnotherConsumer() public {
@@ -399,7 +493,7 @@ contract DeployMainnetForkTest is Test {
         vm.prank(deployer);
         coordinator.addConsumer(subId, makeAddr("other consumer"));
         vm.expectRevert(abi.encodeWithSelector(DeployMainnet.SubscriptionConsumersUnexpected.selector, subId));
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(_consumers(subId).length, 1);
     }
 
@@ -412,18 +506,17 @@ contract DeployMainnetForkTest is Test {
         coordinator.requestSubscriptionOwnerTransfer(subId, SAFE);
         vm.prank(SAFE);
         coordinator.acceptSubscriptionOwnerTransfer(subId);
-        _refused(_config(subId, address(0)), abi.encodeWithSelector(DeployMainnet.SubscriptionInUse.selector, subId));
         // Refused after simulating its own steps: a forge script run then sends nothing. A test cannot roll back the
         // broadcast nonce, so check the state instead.
         vm.expectRevert(_safeAction("coordinator.addConsumer(subId, raffle)"));
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(_consumers(subId).length, 0);
         assertEq(_nativeBalance(subId), 0);
         assertEq(labx.pendingOwner(), address(0));
 
         vm.prank(SAFE);
         coordinator.addConsumer(subId, address(labx));
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertTrue(labx.nativePayment());
         assertEq(labx.pendingOwner(), SAFE);
         assertEq(_nativeBalance(subId), FUND);
@@ -438,13 +531,13 @@ contract DeployMainnetForkTest is Test {
         vm.prank(SAFE);
         labx.acceptOwnership();
         vm.expectRevert(_safeAction("raffle.setNativePayment(true)"));
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(_consumers(subId).length, 0);
         assertEq(_nativeBalance(subId), 0);
 
         vm.prank(SAFE);
         labx.setNativePayment(true);
-        stage2.deploy(_config(subId, address(labx)));
+        stage2.deploy(_resume(subId, address(labx)));
         assertEq(_consumers(subId)[0], address(labx));
         assertEq(stage2.subscription(subId).requestedOwner, SAFE);
     }
@@ -452,7 +545,7 @@ contract DeployMainnetForkTest is Test {
     /// @dev Measures counting under chain-1 gas rules today; Sepolia's October 2026 repricing made it about 230,000 gas a lot.
     function test_measuresCountingAndPurchaseGasForTwentyLots() public {
         uint256 subId = _minedSubscription();
-        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
         _accept(labx, subId);
         vm.prank(SAFE);
         labx.setPaused(false);
@@ -493,7 +586,7 @@ contract DeployMainnetForkTest is Test {
 
     function test_runsOneRaffleThroughTheRealCoordinatorAndUsdc() public {
         uint256 subId = _minedSubscription();
-        LabxRaffle labx = stage2.deploy(_config(subId, address(0)));
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
         _accept(labx, subId);
 
         MockERC721 nft = new MockERC721();

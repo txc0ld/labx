@@ -25,15 +25,20 @@ interface ISafeOwners {
 ///      keep the timestamped run-<time>.json copies.
 ///      1. Stage 1, CreateMainnetSubscription, creates the VRF subscription. Read its ID from the mined receipt, never
 ///         from the simulation: `cast receipt <tx> --json`, the SubscriptionCreated log whose emitter is the
-///         coordinator and whose owner (the log data) is the deployer; the ID is topic 1. Write the stage 1 tx hash
-///         and the ID into the deployment record.
-///      2. Stage 2, DeployMainnet, with VRF_SUBSCRIPTION_ID, FUND_TARGET_WEI, TERMS_HASH, SAFE_ADDRESS and no
-///         RAFFLE_ADDRESS. A fresh run refuses a subscription that is not the deployer's, has a pending owner or has
-///         a consumer. Write the raffle address and every stage 2 tx hash into the record before anything else.
-///      3. If stage 2 stops part way, settle every pending transaction (mined or replaced), then rerun it with
-///         RAFFLE_ADDRESS from the record. A resume refuses a raffle whose code, settings or ownership differ from a
-///         fresh deployment, sends only the missing steps, and funds only up to FUND_TARGET_WEI.
-///      4. The Safe accepts both transfers, checks the state, and unpauses the raffle only at launch.
+///         coordinator and whose owner (the log data) is the deployer; the ID is topic 1.
+///      2. Before stage 2, write into the deployment record: the stage 1 tx hash, its nonce (`cast tx <tx> nonce`),
+///         the ID, EXPECTED_NONCE (that nonce + 1) and the raffle's CREATE address
+///         (`cast compute-address <deployer> --nonce <EXPECTED_NONCE>`).
+///      3. Stage 2, DeployMainnet, with DEPLOY_MODE=fresh, EXPECTED_NONCE, VRF_SUBSCRIPTION_ID, FUND_TARGET_WEI,
+///         TERMS_HASH, SAFE_ADDRESS and no RAFFLE_ADDRESS. A fresh run refuses a deployer nonce other than
+///         EXPECTED_NONCE, and a subscription that is not the deployer's, has a pending owner or has a consumer. It
+///         logs the CREATE address, which must match the record. Write every stage 2 tx hash into the record.
+///      4. If stage 2 stops part way, settle every pending transaction (mined or replaced). If the deployer nonce is
+///         still EXPECTED_NONCE, nothing mined and a fresh run may repeat. Otherwise the CREATE mined at the recorded
+///         address: rerun with DEPLOY_MODE=resume and RAFFLE_ADDRESS set to it. A resume refuses a raffle whose code,
+///         settings or ownership differ from a fresh deployment, sends only the missing steps, and funds only up to
+///         FUND_TARGET_WEI.
+///      5. The Safe accepts both transfers, checks the state, and unpauses the raffle only at launch.
 ///      Every check runs in forge's simulation, so a refusal stops the run before anything is sent.
 abstract contract MainnetDeployment is Script {
     error SafeNotDeployed(address safe);
@@ -109,10 +114,15 @@ contract CreateMainnetSubscription is MainnetDeployment {
 }
 
 /// @notice Stage 2: deploys the raffle pinned to the mined subscription, funds the subscription up to a target, and
-///         offers both to the Safe. The raffle starts paused from its constructor. A fresh run (no RAFFLE_ADDRESS) only
-///         accepts the untouched stage 1 subscription; a resume (RAFFLE_ADDRESS set) only accepts a raffle identical to
-///         a fresh deployment, and sends only the missing steps. Every other chain id is refused.
+///         offers both to the Safe. The raffle starts paused from its constructor. DEPLOY_MODE must say which run this
+///         is. A fresh run only accepts the recorded deployer nonce and the untouched stage 1 subscription; a resume
+///         needs RAFFLE_ADDRESS, only accepts a raffle identical to a fresh deployment, and sends only the missing steps.
+///         Every other chain id is refused.
 contract DeployMainnet is MainnetDeployment {
+    error DeployModeInvalid(string mode);
+    error RaffleAddressUnexpected(address raffle);
+    error RaffleAddressMissing();
+    error NonceMoved(uint256 expected, uint256 actual);
     error SubscriptionInUse(uint256 subId);
     error RaffleCodeMismatch(address raffle);
     error RaffleSettingMismatch(string setting);
@@ -129,43 +139,58 @@ contract DeployMainnet is MainnetDeployment {
         uint256 fundTarget;
         // The ID from the mined SubscriptionCreated event of stage 1.
         uint256 subId;
-        // Zero for a fresh run; the raffle from the deployment record when resuming.
+        // DEPLOY_MODE=fresh or DEPLOY_MODE=resume.
+        bool fresh;
+        // Fresh only: the deployer nonce the raffle CREATE uses, from the deployment record (stage 1 nonce + 1).
+        uint256 expectedNonce;
+        // Resume only: the raffle from the deployment record.
         address existing;
     }
 
     function run() external returns (LabxRaffle labx) {
         _requireMainnet();
-        return _deploy(
-            Config({
-                safe: vm.envAddress("SAFE_ADDRESS"),
-                pk: vm.envUint("DEPLOYER_PRIVATE_KEY"),
-                terms: vm.envBytes32("TERMS_HASH"),
-                fundTarget: vm.envUint("FUND_TARGET_WEI"),
-                subId: vm.envUint("VRF_SUBSCRIPTION_ID"),
-                existing: vm.envOr("RAFFLE_ADDRESS", address(0))
-            })
-        );
+        return _deploy(_config());
+    }
+
+    /// @dev Reads the mode before anything else; an unset DEPLOY_MODE reads as "" and is refused.
+    function _config() internal view returns (Config memory c) {
+        string memory mode = vm.envOr("DEPLOY_MODE", string(""));
+        c.fresh = keccak256(bytes(mode)) == keccak256("fresh");
+        if (!c.fresh && keccak256(bytes(mode)) != keccak256("resume")) revert DeployModeInvalid(mode);
+        if (c.fresh) c.expectedNonce = vm.envUint("EXPECTED_NONCE");
+        c.existing = vm.envOr("RAFFLE_ADDRESS", address(0));
+        c.safe = vm.envAddress("SAFE_ADDRESS");
+        c.pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        c.terms = vm.envBytes32("TERMS_HASH");
+        c.fundTarget = vm.envUint("FUND_TARGET_WEI");
+        c.subId = vm.envUint("VRF_SUBSCRIPTION_ID");
     }
 
     function _deploy(Config memory c) internal returns (LabxRaffle labx) {
         _requireMainnet();
+        if (c.fresh && c.existing != address(0)) revert RaffleAddressUnexpected(c.existing);
+        if (!c.fresh && c.existing == address(0)) revert RaffleAddressMissing();
         _validateSafe(c.safe);
         address deployer = vm.addr(c.pk);
         Subscription memory sub = _subscription(c.subId);
         if (sub.owner != deployer && sub.owner != c.safe) revert SubscriptionNotOwned(c.subId, sub.owner);
         LabxRaffle.Init memory init = _init(c);
-        if (c.existing == address(0)) {
-            // A used subscription means this is a resume that lost RAFFLE_ADDRESS; deploying again would add a second raffle.
+        if (c.fresh) {
+            // Any deployer transaction since stage 1, such as this raffle's CREATE from an interrupted run, moves the
+            // nonce; that run must resume instead of deploying another raffle.
+            uint256 nonce = vm.getNonce(deployer);
+            if (nonce != c.expectedNonce) revert NonceMoved(c.expectedNonce, nonce);
             if (sub.owner != deployer || sub.requestedOwner != address(0) || sub.consumers.length != 0) {
                 revert SubscriptionInUse(c.subId);
             }
+            console2.log("Raffle CREATE address", vm.computeCreateAddress(deployer, c.expectedNonce));
         } else {
             _requireResumable(LabxRaffle(payable(c.existing)), init, c, deployer);
         }
 
         IVRFSubscriptionAdmin coordinator = IVRFSubscriptionAdmin(VRF_COORDINATOR);
         vm.startBroadcast(c.pk);
-        labx = c.existing == address(0) ? new LabxRaffle(init) : LabxRaffle(payable(c.existing));
+        labx = c.fresh ? new LabxRaffle(init) : LabxRaffle(payable(c.existing));
         if (labx.owner() == deployer && !labx.nativePayment()) labx.setNativePayment(true);
         if (sub.owner == deployer && !_contains(sub.consumers, address(labx))) {
             coordinator.addConsumer(c.subId, address(labx));
