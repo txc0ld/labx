@@ -33,11 +33,15 @@ interface ISafeOwners {
 ///         TERMS_HASH, SAFE_ADDRESS and no RAFFLE_ADDRESS. A fresh run refuses a deployer nonce other than
 ///         EXPECTED_NONCE, and a subscription that is not the deployer's, has a pending owner or has a consumer. It
 ///         logs the CREATE address, which must match the record. Write every stage 2 tx hash into the record.
-///      4. If stage 2 stops part way, settle every pending transaction (mined or replaced). If the deployer nonce is
-///         still EXPECTED_NONCE, nothing mined and a fresh run may repeat. Otherwise the CREATE mined at the recorded
-///         address: rerun with DEPLOY_MODE=resume and RAFFLE_ADDRESS set to it. A resume refuses a raffle whose code,
-///         settings or ownership differ from a fresh deployment, sends only the missing steps, and funds only up to
-///         FUND_TARGET_WEI.
+///      4. If stage 2 stops part way, settle every pending transaction (mined, replaced or cancelled) and read each
+///         receipt. If the deployer nonce is still EXPECTED_NONCE, nothing mined and a fresh run may repeat. A moved
+///         nonce alone does not prove the CREATE succeeded: a CREATE that reverted or ran out of gas, or another
+///         transaction at that nonce, also moves it and leaves no code. Resume only when the CREATE's canonical receipt
+///         has status 1 and the recorded address has code: rerun with DEPLOY_MODE=resume and RAFFLE_ADDRESS set to it.
+///         A resume refuses a raffle whose code, settings or ownership differ from a fresh deployment, sends only the
+///         missing steps, and funds only up to FUND_TARGET_WEI. If the CREATE failed or was replaced, record that,
+///         start a new deployment record with the current nonce as EXPECTED_NONCE and its predicted address, check the
+///         subscription is still untouched, and run fresh again. EXPECTED_NONCE never changes without that record.
 ///      5. The Safe accepts both transfers, checks the state, and unpauses the raffle only at launch.
 ///      Every check runs in forge's simulation, so a refusal stops the run before anything is sent.
 abstract contract MainnetDeployment is Script {
