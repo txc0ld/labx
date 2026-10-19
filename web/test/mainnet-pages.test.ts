@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({ usePathname: () => "/about" }));
 
 type Page = { default: ComponentType; metadata?: { description?: string } };
 /** A page's visible text and meta description, as the build configured by NEXT_PUBLIC_CHAIN_ID renders it. */
-async function page(route: "about" | "privacy" | "legal" | "guide") {
+async function page(route: "about" | "privacy" | "legal" | "guide" | "rules") {
   const module = await import(`../app/${route}/page.tsx`) as Page;
   const text = renderToStaticMarkup(createElement(module.default)).replace(/<[^>]+>/g, "").replace(/&quot;/g, "\"").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
   return { text, description: module.metadata?.description };
@@ -52,7 +52,7 @@ describe("legal and guide pages on a mainnet build", () => {
   beforeEach(() => { vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1"); });
 
   it("states Ethereum mainnet facts and no Sepolia facts", async () => {
-    const about = await page("about"), privacy = await page("privacy"), legal = await page("legal"), guide = await page("guide");
+    const about = await page("about"), privacy = await page("privacy"), legal = await page("legal"), guide = await page("guide"), rules = await page("rules");
     expect(about.description).toBe("LABx is the Ethereum membership bench operated by Fantom Labs Pty Ltd. Escrowed pieces, membership packs, Chainlink VRF.");
     expect(about.text).toContain("LABx runs on Ethereum mainnet, chain ID 1. The website only enables approved Ethereum mainnet deployments.");
     expect(privacy.description).toBe("Privacy policy for the LABx Ethereum bench operated by Fantom Labs Pty Ltd.");
@@ -73,7 +73,8 @@ describe("legal and guide pages on a mainnet build", () => {
     expect(guide.text).toContain("Ethereum mainnetEvery listing and action requires an approved deployment.");
     // The Terms page's counsel note names the Sepolia terms it was derived from; nothing else may mention Sepolia.
     const legalFacts = legal.text.replace(/Pending counsel review: These Ethereum mainnet terms[^”]*”/, "");
-    for (const { text, description } of [about, privacy, { ...legal, text: legalFacts }, guide]) {
+    expect(rules.text).toContain("Draw and recovery controls stay disabled unless a reviewed v3 deployment is configured.");
+    for (const { text, description } of [about, privacy, { ...legal, text: legalFacts }, guide, rules]) {
       expect(`${text} ${description ?? ""}`).not.toMatch(/Sepolia|11155111|blocked by the contract constructor|refuses a mainnet wallet|not a mainnet product/);
     }
   });

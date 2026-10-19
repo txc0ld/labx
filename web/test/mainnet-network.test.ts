@@ -36,7 +36,7 @@ const SEPOLIA_ADDRESS = "0x8b0332D0ca48908e174F42eA1b3123e63f3F4327";
 const SEPOLIA_TERMS_HASH: Hex = "0x653a59619128ccbd7b75b40db072ff9aab5c5a547caf1ccaf9de67079c463f25";
 const V2_TERMS_HASH: Hex = "0xb3c83a96bc5e11afd2758d8b515bd495d83294a24d44c15c42b9aa970f4a75d1";
 /** The mainnet publication's hash, pinned so any change to its text is deliberate. */
-const MAINNET_TERMS_HASH: Hex = "0x9c18460c2ec38f0ea8d84e789c910e3a922fa88434c1bdf05e6077e836cadcb2";
+const MAINNET_TERMS_HASH: Hex = "0x60b0227346cc2217a96c89385ca06119826c2d8493afe9134974c0324db0c06a";
 const block: BlockRef = { number: 21_000_100n, hash: keccak256(toBytes("block")), timestamp: 1_800_000_000n };
 const account: Address = "0x1111111111111111111111111111111111111111";
 
@@ -105,7 +105,12 @@ describe("network facts", () => {
     expect(NETWORKS[11155111].chain).toBe(appKit.sepolia);
   });
 
-  it.each([[undefined, 11155111], ["11155111", 11155111], ["1", 1], ["0x1", 11155111], ["137", 11155111]] as const)("reads NEXT_PUBLIC_CHAIN_ID %s as chain %s", (value, expected) => {
+  it.each(["0x1", "137", "1 ", "01", "31337"])("refuses NEXT_PUBLIC_CHAIN_ID %j instead of serving Sepolia", value => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", value);
+    expect(() => configuredChainId()).toThrow("NEXT_PUBLIC_CHAIN_ID must be 1 (Ethereum) or 11155111 (Sepolia).");
+  });
+
+  it.each([[undefined, 11155111], ["", 11155111], ["11155111", 11155111], ["1", 1]] as const)("reads NEXT_PUBLIC_CHAIN_ID %s as chain %s", (value, expected) => {
     vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", value);
     expect(configuredChainId()).toBe(expected);
   });
@@ -143,7 +148,6 @@ describe("deployment selection", () => {
 
   it.each([
     { name: "a Sepolia build given the mainnet address", chain: undefined, address: MAINNET_FIXTURE.address },
-    { name: "a Sepolia build given the mainnet address and an unknown chain", chain: "137", address: MAINNET_FIXTURE.address },
     { name: "a mainnet build given the Sepolia address", chain: "1", address: SEPOLIA_ADDRESS }
   ])("leaves $name unavailable in browser and server", async ({ chain, address }) => {
     vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", chain);
@@ -201,7 +205,7 @@ describe("published terms by chain", () => {
     expect(catalogAvailability(openRaffle(MAINNET_TERMS_HASH)).label).toBe("Terms unavailable");
   });
 
-  it("publishes the mainnet terms on a mainnet build, changing only the Network section", async () => {
+  it("publishes the mainnet terms on a mainnet build, changing only the Network section and the ETH route", async () => {
     vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
     const terms = await import("../lib/published-terms");
     expect(terms.TERMS_VERSION).toBe("labx-membership-2026-10-19-mainnet-v1");
@@ -210,10 +214,13 @@ describe("published terms by chain", () => {
     const sepolia = terms.publishedTermsByHash(SEPOLIA_TERMS_HASH);
     expect(terms.DRAW_RULES).toEqual(sepolia.rules);
     expect(terms.MEMBERSHIP_TERMS.map(section => section.heading)).toEqual(sepolia.terms.map(section => section.heading));
-    expect(terms.MEMBERSHIP_TERMS.filter(section => section.heading !== "Network")).toEqual(sepolia.terms.filter(section => section.heading !== "Network"));
+    expect(terms.MEMBERSHIP_TERMS.filter(section => section.heading !== "Network" && section.heading !== "Fees")).toEqual(sepolia.terms.filter(section => section.heading !== "Network" && section.heading !== "Fees"));
+    const fees = terms.MEMBERSHIP_TERMS.find(section => section.heading === "Fees")?.paragraphs ?? [], sepoliaFees = sepolia.terms.find(section => section.heading === "Fees")?.paragraphs ?? [];
+    expect(fees.slice(0, 2)).toEqual(sepoliaFees.slice(0, 2));
+    expect(fees[2]).toBe("Cancellation refunds outstanding principal only; the successful purchase processing fee is nonrefundable. No seller commission is charged on cancellation. Purchases are paid in USDC only. Gas costs are not refunded. USDC is the unit of account.");
     expect(terms.MEMBERSHIP_TERMS.find(section => section.heading === "Network")?.paragraphs).toEqual(["These terms describe the LABx v3 contract on Ethereum mainnet, chain ID 1. The website permits only approved Ethereum mainnet deployments. Ethereum mainnet is not a test network."]);
     expect(terms.PUBLISHED_TERMS_CONTENT).toContain("These terms are a product draft for counsel, not a legal opinion.");
-    expect(terms.PUBLISHED_TERMS_CONTENT).not.toMatch(/Sepolia|5-USDC|blocks Ethereum mainnet|unpublished/);
+    expect(terms.PUBLISHED_TERMS_CONTENT).not.toMatch(/Sepolia|5-USDC|blocks Ethereum mainnet|unpublished|Uniswap|ETH-route|swap/);
   });
 
   it.each([undefined, "1"])("resolves the Sepolia v3, mainnet and historical v2 publications on a NEXT_PUBLIC_CHAIN_ID=%s build", async value => {

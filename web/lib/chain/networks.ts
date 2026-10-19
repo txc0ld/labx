@@ -73,11 +73,16 @@ export function publicChainId(value: string | undefined): PublicChainId | null {
 }
 
 /**
- * The chain this build serves. NEXT_PUBLIC_CHAIN_ID=1 selects Ethereum; any other value, or none, keeps Sepolia as before
- * mainnet support. A deployment is still selected only when it is registered on exactly this chain.
+ * The chain this build serves. NEXT_PUBLIC_CHAIN_ID=1 selects Ethereum and 11155111 or no value keeps Sepolia, as before
+ * mainnet support. Any other value is a configuration mistake and throws, so a mistyped mainnet setting fails the build
+ * instead of quietly serving Sepolia. A deployment is still selected only when it is registered on exactly this chain.
  */
 export function configuredChainId(): PublicChainId {
-  return publicChainId(process.env.NEXT_PUBLIC_CHAIN_ID) ?? 11155111;
+  const value = process.env.NEXT_PUBLIC_CHAIN_ID;
+  if (value === undefined || value === "") return 11155111;
+  const chainId = publicChainId(value);
+  if (chainId === null) throw new Error("NEXT_PUBLIC_CHAIN_ID must be 1 (Ethereum) or 11155111 (Sepolia).");
+  return chainId;
 }
 
 /** The display name of a chain, or its number when LABx does not support it. */

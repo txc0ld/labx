@@ -22,10 +22,14 @@ const V3_RULES: readonly PublishedSection[] = [
   { heading: "Before the draw", paragraphs: ["LABx reviews the exact NFT and draw-funding use before opening. Draft edits require a fresh review. Opening fixes the NFT, membership economics, closing time, treasury and randomness configuration. The raffle cannot close before its published deadline.", "After sales close, eligible entries freeze before randomness is requested."] },
   { heading: "Outcome and recovery", paragraphs: ["Chainlink VRF selects from the frozen snapshot. The winner claims the NFT, the seller claims net membership proceeds, and the pinned treasury receives buyer fees and the seller commission.", "If the raffle is cancelled, each buyer claims outstanding membership principal only. Processing fees remain retained even after draw timeout or funding failure. No seller commission accrues on cancellation. The seller can reclaim the NFT."] }
 ];
-// Mainnet publication: Sepolia's text with only the Network section's statements of fact made true for Ethereum mainnet.
+// Mainnet publication: Sepolia's text with its statements of fact made true for Ethereum mainnet. Only the Network section and
+// the Fees section's ETH route differ: the mainnet deployment has no swap router, WETH or price feed, so it takes USDC only.
 const MAINNET_VERSION = "labx-membership-2026-10-19-mainnet-v1";
-const MAINNET_TERMS: readonly PublishedSection[] = SEPOLIA_TERMS.map(section => section.heading !== "Network" ? section : {
-  heading: "Network", paragraphs: ["These terms describe the LABx v3 contract on Ethereum mainnet, chain ID 1. The website permits only approved Ethereum mainnet deployments. Ethereum mainnet is not a test network."]
+const SEPOLIA_ETH_ROUTE = "ETH is an optional payment route through Uniswap and the Chainlink ETH/USD feed for the same USDC total. ETH-route cancellation refunds are principal denominated in USDC, not ETH. Gas and swap costs are not refunded.";
+const MAINNET_TERMS: readonly PublishedSection[] = SEPOLIA_TERMS.map(section => {
+  if (section.heading === "Network") return { heading: "Network", paragraphs: ["These terms describe the LABx v3 contract on Ethereum mainnet, chain ID 1. The website permits only approved Ethereum mainnet deployments. Ethereum mainnet is not a test network."] };
+  if (section.heading === "Fees") return { heading: "Fees", paragraphs: section.paragraphs.map(paragraph => paragraph.replace(SEPOLIA_ETH_ROUTE, "Purchases are paid in USDC only. Gas costs are not refunded.")) };
+  return section;
 });
 
 function publication(version: string, terms: readonly PublishedSection[], rules: readonly PublishedSection[]): Publication {

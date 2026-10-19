@@ -80,7 +80,7 @@ export default function PrivacyPage() {
         <p>The bench uses local storage for your email preference and pending-transaction recovery. Session storage remembers whether the introductory film has been handled, so it does not repeat during ordinary navigation. It does not use advertising cookies and it does not run a third-party ad pixel. Hosting may set a strictly necessary cookie for the application.</p>
 
         <h2>Who else sees a record</h2>
-        <p>Infrastructure that may process data on our behalf includes the site host, the Neon or Redis database that keeps server records, an optional email sender, a wallet you install, and public {network.shortName} infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
+        <p>Infrastructure that may process data on our behalf includes the site host, the Neon or Redis database that keeps server records, the Alchemy NFT API that lists the NFTs in a seller's wallet, an optional email sender, a wallet you install, and public {network.shortName} infrastructure including Chainlink VRF. Those processors see only what they need to provide that function.</p>
         <p>We do not publish a country-by-country storage map. Hosting, optional persistence, and optional mail may process a record outside Australia. Use of the bench is use of those processors.</p>
 
         <h2>Retention</h2>

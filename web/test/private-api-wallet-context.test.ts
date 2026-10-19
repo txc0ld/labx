@@ -1,6 +1,6 @@
 import { fixtureTrust } from "./fixtures/deployment";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, keccak256, toBytes } from "viem";
 import { configuredBrowserService } from "../lib/chain/browser";
 import { createRaffleService } from "../lib/chain/service";
 import { createCommitment, readPrivateRecords, recoverCommitment, saveAgreement, sendPurchaseReceipt } from "../lib/chain/api";
@@ -77,3 +77,38 @@ describe("private API wallet binding before context fetch", () => {
     expect(vi.mocked(control.provider.request).mock.calls.filter(([request]) => request.method === "personal_sign")).toHaveLength(1);
   });
 });
+
+describe("Create on a mainnet build", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); });
+
+  it("signs for chain 1 with the mainnet terms and accepts the chain 1 commitment", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    vi.resetModules();
+    const [{ configuredBrowserService: browserService }, api, terms, { WalletSession: Session }, { createRaffleService: raffleService }] = await Promise.all([
+      import("../lib/chain/browser"), import("../lib/chain/api"), import("../lib/published-terms"), import("../lib/chain/wallet-session"), import("../lib/chain/service")
+    ]);
+    const mainnet: DeploymentManifest = { ...manifest, chainId: 1 };
+    const signed: string[] = [];
+    const provider: WalletProvider = { request: vi.fn(async ({ method, params }) => {
+      if (method === "eth_accounts" || method === "eth_requestAccounts") return [first];
+      if (method === "eth_chainId") return "0x1";
+      if (method === "wallet_switchEthereumChain") return null;
+      if (method === "personal_sign") { signed.push(String((params as unknown[])[0])); return "0xab"; }
+      throw new Error(`Unexpected method ${method}`);
+    }) };
+    const wallet = new Session(provider, 1); await wallet.connect();
+    vi.mocked(browserService).mockReturnValue({ kind: "configured", service: raffleService(createPublicClient({ transport: http("http://127.0.0.1:1") }), mainnet), wallet });
+    const mainnetContext = { ...context, chainId: 1, termsHash: terms.PUBLISHED_TERMS_HASH, termsVersion: terms.TERMS_VERSION };
+    const stored = { seller: first, nft: manifest.address, tokenId: "1", chainId: "1", labx: manifest.address, publicSummary: "Summary", publicHash: keccak256(toBytes("Summary")), nonce: digest, commit: digest };
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, context: mainnetContext })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, ...stored })));
+    vi.stubGlobal("fetch", fetcher);
+
+    expect(terms.TERMS_VERSION).toBe("labx-membership-2026-10-19-mainnet-v1");
+    await expect(api.createCommitment(wallet, { nft: manifest.address, tokenId: "1", publicSummary: "Summary", privateCommitment: "Private" })).resolves.toMatchObject({ chainId: "1" });
+    expect(fetcher.mock.calls.map(([path]) => path)).toEqual(["/api/workflow/context", "/api/reserve"]);
+    expect(signed).toHaveLength(1);
+  });
+});
+
