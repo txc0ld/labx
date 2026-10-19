@@ -19,13 +19,17 @@ function errorDetails(error: unknown) {
 const PRE_BROADCAST = /insufficient funds|gas required exceeds|intrinsic gas|cannot estimate gas|failed to estimate gas|gas estimation failed|max fee per gas less than block base fee/i;
 
 /**
- * A wallet failure raised by the wallet's own checks before it broadcasts: not enough ETH for its fee, a failed gas
- * estimate, or its internal (-32603) and server (-32000) errors. A clean rejection is not one; it has its own path.
- * The class alone never proves that nothing was sent: the caller still reads the account's pending nonce.
+ * How a wallet failure shows that the wallet's own checks stopped it before it broadcast. "message": its text names one,
+ * such as not enough ETH for the fee or a failed gas estimate. "code": only the wallet's internal (-32603) or server
+ * (-32000) code says so; some wallets also use these codes after their own RPC already took the send, so this is weaker.
+ * null: neither, including a clean rejection, which has its own path. Neither class proves that nothing was sent: the
+ * caller still reads the account's pending nonce.
  */
-export function isPreBroadcastError(error: unknown): boolean {
-  if (isWalletRequestRejected(error)) return false;
-  return errorDetails(error).some(({ code, message }) => code === -32603 || code === -32000 || PRE_BROADCAST.test(message));
+export function preBroadcastEvidence(error: unknown): "message" | "code" | null {
+  if (isWalletRequestRejected(error)) return null;
+  const details = errorDetails(error);
+  if (details.some(({ message }) => PRE_BROADCAST.test(message))) return "message";
+  return details.some(({ code }) => code === -32603 || code === -32000) ? "code" : null;
 }
 
 /** One plain sentence for a wallet failure that sent nothing. */

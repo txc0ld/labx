@@ -27,7 +27,8 @@ export function aboutEth(wei: bigint): string {
 
 /**
  * Estimates the transaction's gas at `blockNumber`, the block its fresh simulation used, and refuses it before any wallet
- * request or pending record when gas × maxFeePerGas + value is more than the account's ETH there. Returns the fees to suggest.
+ * request or pending record when gas × 1.5 × maxFeePerGas + value is more than the account's ETH there. Wallets set their
+ * own gas limit about 1.5 times their estimate and need the balance to cover that limit. Returns the fees to suggest.
  */
 export async function checkNetworkFee(client: FeeClient, chainId: number, transaction: { account: Address; to: Address; data: Hex; value: bigint; blockNumber: bigint }): Promise<FeeSuggestion> {
   const { account, to, data, value, blockNumber } = transaction;
@@ -37,7 +38,7 @@ export async function checkNetworkFee(client: FeeClient, chainId: number, transa
     if (balance < value || /insufficient funds/i.test(error instanceof Error ? error.message : "")) throw new NotSentError(`Your wallet doesn't have enough ${currency} for this payment and the network fee.`);
     throw new NotSentError("This transaction would fail on the network right now, so your wallet wasn't opened. Refresh and try again.");
   });
-  const needed = gas * fees.maxFeePerGas + value;
+  const needed = gas * 3n / 2n * fees.maxFeePerGas + value;
   if (balance < needed) throw new NotSentError(`Your wallet needs about ${aboutEth(needed)} ${currency} for ${value > 0n ? "this payment and " : ""}the network fee.`);
   return fees;
 }

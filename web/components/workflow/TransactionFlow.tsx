@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useSyncExternalStore, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useSyncExternalStore, useState, type ReactNode } from "react";
 import { formatEther, isHex, type Address, type Hex } from "viem";
 import { chainName } from "@/lib/chain/networks";
 import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
@@ -38,8 +38,11 @@ export type TransactionFlowProps = {
   label: string;
   formatUsdc: AmountFormatter;
   resumeHash?: Hex;
-  /** direct is true only when the confirmation came straight from this flow's own wallet request, not a later check or recovery. */
-  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction, direct: boolean) => void | Promise<void>;
+  /**
+   * Runs only for this flow's own wallet request from this visit. via is "wallet" when the confirmation came straight from
+   * that request, and "check" when a later check settled it, such as after a confirmation slower than the first watch.
+   */
+  onConfirmed?: (confirmation: Extract<Confirmation, { kind: "confirmed" }>, submitted: SubmittedAction, via: "wallet" | "check") => void | Promise<void>;
   onCancel?: () => void;
   disabled?: boolean;
   disabledReason?: string;
@@ -49,6 +52,10 @@ export type TransactionFlowProps = {
   submitOnMount?: boolean;
   /** Awaited before the error shows when preparing that automatic send fails, often because the raffle already moved on, so the page can re-read it and show the step that fits now. */
   onUnavailable?: () => void | Promise<void>;
+  /** Shown under the button only while the flow is idle, such as what the wallet will ask for. */
+  idleHint?: ReactNode;
+  /** Called with this flow's own submission once the wallet returns its hash, even if the flow unmounted meanwhile. */
+  onSubmitted?: (submitted: SubmittedAction) => void;
 };
 
 function walletSnapshot(wallet: WalletSessionPort) {
@@ -127,7 +134,7 @@ function confirmLabel(action: WorkflowAction, label: string) {
   return action.kind === "approveUsdc" ? "Confirm approval" : action.kind === "buyMembership" ? "Confirm purchase" : `Confirm ${lowerFirst(label)}`;
 }
 
-export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, onUnavailable, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false, submitOnMount = false }: TransactionFlowProps) {
+export function TransactionFlow({ service, wallet, action, label, formatUsdc, resumeHash, onConfirmed, onCancel, onUnavailable, idleHint, onSubmitted, disabled = false, disabledReason, prepareOnMount = false, submitOnClick = false, submitOnMount = false }: TransactionFlowProps) {
   const { owner, outcomes } = useTransactionOutcomes(service, wallet);
   const activeOutcome = outcomes.some(item => item.kind === "overflow" || item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "error" && (item.submitted !== null || item.id === "storage-error"));
   const reviewTitleId = useId();
@@ -145,6 +152,11 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const savedCheck = useSavedHashCheck(service, wallet, state.kind === "recovery" ? state.saved : state.kind === "pending" ? state.submitted.hash : null);
   const pendingSend = usePendingSend(service, wallet, state.kind === "recovery" && state.saved === null ? { id: state.id, hash: null, nonce: state.nonce } : null);
   const pendingSendSettled = pendingSend.status === "spent" || pendingSend.status === "settled";
+  // The record's panel below, so a page-level ResumeTransaction hides its own copy while this one is visible.
+  const pendingPanel = useRef<HTMLElement>(null);
+  const showPendingPanel = pendingSend.showPanel;
+  const pendingPanelShown = state.kind === "recovery" && state.saved === null;
+  useEffect(() => pendingPanelShown ? showPendingPanel(pendingPanel.current) : undefined, [pendingPanelShown, showPendingPanel, pendingSend.status]);
   const recoveryTerminal = state.kind === "recovery" && currentWallet.kind === "connected"
     ? outcomes.find(item => item.kind === "terminal" && item.account.toLowerCase() === currentWallet.account.toLowerCase()
       && item.confirmation.receipt.nonce === state.nonce)
@@ -158,8 +170,8 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   // Read once at mount, and spent on the first decision: a later prop, scope or journal change never sends on its own.
   const [autoSubmit] = useState(submitOnMount);
   const autoSubmitSpent = useRef(false);
-  const callbacks = useRef({ onConfirmed, onCancel, onUnavailable });
-  callbacks.current = { onConfirmed, onCancel, onUnavailable };
+  const callbacks = useRef({ onConfirmed, onCancel, onUnavailable, onSubmitted });
+  callbacks.current = { onConfirmed, onCancel, onUnavailable, onSubmitted };
   const reviewButtons = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -284,10 +296,11 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
       if (fromClick && submitOnClick && SUBMIT_ON_CLICK_KINDS.has(action.kind)) {
         setCurrent(expected, { kind: "submitting", prepared });
         await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
+          callbacks.current.onSubmitted?.(submitted);
           if (!isCurrent(expected)) return;
           ownSubmission.current = { scope: expected.generation, submitted };
           setCurrent(expected, { kind: "confirming", submitted });
-        }, () => { if (!isCurrent(expected)) throw new Error("This action is no longer active."); }), expected, true);
+        }, () => { if (!isCurrent(expected)) throw new Error("This action is no longer active."); }), expected, "wallet");
       } else setCurrent(expected, { kind: "review", prepared });
     } catch (error) {
       await showError(error, expected);
@@ -320,7 +333,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (state.kind === "review") reviewButtons.current?.scrollIntoView({ block: "nearest" });
   }, [state.kind]);
 
-  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext, direct = false) {
+  async function applyOutcome(outcome: TransactionOutcome, expected: FlowContext, via: "wallet" | "check" = "check") {
     if (!isCurrent(expected)) return;
     if (outcome.kind === "terminal") {
       const confirmation = outcome.confirmation;
@@ -329,7 +342,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         setCurrent(expected, { kind: "receipt", confirmation });
       } else if (confirmation.kind === "confirmed") {
         setCurrent(expected, { kind: "confirmed", confirmation });
-        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted, direct);
+        await callbacks.current.onConfirmed?.(confirmation, outcome.submitted, via);
       } else setCurrent(expected, { kind: confirmation.kind, confirmation });
     } else if (outcome.kind === "pending" || outcome.kind === "checking") {
       setCurrent(expected, { kind: "pending", submitted: outcome.submitted });
@@ -361,10 +374,11 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     setCurrent(expected, { kind: "submitting", prepared });
     try {
       await applyOutcome(await owner.submit(prepared, expected.wallet, submitted => {
+        callbacks.current.onSubmitted?.(submitted);
         if (!isCurrent(expected)) return;
         ownSubmission.current = { scope: expected.generation, submitted };
         setCurrent(expected, { kind: "confirming", submitted });
-      }), expected, true);
+      }), expected, "wallet");
     } catch (error) {
       await showError(error, expected);
     } finally {
@@ -408,14 +422,14 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (recovery.saved === null) {
       const rejectFirst = <p className="muted">If your wallet still shows a request from LABx, reject it first.</p>;
       if (pendingSend.status === "unsent") return (
-        <section className="transaction-state notice warning stack" role="status">
+        <section ref={pendingPanel} className="transaction-state notice warning stack" role="status">
           <strong>Your wallet didn’t send your last transaction.</strong>
           <button className="btn" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button>
           <details><summary>Details</summary>{rejectFirst}</details>
         </section>
       );
       return (
-        <section className="transaction-state stack" role="status">
+        <section ref={pendingPanel} className="transaction-state stack" role="status">
           <p className="transaction-progress"><span className="transaction-spinner" aria-hidden="true" />{pendingSend.status === "waiting" ? "Waiting for your last transaction to confirm…" : pendingSend.status === "unknown" ? "Can’t reach the network to check your last transaction. Trying again…" : "Checking your last transaction…"}</p>
           {pendingSend.status === "unknown" ? <details><summary>Details</summary><div className="stack">{form}{rejectFirst}</div></details> : null}
         </section>
@@ -440,7 +454,8 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
 
   // aria-busy marks a wallet request that is about to start or in flight, which also holds the raffle page's background re-read.
   if (state.kind === "idle") {
-    return <button className="btn" type="button" aria-busy={autoSubmit && !autoSubmitSpent.current || undefined} disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
+    const button = <button className="btn" type="button" aria-busy={autoSubmit && !autoSubmitSpent.current || undefined} disabled={disabled || activeOutcome} title={disabled ? disabledReason : undefined} onClick={() => void prepare(true)}>{label}</button>;
+    return idleHint ? <>{button}{idleHint}</> : button;
   }
   if (state.kind === "preparing") {
     return <button className="btn" type="button" aria-busy="true" disabled>{submitOnClick ? "Preparing…" : "Preparing review…"}</button>;

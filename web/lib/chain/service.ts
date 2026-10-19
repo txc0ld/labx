@@ -8,7 +8,7 @@ import { createReader } from "./reader";
 import { createSellerReader } from "./seller-reader";
 import { ownerExecutionConfirmer } from "./owner-execution";
 import { ownerExecutionDiscoverer } from "./owner-execution-discovery";
-import { isPreBroadcastError, isWalletRequestRejected, notSentReason } from "./wallet-errors";
+import { isWalletRequestRejected, notSentReason, preBroadcastEvidence } from "./wallet-errors";
 import { actionBuilder } from "./actions";
 import { hash, sameAddress } from "./validation";
 import { chainName, feeCurrency } from "./networks";
@@ -22,8 +22,15 @@ function connected(wallet: WalletSessionPort, chainId: number) {
 function sameTransaction(a: { to: Address; data: Hex; value: bigint }, b: { to: Address; data: Hex; value: bigint }) {
   return sameAddress(a.to, b.to) && a.data.toLowerCase() === b.data.toLowerCase() && a.value === b.value;
 }
+/** Whether a chain read failed because the RPC does not know the transaction hash. */
+export function isTransactionNotFound(error: unknown): boolean {
+  const missing = (cause: unknown) => cause instanceof TransactionNotFoundError;
+  return missing(error) || error instanceof BaseError && missing(error.walk(missing));
+}
 /** Blocks after a record's starting block before a send with nothing at its nonce is treated as never sent. */
 export const UNSENT_CLEAR_BLOCKS = 25n;
+/** Waits between the pending-nonce reads after a wallet failure that only a -32603 or -32000 code marks as pre-broadcast. */
+export const CODE_ONLY_RECHECK_MS = [2_000, 2_000] as const;
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
   const sellerReader = createSellerReader(client, manifest, reader);
@@ -128,64 +135,81 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     if (entry.used) throw new Error("This review is invalid or already submitted. Review again.");
     if (submitting.has(key) || journal.read(account)) throw new Error(unresolved);
     submitting.add(key); entry.used = true;
-    let intent: PendingIntent | null = null;
-    let walletRequested = false;
-    let broadcastHash: Hex | null = null;
-    try {
-      await wallet.assertCurrent(entry.session);
-      const fresh = await build(entry.action, entry.session);
-      await assertDraft(entry.action, entry.expectedDraft, account, fresh.block);
-      if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
-      const fees = await checkNetworkFee(client, manifest.chainId, { account, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value, blockNumber: fresh.block.number });
-      const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
-      await wallet.assertCurrent(entry.session);
-      const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce, ...fees }, async () => {
-        await journal.exclusive(account, async () => {
-          assertIntent?.();
-          if (journal.read(account)) throw new Error(unresolved);
-          intent = { id: crypto.randomUUID(), intentHash: transactionIntent(entry.transaction), nonce, startedBlock: fresh.block.number.toString(), hash: null };
-          journal.write(account, intent);
-          beforeRequest?.({ id: intent.id, intentHash: intent.intentHash, nonce: intent.nonce, startedBlock: intent.startedBlock });
-        });
-      }, () => { assertIntent?.(); walletRequested = true; onDispatch(); });
-      broadcastHash = txHash;
-      if (!walletRequested) throw new Error("Wallet adapter did not establish transaction recovery protection.");
-      await journal.exclusive(account, async () => {
-        const current = journal.read(account);
-        if (!current || current.id !== intent?.id) throw new Error("Pending transaction record changed. Reconcile wallet activity.");
-        journal.write(account, { ...current, hash: txHash });
-      });
-      return { hash: txHash, account, chainId: manifest.chainId, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value };
-    } catch (error) {
-      let refused = broadcastHash === null && isWalletRequestRejected(error);
-      if (!walletRequested || refused) await journal.exclusive(account, async () => {
-        const current = journal.read(account);
-        if (current && current.id === intent?.id) {
-          if (current.hash !== null || broadcastHash !== null) refused = false;
-          else {
-            onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
-            journal.remove(account);
-          }
-        }
-      });
-      // The wallet's own fee or gas check failed before it broadcast. With nothing pending at this nonce, the send is retired here.
-      let notSent = false;
-      if (walletRequested && !refused && broadcastHash === null && isPreBroadcastError(error)) {
+    // Every tab sees this wallet request as open until its result is recorded, so no tab settles its record from the chain meanwhile.
+    try { return await journal.holdRequest(account, async () => {
+      // Written inside the wallet's beforeRequest callback, so the type stays explicit.
+      let intent = null as PendingIntent | null;
+      let walletRequested = false;
+      let broadcastHash: Hex | null = null;
+      try {
+        await wallet.assertCurrent(entry.session);
+        const fresh = await build(entry.action, entry.session);
+        await assertDraft(entry.action, entry.expectedDraft, account, fresh.block);
+        if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
+        const fees = await checkNetworkFee(client, manifest.chainId, { account, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value, blockNumber: fresh.block.number });
+        const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
+        await wallet.assertCurrent(entry.session);
+        const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce, ...fees }, async () => {
+          await journal.exclusive(account, async () => {
+            assertIntent?.();
+            if (journal.read(account)) throw new Error(unresolved);
+            intent = { id: crypto.randomUUID(), intentHash: transactionIntent(entry.transaction), nonce, startedBlock: fresh.block.number.toString(), hash: null };
+            journal.write(account, intent);
+            beforeRequest?.({ id: intent.id, intentHash: intent.intentHash, nonce: intent.nonce, startedBlock: intent.startedBlock });
+          });
+        }, () => { assertIntent?.(); walletRequested = true; onDispatch(); });
+        broadcastHash = txHash;
+        if (!walletRequested) throw new Error("Wallet adapter did not establish transaction recovery protection.");
         await journal.exclusive(account, async () => {
           const current = journal.read(account);
-          if (!current || current.id !== intent?.id || current.hash !== null) return;
-          if (await client.getTransactionCount({ address: account, blockTag: "pending" }) > current.nonce) return;
-          const latest = journal.read(account);
-          if (!latest || latest.id !== current.id || latest.hash !== null) return;
-          onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
-          journal.remove(account);
-          notSent = true;
-        }).catch(() => { /* An unreadable nonce keeps the record; the page settles it from the chain. */ });
+          // Nothing clears a record while its request is open, but if something did, the returned hash protects the send again.
+          if (!current && intent) { journal.write(account, { ...intent, hash: txHash }); return; }
+          if (!current || current.id !== intent?.id) throw new Error("Pending transaction record changed. Reconcile wallet activity.");
+          journal.write(account, { ...current, hash: txHash });
+        });
+        return { hash: txHash, account, chainId: manifest.chainId, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value };
+      } catch (error) {
+        let refused = broadcastHash === null && isWalletRequestRejected(error);
+        if (!walletRequested || refused) await journal.exclusive(account, async () => {
+          const current = journal.read(account);
+          if (current && current.id === intent?.id) {
+            if (current.hash !== null || broadcastHash !== null) refused = false;
+            else {
+              onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
+              journal.remove(account);
+            }
+          }
+        });
+        // The wallet's own fee or gas check failed before it broadcast. With nothing pending at this nonce, the send is retired here.
+        let notSent = false;
+        const evidence = walletRequested && !refused && broadcastHash === null ? preBroadcastEvidence(error) : null;
+        if (evidence) {
+          const quiet = async (nonce: number) => await client.getTransactionCount({ address: account, blockTag: "pending" }) <= nonce;
+          await (async () => {
+            const sent = intent;
+            if (!sent) return;
+            // A bare code is weaker evidence: LABx's RPC reads again over a few seconds, so a send the wallet's own RPC took can arrive.
+            if (evidence === "code") for (const wait of CODE_ONLY_RECHECK_MS) {
+              if (!await quiet(sent.nonce)) return;
+              await new Promise(resolve => setTimeout(resolve, wait));
+            }
+            await journal.exclusive(account, async () => {
+              const current = journal.read(account);
+              if (!current || current.id !== sent.id || current.hash !== null) return;
+              if (!await quiet(current.nonce)) return;
+              const latest = journal.read(account);
+              if (!latest || latest.id !== current.id || latest.hash !== null) return;
+              onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
+              journal.remove(account);
+              notSent = true;
+            });
+          })().catch(() => { /* An unreadable nonce keeps the record; the page settles it from the chain. */ });
+        }
+        if (notSent) throw new NotSentError(notSentReason(error, feeCurrency(manifest.chainId)));
+        if (walletRequested && !refused) throw new Error("The wallet response is uncertain. Check its activity and reconcile the transaction hash before retrying.");
+        throw error;
       }
-      if (notSent) throw new NotSentError(notSentReason(error, feeCurrency(manifest.chainId)));
-      if (walletRequested && !refused) throw new Error("The wallet response is uncertain. Check its activity and reconcile the transaction hash before retrying.");
-      throw error;
-    } finally { submitting.delete(key); }
+    }); } finally { submitting.delete(key); }
   }
 
   async function nonceState(account: Address, entry: Readonly<PendingIntent>) {
@@ -199,20 +223,29 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     if (pendingNonce > entry.nonce) return "waiting";
     return block >= BigInt(entry.startedBlock) + UNSENT_CLEAR_BLOCKS ? "expired" : "unsent";
   }
+  /** Whether the chain knows the transaction, mined or pending. Read failures other than "not found" are thrown. */
+  async function knownTransaction(txHash: Hex) {
+    try { await client.getTransaction({ hash: txHash }); return true; }
+    catch (error) { if (isTransactionNotFound(error)) return false; throw error; }
+  }
   async function settlePending({ wallet, expected, continueUnsent = false }: Parameters<RaffleService["settlePending"]>[0]): Promise<PendingSettlement> {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const account = session.account;
-    const inspected = (current: PendingIntent | null): current is PendingIntent => current !== null && expected.hash === null
-      && current.hash === null && current.id === expected.id && current.nonce === expected.nonce;
+    const inspected = (current: PendingIntent | null): current is PendingIntent => current !== null && current.id === expected.id && current.nonce === expected.nonce
+      && (current.hash === null ? expected.hash === null : expected.hash !== null && current.hash.toLowerCase() === expected.hash.toLowerCase());
     if (!inspected(journal.read(account))) return { kind: "changed" };
     // This tab's own wallet request is still open: its result decides, not the chain.
     if (submitting.has(account.toLowerCase())) return { kind: "waiting" };
     return journal.exclusive(account, async (): Promise<PendingSettlement> => {
       const current = journal.read(account);
       if (!inspected(current)) return { kind: "changed" };
-      if (submitting.has(account.toLowerCase())) return { kind: "waiting" };
+      // So does a wallet request still open in this or any other tab.
+      if (submitting.has(account.toLowerCase()) || await journal.requestOpen(account)) return { kind: "waiting" };
+      // A saved hash the chain still knows is settled by its own receipt check. One it no longer knows was replaced or dropped.
+      if (current.hash !== null && await knownTransaction(current.hash)) return { kind: "waiting" };
       const state = await nonceState(account, current);
-      if (state === "waiting" || state === "unsent" && !continueUnsent) return { kind: state };
+      // A saved hash was broadcast once, and its wallet may broadcast it again, so only 25 blocks with nothing at its nonce clear it.
+      if (state === "waiting" || state === "unsent" && (!continueUnsent || current.hash !== null)) return { kind: state };
       if (!inspected(journal.read(account))) return { kind: "changed" };
       journal.remove(account);
       return { kind: state === "spent" ? "spent" : "dropped" };

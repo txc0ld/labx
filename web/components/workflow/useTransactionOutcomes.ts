@@ -25,7 +25,7 @@ export function useTransactionOutcomes(service: RaffleService, wallet: WalletSes
  */
 export type SavedHashCheck = "checking" | "attention" | "settled";
 export type PageVisibility = { visible(): boolean; onVisible(listener: () => void): () => void };
-type CheckService = Pick<RaffleService, "pending" | "inspectOutcome">;
+type CheckService = Pick<RaffleService, "pending" | "inspectOutcome" | "settlePending">;
 type CheckOwner = Pick<TransactionOutcomes, "getSnapshot" | "resume">;
 
 const FIRST_RETRY_MS = 2_000, MAX_RETRY_MS = 15_000;
@@ -49,9 +49,11 @@ function ownCheckFailed(outcomes: readonly TransactionOutcome[], hash: Hex) {
  * Re-checks a transaction hash that the pending journal already holds, while the page is visible, with backoff.
  * It only reads: it never prepares, signs, sends, connects or switches networks. The journal is cleared only through
  * owner.resume, the same canonical path as the manual check, and only after a read-only inspection finds a successful
- * receipt for this exact hash with the required confirmations and the journal's own intent. A reverted receipt, a
- * different intent, an unknown hash, a failed confirmation in this tab, or a send still pending after three minutes
- * calls onAttention and leaves the decision to the person. onSettled reports that the journal no longer holds the hash.
+ * receipt for this exact hash with the required confirmations and the journal's own intent. A hash the chain no longer
+ * knows was replaced or dropped, so service.settlePending decides that record from the account's nonces and clears only
+ * that record. A reverted receipt, a different intent, an unknown hash the nonces cannot settle, a failed confirmation in
+ * this tab, or a send still pending after three minutes calls onAttention and leaves the decision to the person.
+ * onSettled reports that the journal no longer holds the hash.
  */
 export function startSavedHashCheck({ owner, service, wallet, account, hash, onAttention, onSettled, visibility = documentVisibility, now = Date.now }: {
   owner: CheckOwner;
@@ -86,6 +88,9 @@ export function startSavedHashCheck({ owner, service, wallet, account, hash, onA
         failures = 0;
         if (now() - started >= SAVED_HASH_ATTENTION_MS) attention();
       } else if (inspection.kind === "unknown") {
+        const settled = await service.settlePending({ wallet, expected: pending });
+        if (stopped) return;
+        if (settled.kind === "spent" || settled.kind === "dropped") { onSettled(); return; }
         if (++failures >= 2) attention();
       } else if (inspection.kind === "confirmed" && sameHash(inspection.hash, hash) && inspection.receipt.to) {
         const expectedIntent = transactionIntent({ to: inspection.receipt.to, data: inspection.receipt.data, value: inspection.receipt.value });
@@ -228,17 +233,23 @@ export function startPendingSendCheck({ service, wallet, expected, onStatus, vis
   };
 }
 
-type SendEntry = { status: PendingSendStatus; users: number; listeners: Set<() => void>; check: ReturnType<typeof startPendingSendCheck> | null };
+// panels counts the visible TransactionFlow panels that show this record, so a page-level ResumeTransaction can hide its copy.
+type SendEntry = { status: PendingSendStatus; users: number; panels: number; listeners: Set<() => void>; check: ReturnType<typeof startPendingSendCheck> | null };
 const pendingSendChecks = new WeakMap<TransactionOutcomes, Map<string, SendEntry>>();
 function sendEntry(owner: TransactionOutcomes, key: string) {
   let entries = pendingSendChecks.get(owner);
   if (!entries) { entries = new Map(); pendingSendChecks.set(owner, entries); }
   let entry = entries.get(key);
-  if (!entry) { entry = { status: "checking", users: 0, listeners: new Set(), check: null }; entries.set(key, entry); }
+  if (!entry) { entry = { status: "checking", users: 0, panels: 0, listeners: new Set(), check: null }; entries.set(key, entry); }
   return entry;
 }
+function notifySend(entry: SendEntry) { for (const listener of entry.listeners) listener(); }
 
-/** Shares one chain check per wallet session and pending record without a hash across every component that shows it. */
+/**
+ * Shares one chain check per wallet session and pending record without a hash across every component that shows it.
+ * showPanel(element) marks a rendered panel as shown while the element is visible on the page, and returns its cleanup;
+ * panelShown is whether any such panel is shown, so the page shows one panel for the record.
+ */
 export function usePendingSend(service: RaffleService, wallet: WalletSessionPort, pending: Pick<OutcomeJournal, "id" | "hash" | "nonce"> | null) {
   const snapshot = useWalletSnapshot(wallet);
   const owner = transactionOutcomes(service);
@@ -252,12 +263,14 @@ export function usePendingSend(service: RaffleService, wallet: WalletSessionPort
   }, [entry]);
   const getStatus = useCallback(() => entry?.status ?? null, [entry]);
   const status = useSyncExternalStore(subscribe, getStatus, getStatus);
+  const getPanelShown = useCallback(() => (entry?.panels ?? 0) > 0, [entry]);
+  const panelShown = useSyncExternalStore(subscribe, getPanelShown, getPanelShown);
   useEffect(() => {
     if (!entry || !account || id === null || nonce === null) return;
     const publish = (next: PendingSendStatus) => {
       if (entry.status === next) return;
       entry.status = next;
-      for (const listener of entry.listeners) listener();
+      notifySend(entry);
     };
     if (entry.users++ === 0) entry.check = startPendingSendCheck({ service, wallet, expected: { id, hash: null, nonce }, onStatus: publish });
     return () => {
@@ -267,5 +280,12 @@ export function usePendingSend(service: RaffleService, wallet: WalletSessionPort
     };
   }, [entry, service, wallet, account, id, nonce]);
   const continueUnsent = useCallback(() => entry?.check?.continueUnsent() ?? Promise.resolve(), [entry]);
-  return { status, continueUnsent };
+  const showPanel = useCallback((element: Element | null) => {
+    // A panel inside a closed disclosure has no layout box, so it does not count as shown.
+    if (!entry || !element || element.getClientRects().length === 0) return undefined;
+    entry.panels += 1;
+    notifySend(entry);
+    return () => { entry.panels -= 1; notifySend(entry); };
+  }, [entry]);
+  return { status, continueUnsent, panelShown, showPanel };
 }

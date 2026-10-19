@@ -46,6 +46,7 @@ run("wallet review repairs", () => {
   });
 
   // The wallet's own -32603 class is a pre-broadcast failure: retired only when the chain shows nothing pending at its nonce.
+  // With only the code to go on, the pending nonce must stay quiet for a few seconds first.
   it.each([false, true])("handles a nested rejection inside -32603 by the pending nonce (a send at its nonce: %s)", async sentAtNonce => {
     const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);
     const wallet = c.wallet(c.seller).session; await wallet.connect();
@@ -63,7 +64,7 @@ run("wallet review repairs", () => {
     await expect(sending).rejects.toThrow(/uncertain/);
     expect(journal.read(c.seller)?.hash).toBeNull();
     await expect(service.submit({ prepared: await service.prepare({ action: { kind: "approvePrize", id: 1n }, wallet }), wallet })).rejects.toThrow(/unresolved/);
-  });
+  }, 15_000);
 
   it.each([4001, 5000].flatMap(code => ["other intent", "recorded hash", "returned hash"].map(mode => ({ code, mode }))))("does not remove recovery for $mode on rejection code $code", async ({ code, mode }) => {
     const journal = memoryPendingJournal(), service = createRaffleService(c.client, c.manifest, journal);

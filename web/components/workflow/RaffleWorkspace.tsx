@@ -479,6 +479,10 @@ function purchaseRecap(snapshot: RaffleSnapshot, submitted: SubmittedAction) {
   } catch { return null; }
 }
 
+function approvalRefreshKey(account: string, revision: number, hash: Hex) {
+  return `usdc-approval:${account.toLowerCase()}:${revision}:${hash.toLowerCase()}`;
+}
+
 /** One tick for the terms, the draw rules and the age requirement. It belongs to the wallet that ticked it, not to one order. */
 type Consent = { account: string | null; checked: boolean };
 const NO_CONSENT: Consent = { account: null, checked: false };
@@ -505,6 +509,8 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   // The order whose exact USDC approval this page just confirmed from the buyer's own click, so its purchase opens in the
   // wallet next, once. Kept only in memory: a reload never resumes it. block is the approval's block, revision the wallet session.
   const [buyAfterApproval, setBuyAfterApproval] = useState<{ order: string; revision: number; block: bigint } | null>(null);
+  // The exact USDC approvals this page sent in this visit, kept after their flow unmounts.
+  const [ownApprovals, setOwnApprovals] = useState<readonly SubmittedAction[]>([]);
   const orderGeneration = useRef(0);
   const [quote, setQuote] = useState<MembershipQuote | null>(null);
   const [quoteState, setQuoteState] = useState<"idle" | "loading" | "error">("idle");
@@ -606,10 +612,24 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   useEffect(() => {
     if (buyAfterApproval && (buyReady || reloadFailed || quoteState === "error" || buyerWallet.revision !== buyAfterApproval.revision || order !== null && order !== buyAfterApproval.order)) setBuyAfterApproval(null);
   }, [buyAfterApproval, buyReady, reloadFailed, quoteState, buyerWallet.revision, order]);
-  const approved = async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, direct: boolean) => {
-    if (direct && order) setBuyAfterApproval({ order, revision: buyerWallet.revision, block: confirmation.blockNumber });
+  // A later check of this click's own approval, after a confirmation slower than the first watch, opens the purchase too.
+  const approved = async (confirmation: Extract<Confirmation, { kind: "confirmed" }>) => {
+    if (order) setBuyAfterApproval({ order, revision: buyerWallet.revision, block: confirmation.blockNumber });
+    if (buyerAccount) owner.claimRefresh(approvalRefreshKey(buyerAccount, buyerWallet.revision, confirmation.hash));
     await onConfirmed();
   };
+  // This page's own approval that confirmed after this wallet's account was read. When the pack, quantity or payment changed
+  // while it was in the wallet or confirming, its flow unmounted before it could re-read the account, so the page re-reads it
+  // once here and the next step uses the new allowance. Approvals recovered from storage keep the explicit Refresh.
+  const approvalAfterRead = account === null ? undefined : outcomes.find(outcome => outcome.kind === "terminal" && outcome.confirmation.kind === "confirmed"
+    && outcome.confirmation.receipt.blockNumber > account.snapshot.block.number && ownApprovals.some(submitted => owner.belongsToSubmission(submitted, outcome)));
+  const approvalAfterReadHash = approvalAfterRead?.kind === "terminal" ? approvalAfterRead.confirmation.hash : null;
+  useEffect(() => {
+    if (!approvalAfterReadHash || !buyerAccount || !owner.claimRefresh(approvalRefreshKey(buyerAccount, buyerWallet.revision, approvalAfterReadHash))) return;
+    void onConfirmed();
+    // onConfirmed is a fresh function on each render; the claimed key makes this run once per approval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalAfterReadHash, buyerAccount, buyerWallet.revision, owner]);
 
   async function buyAgain() {
     if ((!canBuyAgain && !canArchivePurchase) || !purchaseOutcome) return;
@@ -677,7 +697,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
               : insufficientUsdc ? <p className="notice warning" role="status">Not enough USDC. You need {total} USDC.</p>
               : !nextStep?.enabled ? <p className="notice warning" role="status">{nextStep?.reason || "Purchase is not available."}</p>
               : !agreed ? <><button className="btn" type="button" disabled>{buyLabel}</button><p className={checkout.hint}>Tick the box above to continue.</p></>
-              : approvalFirst ? <><TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label={buyLabel} submitOnClick formatUsdc={formatUsdcAmount} onConfirmed={approved} disabled={!writesEnabled} disabledReason={writeDisabledReason} /><p className={checkout.hint}>Your wallet asks twice: first to approve exactly {total} USDC, then to buy.</p></>
+              : approvalFirst ? <TransactionFlow key={`approve-${packId}-${quantity}-${quote.totalUsdc}`} service={browser.service} wallet={browser.wallet} action={{ kind: "approveUsdc", id: snapshot.id, packId, quantity }} label={buyLabel} submitOnClick formatUsdc={formatUsdcAmount} onConfirmed={approved} onSubmitted={submitted => setOwnApprovals(current => [...current, submitted])} disabled={!writesEnabled} disabledReason={writeDisabledReason} idleHint={<p className={checkout.hint}>Your wallet asks twice: first to approve exactly {total} USDC, then to buy.</p>} />
               : purchaseAction ? <TransactionFlow key={`buy-${packId}-${quantity}-${payment}`} service={browser.service} wallet={browser.wallet} action={purchaseAction} label={buyLabel} submitOnClick submitOnMount={autoBuy} formatUsdc={formatUsdcAmount} onConfirmed={onConfirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /> : <p className="notice warning" role="status">Purchase is not available.</p>}
           </WalletGate>
           </div>
@@ -821,7 +841,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   // Reclaim NFT follows only a cancellation whose own click confirmed it. A rejection, revert or later check ends the sequence.
   const reclaimNext = availability.kind === "cancel" && cancelReclaimsPrize(snapshot) ? onCancelled : undefined;
   const confirmed = reclaimNext
-    ? async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, direct: boolean) => { if (direct) reclaimNext(confirmation.blockNumber); await onConfirmed(); }
+    ? async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, via: "wallet" | "check") => { if (via === "wallet") reclaimNext(confirmation.blockNumber); await onConfirmed(); }
     : onConfirmed;
   return <section className="workflow-next stack"><div><h2>{label}</h2><p>{availability.reason || description || sellerStepText(snapshot, availability.kind)}</p>{fact ? <p className="workflow-fact">{fact}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} submitOnClick={STATE_ONLY_KINDS.has(availability.kind)} submitOnMount={submitOnMount} onUnavailable={onUnavailable} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={label} formatUsdc={formatUsdcAmount} onConfirmed={confirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
 }

@@ -3,7 +3,7 @@ import { encodeFunctionData, erc20Abi, type Address, type Hex } from "viem";
 import { SAVED_HASH_ATTENTION_MS, startSavedHashCheck, type PageVisibility } from "../components/workflow/useTransactionOutcomes";
 import { transactionIntent } from "../lib/chain/pending-journal";
 import type { TransactionOutcome } from "../lib/chain/transaction-outcomes";
-import type { CanonicalReceipt, OutcomeInspection, OutcomeJournal, SubmittedAction, WalletSnapshot } from "../lib/chain/types";
+import type { CanonicalReceipt, OutcomeInspection, OutcomeJournal, PendingSettlement, SubmittedAction, WalletSnapshot } from "../lib/chain/types";
 import type { WalletSessionPort } from "../lib/chain/ports";
 
 const account: Address = "0x1111111111111111111111111111111111111111";
@@ -17,7 +17,7 @@ const receipt: CanonicalReceipt = { ...submitted, nonce: 4, blockNumber: 20n, st
 const confirmed: OutcomeInspection = { kind: "confirmed", hash, blockNumber: 20n, replacedHash: null, receipt };
 const intent = transactionIntent({ to: usdc, data, value: 0n });
 
-function harness({ inspection = confirmed, journalIntent = intent, outcomes = [] as TransactionOutcome[], saved = { id: "saved", hash, nonce: 4 } as OutcomeJournal | null }: { inspection?: OutcomeInspection; journalIntent?: Hex; outcomes?: TransactionOutcome[]; saved?: OutcomeJournal | null } = {}) {
+function harness({ inspection = confirmed, journalIntent = intent, outcomes = [] as TransactionOutcome[], saved = { id: "saved", hash, nonce: 4 } as OutcomeJournal | null, settlement = { kind: "waiting" } as PendingSettlement }: { inspection?: OutcomeInspection; journalIntent?: Hex; outcomes?: TransactionOutcome[]; saved?: OutcomeJournal | null; settlement?: PendingSettlement } = {}) {
   let journal = saved;
   let clock = 0, visible = true, onVisible: () => void = () => {};
   const snapshot: WalletSnapshot = { kind: "connected", account, chainId: 31337, revision: 1 };
@@ -32,6 +32,11 @@ function harness({ inspection = confirmed, journalIntent = intent, outcomes = []
       return journal;
     }),
     inspectOutcome: vi.fn(async (_input: { hash: Hex; account: Address; timeoutMs?: number }) => inspection),
+    // The account's nonces for a saved hash the chain no longer knows; "spent" and "dropped" clear the record.
+    settlePending: vi.fn(async (_input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean }) => {
+      if (settlement.kind === "spent" || settlement.kind === "dropped") journal = null;
+      return settlement;
+    }),
     prepare: vi.fn(forbidden), submit: vi.fn(forbidden), confirm: vi.fn(forbidden), resume: vi.fn(forbidden)
   };
   const terminal: TransactionOutcome = { id: hash, account, kind: "terminal", submitted: receipt, confirmation: { kind: "confirmed", hash, blockNumber: 20n, replacedHash: null, receipt } };
@@ -125,9 +130,23 @@ describe("automatic check of a saved transaction hash", () => {
     expect(h.onAttention).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.service.inspectOutcome).toHaveBeenCalledTimes(2);
+    expect(h.service.settlePending).toHaveBeenCalledWith({ wallet: h.wallet, expected: { id: "saved", hash, nonce: 4 } });
     expect(h.onAttention).toHaveBeenCalledTimes(1);
     expect(h.owner.resume).not.toHaveBeenCalled();
     expect(h.journal).not.toBeNull();
+    h.stop();
+  });
+
+  it.each(["spent", "dropped"] as const)("settles a saved hash the chain no longer knows once the account's nonces show it %s", async kind => {
+    const h = harness({ inspection: { kind: "unknown", hash, reason: "Transaction not found." }, settlement: { kind } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.service.settlePending).toHaveBeenCalledTimes(1);
+    expect(h.service.settlePending.mock.calls[0][0].continueUnsent).toBeUndefined();
+    expect(h.journal).toBeNull();
+    expect(h.onSettled).toHaveBeenCalled();
+    expect(h.onAttention).not.toHaveBeenCalled();
+    expect(h.owner.resume).not.toHaveBeenCalled();
+    expectReadsOnly(h);
     h.stop();
   });
 

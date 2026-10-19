@@ -8,7 +8,12 @@ export interface PendingJournal {
   write(account: Address, intent: PendingIntent): void;
   remove(account: Address): void;
   exclusive<T>(account: Address, run: () => Promise<T>): Promise<T>;
+  /** Runs `run` while every tab can see that this account has a wallet request open. Refuses at once when one already is. */
+  holdRequest<T>(account: Address, run: () => Promise<T>): Promise<T>;
+  /** Whether any tab has a wallet request open for this account. */
+  requestOpen(account: Address): Promise<boolean>;
 }
+export const REQUEST_OPEN_ELSEWHERE = "Your wallet already has a request from LABx open. Finish or reject it first.";
 export function transactionIntent(tx: { to: Address; data: Hex; value: bigint }): Hex {
   return keccak256(encodeAbiParameters([{ type: "address" }, { type: "bytes32" }, { type: "uint256" }], [tx.to, keccak256(tx.data), tx.value]));
 }
@@ -19,12 +24,19 @@ function parse(raw: string | null): PendingIntent | null {
   return { id: value.id, intentHash: hash(value.intentHash), nonce: value.nonce, startedBlock: value.startedBlock, hash: value.hash === null ? null : hash(value.hash) };
 }
 export function memoryPendingJournal(): PendingJournal {
-  const records = new Map<string, string>(), locks = new Map<string, Promise<unknown>>();
+  const records = new Map<string, string>(), locks = new Map<string, Promise<unknown>>(), requests = new Set<string>();
   return {
     read: account => parse(records.get(account.toLowerCase()) ?? null),
     write: (account, intent) => { records.set(account.toLowerCase(), JSON.stringify(intent)); },
     remove: account => { records.delete(account.toLowerCase()); },
-    exclusive(account, run) { const key = account.toLowerCase(); const next = (locks.get(key) ?? Promise.resolve()).catch(() => {}).then(run); locks.set(key, next); return next; }
+    exclusive(account, run) { const key = account.toLowerCase(); const next = (locks.get(key) ?? Promise.resolve()).catch(() => {}).then(run); locks.set(key, next); return next; },
+    async holdRequest(account, run) {
+      const key = account.toLowerCase();
+      if (requests.has(key)) throw new Error(REQUEST_OPEN_ELSEWHERE);
+      requests.add(key);
+      try { return await run(); } finally { requests.delete(key); }
+    },
+    requestOpen: async account => requests.has(account.toLowerCase())
   };
 }
 export function browserPendingJournal(manifest: DeploymentManifest): PendingJournal {
@@ -38,6 +50,18 @@ export function browserPendingJournal(manifest: DeploymentManifest): PendingJour
     read: account => parse(storage().getItem(key(account))),
     write(account, intent) { const data = JSON.stringify(intent); storage().setItem(key(account), data); if (storage().getItem(key(account)) !== data) throw new Error("Pending transaction could not be saved. No new transaction is allowed."); },
     remove: account => { storage().removeItem(key(account)); },
-    async exclusive(account, run) { storage(); return await window.navigator.locks.request(key(account), run); }
+    async exclusive(account, run) { storage(); return await window.navigator.locks.request(key(account), run); },
+    async holdRequest(account, run) {
+      storage();
+      return await window.navigator.locks.request(`${key(account)}:request`, { ifAvailable: true }, async lock => {
+        if (!lock) throw new Error(REQUEST_OPEN_ELSEWHERE);
+        return await run();
+      });
+    },
+    async requestOpen(account) {
+      storage();
+      const { held = [] } = await window.navigator.locks.query();
+      return held.some(lock => lock.name === `${key(account)}:request`);
+    }
   };
 }

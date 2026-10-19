@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { decodeFunctionData, encodeFunctionData, erc20Abi, keccak256, toBytes, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, erc20Abi, keccak256, parseEther, toBytes, type Address, type Hex } from "viem";
 import { raffleAbi } from "../lib/chain/abi";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { formatUsdcAmount } from "../components/workflow/format";
@@ -185,30 +185,39 @@ run("one-click membership purchase in a rendered browser", () => {
 
   it("settles a pending record with nothing at its nonce from the chain, without a pasted hash", async () => {
     const intentHash = keccak256(toBytes("easy-buy-stuck"));
-    const write = (record: { id: string; nonce: number; startedBlock: bigint }) => fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value),
-      { key: journalKey(chain.buyer), value: JSON.stringify({ id: record.id, intentHash, nonce: record.nonce, startedBlock: record.startedBlock.toString(), hash: null }) });
+    const write = (record: { id: string; nonce: number; startedBlock: bigint; hash?: Hex }) => fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value),
+      { key: journalKey(chain.buyer), value: JSON.stringify({ id: record.id, intentHash, nonce: record.nonce, startedBlock: record.startedBlock.toString(), hash: record.hash ?? null }) });
     const saved = () => fixture.page.evaluate((key: string) => localStorage.getItem(key), journalKey(chain.buyer));
     const hashField = fixture.page.getByLabel("Transaction hash");
+    const unsentPanel = fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true });
+    const waitingLine = fixture.page.getByText("Waiting for your last transaction to confirm…", { exact: true });
+    const visible = (locator: ReturnType<typeof fixture.page.getByText>) => locator.evaluateAll(nodes => nodes.filter(node => (node as HTMLElement).checkVisibility()).length);
+    // This test sets up its own chain state: a spent buyer nonce, and enough blocks for the 25-block rule.
+    await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.buyer, value: "0x0", gas: "0x5208" }]);
+    await chain.rpc("anvil_mine", ["0x20"]);
     await openPiece(chain.buyer);
     const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
 
-    // Nothing at its nonce and fewer than 25 blocks old: the person continues with one click.
+    // Nothing at its nonce and fewer than 25 blocks old: the page shows it before the box is ticked, and once after.
     await write({ id: "recent-unsent", nonce, startedBlock: await chain.client.getBlockNumber() });
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
-    await fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true }).first().waitFor({ state: "visible", timeout: 20_000 });
+    await unsentPanel.first().waitFor({ state: "visible", timeout: 20_000 });
     expect(await fixture.page.getByText(/needs a check|paste/i).count()).toBe(0);
     expect(await hashField.count()).toBe(0);
     await fixture.page.locator(".resume-transaction summary", { hasText: /^Details$/ }).click();
     expect(await fixture.page.getByText("If your wallet still shows a request from LABx, reject it first.", { exact: true }).first().isVisible()).toBe(true);
     await agreement().check();
-    await fixture.page.getByRole("button", { name: "Continue", exact: true }).first().click();
+    await fixture.page.locator(".checkout-bar").getByText("Your wallet didn’t send your last transaction.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => visible(unsentPanel), { timeout: 10_000 }).toBe(1);
+    expect(await fixture.page.getByRole("button", { name: "Continue", exact: true }).count()).toBe(1);
+    await fixture.page.getByRole("button", { name: "Continue", exact: true }).click();
     await expect.poll(saved, { timeout: 10_000 }).toBeNull();
     await buy(total(PRICES.Entry)).waitFor({ state: "visible", timeout: 15_000 });
-    expect(await fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true }).count()).toBe(0);
+    expect(await unsentPanel.count()).toBe(0);
 
     // At least 25 blocks old with still nothing at its nonce: it clears by itself.
     const block = await chain.client.getBlockNumber();
-    await write({ id: "aged-unsent", nonce, startedBlock: block > 30n ? block - 30n : 0n });
+    await write({ id: "aged-unsent", nonce, startedBlock: block - 25n });
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(saved, { timeout: 20_000 }).toBeNull();
     await agreement().check();
@@ -219,14 +228,23 @@ run("one-click membership purchase in a rendered browser", () => {
     await fixture.page.reload({ waitUntil: "domcontentloaded" });
     await expect.poll(saved, { timeout: 20_000 }).toBeNull();
 
-    // Something is pending at its nonce: the page waits, then clears once that send is mined.
+    // A saved hash the chain never saw, as after a wallet's speed-up or cancel, at a spent nonce: it clears by itself too.
+    await write({ id: "replaced", nonce: nonce - 1, startedBlock: await chain.client.getBlockNumber(), hash: keccak256(toBytes("easy-buy-replaced")) });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    await expect.poll(saved, { timeout: 30_000 }).toBeNull();
+    expect(await hashField.count()).toBe(0);
+
+    // Something is pending at its nonce: the page says so on load, before the box is ticked, then clears once it is mined.
     await chain.rpc("evm_setAutomine", [false]);
     try {
       await chain.rpc("eth_sendTransaction", [{ from: chain.buyer, to: chain.buyer, value: "0x0", nonce: `0x${nonce.toString(16)}`, gas: "0x5208" }]);
       await write({ id: "waiting", nonce, startedBlock: await chain.client.getBlockNumber() });
       await fixture.page.reload({ waitUntil: "domcontentloaded" });
+      await waitingLine.waitFor({ state: "visible", timeout: 20_000 });
+      expect(await agreement().isChecked()).toBe(false);
       await agreement().check();
-      await fixture.page.getByText("Waiting for your last transaction to confirm…", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+      await fixture.page.locator(".checkout-bar").getByText("Waiting for your last transaction to confirm…", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => visible(waitingLine), { timeout: 10_000 }).toBe(1);
       expect(await saved()).not.toBeNull();
       await chain.mine();
     } finally {
@@ -235,9 +253,9 @@ run("one-click membership purchase in a rendered browser", () => {
     await expect.poll(saved, { timeout: 20_000 }).toBeNull();
     await buy(total(PRICES.Entry)).waitFor({ state: "visible", timeout: 15_000 });
     expect(await hashField.count()).toBe(0);
-    // Only the test's own send at that nonce went out: the page never asked the wallet for anything.
+    // Only the test's own sends went out: the page never asked the wallet for anything.
     expect(await chain.client.getTransactionCount({ address: chain.buyer })).toBe(nonce + 1);
-  }, 120_000);
+  }, 150_000);
 
   it("does not open the wallet when it cannot pay the network fee, and says how much it needs", async () => {
     await chain.rpc("anvil_setBalance", [chain.stranger, "0x3e8"]);
@@ -254,4 +272,118 @@ run("one-click membership purchase in a rendered browser", () => {
       await chain.rpc("anvil_setBalance", [chain.stranger, "0x21e19e0c9bab2400000"]);
     }
   }, 60_000);
+
+  it("buys with ETH in one wallet transaction for at most the quoted ETH, with no approval and no signature", async () => {
+    await openPiece(chain.stranger);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Bronze");
+    await fixture.page.getByRole("radio", { name: "ETH quote", exact: true }).check();
+    const button = fixture.page.getByRole("button", { name: /^Buy for up to [\d.]+ ETH$/ });
+    await button.waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByText(/Your wallet asks twice/).count()).toBe(0);
+    const maxEth = parseEther(/up to ([\d.]+) ETH/.exec(await button.innerText())?.[1] ?? "0");
+    expect(maxEth).toBeGreaterThan(0n);
+    await button.click();
+    await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+    expect(await youreIn().innerText()).toContain("1 × Bronze");
+    const requests = await wallet.requests();
+    expect(requests.map(request => request.method)).toEqual(["eth_sendTransaction"]);
+    const [sent] = requests;
+    const purchase = decodeFunctionData({ abi: raffleAbi, data: sent.data as Hex });
+    expect(purchase.functionName).toBe("buyPackWithEth");
+    expect(purchase.args?.slice(0, 4)).toEqual([id, 1, 1, PUBLISHED_TERMS_HASH]);
+    expect(BigInt(sent.value ?? "0x0")).toBe(maxEth);
+    expect(sent.maxFeePerGas !== undefined && sent.maxPriorityFeePerGas !== undefined).toBe(true);
+    expect(await wallet.reviews()).toBe(0);
+    await buyAgain();
+  }, 90_000);
+
+  it("re-reads the allowance when the pack changes while its approval confirms, so the purchase needs no second approval", async () => {
+    await openPiece(chain.buyer);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Gold");
+    const gold = total(PRICES.Gold), entry = total(PRICES.Entry);
+    expect(await allowance(chain.buyer)).toBe(0n);
+    fixture.setMineConfirmation(false);
+    await chain.rpc("evm_setAutomine", [false]);
+    try {
+      await buy(gold).click();
+      await expect.poll(async () => (await wallet.requests()).length, { timeout: 20_000 }).toBe(1);
+      await fixture.page.getByText(/^Confirming on the network/).waitFor({ state: "visible", timeout: 20_000 });
+      await choose("Entry");
+    } finally {
+      fixture.setMineConfirmation(true);
+      await chain.rpc("evm_setAutomine", [true]);
+    }
+    await chain.mine();
+    await chain.mine();
+    await expect.poll(() => allowance(chain.buyer), { timeout: 10_000 }).toBe(gold);
+    // The page reads the new allowance, so Entry goes straight to the purchase.
+    await expect.poll(() => fixture.page.getByText(/Your wallet asks twice/).count(), { timeout: 20_000 }).toBe(0);
+    await expect.poll(() => buy(entry).isEnabled(), { timeout: 20_000 }).toBe(true);
+    await buy(entry).click();
+    await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+    expect((await wallet.requests()).map(call)).toEqual([
+      { name: "approve", args: [chain.raffle.address, gold] },
+      { name: "buyPack", args: [id, 0, 1, PUBLISHED_TERMS_HASH] }
+    ]);
+    await buyAgain();
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+  }, 120_000);
+
+  it("after a wallet error without a code, shows one plain panel and no reconcile wording, then buys after Continue", async () => {
+    await openPiece(chain.buyer);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Entry");
+    const entry = total(PRICES.Entry);
+    expect(await allowance(chain.buyer)).toBe(0n);
+    await wallet.fail(APPROVE, "Request expired. Please try again.");
+    await buy(entry).click();
+    const unsent = fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true });
+    await unsent.first().waitFor({ state: "visible", timeout: 20_000 });
+    await expect.poll(() => unsent.evaluateAll(nodes => nodes.filter(node => (node as HTMLElement).checkVisibility()).length), { timeout: 10_000 }).toBe(1);
+    expect(await fixture.page.getByRole("button", { name: "Continue", exact: true }).count()).toBe(1);
+    expect(await fixture.page.getByText(/reconcile|uncertain|needs attention/i).count()).toBe(0);
+    expect(await fixture.page.getByText(/Your wallet asks twice/).count()).toBe(0);
+    await fixture.page.getByRole("button", { name: "Continue", exact: true }).click();
+    await buy(entry).waitFor({ state: "visible", timeout: 15_000 });
+    await expect.poll(() => buy(entry).isEnabled(), { timeout: 15_000 }).toBe(true);
+    await buy(entry).click();
+    await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+    expect((await wallet.requests()).map(call).map(item => item.name)).toEqual(["approve", "approve", "buyPack"]);
+    await buyAgain();
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+  }, 90_000);
+
+  it("opens the purchase by itself when the approval confirms after the first one-minute watch", async () => {
+    await openPiece(chain.buyer);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Silver");
+    const amount = total(PRICES.Silver);
+    expect(await allowance(chain.buyer)).toBe(0n);
+    fixture.setMineConfirmation(false);
+    await chain.rpc("evm_setAutomine", [false]);
+    try {
+      await buy(amount).click();
+      await expect.poll(async () => (await wallet.requests()).length, { timeout: 20_000 }).toBe(1);
+      await fixture.page.getByText(/^Still confirming on the network/).waitFor({ state: "visible", timeout: 90_000 });
+    } finally {
+      fixture.setMineConfirmation(true);
+      await chain.rpc("evm_setAutomine", [true]);
+    }
+    await chain.mine();
+    await chain.mine();
+    // No click: the automatic check confirms the approval and the purchase opens in the wallet.
+    await youreIn().waitFor({ state: "visible", timeout: 60_000 });
+    expect((await wallet.requests()).map(call)).toEqual([
+      { name: "approve", args: [chain.raffle.address, amount] },
+      { name: "buyPack", args: [id, 2, 1, PUBLISHED_TERMS_HASH] }
+    ]);
+    await buyAgain();
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+  }, 200_000);
 });

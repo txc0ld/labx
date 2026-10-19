@@ -64,7 +64,11 @@ export interface RaffleService {
   acknowledgeOutcome(input: { receipt: CanonicalReceipt; acknowledge: () => void }): Promise<void>;
   pending(input: { wallet: WalletSessionPort; expectedIntent?: Hex }): Promise<OutcomeJournal | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort; expectedJournal?: OutcomeJournal; beforeJournalUpdate?: (input: { transaction: SubmittedAction; nonce: number; pending: OutcomeJournal }) => void }): Promise<SubmittedAction | null>;
-  /** Reads the chain for `expected`, a pending record without a hash, and clears exactly that record when the chain shows its send can no longer be mined. continueUnsent also clears it when nothing is at its nonce. */
+  /**
+   * Reads the chain for `expected`, the pending record, and clears exactly that record when the chain shows its send can no
+   * longer be mined. A record with a saved hash is read this way only once the chain no longer knows that hash. continueUnsent
+   * also clears a record without a hash when nothing is at its nonce.
+   */
   settlePending(input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean }): Promise<PendingSettlement>;
 }
 

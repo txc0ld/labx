@@ -101,10 +101,11 @@ export type OutcomeLineage = Readonly<{ hash: Hex }>;
 export type SubmissionCheckpoint = { id: string; intentHash: Hex; nonce: number; startedBlock: string };
 export type OutcomeJournal = { id: string; hash: Hex | null; nonce: number; checkpoint?: SubmissionCheckpoint };
 /**
- * What the chain says about a pending record that has no hash, from the account's latest nonce L, pending nonce P and
- * the record's nonce N. "spent": L > N and P == L, so nothing can still be mined at N and the record was cleared.
- * "dropped": nothing is at N (P <= N) and the record was cleared because the person chose Continue or 25 blocks passed.
- * "waiting": something is pending that may be the send. "unsent": nothing is at N yet. "changed": the record is gone or differs.
+ * What the chain says about a pending record without a hash, or with a saved hash the chain no longer knows, from the
+ * account's latest nonce L, pending nonce P and the record's nonce N. "spent": L > N and P == L, so nothing can still be
+ * mined at N and the record was cleared. "dropped": nothing is at N (P <= N) and the record was cleared because the person
+ * chose Continue or 25 blocks passed. "waiting": something is pending that may be the send, a wallet request is open, or
+ * the chain still knows the saved hash. "unsent": nothing is at N yet. "changed": the record is gone or differs.
  */
 export type PendingSettlement = { kind: "spent" | "dropped" | "waiting" | "unsent" | "changed" };
 export type Confirmation =

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PublicClient } from "viem";
+import { TransactionNotFoundError, type PublicClient } from "viem";
 import { createRaffleService, UNSENT_CLEAR_BLOCKS } from "../lib/chain/service";
-import { memoryPendingJournal, type PendingIntent, type PendingJournal } from "../lib/chain/pending-journal";
+import { memoryPendingJournal, REQUEST_OPEN_ELSEWHERE, type PendingIntent, type PendingJournal } from "../lib/chain/pending-journal";
 import { checkNetworkFee, aboutEth, PRIORITY_FEE_FLOOR, suggestFees } from "../lib/chain/network-fee";
-import { isPreBroadcastError, notSentReason } from "../lib/chain/wallet-errors";
+import { notSentReason, preBroadcastEvidence } from "../lib/chain/wallet-errors";
 import { isNotSent, NotSentError, SubmissionNotDispatchedError } from "../lib/chain/submission-errors";
 import { WalletSession } from "../lib/chain/wallet-session";
 import { startPendingSendCheck, type PageVisibility, type PendingSendStatus } from "../components/workflow/useTransactionOutcomes";
@@ -22,18 +22,39 @@ function entry(overrides: Partial<PendingIntent> = {}): PendingIntent {
   return { id: "stuck-purchase", intentHash: DIGEST, nonce: 18, startedBlock: STARTED.toString(), hash: null, ...overrides };
 }
 
-/** A chain that answers only the reads the pending check makes: latest and pending nonces and the block number. */
-function chainReads(initial: { latest: number; pending: number; block: bigint }) {
-  const state = { ...initial, reads: 0, onRead: undefined as (() => void) | undefined };
+/** A chain that answers only the reads the pending check makes: latest and pending nonces, the block number and, for a saved hash, whether it is known. */
+function chainReads(initial: { latest: number; pending: number; block: bigint; known?: boolean }) {
+  const state = { known: false, ...initial, reads: 0, onRead: undefined as (() => void) | undefined };
   const client = {
     async getTransactionCount({ blockTag }: { blockTag: "latest" | "pending" }) {
       state.reads += 1; state.onRead?.();
       return blockTag === "latest" ? state.latest : state.pending;
     },
-    async getBlockNumber() { return state.block; }
+    async getBlockNumber() { return state.block; },
+    async getTransaction({ hash }: { hash: `0x${string}` }) {
+      if (!state.known) throw new TransactionNotFoundError({ hash });
+      return { hash };
+    }
   } as unknown as PublicClient;
   return { client, state };
 }
+
+/** A journal that counts its locked runs and any two that overlap, which the lock must never allow. */
+function watchedJournal() {
+  const inner = memoryPendingJournal();
+  const stats = { runs: 0, overlaps: 0 };
+  let active = 0;
+  const journal: PendingJournal = {
+    ...inner,
+    exclusive: (account, run) => inner.exclusive(account, async () => {
+      stats.runs += 1;
+      if (++active > 1) stats.overlaps += 1;
+      try { return await run(); } finally { active -= 1; }
+    })
+  };
+  return { journal, stats };
+}
+const macrotasks = async (count: number) => { for (let index = 0; index < count; index++) await new Promise(resolve => setTimeout(resolve, 0)); };
 
 function connectedWallet(account: `0x${string}` = ACCOUNT): WalletSessionPort {
   const snapshot: WalletSnapshot = { kind: "connected", account, chainId: manifest.chainId, revision: 1 };
@@ -108,8 +129,8 @@ describe("a pending send without a hash settles from the account's nonces", () =
     expect(journal.read(ACCOUNT)?.id).toBe("newer-send");
   });
 
-  it("lets only one of two tabs clear the record, and the waiting tab leaves the other tab's new send alone", async () => {
-    const journal = memoryPendingJournal();
+  it("lets only one of two tabs clear the record, each inside the journal lock, never overlapping", async () => {
+    const { journal, stats } = watchedJournal();
     const first = setup({ latest: 18, pending: 18, block: STARTED + 1n }, journal);
     const second = createRaffleService(first.client, manifest, journal);
     const results = await Promise.all([
@@ -118,10 +139,13 @@ describe("a pending send without a hash settles from the account's nonces", () =
     ]);
     expect(results.map(result => result.kind).sort()).toEqual(["changed", "dropped"]);
     expect(journal.read(ACCOUNT)).toBeNull();
+    expect(stats).toEqual({ runs: 2, overlaps: 0 });
+  });
 
-    // A tab holding the journal lock retires the record and starts a new send. The other tab read the old record before
-    // the lock and must not clear the new one once it gets the lock.
-    journal.write(ACCOUNT, entry());
+  it("reads nothing from the chain while another tab holds the journal lock, then leaves that tab's new send alone", async () => {
+    // A tab holding the journal lock retires the record and starts a new send. This tab read the old record before the
+    // lock and must neither read the chain nor clear anything until it gets the lock, and then must not clear the new one.
+    const { service, wallet, expected, journal, state } = setup({ latest: 18, pending: 18, block: STARTED + 1n });
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     const otherTab = journal.exclusive(ACCOUNT, async () => {
@@ -129,11 +153,75 @@ describe("a pending send without a hash settles from the account's nonces", () =
       journal.remove(ACCOUNT);
       journal.write(ACCOUNT, entry({ id: "other-tab-send", nonce: 18 }));
     });
-    const waiting = second.settlePending({ wallet: first.wallet, expected: first.expected, continueUnsent: true });
+    let settled = false;
+    const waiting = service.settlePending({ wallet, expected, continueUnsent: true }).finally(() => { settled = true; });
+    await macrotasks(5);
+    expect(settled).toBe(false);
+    expect(state.reads).toBe(0);
+    expect(journal.read(ACCOUNT)?.id).toBe("stuck-purchase");
     release();
     await otherTab;
     expect(await waiting).toEqual({ kind: "changed" });
     expect(journal.read(ACCOUNT)?.id).toBe("other-tab-send");
+  });
+
+  it("waits while another tab has a wallet request open, even with nothing at its nonce after 25 blocks", async () => {
+    const { service, wallet, expected, journal, state } = setup({ latest: 18, pending: 18, block: STARTED + UNSENT_CLEAR_BLOCKS + 5n });
+    let answer!: () => void;
+    const answered = new Promise<void>(resolve => { answer = resolve; });
+    const otherTab = journal.holdRequest(ACCOUNT, () => answered);
+    await expect(journal.holdRequest(ACCOUNT, async () => "second request")).rejects.toThrow(REQUEST_OPEN_ELSEWHERE);
+    expect(await service.settlePending({ wallet, expected, continueUnsent: true })).toEqual({ kind: "waiting" });
+    expect(journal.read(ACCOUNT)?.id).toBe("stuck-purchase");
+    expect(state.reads).toBe(0);
+    answer();
+    await otherTab;
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "dropped" });
+    expect(journal.read(ACCOUNT)).toBeNull();
+  });
+});
+
+describe("a pending send whose saved hash the chain no longer knows", () => {
+  const SAVED = `0x${"cd".repeat(32)}` as const;
+  function saved(chain: { latest: number; pending: number; block: bigint; known?: boolean }) {
+    const setupResult = setup(chain);
+    setupResult.journal.write(ACCOUNT, entry({ hash: SAVED }));
+    return { ...setupResult, expected: { id: "stuck-purchase", hash: SAVED, nonce: 18 } };
+  }
+
+  it("leaves a hash the chain still knows to its receipt check", async () => {
+    const { service, wallet, expected, journal, state } = saved({ latest: 19, pending: 19, block: STARTED + 100n, known: true });
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "waiting" });
+    expect(journal.read(ACCOUNT)?.hash).toBe(SAVED);
+    expect(state.reads).toBe(0);
+  });
+
+  it("clears it once its nonce is spent by a replacement and nothing is pending (L > N, P == L)", async () => {
+    const { service, wallet, expected, journal } = saved({ latest: 19, pending: 19, block: STARTED + 1n });
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "spent" });
+    expect(journal.read(ACCOUNT)).toBeNull();
+  });
+
+  it("waits while something is pending at its nonce", async () => {
+    const { service, wallet, expected, journal } = saved({ latest: 18, pending: 19, block: STARTED + 100n });
+    expect(await service.settlePending({ wallet, expected })).toEqual({ kind: "waiting" });
+    expect(journal.read(ACCOUNT)?.hash).toBe(SAVED);
+  });
+
+  it("clears a dropped send only after 25 blocks with nothing at its nonce, never on Continue", async () => {
+    const early = saved({ latest: 18, pending: 18, block: STARTED + UNSENT_CLEAR_BLOCKS - 1n });
+    expect(await early.service.settlePending({ wallet: early.wallet, expected: early.expected, continueUnsent: true })).toEqual({ kind: "unsent" });
+    expect(early.journal.read(ACCOUNT)?.hash).toBe(SAVED);
+    const late = saved({ latest: 18, pending: 18, block: STARTED + UNSENT_CLEAR_BLOCKS });
+    expect(await late.service.settlePending({ wallet: late.wallet, expected: late.expected })).toEqual({ kind: "dropped" });
+    expect(late.journal.read(ACCOUNT)).toBeNull();
+  });
+
+  it("never clears a record whose saved hash differs from the one inspected", async () => {
+    const { service, wallet, journal } = saved({ latest: 19, pending: 19, block: STARTED + 100n });
+    expect(await service.settlePending({ wallet, expected: { id: "stuck-purchase", hash: `0x${"ef".repeat(32)}`, nonce: 18 } })).toEqual({ kind: "changed" });
+    expect(await service.settlePending({ wallet, expected: { id: "stuck-purchase", hash: null, nonce: 18 } })).toEqual({ kind: "changed" });
+    expect(journal.read(ACCOUNT)?.hash).toBe(SAVED);
   });
 });
 
@@ -196,13 +284,21 @@ describe("the page's chain check for a pending send", () => {
 
 describe("wallet failures before broadcast", () => {
   it.each([
-    ["MetaMask's internal error", { code: -32603, message: "Internal JSON-RPC error." }],
-    ["a server error", { code: -32000, message: "header not found" }],
     ["insufficient funds nested in EIP-1193 data", { code: -32603, message: "Internal JSON-RPC error.", data: { code: -32000, message: "insufficient funds for gas * price + value" } }],
     ["a failed gas estimate in a viem cause chain", Object.assign(new Error("Transaction failed."), { cause: new Error("gas required exceeds allowance (968194)") })],
-    ["intrinsic gas", new Error("intrinsic gas too low")]
-  ])("treats %s as pre-broadcast", (_name, error) => {
-    expect(isPreBroadcastError(error)).toBe(true);
+    ["intrinsic gas", new Error("intrinsic gas too low")],
+    ["a fee below the base fee", { code: -32000, message: "max fee per gas less than block base fee" }]
+  ])("treats %s as pre-broadcast by its message", (_name, error) => {
+    expect(preBroadcastEvidence(error)).toBe("message");
+  });
+
+  // Some wallets use these codes after their own RPC took the send, so the caller re-reads the nonce over a few seconds.
+  it.each([
+    ["MetaMask's internal error", { code: -32603, message: "Internal JSON-RPC error." }],
+    ["WalletConnect's generic internal error", { code: -32603, message: "Internal error" }],
+    ["a server error with another message", { code: -32000, message: "header not found" }]
+  ])("treats %s as pre-broadcast by its code only", (_name, error) => {
+    expect(preBroadcastEvidence(error)).toBe("code");
   });
 
   it.each([
@@ -211,7 +307,7 @@ describe("wallet failures before broadcast", () => {
     ["an unauthorized method", { code: 4100, message: "The requested method is not authorized." }],
     ["a plain value", "failed"]
   ])("does not treat %s as pre-broadcast", (_name, error) => {
-    expect(isPreBroadcastError(error)).toBe(false);
+    expect(preBroadcastEvidence(error)).toBeNull();
   });
 
   it("names the plain cause", () => {
@@ -254,13 +350,21 @@ describe("network fee suggestion and pre-check", () => {
     expect(await checkNetworkFee(client, 11155111, purchase)).toEqual({ maxFeePerGas: 30n + PRIORITY_FEE_FLOOR, maxPriorityFeePerGas: PRIORITY_FEE_FLOOR });
   });
 
-  it("refuses with one plain sentence when gas × maxFeePerGas + value is more than the balance", async () => {
+  it("refuses with one plain sentence when gas × 1.5 × maxFeePerGas + value is more than the balance", async () => {
     const short = feeClient({ baseFee: 1_000_000_000n, tip: 1_500_000_000n, balance: 15_800_000_000_000n });
     const refusal = checkNetworkFee(short.client, 11155111, purchase);
     await expect(refusal).rejects.toBeInstanceOf(NotSentError);
-    await expect(refusal).rejects.toThrow("Your wallet needs about 0.0034 Sepolia ETH for the network fee.");
+    await expect(refusal).rejects.toThrow("Your wallet needs about 0.0051 Sepolia ETH for the network fee.");
     const payment = feeClient({ baseFee: 1_000_000_000n, tip: 1_000_000_000n, gas: 200_000n, balance: 10n ** 15n });
-    await expect(checkNetworkFee(payment.client, 1, { ...purchase, value: 10n ** 15n })).rejects.toThrow("Your wallet needs about 0.0016 ETH for this payment and the network fee.");
+    await expect(checkNetworkFee(payment.client, 1, { ...purchase, value: 10n ** 15n })).rejects.toThrow("Your wallet needs about 0.0019 ETH for this payment and the network fee.");
+  });
+
+  it("covers the gas limit a wallet sets, about 1.5 times the estimate, not only the estimate itself", async () => {
+    // 968,194 gas at Sepolia's suggested 1,000,030 wei is 0.00000097 ETH; the wallet's padded limit needs 0.0000015 ETH.
+    const between = feeClient({ baseFee: 15n, tip: 2n, balance: 1_200_000_000_000n });
+    await expect(checkNetworkFee(between.client, 11155111, purchase)).rejects.toThrow("Your wallet needs about 0.0000015 Sepolia ETH for the network fee.");
+    const covered = feeClient({ baseFee: 15n, tip: 2n, balance: 1_500_000_000_000n });
+    await expect(checkNetworkFee(covered.client, 11155111, purchase)).resolves.toEqual({ maxFeePerGas: 30n + PRIORITY_FEE_FLOOR, maxPriorityFeePerGas: PRIORITY_FEE_FLOOR });
   });
 
   it("refuses plainly when the gas estimate fails", async () => {

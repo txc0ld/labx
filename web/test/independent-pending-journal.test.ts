@@ -78,7 +78,8 @@ run("independent pending journal boundaries on isolated Anvil", () => {
     const rejected = attempts.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(String(rejected[0]?.reason)).toMatch(/unresolved transaction/);
+    // The other instance's open request mark or its pending record refuses the second send, whichever it meets first.
+    expect(String(rejected[0]?.reason)).toMatch(/unresolved transaction|already has a request from LABx open/);
     await chain.mine();
     await chain.mine();
     expect(await first.confirm({ transaction: fulfilled[0]!.value, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
@@ -107,7 +108,9 @@ run("independent pending journal boundaries on isolated Anvil", () => {
       read: () => null,
       write: () => { throw new Error("storage full"); },
       remove: () => {},
-      exclusive: (_account, run) => run()
+      exclusive: (_account, run) => run(),
+      holdRequest: (_account, run) => run(),
+      requestOpen: async () => false
     };
     const blocked = createRaffleService(chain.client, chain.manifest, unavailable);
     const prepared = await blocked.prepare({ action: { kind: "approvePrize", id }, wallet: counted });
