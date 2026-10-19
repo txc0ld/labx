@@ -111,4 +111,3 @@ describe("Create on a mainnet build", () => {
     expect(signed).toHaveLength(1);
   });
 });
-
