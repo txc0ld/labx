@@ -7,7 +7,7 @@ import { browserReadTransport } from "../lib/chain/history-rpc";
 import { NETWORKS } from "../lib/chain/networks";
 import { createReader } from "../lib/chain/reader";
 import { createSellerReader } from "../lib/chain/seller-reader";
-import type { BlockRef, DeploymentManifest } from "../lib/chain/types";
+import type { BlockRef, DeploymentManifest, RaffleSnapshot } from "../lib/chain/types";
 import { fixtureTrust } from "./fixtures/deployment";
 
 const LABX = "0x1111111111111111111111111111111111111111";
@@ -111,8 +111,9 @@ const sepoliaHistory = (rpc: string) => ({ rpc, refusal: NETWORKS[11155111].hist
 /** The browser's public client, as browser.ts builds it, over the stub nodes. */
 const client = (history: "archive" | "down" | null) => createPublicClient({ transport: browserReadTransport(urls.configured, history && sepoliaHistory(urls[history])) });
 const reader = (history: "archive" | "down" | null) => createReader(client(history), manifest);
-const sellerActivity = (history: "archive" | "down" | null) => createSellerReader(client(history), manifest, {
-  checkedBlock: async () => blockAt(HEAD), readRaffle: vi.fn(), listRaffles: vi.fn()
+/** Sales and payouts over the stub nodes, for a raffle created at `created` (the deployment block by default). */
+const sellerActivity = (history: "archive" | "down" | null, created = DEPLOYMENT) => createSellerReader(client(history), manifest, {
+  checkedBlock: async () => blockAt(HEAD), readRaffle: vi.fn(async () => ({ raffle: { createdAt: blockTime(created) } }) as unknown as RaffleSnapshot), listRaffles: vi.fn()
 });
 const logReads = () => calls.filter(call => call.method === "eth_getLogs").map(call => call.node);
 const headerReads = (number: bigint) => calls.filter(call => call.method === "eth_getBlockByNumber" && call.params[0] === numberToHex(number)).map(call => call.node);
@@ -267,5 +268,63 @@ describe("Sales and payouts", () => {
 
     expect(blocks).toEqual([...RECENT].reverse().concat(OLD));
     expect(logReads().filter(name => name === "configured")).toHaveLength(Number((HEAD - DEPLOYMENT) / 2_000n) + 1);
+  });
+
+  it("reads back through empty windows to the next activity, at most ten windows a load", async () => {
+    const activity = sellerActivity("archive");
+    const loads: { blocks: bigint[]; windows: number }[] = [];
+    let cursor: bigint | undefined;
+    do {
+      const before = logReads().filter(name => name === "configured").length;
+      const page = await activity.listRaffleActivity({ id: 7n, cursor });
+      loads.push({ blocks: page.items.map(item => item.blockNumber), windows: logReads().filter(name => name === "configured").length - before });
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    expect(loads).toEqual([
+      { blocks: [...RECENT].reverse(), windows: 1 },
+      { blocks: [], windows: 10 },
+      { blocks: [], windows: 10 },
+      { blocks: [], windows: 10 },
+      { blocks: [OLD], windows: 1 },
+      { blocks: [], windows: 7 }
+    ]);
+  });
+
+  it("ends at the window holding the raffle's creation instead of the deployment block", async () => {
+    const activity = sellerActivity("archive", OLD - 100n);
+    const loads: bigint[][] = [];
+    let cursor: bigint | undefined;
+    do {
+      const page = await activity.listRaffleActivity({ id: 7n, cursor });
+      loads.push(page.items.map(item => item.blockNumber));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    expect(loads).toEqual([[...RECENT].reverse(), [], [], [], [OLD]]);
+  });
+
+  it("tells a raffle created within the newest window that it has no sales in one read", async () => {
+    const page = await sellerActivity(null, HEAD - 500n).listRaffleActivity({ id: 8n });
+
+    expect(page.items).toEqual([]);
+    expect(page.nextCursor).toBeNull();
+    expect(logReads()).toEqual(["configured"]);
+  });
+
+  it("fails a load whose later window fails, and a retry from the same cursor reads the same windows again", async () => {
+    const ranges = () => calls.filter(call => call.node === "configured" && call.method === "eth_getLogs")
+      .map(call => [BigInt((call.params[0] as Filter).fromBlock), BigInt((call.params[0] as Filter).toBlock)]);
+    const cursor = HEAD - 22_000n;
+
+    await expect(sellerActivity("down").listRaffleActivity({ id: 7n, cursor })).rejects.toThrow(/backend unavailable/);
+    const failed = ranges();
+    expect(failed).toEqual([[cursor - 1_999n, cursor], [cursor - 3_999n, cursor - 2_000n]]);
+
+    calls.length = 0;
+    const retried = await sellerActivity("archive").listRaffleActivity({ id: 7n, cursor });
+    expect(ranges().slice(0, 2)).toEqual(failed);
+    expect(retried.items).toEqual([]);
+    expect(retried.nextCursor).toBe(cursor - 20_000n);
   });
 });
