@@ -75,18 +75,11 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     expect(response?.status()).toBe(200);
     await connectWallet(fixture.page, fixture.page.locator(".wallet-identity", { hasText: `${chain.buyer.slice(0, 6)}…${chain.buyer.slice(-4)}` }));
 
-    const agreements = fixture.page.locator(".agreements input[type=checkbox]");
-    await expect.poll(async () => {
-      for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
-      return (await Promise.all((await agreements.all()).map(checkbox => checkbox.isChecked()))).filter(Boolean).length;
-    }, { timeout: 10_000 }).toBe(3);
-    await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
-    const purchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
-    await purchase.waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.locator(".agreements input[type=checkbox]").check();
+    // The allowance already covers the total, so the one click sends only the purchase.
+    const purchase = fixture.page.getByRole("button", { name: "Buy for 22.50 USDC", exact: true });
+    await expect.poll(() => purchase.isEnabled(), { timeout: 10_000 }).toBe(true);
     await purchase.click();
-    const review = fixture.page.locator(".transaction-review");
-    await review.waitFor({ state: "visible", timeout: 10_000 });
-    await review.getByRole("button", { name: "Confirm purchase", exact: true }).click();
     const submitted = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Confirming on the network… usually under 30 seconds" });
     await submitted.waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("button", { name: "Confirming…", exact: true }).isDisabled()).toBe(true);
@@ -100,14 +93,14 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     // A sold-out raffle shows a short sold-out message in place of the checkout.
     await fixture.page.getByText("All memberships are sold.").waitFor({ state: "visible", timeout: 10_000 });
     expect(await fixture.page.getByRole("radiogroup", { name: "Membership packs" }).count()).toBe(0);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
     const recovery = fixture.page.locator(".resume-transaction");
     await recovery.waitFor({ state: "visible", timeout: 10_000 });
     const quiet = recovery.locator("details", { has: fixture.page.locator("summary", { hasText: "Transaction details" }) });
     await quiet.waitFor({ state: "visible", timeout: 10_000 });
     expect(await recovery.locator("form").isVisible()).toBe(false);
     await quiet.locator("summary").first().click();
-    expect(await recovery.getByRole("heading", { name: "Your last transaction needs a check", exact: true }).isVisible()).toBe(true);
+    expect(await recovery.getByText(/needs a check/).count()).toBe(0);
     expect(await recovery.getByLabel("Transaction hash").inputValue()).toBe(transactionHash);
     expect(await recovery.getByRole("button", { name: "Check transaction", exact: true }).isEnabled()).toBe(true);
 
@@ -115,7 +108,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     const journalKey = `labx:pending:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.buyer.toLowerCase()}`;
     await fixture.page.waitForTimeout(3_000);
     expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), journalKey)).toContain(transactionHash.toLowerCase());
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
     await fixture.page.evaluate(() => {
       type Scope = Window & { ethereum: { request(input: { method: string; params?: readonly unknown[] }): Promise<unknown> }; __automaticCheckMethods: string[] };
       const scope = window as unknown as Scope;
@@ -132,7 +125,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await expect.poll(async () => recovery.locator("form").count(), { timeout: 10_000 }).toBe(0);
     await expect.poll(async () => fixture.page.getByRole("button", { name: "Refresh", exact: true }).isDisabled(), { timeout: 10_000 }).toBe(false);
     await expect.poll(async () => fixture.page.getByRole("radiogroup", { name: "Membership packs" }).count(), { timeout: 10_000 }).toBe(0);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
     await expect.poll(async () => service.pending({ wallet: buyer }), { timeout: 10_000 }).toBeNull();
     await expect.poll(() => fixture.page.evaluate((key: string) => localStorage.getItem(key), journalKey), { timeout: 10_000 }).toBeNull();
     const automaticMethods = await fixture.page.evaluate(() => (window as unknown as Window & { __automaticCheckMethods: string[] }).__automaticCheckMethods);
@@ -148,7 +141,7 @@ run("independent rendered pending recovery on isolated Anvil", () => {
     await reloadedReceipt.getByText(/^Confirmed in block \d+\.$/).waitFor({ state: "visible", timeout: 10_000 });
     expect(await reloadedReceipt.locator(".hash").innerText()).toBe(transactionHash);
     expect(await fixture.page.locator(".resume-transaction form").count()).toBe(0);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
     expect(await service.readAccount({ id: 1n, account: chain.buyer })).toMatchObject({ principal: 20_000_000n, fee: 2_500_000n });
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);

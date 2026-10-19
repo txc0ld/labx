@@ -2,7 +2,7 @@ import type { ArtworkMetadata } from "./metadata";
 import type { Address, Hex } from "viem";
 import type {
   SubmissionCheckpoint, DraftInput, ExternalExecutionReference, ActionTrustInput, AdmissionReview, OwnerExecutionIntent, OwnerExecutionConfirmation, AccountRaffleState, BlockRef, CanonicalReceipt, ObservedTransaction, OutcomeInspection, OutcomeJournal, OutcomeLineage, Confirmation, DeploymentManifest, DeploymentStatus, HistoryItem, Lot,
-  MembershipQuote, Page, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
+  MembershipQuote, Page, PendingSettlement, PreparedAction, RafflePolicy, RaffleSnapshot, SubmittedAction, WalletSnapshot, WorkflowAction
 } from "./types";
 import type { SellerRaffleActivity } from "./seller-types";
 import type { DrawFunding } from "./vrf-funding";
@@ -20,7 +20,8 @@ export interface WalletSessionPort {
   refresh(): Promise<WalletSnapshot>;
   disconnect(): void;
   assertCurrent(expected: Extract<WalletSnapshot, { kind: "connected" }>): Promise<void>;
-  requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint; nonce?: number }, beforeRequest?: () => Promise<void>, onProviderRequest?: () => void): Promise<Hex>;
+  /** maxFeePerGas and maxPriorityFeePerGas are the network's fee suggestion, which a wallet may use in place of its own. */
+  requestTransaction(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint; nonce?: number; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint }, beforeRequest?: () => Promise<void>, onProviderRequest?: () => void): Promise<Hex>;
   requestExternalExecution?(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: Address; data: Hex; value: bigint }, beforeRequest: () => Promise<void>, onProviderRequest: () => void): Promise<ExternalExecutionReference>;
   signMessage(input: { message: string; assertIntent?: () => void; expected: Extract<WalletSnapshot, { kind: "connected" }> }): Promise<Hex>;
 }
@@ -63,6 +64,13 @@ export interface RaffleService {
   acknowledgeOutcome(input: { receipt: CanonicalReceipt; acknowledge: () => void }): Promise<void>;
   pending(input: { wallet: WalletSessionPort; expectedIntent?: Hex }): Promise<OutcomeJournal | null>;
   resume(input: { hash: Hex; wallet: WalletSessionPort; expectedJournal?: OutcomeJournal; beforeJournalUpdate?: (input: { transaction: SubmittedAction; nonce: number; pending: OutcomeJournal }) => void }): Promise<SubmittedAction | null>;
+  /**
+   * Reads the chain for `expected`, the pending record, and clears exactly that record when the chain shows its send can no
+   * longer be mined. A record with a saved hash is read this way only once the chain no longer knows that hash. continueUnsent
+   * also clears a record without a hash when nothing is at its nonce. beforeJournalClear runs under the journal lock just
+   * before the record is removed; if it throws, the record stays.
+   */
+  settlePending(input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean; beforeJournalClear?: (input: { account: Address; pending: OutcomeJournal }) => void }): Promise<PendingSettlement>;
 }
 
 export type BrowserService =

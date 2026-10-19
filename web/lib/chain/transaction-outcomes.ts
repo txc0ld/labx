@@ -4,6 +4,7 @@ import type { RaffleService, WalletSessionPort } from "./ports";
 import type { Confirmation, PreparedAction, SubmittedAction, ObservedTransaction, OutcomeLineage } from "./types";
 import { sameAddress } from "./validation";
 import { isWalletRequestRejected } from "./wallet-errors";
+import { isNotSent } from "./submission-errors";
 
 type TerminalConfirmation = Exclude<Confirmation, { kind: "pending" }>;
 export type TransactionOutcome = { id: string; account: Address } & (
@@ -14,7 +15,7 @@ export type TransactionOutcome = { id: string; account: Address } & (
   | { kind: "unverified"; hash: Hex; message: string }
   | { kind: "checking" | "pending"; submitted: SubmittedAction }
   | { kind: "terminal"; submitted: SubmittedAction; confirmation: TerminalConfirmation }
-  | { kind: "error"; message: string; submitted: SubmittedAction | null }
+  | { kind: "error"; message: string; submitted: SubmittedAction | null; /** Nothing was sent and no pending record remains; the message is one plain sentence. */ notSent?: true }
 );
 export type OutcomeStorage = Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem">;
 const EMPTY: readonly TransactionOutcome[] = [];
@@ -34,7 +35,7 @@ export function sameSubmittedIntent(left: SubmittedAction, right: SubmittedActio
 function outcomeHash(outcome: TransactionOutcome): Hex | null {
   return "submitted" in outcome ? outcome.submitted?.hash ?? null : "hash" in outcome ? outcome.hash : null;
 }
-type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending" | "captureOutcomeLineage" | "retainOutcome" | "acknowledgeOutcome">;
+type OutcomeService = Pick<RaffleService, "manifest" | "submit" | "resume" | "confirm" | "inspectOutcome" | "pending" | "settlePending" | "captureOutcomeLineage" | "retainOutcome" | "acknowledgeOutcome">;
 export function createTransactionOutcomes(service: OutcomeService, storage: () => OutcomeStorage = () => window.localStorage) {
   const prefix = `labx:outcome:v1:${service.manifest.chainId}:${service.manifest.address.toLowerCase()}:${service.manifest.runtimeCodeHash.toLowerCase()}:`;
   const listeners = new Set<() => void>();
@@ -220,7 +221,8 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
         if (confirmation.kind === "pending" || confirmation.kind === "unknown") {
           const message = confirmation.kind === "unknown" ? confirmation.reason : confirmation.reason === "unmined" ? "The transaction was unmined at the last check." : "The receipt needs two canonical confirmations.";
           const result: TransactionOutcome = { id: requestedId, account, kind: "unverified", hash, message };
-          return owned ? put(result) : result;
+          // A row that a settled pending record retired while this read ran stays retired.
+          return owned && getSnapshot(account).some(item => item.id === identity(account, requestedId)) ? put(result) : result;
         }
         let result: TransactionOutcome | undefined;
         await service.retainOutcome({ receipt: confirmation.receipt, lineage: lineages.get(key), retain: ({ priorHash }) => {
@@ -338,6 +340,11 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       try { onSubmitted?.(Object.freeze({ ...submitted })); } catch { /* A detached UI cannot interrupt the owned confirmation. */ }
       return await watch(submitted, submittedId, true);
     } catch (error) {
+      if (isNotSent(error) && error instanceof Error) {
+        // Nothing was sent and no pending record remains, so nothing joins the activity list.
+        records.set(key, getSnapshot(prepared.account).filter(item => item.id !== id)); notify();
+        return { id, account: prepared.account, kind: "error", submitted: null, message: error.message, notSent: true };
+      }
       return isWalletRequestRejected(error)
         ? put({ id, account: prepared.account, kind: "rejected", message: "The wallet request was rejected. No transaction was submitted." })
         : put({ id, account: prepared.account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "The wallet response could not be checked. Review wallet activity before retrying." });
@@ -409,8 +416,31 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     if (recovering) await recovering;
     void recover(record.account);
   }
+  /**
+   * Settles the pending record `expected` from the chain. When service.settlePending clears a record with a saved hash, the
+   * same journal lock first retires this owner's unfinished outcomes of that hash: their saved checkpoints, so a reload does
+   * not restore them as unverified, and their rows here. An outcome whose verified nonce differs from the record's stays, and
+   * so does a terminal receipt.
+   */
+  function settlePending(input: Omit<Parameters<RaffleService["settlePending"]>[0], "beforeJournalClear">) {
+    return service.settlePending({ ...input, beforeJournalClear({ account, pending }) {
+      const hash = pending.hash?.toLowerCase();
+      if (!hash) return;
+      const known = verified.get(checkpointKey(account, hash));
+      if (known && known.nonce !== pending.nonce) return;
+      const target = storage();
+      for (const hint of stored(account)) {
+        if (hint.hash !== hash) continue;
+        const key = checkpointKey(account, hint.id);
+        target.removeItem(key);
+        if (target.getItem(key) !== null) throw new Error("The recovery checkpoint could not be cleared.");
+      }
+      const current = getSnapshot(account), kept = current.filter(item => item.kind === "terminal" || outcomeHash(item)?.toLowerCase() !== hash);
+      if (kept.length !== current.length) { records.set(accountKey(account), kept); notify(); }
+    } });
+  }
   function claimRefresh(key: string) { if (refreshed.has(key)) return false; refreshed.add(key); return true; }
-  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, synchronize, observe, submit, resume, belongsToSubmission, acknowledge };
+  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, synchronize, observe, submit, resume, settlePending, belongsToSubmission, acknowledge };
 }
 export type TransactionOutcomes = ReturnType<typeof createTransactionOutcomes>;
 const owners = new WeakMap<RaffleService, TransactionOutcomes>();
