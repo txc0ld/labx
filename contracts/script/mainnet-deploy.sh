@@ -68,25 +68,34 @@ deployer() {
 has_code() { local c; c=$(read_chain "code at $1" cast code "$1" --rpc-url "$RPC_URL"); [ "$c" != "0x" ]; }
 
 # Waits until a transaction is CONFIRMATIONS deep in the canonical chain and prints its receipt JSON; fails on a
-# reverted transaction. cast returns an existing receipt without waiting for depth, so depth is counted here from the
-# latest block, and the receipt's block hash must equal the canonical block's hash at that height (a reorg that moved
-# the transaction makes it wait again). Gives up after RECEIPT_TIMEOUT seconds (default 900).
+# reverted transaction. cast returns an existing receipt without waiting for depth, so depth is counted here against an
+# identified head: the head's number and hash are read, the receipt's block hash must be the canonical hash at its
+# height, and the hash at the head's height is read again and must still be the head's, so a rollback between the reads
+# is not accepted. Every read gets only the time left of RECEIPT_TIMEOUT (default 900 seconds), and the deadline is
+# checked again before a receipt is accepted.
 mined() {
-  local tx=$1 deadline=$((SECONDS + ${RECEIPT_TIMEOUT:-900})) raw receipt number hash latest canonical status
+  local tx=$1 deadline=$((SECONDS + ${RECEIPT_TIMEOUT:-900})) raw receipt number hash head head_number head_hash canonical recheck status wait_for
+  left() { local l=$((deadline - SECONDS)); [ "$l" -gt 0 ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s"; echo "$l"; }
   while :; do
     receipt=""
-    if raw=$(timeout 60 cast receipt "$tx" --async --rpc-url "$RPC_URL" --json 2>/dev/null) && [ -n "$raw" ]; then
+    if raw=$(timeout "$(left)" cast receipt "$tx" --async --rpc-url "$RPC_URL" --json 2>/dev/null) && [ -n "$raw" ]; then
       receipt=$(unwrap_json "$raw")
       number=$(echo "$receipt" | python3 -c 'import json,sys; n=json.load(sys.stdin).get("blockNumber"); print(int(n, 16) if isinstance(n, str) else (n if n is not None else ""))')
       hash=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("blockHash") or "")')
       if [ -n "$number" ] && [ -n "$hash" ]; then
-        latest=$(read_chain "the latest block" cast block-number --rpc-url "$RPC_URL")
-        canonical=$(read_chain "the hash of block $number" cast block "$number" --field hash --rpc-url "$RPC_URL")
-        if [ $((latest - number + 1)) -ge "$CONFIRMATIONS" ] && same "$canonical" "$hash"; then break; fi
+        head=$(read_chain "the latest block" cast_json timeout "$(left)" cast block latest --rpc-url "$RPC_URL")
+        head_number=$(echo "$head" | python3 -c 'import json,sys; n=json.load(sys.stdin)["number"]; print(int(n, 16) if isinstance(n, str) else n)')
+        head_hash=$(echo "$head" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hash"])')
+        if [ $((head_number - number + 1)) -ge "$CONFIRMATIONS" ]; then
+          # A failed or empty read here (a rollback can remove the old head's height) means not yet, not accepted.
+          canonical=$(timeout "$(left)" cast block "$number" --field hash --rpc-url "$RPC_URL" 2>/dev/null) || canonical=""
+          recheck=$(timeout "$(left)" cast block "$head_number" --field hash --rpc-url "$RPC_URL" 2>/dev/null) || recheck=""
+          if [ -n "$canonical" ] && [ -n "$recheck" ] && same "$canonical" "$hash" && same "$recheck" "$head_hash" && [ "$SECONDS" -lt "$deadline" ]; then break; fi
+        fi
       fi
     fi
-    [ "$SECONDS" -lt "$deadline" ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s"
-    sleep 5
+    wait_for=$(left)
+    sleep $((wait_for < 5 ? wait_for : 5))
   done
   status=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
   [ "$status" = "0x1" ] || [ "$status" = "1" ] || die "transaction $tx failed on chain"
