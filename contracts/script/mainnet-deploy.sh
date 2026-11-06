@@ -55,10 +55,11 @@ CHAIN=$(read_chain "the chain id" cast chain-id --rpc-url "$RPC_URL")
 [ "$CHAIN" = "1" ] || die "RPC_URL is chain $CHAIN, not Ethereum mainnet (chain 1)"
 cd "$ROOT"
 
-# Runs a cast command with --json and prints plain JSON: some cast versions wrap the answer in {"schema_version", "data"}.
-cast_json() {
-  "$@" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); d=d["data"] if isinstance(d, dict) and "schema_version" in d and "data" in d else d; print(json.dumps(d))'
-}
+# Prints plain JSON: some cast versions wrap --json answers in {"schema_version", "data"}.
+unwrap_json() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d=d["data"] if isinstance(d, dict) and "schema_version" in d and "data" in d else d; print(json.dumps(d))' "$1"; }
+# Runs a cast command with --json and prints plain JSON. The command and the parse are separate steps, so a failing
+# command fails here whatever the shell options.
+cast_json() { local raw; raw=$("$@" --json) || return 1; unwrap_json "$raw"; }
 # The deployer address, derived from DEPLOYER_PRIVATE_KEY in the environment, so the key is on no command line.
 deployer() {
   need DEPLOYER_PRIVATE_KEY
@@ -66,11 +67,29 @@ deployer() {
 }
 has_code() { local c; c=$(read_chain "code at $1" cast code "$1" --rpc-url "$RPC_URL"); [ "$c" != "0x" ]; }
 
-# Waits until a transaction is CONFIRMATIONS deep; prints its receipt JSON. Fails on a reverted transaction.
+# Waits until a transaction is CONFIRMATIONS deep in the canonical chain and prints its receipt JSON; fails on a
+# reverted transaction. cast returns an existing receipt without waiting for depth, so depth is counted here from the
+# latest block, and the receipt's block hash must equal the canonical block's hash at that height (a reorg that moved
+# the transaction makes it wait again). Gives up after RECEIPT_TIMEOUT seconds (default 900).
 mined() {
-  local receipt
-  receipt=$(read_chain "the receipt of $1 at $CONFIRMATIONS confirmations (not found or not canonical within ${RECEIPT_TIMEOUT:-900}s)" timeout "${RECEIPT_TIMEOUT:-900}" bash -c "$(declare -f cast_json); cast_json cast receipt \"\$1\" --confirmations \"\$2\" --rpc-url \"\$3\"" _ "$1" "$CONFIRMATIONS" "$RPC_URL")
-  [ "$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "0x1" ] || die "transaction $1 failed on chain"
+  local tx=$1 deadline=$((SECONDS + ${RECEIPT_TIMEOUT:-900})) raw receipt number hash latest canonical status
+  while :; do
+    receipt=""
+    if raw=$(timeout 60 cast receipt "$tx" --async --rpc-url "$RPC_URL" --json 2>/dev/null) && [ -n "$raw" ]; then
+      receipt=$(unwrap_json "$raw")
+      number=$(echo "$receipt" | python3 -c 'import json,sys; n=json.load(sys.stdin).get("blockNumber"); print(int(n, 16) if isinstance(n, str) else (n if n is not None else ""))')
+      hash=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("blockHash") or "")')
+      if [ -n "$number" ] && [ -n "$hash" ]; then
+        latest=$(read_chain "the latest block" cast block-number --rpc-url "$RPC_URL")
+        canonical=$(read_chain "the hash of block $number" cast block "$number" --field hash --rpc-url "$RPC_URL")
+        if [ $((latest - number + 1)) -ge "$CONFIRMATIONS" ] && same "$canonical" "$hash"; then break; fi
+      fi
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s"
+    sleep 5
+  done
+  status=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+  [ "$status" = "0x1" ] || [ "$status" = "1" ] || die "transaction $tx failed on chain"
   echo "$receipt"
 }
 
@@ -146,15 +165,21 @@ reconcile_create() {
   local tx=""
   tx=$(record_get create.tx 2>/dev/null || true)
   if [ -n "$tx" ]; then record_create "$tx"; return 0; fi
-  tx=$(python3 - "$(dirname "$RECORD")" <<'EOF'
+  tx=${CREATE_TX:-}
+  # A run file cut short by an interruption can be unreadable: it is skipped with a note and left in place as evidence.
+  [ -n "$tx" ] || tx=$(python3 - "$(dirname "$RECORD")" <<'EOF'
 import glob, json, os, sys
 for path in sorted(glob.glob(os.path.join(sys.argv[1], "stage2*.json")) + glob.glob(os.path.join(sys.argv[1], "resume*.json"))):
-    for t in json.load(open(path)).get("transactions", []):
+    try:
+        transactions = json.load(open(path)).get("transactions", [])
+    except (OSError, ValueError):
+        print(f"mainnet-deploy: note: {os.path.basename(path)} is unreadable (cut short?); kept, not used", file=sys.stderr)
+        continue
+    for t in transactions:
         if t.get("transactionType") == "CREATE" and t.get("hash"):
             print(t["hash"]); sys.exit()
 EOF
 )
-  [ -n "$tx" ] || tx=${CREATE_TX:-}
   [ -n "$tx" ] || tx=$(find_create) || die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
   record_create "$tx"
 }
@@ -203,6 +228,8 @@ stage1() {
   [ ! -f "$RECORD" ] || die "$RECORD already exists; a second stage 1 would create another subscription"
   local who run tx receipt subId nonce expected predicted block
   who=$(deployer)
+  [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
+    || die "the deployer has a pending transaction; settle it first"
   mkdir -p "$(dirname "$RECORD")"
   broadcast stage1 CreateMainnetSubscription
   run=$RUN
