@@ -2,6 +2,7 @@
 
 import { useCallback, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
+import { configuredChainId, NETWORKS } from "@/lib/chain/networks";
 import type { WalletSessionPort } from "@/lib/chain/ports";
 import { shortAddress } from "./format";
 import { WalletConnectionControls } from "./WalletConnectionControls";
@@ -27,11 +28,12 @@ export function WalletGate({ wallet, goal, children }: { wallet: WalletSessionPo
     );
   }
 
-  if (snapshot.chainId !== 11155111 && snapshot.chainId !== 31337) {
+  const chainId = configuredChainId();
+  if (snapshot.chainId !== chainId && snapshot.chainId !== 31337) {
     return (
       <div className="notice warning stack" role="status">
         <strong>Wrong network</strong>
-        <span>Switch your wallet to Ethereum Sepolia.</span>
+        <span>Switch your wallet to {NETWORKS[chainId].name}.</span>
         <WalletConnectionControls wallet={wallet} />
       </div>
     );

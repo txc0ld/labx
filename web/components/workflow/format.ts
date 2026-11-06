@@ -1,5 +1,6 @@
 import { PUBLISHED_TERMS_HASH } from "@/lib/published-terms";
 import { buyerFee } from "@/lib/chain/fees";
+import { isSupportedChainId, NETWORKS } from "@/lib/chain/networks";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 
 const USDC_DECIMALS = 6n;
@@ -65,7 +66,7 @@ export function formatLocalDate(timestamp: bigint, short = false) {
 }
 
 export function networkName(chainId: number) {
-  return chainId === 11155111 ? "Ethereum Sepolia" : "the local test network";
+  return isSupportedChainId(chainId) && chainId !== 31337 ? NETWORKS[chainId].name : "the local test network";
 }
 
 export const PHASE_LABELS = ["Draft", "Open", "Closed", "Drawing", "Drawn", "Complete", "Cancelled"] as const;
@@ -103,4 +104,16 @@ export function catalogAvailability(snapshot: RaffleSnapshot) {
       : remaining === 0 ? "Sold out" : snapshot.paused ? "Paused"
         : snapshot.policy.termsHash.toLowerCase() !== PUBLISHED_TERMS_HASH.toLowerCase() ? "Terms unavailable" : "Open";
   return { label, purchasable: label === "Open", ended, remaining };
+}
+
+/**
+ * The prize leaves the contract once: to the winner of a finished raffle, or back to the seller after a cancellation.
+ * Listing needs the prize locked, so a cancelled raffle that was listed returned it; a cancelled draft may never have held it.
+ */
+export function prizeStatus(snapshot: RaffleSnapshot) {
+  const r = snapshot.raffle;
+  if (r.escrowed) return { status: "Prize locked", detail: "Locked in the raffle contract" };
+  if (r.phase === 5) return { status: "Prize claimed", detail: "Claimed by the winner" };
+  if (r.phase === 6 && snapshot.admission.record.approvedAtOpening) return { status: "Prize returned to the seller", detail: "Returned to the seller" };
+  return r.phase === 6 ? { status: "Prize not locked", detail: "Not locked" } : { status: "Prize not locked yet", detail: "Not locked yet" };
 }

@@ -1,3 +1,4 @@
+import { chainName, type SupportedChainId } from "./networks";
 import { consentKey, readWalletConsent, revokeWalletConsent, sameConsent, saveWalletConsent } from "./wallet-consent";
 import { WalletSession } from "./wallet-session";
 import type { WalletProvider, WalletSnapshot } from "./types";
@@ -67,7 +68,7 @@ export class BrowserWalletSession extends WalletSession {
 
   constructor(
     private readonly localInjected: WalletProvider | undefined,
-    chainId: 11155111 | 31337,
+    chainId: SupportedChainId,
     private readonly projectId: string | undefined,
     private readonly loadChooser: WalletChooserFactory,
     private readonly restoreScope?: string
@@ -322,8 +323,8 @@ export class BrowserWalletSession extends WalletSession {
       this.replaceProvider(provider);
       const snapshot = await this.refresh();
       this.active(attempt, abort);
-      if (snapshot.kind !== "connected" || snapshot.chainId !== 11155111) {
-        throw new Error("Connect Ethereum Sepolia to continue.");
+      if (snapshot.kind !== "connected" || snapshot.chainId !== this.chainId) {
+        throw new Error(`Connect ${chainName(this.chainId)} to continue.`);
       }
       let persistenceFailed = false;
       try { chooser.remember?.(snapshot); }
@@ -346,7 +347,7 @@ export class BrowserWalletSession extends WalletSession {
           ? error.message
           : error instanceof Error && /still pending|finish or reject/i.test(error.message)
             ? error.message
-            : "Wallet connection was cancelled or could not connect to Ethereum Sepolia. Please retry.";
+            : `Wallet connection was cancelled or could not connect to ${chainName(this.chainId)}. Please retry.`;
         this.status({ kind: "error", message });
       }
       throw error;

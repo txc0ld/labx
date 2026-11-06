@@ -2,7 +2,7 @@ import { isHex } from "viem";
 import { address, hash } from "@/lib/chain/validation";
 import { workflowRequestBody } from "@/lib/chain/request-body";
 import { deliverPurchaseReceipt, resendSender } from "@/lib/receipt-delivery";
-import { serverWorkflow } from "@/lib/chain/server";
+import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { activeStore } from "@/lib/store";
 import { fail, json } from "@/lib/http";
 
@@ -16,11 +16,11 @@ export async function POST(request: Request) {
     const transportIdentity = createHash("sha256").update(key).digest("hex");
     if (typeof body.to !== "string" || typeof body.logIndex !== "number" || typeof body.deadline !== "string" || typeof body.signature !== "string" || !isHex(body.signature)) throw new Error("Receipt request is invalid.");
     const input = { address: address(body.address), to: body.to, transactionHash: hash(body.transactionHash), logIndex: body.logIndex, deadline: body.deadline, signature: body.signature };
-    const result = await deliverPurchaseReceipt(activeStore(), input, context, client, resendSender(key), from, transportIdentity, Date.now(), args => client.verifyMessage(args));
+    const result = await deliverPurchaseReceipt(activeStore(), input, context, client, resendSender(key), from, transportIdentity, Date.now(), signatureVerifier(client));
     return json({ ok: true, ...result });
   } catch (error) {
     // Do not expose RPC/provider URLs, headers or upstream error bodies.
-    const safe = error instanceof Error && /^(A valid|A purchase|A finalized|Receipt |Sepolia request|Persistent Redis|Store )/.test(error.message);
+    const safe = error instanceof Error && /^(A valid|A purchase|A finalized|Receipt |Request authorization|Persistent Redis|Store )/.test(error.message);
     return fail(new Error(safe ? (error as Error).message : "Receipt request could not be completed."));
   }
 }

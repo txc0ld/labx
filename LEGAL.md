@@ -18,8 +18,23 @@ The fixed draw-start, randomness and reveal grace periods are seven days each, m
 
 ## Publication and release
 
-The v3 contract runs on Sepolia only, at `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327`, and labx.art uses it. That deployment rejects Ethereum mainnet. The current source allows a mainnet deployment through a reviewed two-stage script, which still needs its own launch decision. Local source changes do not change the existing Sepolia bytecode. Signed agreements are assertions, not verified age, identity or legal eligibility.
+On Sepolia, the v3 contract runs at `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327` and labx.art uses it; local source changes do not change that bytecode. Its constructor blocks Ethereum mainnet. The mainnet version of the source removes that block, deploys paused through `contracts/script/DeployMainnet.s.sol`, and hands ownership to the Safe, which sets the final terms hash and unpauses at launch. A buyer's agreement (the purchase's on-chain terms acceptance and the 18-or-older checkbox) is an assertion, not verified age, identity or legal eligibility.
 
 Before non-test operation, qualified counsel must review the actual membership benefits, promotion structure, entry conditions, eligibility, jurisdiction restrictions, fees, cancellation/refund terms, privacy and partner offers. Calling a payment a membership does not itself determine its legal treatment. No legal conclusion has been supplied for this product.
 
 The user-facing routes are `/legal`, `/rules`, `/privacy`, `/about` and `/guide`; `/terms` redirects to `/legal`. Receipt emails require configured delivery and a verified finalized purchase.
+
+## Mainnet launch: counsel items
+
+A build with `NEXT_PUBLIC_CHAIN_ID=1` publishes terms version `labx-membership-2026-10-19-mainnet-v1`. Its text equals the Sepolia v3 terms except two statements of fact: the Network section describes Ethereum mainnet, and the Fees section says purchases are paid in USDC only, because the mainnet deployment has no swap router, WETH or price feed (Sepolia's terms describe an optional ETH route that its live contract also leaves disabled). The pages' network facts follow the configured chain. A Sepolia build is unchanged.
+
+These legal characterizations still read as they do on Sepolia. On a mainnet build each is shown under a "Pending counsel review" label until counsel decides the wording:
+
+- About: "These pages are a product draft for counsel, not a legal opinion and not a consumer promotion."
+- Privacy, opening paragraph: "It is a product draft for counsel, not a legal opinion."
+- Privacy, Who we are: "This deployment is a test bench. It is not a consumer promotion."
+- Terms: the mainnet terms keep every legal characterization of the Sepolia terms, including "These terms are a product draft for counsel, not a legal opinion." The Terms page carries one label saying so, because the published text itself is hashed.
+
+Buyer agreement: a purchase no longer collects a per-raffle signed agreement. The buyer ticks one box, "I’m 18 or older and agree to the membership terms and draw rules", and the purchase transaction records acceptance on-chain, because `buyPack` requires `acceptedTerms` to equal the raffle's pinned published terms hash, which includes the draw rules. Agreements signed before this change stay stored and readable. Counsel should confirm that this is a sufficient record of acceptance and of the age assertion.
+
+These statements are the same on both networks and also need counsel's review before mainnet operation: the Privacy Act 1988 and APP 3 and APP 6 basis, the 18-or-older eligibility, the statement that no government identity document is requested, the pages' description of LABx as a "bench", and the fees, cancellation and refund terms. Privacy also has no published privacy mailbox yet (it points to the operator's profile), and its list of processors (site host, Neon or Redis, Alchemy NFT API, email sender, wallet, public chain infrastructure) should be confirmed for the mainnet project's actual vendors.

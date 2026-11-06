@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EthersAdapter } from "@reown/appkit-adapter-ethers";
 import type { AppKit } from "@reown/appkit";
 import { consentKey, saveWalletConsent } from "../lib/chain/wallet-consent";
@@ -38,7 +38,10 @@ vi.mock("@reown/appkit", async importOriginal => {
 vi.mock("../lib/chain/walletconnect-accessibility", () => ({ observeWalletConnectModal: () => () => {}, refreshWalletConnectConnectorLists: () => {} }));
 const account = "0x1111111111111111111111111111111111111111";
 const project = "a".repeat(32), scope = "sdk-restore";
-async function setup(selected = "fixture-injected", liveAccount = account, usageGate: Promise<void> = Promise.resolve()) {
+/** The build's chain for the current run: each suite below runs once on a Sepolia build and once on a mainnet build. */
+let CHAIN: 1 | 11155111 = 11155111;
+const otherChain = () => CHAIN === 1 ? 11155111 : 1;
+async function setup(selected = "fixture-injected", liveAccount = account, usageGate: Promise<void> = Promise.resolve(), consentChain = CHAIN) {
   const records = new Map<string, string>();
   const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); }, removeItem: (key: string) => { records.delete(key); } };
   vi.stubGlobal("window", {
@@ -53,7 +56,7 @@ async function setup(selected = "fixture-injected", liveAccount = account, usage
   const provider = Object.assign(new EventEmitter(), { request: async ({ method }: { method: string }) => {
     requests.push(method);
     if (method === "eth_accounts") return [liveAccount];
-    if (method === "eth_chainId") return "0xaa36a7";
+    if (method === "eth_chainId") return `0x${CHAIN.toString(16)}`;
     throw new Error(`Forbidden restoration request ${method}`);
   } }) as EventEmitter & {
     request(input: { method: string }): Promise<unknown>;
@@ -66,7 +69,7 @@ async function setup(selected = "fixture-injected", liveAccount = account, usage
         topic: "restored-walletconnect-topic",
         expiry: Math.floor(Date.now() / 1000) + 3600,
         peer: { metadata: { name: "Fixture wallet", description: "Fixture", url: "https://wallet.test", icons: [] } },
-        namespaces: { eip155: { accounts: [`eip155:11155111:${liveAccount}`], methods: ["personal_sign", "eth_sendTransaction"], events: ["accountsChanged", "chainChanged"] } }
+        namespaces: { eip155: { accounts: [`eip155:${CHAIN}:${liveAccount}`], methods: ["personal_sign", "eth_sendTransaction"], events: ["accountsChanged", "chainChanged"] } }
       },
       disconnect: vi.fn(async () => {
         const topic = provider.session?.topic;
@@ -80,10 +83,13 @@ async function setup(selected = "fixture-injected", liveAccount = account, usage
   const { ApiController, CoreHelperUtil } = await import("@reown/appkit-controllers");
   vi.spyOn(ApiController, "fetchUsage").mockImplementation(() => usageGate);
   vi.spyOn(CoreHelperUtil, "isMobile").mockReturnValue(false);
-  const consent = saveWalletConsent(consentKey(project, scope), { connectorId: selected, account, chainId: 11155111 });
+  const consent = saveWalletConsent(consentKey(project, scope), { connectorId: selected, account, chainId: consentChain });
   return { requests, consent };
 }
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); sdk.provider = undefined; sdk.adapter = undefined; sdk.instance = undefined; });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.resetModules(); sdk.provider = undefined; sdk.adapter = undefined; sdk.instance = undefined; });
+describe.each([11155111, 1] as const)("on a chain %i build", chainId => {
+beforeEach(() => { CHAIN = chainId; vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", String(chainId)); });
+
 describe("installed AppKit 1.8.19 restore lifecycle", () => {
   it("runs real SDK initialization and restores the selected injected wallet without permission requests", async () => {
     const { requests } = await setup();
@@ -92,6 +98,23 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
     expect(sdk.instance?.getAccount("eip155")).toMatchObject({ isConnected: true, address: account });
     expect(await chooser.restore?.(new AbortController().signal)).not.toBeNull();
     expect(requests).toEqual(["eth_accounts", "eth_chainId", "eth_chainId", "eth_accounts", "eth_chainId", "eth_accounts"]);
+  });
+  it.each(["fixture-injected", "walletConnect"])("does not restore %s from consent saved on the other chain", async selected => {
+    await setup(selected, account, Promise.resolve(), otherChain());
+    const { createAppKitProvider } = await import("../lib/chain/appkit-provider");
+    const chooser = await createAppKitProvider(project, scope);
+    expect(await chooser.restore?.(new AbortController().signal)).toBeNull();
+  });
+  it("remembers a restored wallet only with this build's chain", async () => {
+    await setup();
+    const [{ createAppKitProvider }, { readWalletConsent }, { WalletSelectionChangedError }] = await Promise.all([
+      import("../lib/chain/appkit-provider"), import("../lib/chain/wallet-consent"), import("../lib/chain/wallet-connectors")
+    ]);
+    const chooser = await createAppKitProvider(project, scope);
+    expect(await chooser.restore?.(new AbortController().signal)).not.toBeNull();
+    expect(() => chooser.remember?.({ kind: "connected", account, chainId: otherChain(), revision: 1 })).toThrow(WalletSelectionChangedError);
+    chooser.remember?.({ kind: "connected", account, chainId: CHAIN, revision: 1 });
+    expect(readWalletConsent(consentKey(project, scope))).toMatchObject({ connectorId: "fixture-injected", account, chainId: CHAIN });
   });
   it("does not fall back to another saved connector", async () => {
     const { requests } = await setup("different-connector");
@@ -155,7 +178,7 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
       import("../lib/chain/appkit-provider"),
       import("../lib/chain/wallet-connectors")
     ]);
-    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const wallet = new BrowserWalletSession(undefined, CHAIN, project, () => createAppKitProvider(project, scope), scope);
 
     const restoration = wallet.restore();
     await vi.waitFor(() => {
@@ -179,7 +202,7 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
       import("../lib/chain/appkit-provider"),
       import("../lib/chain/wallet-connectors")
     ]);
-    const wallet = new BrowserWalletSession(undefined, 11155111, project, () => createAppKitProvider(project, scope), scope);
+    const wallet = new BrowserWalletSession(undefined, CHAIN, project, () => createAppKitProvider(project, scope), scope);
 
     const restoration = wallet.restore();
     await vi.waitFor(() => expect(sdk.instance?.getProvider("eip155")).toBe(provider));
@@ -211,12 +234,12 @@ describe("installed AppKit 1.8.19 restore lifecycle", () => {
   it("rejects expired or mismatched WalletConnect authorization", async () => {
     const { consent } = await setup();
     const { hasAuthorizedRestoreSession } = await import("../lib/chain/appkit-provider");
-    const session = { expiry: Math.floor(Date.now() / 1000) + 3600, namespaces: { eip155: { accounts: [`eip155:11155111:${account}`], methods: ["personal_sign", "eth_sendTransaction"], events: ["accountsChanged", "chainChanged"] } } };
+    const session = { expiry: Math.floor(Date.now() / 1000) + 3600, namespaces: { eip155: { accounts: [`eip155:${CHAIN}:${account}`], methods: ["personal_sign", "eth_sendTransaction"], events: ["accountsChanged", "chainChanged"] } } };
     expect(hasAuthorizedRestoreSession({ session }, consent)).toBe(true);
     expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, events: undefined } } } }, consent)).toBe(false);
     expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, events: ["accountsChanged"] } } } }, consent)).toBe(false);
     expect(hasAuthorizedRestoreSession({ session: { ...session, expiry: 1 } }, consent)).toBe(false);
-    expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, accounts: [`eip155:1:${account}`] } } } }, consent)).toBe(false);
+    expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, accounts: [`eip155:${otherChain()}:${account}`] } } } }, consent)).toBe(false);
     expect(hasAuthorizedRestoreSession({ session: { ...session, namespaces: { eip155: { ...session.namespaces.eip155, methods: ["personal_sign"] } } } }, consent)).toBe(false);
   });
 });
@@ -320,7 +343,7 @@ describe("SDK-owned session retirement", () => {
       }
     });
     const attempt = adapter.beginAttempt();
-    await adapter.connectWalletConnect(11155111);
+    await adapter.connectWalletConnect(CHAIN);
     adapter.finishChooser(attempt);
     expect(provider.session?.topic).toBe("next-explicit-topic");
     expect(adapter.connections).toHaveLength(1);
@@ -349,4 +372,5 @@ describe("SDK-owned session retirement", () => {
     expect(() => adapter.releaseWalletConnectSession(provider, topic)).toThrow(/cannot be released/);
     await expect(adapter.disconnectWalletConnectSession(provider, topic)).rejects.toThrow();
   });
+});
 });

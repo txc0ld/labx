@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { JourneyOverview } from "@/components/JourneyOverview";
 import { BUYER_FEE_BPS, SELLER_FEE_BPS } from "@/lib/chain/fees";
+import { configuredChainId } from "@/lib/chain/networks";
 
 export const metadata: Metadata = {
   title: "How LABx works",
@@ -14,7 +15,7 @@ export default function GuidePage() {
       <header className="guide-header">
         <h1 className="page-title">How it works.</h1>
         <p className="guide-intro">Find a piece. Choose a pack. Follow the draw.</p>
-        <p className="guide-availability"><span>Sepolia test network</span>Every listing and action requires an approved deployment.</p>
+        <p className="guide-availability"><span>{configuredChainId() === 1 ? "Ethereum mainnet" : "Sepolia test network"}</span>Every listing and action requires an approved deployment.</p>
       </header>
 
       <div className="guide-grid">

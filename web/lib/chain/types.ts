@@ -1,5 +1,6 @@
 import type { Address, Hex, ContractFunctionReturnType } from "viem";
 import type { raffleAbi } from "./abi";
+import type { SupportedChainId } from "./networks";
 
 export type Raffle = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffle">;
 export type RaffleAccounting = ContractFunctionReturnType<typeof raffleAbi, "view", "getRaffleAccounting">;
@@ -30,7 +31,7 @@ export type RafflePolicy = ContractFunctionReturnType<typeof raffleAbi, "view", 
 export type Lot = ContractFunctionReturnType<typeof raffleAbi, "view", "lotAt">;
 export type BlockRef = { number: bigint; hash: Hex; timestamp: bigint };
 export type DeploymentManifest = {
-  chainId: 11155111 | 31337;
+  chainId: SupportedChainId;
   address: Address;
   runtimeCodeHash: Hex;
   version: 3;
@@ -99,6 +100,16 @@ export type OutcomeInspection = Exclude<Confirmation, { kind: "pending" }>
 export type OutcomeLineage = Readonly<{ hash: Hex }>;
 export type SubmissionCheckpoint = { id: string; intentHash: Hex; nonce: number; startedBlock: string };
 export type OutcomeJournal = { id: string; hash: Hex | null; nonce: number; checkpoint?: SubmissionCheckpoint };
+/**
+ * What the chain says about a pending record without a hash, or with a saved hash the chain no longer knows, from the
+ * account's latest nonce L, pending nonce P and the record's nonce N. "spent": N and every later mined nonce have a
+ * canonical receipt's two confirmations and P == L, so nothing can still be mined at N, and the record was cleared.
+ * "dropped": nothing is at N (L == N and P == N) and the record was cleared because the person chose Continue or 25 blocks
+ * passed. "waiting": something is pending that may be the send, a mined nonce lacks two confirmations, a gap below N
+ * (L < N or P < N) can hold the send queued, a wallet request is open, or the chain still knows the saved hash.
+ * "unsent": nothing is at N yet. "changed": the record is gone or differs.
+ */
+export type PendingSettlement = { kind: "spent" | "dropped" | "waiting" | "unsent" | "changed" };
 export type Confirmation =
   | { kind: "pending"; hash: Hex }
   | { kind: "reverted" | "replaced"; hash: Hex; reason: string; receipt: CanonicalReceipt }

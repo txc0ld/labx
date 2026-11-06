@@ -630,3 +630,47 @@ describe("official AppKit chooser boundary", () => {
     await expect(retried).resolves.toBeDefined();
   });
 });
+
+describe("AppKit chooser on a mainnet build", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("offers only Ethereum with its public RPC, refuses a Sepolia wallet and accepts a mainnet one", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    const fixture = appKitFixture();
+    const { createAppKitProvider } = await loadProvider();
+    const chooser = await createAppKitProvider("a".repeat(32));
+    expect(sdk.configuration).toMatchObject({
+      networks: [{ id: 1 }],
+      defaultNetwork: { id: 1 },
+      metadata: { description: "LABx on Ethereum" },
+      universalProviderConfigOverride: { rpcMap: { "eip155:1": "https://ethereum-rpc.publicnode.com" } }
+    });
+    expect(sdk.configuration?.networks).toHaveLength(1);
+    expect(Object.keys((sdk.configuration?.universalProviderConfigOverride as { rpcMap: object }).rpcMap)).toEqual(["eip155:1"]);
+
+    const sepoliaWallet = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture(account, "0xaa36a7"));
+    await expect(sepoliaWallet).rejects.toThrow(/approved Ethereum account/);
+
+    const mainnetWallet = chooser.connect(new AbortController().signal);
+    await fixture.runExternal();
+    fixture.connect(providerFixture(account, "0x1"));
+    const provider = await mainnetWallet;
+    await expect(provider.request({ method: "eth_chainId" })).resolves.toBe("0x1");
+  });
+
+  it("keeps the Sepolia configuration when NEXT_PUBLIC_CHAIN_ID is unset", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    appKitFixture();
+    const { createAppKitProvider } = await loadProvider();
+    await createAppKitProvider("a".repeat(32));
+    expect(sdk.configuration).toMatchObject({
+      networks: [{ id: 11155111 }],
+      defaultNetwork: { id: 11155111 },
+      metadata: { description: "LABx on Ethereum Sepolia" },
+      universalProviderConfigOverride: { rpcMap: { "eip155:11155111": "https://ethereum-sepolia-rpc.publicnode.com" } }
+    });
+  });
+});

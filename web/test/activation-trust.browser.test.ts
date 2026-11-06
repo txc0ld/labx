@@ -90,8 +90,8 @@ run("activation drift beside browser recovery", () => {
     await viewport(1440);
     await visit("/piece/2", c.buyer);
     await fixture.page.getByText(/reviewed deployment has a pending ownership transfer/).first().waitFor({ state: "visible", timeout: 15_000 });
-    expect(await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).count()).toBe(0);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    await fixture.page.locator(".buyer-flow .notice", { hasText: /pending ownership transfer/ }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
     await viewport(375);
     expect(await fixture.page.getByText(/Existing recovery and receipt controls remain available/).isVisible()).toBe(true);
     await visit("/seller/2", c.seller);
@@ -112,7 +112,7 @@ run("activation drift beside browser recovery", () => {
     await c.write(c.raffle, "transferOwnership", [c.operator]); await c.write(c.raffle, "acceptOwnership");
     await c.write(c.usdc, "mint", [c.buyer, 100_000_000n]);
     await visit("/piece/2", c.buyer);
-    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ timeout: 15_000 });
+    await fixture.page.getByRole("button", { name: "Buy for 27.50 USDC", exact: true }).waitFor({ timeout: 15_000 });
     const selector = encodeFunctionData({ abi: raffleAbi, functionName: "getRaffle", args: [2n] }).slice(0, 10);
     let raffleReads = 0;
     await fixture.page.route(`${c.url}/`, async route => {
@@ -146,10 +146,10 @@ run("activation drift beside browser recovery", () => {
       await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ timeout: 15_000 });
       expect(raffleReads).toBeGreaterThan(0);
       await expect.poll(() => fixture.page.locator(".order-total").innerText(), { timeout: 15_000 }).toMatch(/27\.5/);
-      await expect.poll(() => fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).count(), { timeout: 15_000 }).toBe(0);
-      for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
-      await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
-      await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).waitFor({ timeout: 15_000 });
+      await fixture.page.locator(".agreements input[type=checkbox]").check();
+      // The recovered approval covers the total, so Buy now sends only the purchase.
+      await expect.poll(() => fixture.page.getByRole("button", { name: "Buy for 27.50 USDC", exact: true }).isEnabled(), { timeout: 15_000 }).toBe(true);
+      expect(await fixture.page.getByText(/Your wallet asks twice/).count()).toBe(0);
       const purchase = await c.write(c.raffle, "buyPack", [2n, 0, 1, PUBLISHED_TERMS_HASH], c.buyer); await c.mine();
       raffleReads = 0;
       await recoverReceipt(c.buyer, purchase.transactionHash);
@@ -200,8 +200,7 @@ run("activation drift beside browser recovery", () => {
     await fixture.page.waitForLoadState("networkidle");
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key, value: JSON.stringify(oldJournal) });
     await fixture.page.locator(".agreements input[type=checkbox]").first().waitFor({ timeout: 15_000 });
-    for (const checkbox of await fixture.page.locator(".agreements input[type=checkbox]").all()) await checkbox.check();
-    const localRecovery = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "Your last transaction needs a check" });
+    const localRecovery = fixture.page.locator(".buyer-flow .transaction-state", { has: fixture.page.getByLabel("Transaction hash") });
     await fixture.page.evaluate(({ key, newerJournal, newerHash }) => {
       const originalGet = Storage.prototype.getItem;
       let armed = true;
@@ -226,12 +225,13 @@ run("activation drift beside browser recovery", () => {
         return value;
       };
     }, { key, newerJournal, newerHash });
-    await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
+    // Ticking the box shows the purchase control, which reads the saved transaction and shows its recovery.
+    await fixture.page.locator(".agreements input[type=checkbox]").check();
     await expect.poll(() => fixture.page.getAttribute("html", "data-recovery-race"), { timeout: 15_000 }).toBe("delivered");
     await fixture.page.waitForLoadState("networkidle");
     expect(await localRecovery.getByLabel("Transaction hash").inputValue()).toBe(newerHash);
     expect(await fixture.page.evaluate(key => localStorage.getItem(key), key)).toBe(newerJournal);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
   }, 45_000);
 
   it("loads the private draw setup and sends Confirm the draw straight to the wallet during an ownership transfer", async () => {

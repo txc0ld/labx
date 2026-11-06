@@ -353,7 +353,7 @@ describe("transport-filtered seller activity", () => {
     };
 
     const page = await createSellerReader(client, manifest, reader).listRaffleActivity({ id: 7n });
-    expect(page.items.map(item => item.eventName)).toEqual(financialNames);
+    expect(page.items.map(item => item.eventName)).toEqual([...financialNames].reverse());
     expect(requests).toHaveLength(1);
     expect(requests[0]).toEqual({ method: "eth_getLogs", params: [{
       address: LABX,

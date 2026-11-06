@@ -176,9 +176,10 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
     });
   }).catch(error => cleanupBrowserFailure(browser, server, error));
   let selectedAccount: string = initialAccount;
+  let mineAfterSend = mineConfirmation;
   await context.exposeFunction("__labxRpc", async (input: { method: string; params?: readonly unknown[] }) => {
     const result = await chain.rpc(input.method, input.params ?? []);
-    if (mineConfirmation && input.method === "eth_sendTransaction") {
+    if (mineAfterSend && input.method === "eth_sendTransaction") {
       await chain.mine();
       await chain.mine();
     }
@@ -238,6 +239,8 @@ export async function browserChain(chain: LocalChain, initialAccount: Address = 
     serverOutput: output,
     serverProcessId: server.pid,
     serverProcessGroupId: process.platform === "win32" ? null : server.pid,
+    /** Turns the two blocks mined after each page send on or off, so a test can hold a send unconfirmed. */
+    setMineConfirmation(on: boolean) { mineAfterSend = on; },
     async switchAccount(account: Address) {
       await page.evaluate(async (next: string) =>
         (window as unknown as Window & { __labxSetAccount(next: string): Promise<void> }).__labxSetAccount(next), account);

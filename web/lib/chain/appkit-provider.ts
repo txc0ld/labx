@@ -3,12 +3,16 @@ import { consentKey, readWalletConsent, sameConsent, saveWalletConsent, type Wal
 import { AppKit, CoreHelperUtil, type CreateAppKit } from "@reown/appkit";
 import type { ParsedCaipAddress } from "@reown/appkit-common";
 import { PACKAGE_VERSION } from "@reown/appkit/constants";
-import { sepolia } from "@reown/appkit/networks";
 import { EthersAdapter } from "@reown/appkit-adapter-ethers";
 import { ConnectorController } from "@reown/appkit-controllers";
+import { configuredChainId, NETWORKS } from "./networks";
 import { observeWalletConnectModal, refreshWalletConnectConnectorLists } from "./walletconnect-accessibility";
 import { bounded, type WalletChooser, WalletChooserBusyError, WalletChooserReloadError, WalletSelectionChangedError } from "./wallet-connectors";
 import type { WalletProvider } from "./types";
+
+/** The one chain this build's chooser connects, restores and remembers. */
+const CHAIN_ID = configuredChainId();
+const NETWORK = NETWORKS[CHAIN_ID];
 
 type Attempt = {
   cancelled: boolean;
@@ -524,7 +528,7 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
       const consent = savedConsent(key);
       const connector = this.connectors.find(candidate => candidate.id === params.id);
       const selectedProvider = connector?.provider;
-      if (!consent || consent.chainId !== 11155111 || consent.connectorId !== params.id || ConnectorController.getConnectorId("eip155") !== consent.connectorId || !connector || !selectedProvider || !isWalletProvider(selectedProvider)) throw new Error("No matching authorized wallet connection.");
+      if (!consent || consent.chainId !== CHAIN_ID || consent.connectorId !== params.id || ConnectorController.getConnectorId("eip155") !== consent.connectorId || !connector || !selectedProvider || !isWalletProvider(selectedProvider)) throw new Error("No matching authorized wallet connection.");
       const [accounts, chain] = await Promise.all([selectedProvider.request({ method: "eth_accounts" }), selectedProvider.request({ method: "eth_chainId" })]);
       if (!sameConsent(savedConsent(key), consent) || this.connectors.find(candidate => candidate.id === consent.connectorId)?.provider !== selectedProvider || ConnectorController.getConnectorId("eip155") !== consent.connectorId || !Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== consent.account.toLowerCase() || Number(BigInt(normalizedChainId(chain))) !== consent.chainId) throw new Error("The saved wallet connection changed.");
       if (typeof selectedProvider.on !== "function" || typeof selectedProvider.removeListener !== "function") throw new Error("The wallet cannot report account or network changes safely.");
@@ -544,7 +548,7 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
   class RestoringAppKit extends LabxAppKit {
     override async syncExistingConnection() {
       const consent = savedConsent(key);
-      if (!consent || consent.chainId !== 11155111 || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return;
+      if (!consent || consent.chainId !== CHAIN_ID || ConnectorController.getConnectorId("eip155") !== consent.connectorId) return;
       const connector = adapter.connectors.find(candidate => candidate.id === consent.connectorId);
       const selectedProvider = consent.connectorId === "walletConnect" ? adapter.getWalletConnectProvider() : connector?.provider;
       const selectedTopic = consent.connectorId === "walletConnect" && selectedProvider && typeof selectedProvider === "object"
@@ -577,14 +581,14 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
   }
   const metadata = {
     name: "LABx",
-    description: "LABx on Ethereum Sepolia",
+    description: `LABx on ${NETWORK.name}`,
     url: window.location.origin,
     icons: [`${window.location.origin}/favicon.svg`]
   };
   const options: CreateAppKit = {
     adapters: [adapter],
-    networks: [sepolia],
-    defaultNetwork: sepolia,
+    networks: [NETWORK.chain],
+    defaultNetwork: NETWORK.chain,
     projectId,
     metadata,
     enableInjected: true,
@@ -598,7 +602,7 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
     universalProviderConfigOverride: {
       methods: { eip155: ["eth_sendTransaction", "personal_sign"] },
       events: { eip155: ["accountsChanged", "chainChanged"] },
-      rpcMap: { "eip155:11155111": "https://ethereum-sepolia-rpc.publicnode.com" }
+      rpcMap: { [`eip155:${CHAIN_ID}`]: NETWORK.rpc }
     }
   };
   const appKit = new RestoringAppKit({
@@ -722,7 +726,7 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
     remember(snapshot) {
       if (!key) return;
       const captured = ownedConnection;
-      if (!connected || !captured?.connectorId || !matchesConnection(current, captured) || appKit.getAccount("eip155")?.address?.toLowerCase() !== snapshot.account.toLowerCase() || snapshot.chainId !== 11155111) throw new WalletSelectionChangedError();
+      if (!connected || !captured?.connectorId || !matchesConnection(current, captured) || appKit.getAccount("eip155")?.address?.toLowerCase() !== snapshot.account.toLowerCase() || snapshot.chainId !== CHAIN_ID) throw new WalletSelectionChangedError();
       saveWalletConsent(key, { connectorId: captured.connectorId, account: snapshot.account, chainId: snapshot.chainId });
     },
     async restore(signal) {
@@ -783,8 +787,8 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }
-            if (typeof chain !== "string" || Number(BigInt(chain)) !== 11155111 || !Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== account.address?.toLowerCase()) {
-              throw new Error("The selected wallet did not return the approved Ethereum Sepolia account.");
+            if (typeof chain !== "string" || Number(BigInt(chain)) !== CHAIN_ID || !Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== account.address?.toLowerCase()) {
+              throw new Error(`The selected wallet did not return the approved ${NETWORK.name} account.`);
             }
             await adapter.waitForController(attempt);
             if (settled || signal.aborted || attempt.cancelled) return;
@@ -798,7 +802,7 @@ function createChooser(current: AppKitRuntime, key?: string): WalletChooser {
               provider.request({ method: "eth_accounts" })
             ]);
             if (settled || signal.aborted || attempt.cancelled) return;
-            if (appKit.getProvider("eip155") !== rawProvider || currentAccount?.address?.toLowerCase() !== account.address?.toLowerCase() || typeof currentChain !== "string" || Number(BigInt(currentChain)) !== 11155111 || !Array.isArray(currentAccounts) || typeof currentAccounts[0] !== "string" || currentAccounts[0].toLowerCase() !== currentAccount?.address?.toLowerCase()) {
+            if (appKit.getProvider("eip155") !== rawProvider || currentAccount?.address?.toLowerCase() !== account.address?.toLowerCase() || typeof currentChain !== "string" || Number(BigInt(currentChain)) !== CHAIN_ID || !Array.isArray(currentAccounts) || typeof currentAccounts[0] !== "string" || currentAccounts[0].toLowerCase() !== currentAccount?.address?.toLowerCase()) {
               cancel(new Error("The selected wallet changed while connecting. Please retry."));
               return;
             }

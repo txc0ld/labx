@@ -4,6 +4,7 @@ import { address, hash, sameAddress } from "./chain/validation";
 import { verifyWorkflowAuthorization } from "./chain/server";
 import type { CommitmentInput, PreparationRecoveryInput, WorkflowContext } from "./chain/api-types";
 import type { Store } from "./points";
+import { WorkflowRefusal } from "./workflow-failure";
 export type SignedWorkflowInput<T> = { address: Address; input: T; deadline: string; signature: Hex };
 export type WorkflowVerifier = (args: { address: Address; message: string; signature: Hex }) => Promise<boolean>;
 export function parseEnvelope(body: unknown): SignedWorkflowInput<unknown> {
@@ -22,13 +23,13 @@ export async function saveAuthenticatedCommitment(store: Store, request: SignedW
   // Deadline-independent identity makes retries recover the same durable commitment.
   const identity = keccak256(toBytes(JSON.stringify([context.chainId, context.contract.toLowerCase(), request.address.toLowerCase(), input])));
   const record = await createReserve(store, { ...input, seller: request.address, chainId: BigInt(context.chainId), labx: context.contract, requestIdentity: identity });
-  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId)) throw new Error("Commitment identity does not match.");
+  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId)) throw new WorkflowRefusal("Commitment identity does not match.");
   return record;
 }
 export async function recoverAuthenticatedCommitment(store: Store, request: SignedWorkflowInput<{ commit: Hex }>, context: WorkflowContext, verify: WorkflowVerifier): Promise<ReserveRecord> {
   await verifyWorkflowAuthorization({ operation: "commitment recovery", context, account: request.address, input: request.input, deadline: request.deadline, signature: request.signature, verify });
   const record = await readReserveRecord(store, request.input.commit);
-  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId)) throw new Error("This commitment does not belong to this wallet and deployment.");
+  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId)) throw new WorkflowRefusal("This commitment does not belong to this wallet and deployment.");
   return record;
 }
 
@@ -42,6 +43,6 @@ export async function recoverAuthenticatedPreparation(store: Store, request: Sig
   const commit = await store.get(`reserve-request:v3:${input.requestIdentity}`);
   if (!commit) throw new Error("The saved preparation is not yet available. Retry recovery without creating a new setup.");
   const record = await readReserveRecord(store, hash(commit));
-  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId) || !sameAddress(record.nft, input.nft) || record.tokenId !== input.tokenId) throw new Error("Preparation does not belong to this wallet, deployment and NFT.");
+  if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId) || !sameAddress(record.nft, input.nft) || record.tokenId !== input.tokenId) throw new WorkflowRefusal("Preparation does not belong to this wallet, deployment and NFT.");
   return publishedReserve(record);
 }

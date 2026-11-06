@@ -74,12 +74,16 @@ run("independent seller simplification boundaries", () => {
   it("lets a saved pending intent and a storage-read failure win before Create", async () => {
     const response = await fixture.page.goto(`${fixture.baseUrl}/seller/1`, { waitUntil: "domcontentloaded" });
     expect(response?.status()).toBe(200);
-    await fixture.page.evaluate(({ key, intentHash }) => localStorage.setItem(key, JSON.stringify({ id: "held-before-create", intentHash, nonce: 77, startedBlock: "1", hash: null })), { key: pendingKey(chain.seller), intentHash: zeroHash });
+    // Started at the current block, so the chain check cannot retire it by age while the test looks.
+    const startedBlock = (await chain.client.getBlockNumber()).toString();
+    // At the seller's next nonce, so nothing is at it. A nonce above that leaves a gap below it, and the record keeps waiting.
+    const nonce = await chain.client.getTransactionCount({ address: chain.seller, blockTag: "pending" });
+    await fixture.page.evaluate(({ key, intentHash, startedBlock, nonce }) => localStorage.setItem(key, JSON.stringify({ id: "held-before-create", intentHash, nonce, startedBlock, hash: null })), { key: pendingKey(chain.seller), intentHash: zeroHash, startedBlock, nonce });
     await instrumentProvider();
     const advanced = fixture.page.locator("details.workflow-details > summary").filter({ hasText: "Cancel draft" });
     await connectWallet(fixture.page, advanced);
     await advanced.click();
-    await fixture.page.getByText("Your last transaction needs a check", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
     expect((await providerCalls()).filter(method => method === "eth_sendTransaction" || method === "personal_sign" || method === "eth_sign")).toEqual([]);
 
     await fixture.page.evaluate(key => localStorage.removeItem(key), pendingKey(chain.seller));

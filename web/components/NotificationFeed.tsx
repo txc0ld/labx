@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { configuredChainId, NETWORKS } from "@/lib/chain/networks";
 import { markNotificationRead } from "./NotificationsBell";
 
 type FeedItem = {
@@ -121,10 +122,11 @@ export function NotificationFeed() {
 
   const latest = items[0]!;
   const latestIdentity = `${latest.blockHash}:${latest.transactionHash}:${latest.logIndex}`;
+  const network = NETWORKS[configuredChainId()].shortName;
   return (
     <div className="notification-feed">
       <div className="notification-feed-actions">
-        <p>Historical events from the reviewed Sepolia contract.</p>
+        <p>Historical events from the reviewed {network} contract.</p>
         <div className="notification-feed-buttons">
           <button className="notification-read-button" type="button" disabled={refreshing} onClick={() => void load(undefined, true)}>
             {refreshing ? "Refreshing..." : "Refresh"}
@@ -148,7 +150,7 @@ export function NotificationFeed() {
             <Link href={item.href}>
               <span className={`notification-label notification-label-${item.kind}`}>{item.label}</span>
               <strong>Raffle #{item.raffleId}</strong>
-              <span>Recorded on Sepolia <time dateTime={item.occurredAt}>{formatTime(item.occurredAt)}</time></span>
+              <span>Recorded on {network} <time dateTime={item.occurredAt}>{formatTime(item.occurredAt)}</time></span>
             </Link>
           </li>
         ))}

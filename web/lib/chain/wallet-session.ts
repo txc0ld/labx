@@ -1,4 +1,5 @@
 import { isHex, stringToHex, toHex } from "viem";
+import { chainName, configuredChainId } from "./networks";
 import type { WalletSessionPort } from "./ports";
 import type { WalletProvider, WalletSnapshot } from "./types";
 import { address, hash, sameAddress } from "./validation";
@@ -10,7 +11,7 @@ export class WalletSession implements WalletSessionPort {
   private disposed = false;
   private epoch = 0;
   private retireListeners = () => {};
-  constructor(private provider: WalletProvider | undefined, protected readonly chainId = 11155111) {
+  constructor(private provider: WalletProvider | undefined, protected readonly chainId: number = configuredChainId()) {
     this.listen();
   }
   private listen() {
@@ -91,7 +92,7 @@ export class WalletSession implements WalletSessionPort {
     this.assertProvider(provider, epoch);
     const snapshot = await this.refresh();
     this.assertProvider(provider, epoch);
-    if (snapshot.kind !== "connected" || snapshot.chainId !== this.chainId) throw new Error("Connect the requested test network to continue.");
+    if (snapshot.kind !== "connected" || snapshot.chainId !== this.chainId) throw new Error(`Connect your wallet to ${chainName(this.chainId)} to continue.`);
     return snapshot;
   }
   disconnect() {
@@ -116,7 +117,8 @@ export class WalletSession implements WalletSessionPort {
     onProviderRequest?.();
     this.assertProvider(provider, epoch);
     this.assertSnapshot(expected);
-    const result = await provider.request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId), ...(transaction.nonce === undefined ? {} : { nonce: toHex(transaction.nonce) }) }] });
+    const fees = transaction.maxFeePerGas === undefined || transaction.maxPriorityFeePerGas === undefined ? {} : { maxFeePerGas: toHex(transaction.maxFeePerGas), maxPriorityFeePerGas: toHex(transaction.maxPriorityFeePerGas) };
+    const result = await provider.request({ method: "eth_sendTransaction", params: [{ from: expected.account, to: transaction.to, data: transaction.data, value: toHex(transaction.value), chainId: toHex(expected.chainId), ...(transaction.nonce === undefined ? {} : { nonce: toHex(transaction.nonce) }), ...fees }] });
     return hash(result);
   }
   async requestExternalExecution(expected: Extract<WalletSnapshot, { kind: "connected" }>, transaction: { to: `0x${string}`; data: `0x${string}`; value: bigint }, beforeRequest: () => Promise<void>, onProviderRequest: () => void) {

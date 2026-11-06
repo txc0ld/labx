@@ -20,7 +20,8 @@ export function SellerActivity({ service, id, refreshKey }: { service: RaffleSer
   async function load(cursor?: bigint, block?: BlockRef) {
     const version = ++request.current;
     if (cursor === undefined) setState({ kind: "loading" });
-    else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true } : current);
+    else setState((current) => current.kind === "ready" ? { ...current, loadingMore: true }
+      : current.kind === "error" && current.block ? { kind: "ready", items: current.items, block: current.block, nextCursor: current.nextCursor, loadingMore: true } : current);
     try {
       const page = await service.listRaffleActivity({ id, cursor, block });
       if (version !== request.current) return;
@@ -33,6 +34,7 @@ export function SellerActivity({ service, id, refreshKey }: { service: RaffleSer
       }));
     } catch (error) {
       if (version !== request.current) return;
+      // A failed later page keeps its cursor and pinned block. A failed first load has shown nothing, so Try again starts from the latest block.
       setState((latest) => ({
         kind: "error",
         items: latest.kind === "ready" || latest.kind === "error" ? latest.items : [],
@@ -54,7 +56,7 @@ export function SellerActivity({ service, id, refreshKey }: { service: RaffleSer
     <section className="stack sales-activity" aria-label="Sales and payouts">
       {state.kind === "loading" ? <p className="notice" role="status">Loading sales and payouts…</p> : null}
       {state.kind === "error" ? <div className="notice error stack" role="alert"><strong>Couldn’t load all sales and payouts</strong><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void load(state.nextCursor ?? undefined, state.block ?? undefined)}>Try again</button></div> : null}
-      {state.kind !== "loading" && state.items.length === 0 ? <p>{state.nextCursor === null ? "No sales or payouts yet." : "None found so far."}</p> : null}
+      {state.kind === "ready" && state.items.length === 0 ? <p>{state.nextCursor === null ? "No sales or payouts yet." : "None found so far."}</p> : null}
       {state.kind !== "loading" && state.items.length ? <ol className={styles.activityList}>{state.items.map((item) => <ActivityRow key={`${item.transactionHash}-${item.logIndex}`} item={item} />)}</ol> : null}
       {state.kind === "ready" && state.nextCursor !== null ? <button className="btn btn-dark" type="button" disabled={state.loadingMore} onClick={() => void load(state.nextCursor ?? undefined, state.block)}>{state.loadingMore ? "Loading…" : "Load more"}</button> : null}
     </section>

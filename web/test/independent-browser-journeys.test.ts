@@ -68,7 +68,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
         ? fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true })
         : path.startsWith("/seller/")
           ? fixture.page.locator("details.workflow-details > summary").first()
-          : fixture.page.getByRole("button", { name: /^(Approve [\d.,]+ USDC|Claim your NFT|Claim [\d.,]+ USDC refund)$/ }).or(fixture.page.locator("summary").filter({ hasText: "Other actions" })).first();
+          : fixture.page.getByRole("button", { name: /^(Buy for [\d.,]+ USDC|Claim your NFT|Claim [\d.,]+ USDC refund)$/ }).or(fixture.page.locator("summary").filter({ hasText: "Other actions" })).first();
     await connectWallet(fixture.page, ready);
     await expect.poll(async () => fixture.page.evaluate(async () => {
       const provider = (window as unknown as Window & { ethereum: { request(input: { method: string }): Promise<unknown> } }).ethereum;
@@ -96,7 +96,7 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     expect(alerts).toEqual([]);
   }
 
-  /** A buyer payment or public help step: the website review opens first, then the wallet. */
+  /** A buyer claim or public help step: the website review opens first, then the wallet. */
   async function transact(label: string, confirmName = `Confirm ${label.charAt(0).toLowerCase()}${label.slice(1)}`) {
     const trigger = await revealTrigger(label);
     await trigger.click();
@@ -177,23 +177,28 @@ run("independent rendered wallet journeys on isolated Anvil", () => {
     await expect.poll(async () => (await chain.service.readRaffle({ id })).raffle.phase, { timeout: 15_000 }).toBe(1);
   }
 
+  /** One click: the exact USDC approval, then the purchase, straight to the wallet with no website review or signature. */
   async function purchase(id: bigint, expectedTotal: string) {
     await switchAccount(chain.buyer);
     await goto(`/piece/${id.toString()}`, chain.buyer);
-    await fixture.page.getByRole("button", { name: `Approve ${expectedTotal}`, exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const approval = await transact(`Approve ${expectedTotal}`, "Confirm approval");
-    expect(approval).toContain(expectedTotal);
-    expect(approval).toContain(chain.raffle.address);
-    const agreements = fixture.page.locator(".agreements input[type=checkbox]");
-    await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
-    for (const checkbox of await agreements.all()) await checkbox.check();
-    await fixture.page.getByRole("button", { name: "Sign agreement", exact: true }).click();
-    await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-    const purchaseReview = await transact("Purchase membership", "Confirm purchase");
-    expect(purchaseReview).toContain(expectedTotal);
-    expect(purchaseReview).toContain(chain.raffle.address);
+    const buy = fixture.page.getByRole("button", { name: `Buy for ${expectedTotal}`, exact: true });
+    await buy.waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.locator(".agreements input[type=checkbox]").check();
+    await expect.poll(() => buy.isEnabled(), { timeout: 10_000 }).toBe(true);
+    const wallet = await watchWallet(fixture.page);
+    const blockBeforeSubmit = await chain.client.getBlockNumber({ cacheTime: 0 });
+    await buy.click();
+    await fixture.page.locator(".purchase-receipt", { hasText: "You’re in" }).waitFor({ state: "visible", timeout: 30_000 });
+    await settled(blockBeforeSubmit);
+    expect(await wallet.reviews()).toBe(0);
+    const requests = await wallet.requests();
+    expect(requests.map(request => request.method)).toEqual(["eth_sendTransaction", "eth_sendTransaction"]);
+    expect(requests.map(request => request.to)).toEqual([chain.usdc.address.toLowerCase(), chain.raffle.address.toLowerCase()]);
+    const total = parseUnits(expectedTotal.replace(" USDC", ""), 6);
+    expect(decodeFunctionData({ abi: erc20Abi, data: requests[0].data as `0x${string}` })).toEqual({ functionName: "approve", args: [chain.raffle.address, total] });
+    expect(decodeFunctionData({ abi: raffleAbi, data: requests[1].data as `0x${string}` }).functionName).toBe("buyPack");
     const account = await chain.service.readAccount({ id, account: chain.buyer });
-    expect(account.principal + account.fee).toBe(parseUnits(expectedTotal.replace(" USDC", ""), 6));
+    expect(account.principal + account.fee).toBe(total);
   }
 
   it("renders seller creation through buyer prize, seller proceeds and pinned fee claims", async () => {

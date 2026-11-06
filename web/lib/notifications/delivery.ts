@@ -1,4 +1,5 @@
 import { keccak256, toBytes } from "viem";
+import { configuredChainId, NETWORKS } from "../chain/networks";
 import type { Store } from "../points";
 import type { MailPayload, MailSender } from "../receipt-delivery";
 import type { NotificationEvent } from "./events";
@@ -199,14 +200,15 @@ function requireMailConfig(from: string, transportIdentity: string, now: number)
 function notificationPayload(from: string, origin: string, event: NotificationEvent): MailPayload {
   const link = new URL(event.href, origin).href;
   const subject = `[LABx] ${event.label}: Raffle #${event.raffleId}`;
+  const network = NETWORKS[configuredChainId()].shortName;
   const text = [
     event.label,
     `Raffle #${event.raffleId}`,
-    `Recorded on Sepolia at ${event.occurredAt}.`,
+    `Recorded on ${network} at ${event.occurredAt}.`,
     link
   ].join("\n");
   const anchor = ["<a", `href=${JSON.stringify(link)}`, ">View raffle</a>"].join(" ");
-  const html = `<p><strong>${event.label}</strong></p><p>Raffle #${event.raffleId}</p><p>Recorded on Sepolia at ${event.occurredAt}.</p><p>${anchor}</p>`;
+  const html = `<p><strong>${event.label}</strong></p><p>Raffle #${event.raffleId}</p><p>Recorded on ${network} at ${event.occurredAt}.</p><p>${anchor}</p>`;
   return { from, to: ADMIN_NOTIFICATION_RECIPIENT, subject, text, html };
 }
 

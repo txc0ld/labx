@@ -1,7 +1,8 @@
 import type { Address } from "viem";
+import type { PublicChainId } from "./chain/networks";
 
 export type WalletNft = { contract: Address; tokenId: string; name: string; collection: string; image: string | null };
-export type WalletNftPage = { items: readonly WalletNft[]; nextCursor: string | null; chainId: 11155111 };
+export type WalletNftPage = { items: readonly WalletNft[]; nextCursor: string | null; chainId: PublicChainId };
 
 export const MAX_CURSOR_LENGTH = 2_048;
 export const MAX_RESPONSE_BYTES = 65_536;

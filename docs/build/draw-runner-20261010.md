@@ -78,6 +78,10 @@ To turn it on:
 
 Top up the wallet when a run reports `low-funds`.
 
+Chainlink's nodes answer a draw only when the VRF subscription holds enough to pay for it at the gas lane's maximum price. Chainlink documents the minimum as (callback gas + 200,000 verification gas) × lane maximum × (100 + premium)%, plus the flat fee: about 0.434 ETH for 500,000 callback gas on Sepolia's 500 gwei lane, and about 0.112 ETH for 250,000 on mainnet's 200 gwei lane. It is an estimate, not an exact threshold: raffle 3 waited in Drawing at 0.1 ETH and was answered a minute after a top-up to 0.35 ETH. The review page shows the subscription's balance against this estimate before approval. Anyone can top it up with `fundSubscriptionWithNative(subscriptionId)` on the coordinator.
+
+The runner's `requestRandomness` cap is 1,200,000 gas: the real coordinator used 649,603 on raffle 3, against about 160,000 on the local mock.
+
 If an owner, treasury or Safe signer turns on a smart-account delegation that is not a Safe, the runner stops until reviewed, and sellers see the manual steps after 30 minutes.
 
 To turn it off, delete `LABX_KEEPER_PRIVATE_KEY` from the Vercel Production environment and redeploy. The route then returns 503 and sends nothing. Also delete `NEXT_PUBLIC_LABX_DRAW_RUNNER` before that redeploy if sellers should see the manual buttons again.

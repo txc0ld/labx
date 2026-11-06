@@ -1,5 +1,6 @@
 import { getAddress, isAddress, type Address } from "viem";
 import { safeArtworkUrl } from "./chain/metadata";
+import { configuredChainId, NETWORKS, type PublicChainId } from "./chain/networks";
 import { MAX_RESPONSE_BYTES, boundedWalletNftText, isValidWalletNftCursor, normalizeTokenId, objectRecord, type WalletNft, type WalletNftPage } from "./wallet-nfts-shared";
 
 const MAX_UPSTREAM_BYTES = 2 * 1_024 * 1_024;
@@ -31,7 +32,7 @@ function responseBytes(page: WalletNftPage): number {
   return new TextEncoder().encode(JSON.stringify({ ok: true, ...page })).length;
 }
 
-export function normalizeWalletNftPage(value: unknown): WalletNftPage {
+export function normalizeWalletNftPage(value: unknown, chainId: PublicChainId = configuredChainId()): WalletNftPage {
   const root = objectRecord(value);
   if (!root || !Array.isArray(root.ownedNfts) || root.ownedNfts.length > 100) throw new PublicFailure(502, "Wallet NFT inventory is temporarily unavailable.");
   const nextCursor = root.pageKey === undefined || root.pageKey === null ? null : root.pageKey;
@@ -52,7 +53,7 @@ export function normalizeWalletNftPage(value: unknown): WalletNftPage {
     seen.add(key);
     items.push({ contract: normalizedContract, tokenId, name: boundedWalletNftText(item.name ?? item.title, 160), collection: boundedWalletNftText(contract.name, 160), image: previewUrl(item) });
   }
-  const page = { items, nextCursor, chainId: 11155111 } satisfies WalletNftPage;
+  const page = { items, nextCursor, chainId } satisfies WalletNftPage;
   if (responseBytes(page) <= MAX_RESPONSE_BYTES) return page;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -137,6 +138,7 @@ export function createWalletNftHandler(options: HandlerOptions = {}) {
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? 8_000;
   const trustedVercel = options.trustedVercel ?? false;
+  const chainId = configuredChainId(), host = NETWORKS[chainId].nftApiHost;
   const cache = new Map<string, CacheEntry>();
   const ipRates = new Map<string, RateEntry>();
   const ownerRates = new Map<string, RateEntry>();
@@ -177,15 +179,15 @@ export function createWalletNftHandler(options: HandlerOptions = {}) {
   }
 
   async function upstream(owner: Address, cursor: string | null): Promise<WalletNftPage> {
-    if (!options.apiKey || !/^[A-Za-z0-9_-]{8,256}$/.test(options.apiKey)) throw new PublicFailure(503, "Wallet NFT inventory is unavailable. Enter the NFT contract and token ID manually.");
-    const url = new URL("https://eth-sepolia.g.alchemy.com/nft/v3/getNFTsForOwner");
+    if (!host || !options.apiKey || !/^[A-Za-z0-9_-]{8,256}$/.test(options.apiKey)) throw new PublicFailure(503, "Wallet NFT inventory is unavailable. Enter the NFT contract and token ID manually.");
+    const url = new URL(`https://${host}.g.alchemy.com/nft/v3/getNFTsForOwner`);
     url.searchParams.set("owner", owner); url.searchParams.set("withMetadata", "true"); url.searchParams.set("pageSize", "24"); url.searchParams.set("tokenUriTimeoutInMs", "0");
     if (cursor !== null) url.searchParams.set("pageKey", cursor);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetcher(url, { method: "GET", redirect: "error", credentials: "omit", headers: { Accept: "application/json", Authorization: `Bearer ${options.apiKey}` }, signal: controller.signal });
-      return normalizeWalletNftPage(await readBoundedJson(response, controller.signal));
+      return normalizeWalletNftPage(await readBoundedJson(response, controller.signal), chainId);
     } catch (error) {
       if (error instanceof PublicFailure) throw error;
       if (controller.signal.aborted) throw new PublicFailure(503, "Wallet NFT inventory timed out. Enter the NFT manually or try again.");
@@ -199,7 +201,7 @@ export function createWalletNftHandler(options: HandlerOptions = {}) {
       const current = now();
       checkRate(ipRates, clientBucket(request, trustedVercel), 30, current);
       checkRate(ownerRates, input.owner.toLowerCase(), 30, current);
-      const key = `11155111:${input.owner.toLowerCase()}:${input.cursor ?? ""}`;
+      const key = `${chainId}:${input.owner.toLowerCase()}:${input.cursor ?? ""}`;
       const hit = cached(key, current);
       if (hit) return json({ ok: true, ...hit });
       const pending = inFlight.get(key);

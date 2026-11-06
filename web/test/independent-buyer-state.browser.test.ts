@@ -85,37 +85,13 @@ run("independent buyer state journeys", () => {
     const quantity = fixture.page.getByRole("spinbutton", { name: "Quantity", exact: true });
     await quantity.fill("2");
 
-    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
-    await approve.waitFor({ state: "visible", timeout: 10_000 });
-    await approve.click();
-    const approvalReview = fixture.page.locator(".transaction-review");
-    await approvalReview.waitFor({ state: "visible", timeout: 10_000 });
-    const approvalText = await approvalReview.innerText();
-    expect(approvalText).toContain("88.50 USDC");
-    await approvalReview.getByRole("button", { name: "Confirm approval", exact: true }).click();
-
-    await expect.poll(() => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [chain.buyer, chain.raffle.address] }), { timeout: 15_000 }).toBe(88_500_000n);
-    await fixture.page.waitForTimeout(500);
+    await fixture.page.locator(".agreements input[type=checkbox]").check();
+    const buy = fixture.page.getByRole("button", { name: "Buy for 88.50 USDC", exact: true });
+    await expect.poll(() => buy.isEnabled(), { timeout: 10_000 }).toBe(true);
     expect(await silver.isChecked()).toBe(true);
     expect(await quantity.inputValue()).toBe("2");
-    const agreements = fixture.page.locator(".agreements input[type=checkbox]");
-    await agreements.first().waitFor({ state: "visible", timeout: 10_000 });
-    await expect.poll(async () => {
-      for (const checkbox of await agreements.all()) if (!await checkbox.isChecked()) await checkbox.check();
-      return (await Promise.all((await agreements.all()).map(checkbox => checkbox.isChecked()))).filter(Boolean).length;
-    }, { timeout: 10_000 }).toBe(3);
-    const recordAgreement = fixture.page.getByRole("button", { name: "Sign agreement", exact: true });
-    await recordAgreement.waitFor({ state: "visible", timeout: 10_000 });
-    await recordAgreement.click();
-
-    const purchase = fixture.page.getByRole("button", { name: "Purchase membership", exact: true });
-    await purchase.waitFor({ state: "visible", timeout: 10_000 });
-    await purchase.click();
-    const purchaseReview = fixture.page.locator(".transaction-review");
-    await purchaseReview.waitFor({ state: "visible", timeout: 10_000 });
-    const purchaseText = await purchaseReview.innerText();
-    expect(purchaseText).toContain("88.50 USDC");
-    await purchaseReview.getByRole("button", { name: "Confirm purchase", exact: true }).click();
+    // One click: the exact approval, then the purchase opens in the wallet once the approval confirms.
+    await buy.click();
 
     const confirmed = fixture.page.locator(".buyer-flow .transaction-state", { hasText: "You’re in" });
     await confirmed.waitFor({ state: "visible", timeout: 15_000 });
@@ -131,7 +107,7 @@ run("independent buyer state journeys", () => {
     await fixture.page.getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
     await expect.poll(() => buyAgain.isEnabled(), { timeout: 15_000 }).toBe(true);
     expect(await confirmed.innerText()).toBe(confirmationText);
-    expect(await fixture.page.getByRole("button", { name: "Purchase membership", exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: /^Buy for / }).count()).toBe(0);
 
     const snapshot = await service.readRaffle({ id: 1n });
     expect(snapshot.packs.map(pack => pack.sold)).toEqual([0, 0, 2, 0, 0]);
@@ -150,11 +126,10 @@ run("independent buyer state journeys", () => {
 
   it("does not show a delayed approval confirmation under a replacement wallet", async () => {
     await openPiece(2n, chain.stranger);
-    const approve = fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ });
-    await approve.waitFor({ state: "visible", timeout: 10_000 });
-    await approve.click();
-    const review = fixture.page.locator(".transaction-review");
-    await review.waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.locator(".agreements input[type=checkbox]").check();
+    const approve = fixture.page.getByRole("button", { name: /^Buy for [\d.,]+ USDC$/ });
+    await expect.poll(() => approve.isEnabled(), { timeout: 10_000 }).toBe(true);
+    const treasuryNonce = await chain.client.getTransactionCount({ address: chain.treasury });
 
     const held: Route[] = [];
     let holding = true;
@@ -168,7 +143,7 @@ run("independent buyer state journeys", () => {
       }
       await route.continue();
     });
-    await review.getByRole("button", { name: "Confirm approval", exact: true }).click();
+    await approve.click();
     await expect.poll(() => held.length, { timeout: 10_000 }).toBeGreaterThan(0);
 
     await fixture.switchAccount(chain.treasury);
@@ -179,8 +154,13 @@ run("independent buyer state journeys", () => {
       .toContain(`${chain.treasury.slice(0, 6)}…${chain.treasury.slice(-4)}`);
     await fixture.page.waitForTimeout(250);
 
-    expect(await fixture.page.locator(".buyer-flow .transaction-state", { hasText: /Done\.|Confirmed/ }).count()).toBe(0);
+    expect(await fixture.page.locator(".buyer-flow .transaction-state", { hasText: /Done\.|Confirmed|Opening your purchase/ }).count()).toBe(0);
     expect(await fixture.page.locator(".buyer-flow [role=alert]").allInnerTexts()).toEqual([]);
-    await fixture.page.getByRole("button", { name: /^Approve [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByText("You switched wallets, so tick the box again.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await fixture.page.getByRole("button", { name: /^Buy for [\d.,]+ USDC$/ }).waitFor({ state: "visible", timeout: 10_000 });
+    // The stranger's approval never opens a purchase for the replacement wallet.
+    await fixture.page.waitForTimeout(1_000);
+    expect(await chain.client.getTransactionCount({ address: chain.treasury })).toBe(treasuryNonce);
+    expect(await service.readAccount({ id: 2n, account: chain.stranger })).toMatchObject({ principal: 0n });
   }, 45_000);
 });
