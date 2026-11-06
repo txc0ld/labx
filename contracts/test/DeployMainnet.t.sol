@@ -34,6 +34,10 @@ contract DeployMainnetHarness is DeployMainnet {
         return _deploy(c);
     }
 
+    function verifyDeployment(Config memory c, address deployer) external {
+        _verify(c, deployer);
+    }
+
     function validateSafe(address safe) external view {
         _validateSafe(safe);
     }
@@ -339,6 +343,48 @@ contract DeployMainnetForkTest is Test {
     }
 
     /// @dev Funding is a target, not an amount: a rerun adds nothing, and a resume after partial funding sends the shortfall.
+    /// @dev Final review of e327cb8: verify must judge the mined state, so a deployment missing any step fails it, and it
+    ///      sends nothing either way.
+    function _verified(DeployMainnet.Config memory c, bytes memory reason) internal {
+        uint64 nonce = vm.getNonce(deployer);
+        uint256 balance = deployer.balance;
+        if (reason.length != 0) vm.expectRevert(reason);
+        stage2.verifyDeployment(c, deployer);
+        assertEq(vm.getNonce(deployer), nonce);
+        assertEq(deployer.balance, balance);
+    }
+
+    function test_verifyRefusesADeploymentWithOnlyItsCreateOrNativeBillingMined() public {
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = _interrupted(subId);
+        _verified(_resume(subId, address(labx)), _safeAction("coordinator.addConsumer(subId, raffle)"));
+        vm.prank(deployer);
+        labx.setNativePayment(true);
+        _verified(_resume(subId, address(labx)), _safeAction("coordinator.addConsumer(subId, raffle)"));
+        assertEq(_consumers(subId).length, 0);
+        assertEq(_nativeBalance(subId), 0);
+        assertEq(labx.pendingOwner(), address(0));
+    }
+
+    function test_verifyRefusesAnUnderfundedSubscription() public {
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
+        DeployMainnet.Config memory c = _resume(subId, address(labx));
+        c.fundTarget = FUND + 1;
+        _verified(c, abi.encodeWithSelector(DeployMainnet.SubscriptionUnderfunded.selector, subId, FUND, FUND + 1));
+    }
+
+    function test_verifyPassesAFullRunBeforeAndAfterSafeAcceptance() public {
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
+        _verified(_resume(subId, address(labx)), "");
+        _accept(labx, subId);
+        _verified(_resume(subId, address(labx)), "");
+        DeployMainnet.Config memory changed = _resume(subId, address(labx));
+        changed.terms = keccak256("other terms");
+        _verified(changed, _settingMismatch("termsHash"));
+    }
+
     function test_fundsOnlyUpToTheTarget() public {
         uint256 subId = _minedSubscription();
         LabxRaffle labx = stage2.deploy(_fresh(subId));

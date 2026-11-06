@@ -38,7 +38,15 @@ Present the frozen candidate, test/review evidence, deployment constructor value
 
 ### Mainnet procedure
 
-`contracts/script/DeployMainnet.s.sol` is the only mainnet path. Its NatSpec carries the same steps. `contracts/script/mainnet-deploy.sh` runs steps 2 to 5 without hand-copied values: `preflight`, `stage1` (the subscription ID comes only from the mined receipt), `stage2` (refuses a moved nonce and a CREATE at any address but the recorded one), `resume` (only when the recorded address has code) and `verify` (the resume validation as a read-only simulation, then the website manifest values). It keeps the deployment record in `deployments/mainnet.json` and a timestamped copy of every forge run file beside it.
+`contracts/script/DeployMainnet.s.sol` is the only mainnet path. Its NatSpec carries the same steps. `contracts/script/mainnet-deploy.sh` runs steps 2 to 5 without hand-copied values and keeps the deployment record in `deployments/mainnet.json`, with a timestamped copy of every forge run file beside it (also on failure or Ctrl-C):
+
+- `preflight` checks the chain, the Safe (code, threshold of at least 2), the coordinator, USDC, that the deployer has no code and no pending transaction, and its balance.
+- `stage1` reads the subscription ID only from the mined `SubscriptionCreated` log (emitter the coordinator, owner the deployer) and starts the record.
+- `stage2` refuses a moved or pending nonce, and records the CREATE only after its receipt shows success, the recorded deployer, `EXPECTED_NONCE` and the predicted address.
+- `resume` first establishes that CREATE: from the record, a kept run file, `CREATE_TX` (checked the same way), or a search for the deployer's `EXPECTED_NONCE` on chain. It refuses when the CREATE failed or was replaced.
+- `verify` runs `DeployMainnet.verify()`. It is read-only: it checks the mined state and takes no missing step, so an incomplete deployment fails it. It prints the website manifest only for a recorded CREATE and complete reads.
+
+Any failed read stops the run. `CONFIRMATIONS` (default 3) applies when the driver records a receipt. Forge's `--slow` itself waits for one confirmation between its own transactions.
 
 1. The deployer key runs these two scripts and signs nothing else until the Safe has accepted both transfers.
 2. Stage 1, `CreateMainnetSubscription`, creates the VRF subscription. Read the ID from the mined receipt, never from the simulation: run `cast receipt <tx> --json` and take the `SubscriptionCreated` log whose emitter is the coordinator `0xD7f86b4b8Cae7D942340FF628F82735b7a20893a` and whose data (the owner) is the deployer. The ID is topic 1.

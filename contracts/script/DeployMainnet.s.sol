@@ -134,6 +134,7 @@ contract DeployMainnet is MainnetDeployment {
     error SubscriptionOwnershipUnexpected(address owner, address requestedOwner);
     error SubscriptionConsumersUnexpected(uint256 subId);
     error SafeActionRequired(string action);
+    error SubscriptionUnderfunded(uint256 subId, uint256 balance, uint256 target);
 
     struct Config {
         address safe;
@@ -214,6 +215,33 @@ contract DeployMainnet is MainnetDeployment {
         console2.log(
             "Record the raffle address and every tx hash. The Safe accepts both transfers, then unpauses at launch."
         );
+    }
+
+    /// @notice Read-only check of a deployment as mined, for the record before the website registers it: the raffle is
+    ///         exactly what a fresh run deploys with these inputs, every reviewed setting and native billing hold, it is the
+    ///         subscription's only consumer, the subscription holds at least the funding target, and the raffle and the
+    ///         subscription are both owned by or offered to the Safe. It sends nothing and takes no missing step (the
+    ///         reference raffle exists only in the simulation), so an incomplete deployment fails here. It needs no
+    ///         private key: DEPLOYER_ADDRESS and RAFFLE_ADDRESS come from the deployment record.
+    function verify() external {
+        _requireMainnet();
+        Config memory c;
+        c.existing = vm.envAddress("RAFFLE_ADDRESS");
+        c.safe = vm.envAddress("SAFE_ADDRESS");
+        c.terms = vm.envBytes32("TERMS_HASH");
+        c.fundTarget = vm.envUint("FUND_TARGET_WEI");
+        c.subId = vm.envUint("VRF_SUBSCRIPTION_ID");
+        _verify(c, vm.envAddress("DEPLOYER_ADDRESS"));
+    }
+
+    function _verify(Config memory c, address deployer) internal {
+        _validateSafe(c.safe);
+        LabxRaffle labx = LabxRaffle(payable(c.existing));
+        _requireResumable(labx, _init(c), c, deployer);
+        _requireHandoff(labx, c, deployer);
+        uint256 balance = _subscription(c.subId).nativeBalance;
+        if (balance < c.fundTarget) revert SubscriptionUnderfunded(c.subId, balance, c.fundTarget);
+        console2.log("Verified LabxRaffle", c.existing);
     }
 
     function _init(Config memory c) private pure returns (LabxRaffle.Init memory) {

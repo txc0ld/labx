@@ -5,12 +5,14 @@
 #   contracts/script/mainnet-deploy.sh stage1      creates the VRF subscription and starts the deployment record
 #   contracts/script/mainnet-deploy.sh stage2      deploys, configures and offers both ownerships to the Safe
 #   contracts/script/mainnet-deploy.sh resume      finishes an interrupted stage 2 after a successful CREATE
-#   contracts/script/mainnet-deploy.sh verify      read-only: validates the deployment and prints the website manifest
+#   contracts/script/mainnet-deploy.sh verify      read-only: checks the mined deployment and prints the website manifest
 #
-# Environment: RPC_URL, DEPLOYER_PRIVATE_KEY, SAFE_ADDRESS, TERMS_HASH, FUND_TARGET_WEI. RECORD defaults to
-# deployments/mainnet.json. CONFIRMATIONS (default 3) is how deep each receipt must be before the next step.
-# Every value the procedure needs (subscription ID, nonce, predicted address, tx hashes) is read from mined receipts
-# and written to the record, which later steps require. Nothing here prints the private key.
+# Environment: RPC_URL, DEPLOYER_PRIVATE_KEY (stage1, stage2, resume), SAFE_ADDRESS, TERMS_HASH and FUND_TARGET_WEI
+# (preflight and stage1; later steps read them from the record). RECORD defaults to deployments/mainnet.json.
+# CONFIRMATIONS (default 3) is how deep each receipt must be before it is recorded. CREATE_TX names the raffle CREATE
+# when an interrupted run left no run file and the RPC cannot search old nonces; it is checked like any other receipt.
+# Every value the procedure needs is read from mined receipts and kept in the record, which later steps require.
+# Nothing here prints the private key.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -18,13 +20,20 @@ RECORD=${RECORD:-$ROOT/deployments/mainnet.json}
 CONFIRMATIONS=${CONFIRMATIONS:-3}
 COORDINATOR=0xD7f86b4b8Cae7D942340FF628F82735b7a20893a
 USDC=0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
-SUBSCRIPTION_CREATED=$(cast keccak "SubscriptionCreated(uint256,address)")
 SCRIPT=contracts/script/DeployMainnet.s.sol
+LATEST=contracts/broadcast/DeployMainnet.s.sol/1/run-latest.json
 
-die() { echo "mainnet-deploy: $*" >&2; exit 1; }
+MAIN=$$
+# A failure inside $(...) only ends that subshell, and set -e ignores it inside a test or an || list. die therefore also
+# signals the main process, so a failed read anywhere stops the whole run.
+trap 'exit 1' USR1
+die() { echo "mainnet-deploy: $*" >&2; [ "$BASHPID" = "$MAIN" ] || kill -USR1 "$MAIN"; exit 1; }
 need() { [ -n "${!1:-}" ] || die "$1 is required"; }
 lower() { tr '[:upper:]' '[:lower:]'; }
-record_get() { python3 -c "import json,sys; d=json.load(open('$RECORD')); v=d; [v:=v[k] for k in sys.argv[1].split('.')]; print(v)" "$1"; }
+same() { [ "$(echo "$1" | lower)" = "$(echo "$2" | lower)" ]; }
+# Runs a read and fails the whole run on an RPC error or an empty answer, so nothing is reported from a failed read.
+read_chain() { local v; v=$("$@") || die "read failed: $*"; [ -n "$v" ] || die "empty answer: $*"; echo "$v"; }
+record_get() { python3 -c "import json,sys; v=json.load(open(sys.argv[2])); [v:=v[k] for k in sys.argv[1].split('.')]; print('' if v is None else v)" "$1" "$RECORD"; }
 record_set() { python3 - "$RECORD" "$1" "$2" <<'EOF'
 import json, sys
 path, key, value = sys.argv[1:]
@@ -39,24 +48,26 @@ EOF
 }
 
 need RPC_URL
-[ "$(cast chain-id --rpc-url "$RPC_URL")" = "1" ] || die "RPC_URL is not Ethereum mainnet (chain 1)"
+CHAIN=$(read_chain cast chain-id --rpc-url "$RPC_URL")
+[ "$CHAIN" = "1" ] || die "RPC_URL is chain $CHAIN, not Ethereum mainnet (chain 1)"
 cd "$ROOT"
 
-deployer() { need DEPLOYER_PRIVATE_KEY; cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY"; }
-# True when the address has code. An RPC failure stops the run instead of reading as "no code".
-has_code() { local c; c=$(cast code "$1" --rpc-url "$RPC_URL") || die "could not read code at $1"; [ -n "$c" ] && [ "$c" != "0x" ]; }
+# Runs a cast command with --json and prints plain JSON: some cast versions wrap the answer in {"schema_version", "data"}.
+cast_json() {
+  "$@" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); d=d["data"] if isinstance(d, dict) and "schema_version" in d and "data" in d else d; print(json.dumps(d))'
+}
+deployer() { need DEPLOYER_PRIVATE_KEY; read_chain cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY"; }
+has_code() { local c; c=$(read_chain cast code "$1" --rpc-url "$RPC_URL"); [ "$c" != "0x" ]; }
 
-# Waits until a transaction is CONFIRMATIONS deep and succeeded; prints its receipt JSON.
+# Waits until a transaction is CONFIRMATIONS deep; prints its receipt JSON. Fails on a reverted transaction.
 mined() {
   local receipt
-  receipt=$(cast receipt "$1" --confirmations "$CONFIRMATIONS" --rpc-url "$RPC_URL" --json)
-  [ "$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "0x1" ] || die "transaction $1 failed"
+  receipt=$(read_chain cast_json cast receipt "$1" --confirmations "$CONFIRMATIONS" --rpc-url "$RPC_URL")
+  [ "$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "0x1" ] || die "transaction $1 failed on chain"
   echo "$receipt"
 }
 
-LATEST=contracts/broadcast/DeployMainnet.s.sol/1/run-latest.json
-# Copies forge's run file next to the record, since every run overwrites run-latest.json. Prints nothing when forge
-# sent no transaction (it then writes no file; forge_run removes the previous one first).
+# Copies forge's run file next to the record (every run overwrites run-latest.json). Prints nothing when there is none.
 keep_run() {
   local kept
   [ -f "$LATEST" ] || return 0
@@ -65,24 +76,111 @@ keep_run() {
   echo "$kept"
 }
 
-forge_run() { rm -f "$LATEST"; forge script "$SCRIPT:$1" --root contracts --rpc-url "$RPC_URL" --slow "${@:2}"; }
+# Runs forge with --broadcast in the main shell, its output on the terminal, and sets RUN to the kept run file (empty when
+# nothing was sent). If forge fails or is interrupted, keeps whatever run file it wrote before stopping.
+RUN=""
+broadcast() {
+  local label=$1 status=0 kept
+  rm -f "$LATEST"
+  trap 'kept=$(keep_run "'"$label"'-interrupted"); echo "mainnet-deploy: interrupted; run file: ${kept:-none}" >&2; exit 130' INT TERM
+  forge script "$SCRIPT:$2" --root contracts --rpc-url "$RPC_URL" --slow --broadcast >&2 || status=$?
+  trap - INT TERM
+  if [ "$status" -ne 0 ]; then
+    kept=$(keep_run "$label-failed")
+    die "$label stopped (forge exit $status); run file: ${kept:-none}. Settle every transaction it sent before anything else; LAUNCH.md step 5"
+  fi
+  RUN=$(keep_run "$label")
+}
+
+# The raffle CREATE's provenance: tx, block and address, all from its mined receipt. Only a successful CREATE from the
+# recorded deployer at EXPECTED_NONCE that created the recorded address is accepted.
+record_create() {
+  local tx=$1 receipt tx_json from nonce created block
+  receipt=$(mined "$tx")
+  tx_json=$(read_chain cast_json cast tx "$tx" --rpc-url "$RPC_URL")
+  from=$(echo "$tx_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["from"])')
+  nonce=$(echo "$tx_json" | python3 -c 'import json,sys; n=json.load(sys.stdin)["nonce"]; print(int(n, 16) if isinstance(n, str) else n)')
+  created=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("contractAddress") or "")')
+  block=$(echo "$receipt" | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["blockNumber"], 16))')
+  same "$from" "$(record_get deployer)" || die "CREATE $tx was sent by $from, not the recorded deployer"
+  [ "$nonce" = "$(record_get expectedNonce)" ] || die "CREATE $tx used nonce $nonce, not EXPECTED_NONCE $(record_get expectedNonce)"
+  same "$created" "$(record_get predictedRaffle)" || die "CREATE $tx created ${created:-nothing}, not the recorded $(record_get predictedRaffle)"
+  record_set create "{\"tx\": \"$tx\", \"block\": $block, \"address\": \"$created\"}"
+}
+
+# Finds the transaction the deployer sent at EXPECTED_NONCE: the first block after stage 1 whose nonce passes it.
+find_create() {
+  local who expected lo hi mid tx
+  who=$(record_get deployer); expected=$(record_get expectedNonce)
+  lo=$(record_get stage1.block); hi=$(read_chain cast block-number --rpc-url "$RPC_URL")
+  [ "$(read_chain cast nonce "$who" --block "$hi" --rpc-url "$RPC_URL")" -gt "$expected" ] || return 1
+  while [ $((hi - lo)) -gt 1 ]; do
+    mid=$(((lo + hi) / 2))
+    if [ "$(read_chain cast nonce "$who" --block "$mid" --rpc-url "$RPC_URL")" -gt "$expected" ]; then hi=$mid; else lo=$mid; fi
+  done
+  tx=$(read_chain cast_json cast block "$hi" --full --rpc-url "$RPC_URL" | python3 -c "
+import json, sys
+nonce = lambda n: int(n, 16) if isinstance(n, str) else n
+txs = [t['hash'] for t in json.load(sys.stdin)['transactions'] if t['from'].lower() == '$who'.lower() and nonce(t['nonce']) == $expected]
+print(txs[0] if txs else '')")
+  [ -n "$tx" ] || die "found no transaction at nonce $expected in block $hi"
+  echo "$tx"
+}
+
+# Makes sure the record names the CREATE: from the record, a kept run file, CREATE_TX, or a search by nonce.
+reconcile_create() {
+  local tx=""
+  [ -z "$(record_get create 2>/dev/null || true)" ] || return 0
+  tx=$(python3 - "$(dirname "$RECORD")" <<'EOF'
+import glob, json, os, sys
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "stage2*.json")) + glob.glob(os.path.join(sys.argv[1], "resume*.json"))):
+    for t in json.load(open(path)).get("transactions", []):
+        if t.get("transactionType") == "CREATE" and t.get("hash"):
+            print(t["hash"]); sys.exit()
+EOF
+)
+  [ -n "$tx" ] || tx=${CREATE_TX:-}
+  [ -n "$tx" ] || tx=$(find_create) || die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
+  record_create "$tx"
+}
+
+# Records every transaction of a kept run file once it is mined.
+record_run() {
+  local run=$1 key=$2 txs
+  txs=$(python3 -c "import json,sys; print(json.dumps([{'hash': t['hash'], 'type': t['transactionType'], 'function': t.get('function')} for t in json.load(open(sys.argv[1]))['transactions']]))" "$run")
+  for h in $(echo "$txs" | python3 -c 'import json,sys; print(" ".join(t["hash"] for t in json.load(sys.stdin)))'); do mined "$h" > /dev/null; done
+  record_set "runs.$key" "$(python3 -c "import json,sys; print(json.dumps({'run': sys.argv[2], 'transactions': json.loads(sys.argv[1])}))" "$txs" "$(basename "$run")")"
+}
+
+stage_env() {
+  export VRF_SUBSCRIPTION_ID SAFE_ADDRESS TERMS_HASH FUND_TARGET_WEI
+  VRF_SUBSCRIPTION_ID=$(record_get stage1.subscriptionId)
+  SAFE_ADDRESS=$(record_get safe); TERMS_HASH=$(record_get termsHash); FUND_TARGET_WEI=$(record_get fundTargetWei)
+}
 
 preflight() {
   need SAFE_ADDRESS; need TERMS_HASH; need FUND_TARGET_WEI
-  local who balance threshold
+  local who balance threshold owners nonce pending gas
   who=$(deployer)
   has_code "$SAFE_ADDRESS" || die "no Safe at $SAFE_ADDRESS"
-  threshold=$(cast call "$SAFE_ADDRESS" "getThreshold()(uint256)" --rpc-url "$RPC_URL")
+  threshold=$(read_chain cast call "$SAFE_ADDRESS" "getThreshold()(uint256)" --rpc-url "$RPC_URL")
   [ "$threshold" -ge 2 ] || die "Safe threshold $threshold is below 2"
+  owners=$(read_chain cast call "$SAFE_ADDRESS" "getOwners()(address[])" --rpc-url "$RPC_URL")
   for c in $COORDINATOR $USDC; do has_code "$c" || die "no code at $c"; done
-  balance=$(cast balance "$who" --rpc-url "$RPC_URL")
-  echo "deployer          $who (nonce $(cast nonce "$who" --rpc-url "$RPC_URL"))"
+  ! has_code "$who" || die "the deployer $who has code (an EIP-7702 delegation?); use a plain key"
+  nonce=$(read_chain cast nonce "$who" --rpc-url "$RPC_URL")
+  pending=$(read_chain cast nonce "$who" --block pending --rpc-url "$RPC_URL")
+  [ "$nonce" = "$pending" ] || die "the deployer has pending transactions (nonce $nonce, pending $pending); settle them first"
+  balance=$(read_chain cast balance "$who" --rpc-url "$RPC_URL")
+  gas=$(read_chain cast gas-price --rpc-url "$RPC_URL")
+  echo "deployer          $who (nonce $nonce, no pending transactions, no code)"
   echo "deployer balance  $(cast from-wei "$balance") ETH; the subscription is funded to $(cast from-wei "$FUND_TARGET_WEI") ETH from it"
-  echo "Safe              $SAFE_ADDRESS, $threshold of $(cast call "$SAFE_ADDRESS" "getOwners()(address[])" --rpc-url "$RPC_URL")"
-  echo "gas price         $(cast from-wei "$(cast gas-price --rpc-url "$RPC_URL")" gwei) gwei"
+  echo "Safe              $SAFE_ADDRESS, $threshold of $owners"
+  echo "gas price         $(cast from-wei "$gas" gwei) gwei; deployment uses about 5.9M gas, $(cast from-wei "$((gas * 5900000))") ETH now"
   # Wei amounts exceed bash integers.
-  python3 -c "import sys; sys.exit(0 if int(sys.argv[1]) > int(sys.argv[2]) else 1)" "$balance" "$FUND_TARGET_WEI" || die "deployer holds less than FUND_TARGET_WEI plus gas"
-  if [ -f "$RECORD" ]; then echo "record            $RECORD exists (stage 1 done: subscription $(record_get stage1.subscriptionId))"; else echo "record            none yet; stage1 starts it"; fi
+  python3 -c "import sys; sys.exit(0 if int(sys.argv[1]) > int(sys.argv[2]) + int(sys.argv[3]) * 8_000_000 else 1)" "$balance" "$FUND_TARGET_WEI" "$gas" \
+    || die "the deployer holds less than FUND_TARGET_WEI plus 8M gas at the current price"
+  if [ -f "$RECORD" ]; then echo "record            $RECORD exists (subscription $(record_get stage1.subscriptionId))"; else echo "record            none yet; stage1 starts it"; fi
 }
 
 stage1() {
@@ -91,104 +189,97 @@ stage1() {
   local who run tx receipt subId nonce expected predicted block
   who=$(deployer)
   mkdir -p "$(dirname "$RECORD")"
-  forge_run CreateMainnetSubscription --broadcast || { run=$(keep_run stage1-failed); die "stage 1 failed; forge's run file: ${run:-none}. Read its receipt before anything else"; }
-  run=$(keep_run stage1)
+  broadcast stage1 CreateMainnetSubscription
+  run=$RUN
   [ -n "$run" ] || die "stage 1 sent no transaction"
   tx=$(python3 -c "import json,sys; t=json.load(open(sys.argv[1]))['transactions']; assert len(t) == 1; print(t[0]['hash'])" "$run")
   receipt=$(mined "$tx")
   # The ID comes only from the mined SubscriptionCreated log whose emitter is the coordinator and whose owner is the deployer.
   subId=$(echo "$receipt" | python3 -c "
 import json, sys
-logs = [l for l in json.load(sys.stdin)['logs'] if l['address'].lower() == '$COORDINATOR'.lower() and l['topics'][0] == '$SUBSCRIPTION_CREATED' and int(l['data'], 16) == int('$who', 16)]
+topic = '$(cast keccak "SubscriptionCreated(uint256,address)")'
+logs = [l for l in json.load(sys.stdin)['logs'] if l['address'].lower() == '$COORDINATOR'.lower() and l['topics'][0] == topic and int(l['data'], 16) == int('$who', 16)]
 assert len(logs) == 1, 'expected one SubscriptionCreated log for the deployer'
 print(int(logs[0]['topics'][1], 16))")
-  nonce=$(cast tx "$tx" nonce --rpc-url "$RPC_URL")
+  nonce=$(read_chain cast tx "$tx" nonce --rpc-url "$RPC_URL")
   expected=$((nonce + 1))
-  predicted=$(cast compute-address "$who" --nonce "$expected" | awk '{print $NF}')
+  predicted=$(read_chain cast compute-address "$who" --nonce "$expected" | awk '{print $NF}')
   block=$(echo "$receipt" | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["blockNumber"], 16))')
-  mkdir -p "$(dirname "$RECORD")"
   python3 - "$RECORD" <<EOF
 import json, sys
 json.dump({
   "chainId": 1, "deployer": "$who", "safe": "$SAFE_ADDRESS", "termsHash": "$TERMS_HASH", "fundTargetWei": "$FUND_TARGET_WEI",
   "coordinator": "$COORDINATOR", "usdc": "$USDC",
   "stage1": {"tx": "$tx", "block": $block, "nonce": $nonce, "subscriptionId": "$subId", "run": "$(basename "$run")"},
-  "expectedNonce": $expected, "predictedRaffle": "$predicted", "stage2": None
+  "expectedNonce": $expected, "predictedRaffle": "$predicted", "create": None, "runs": {}
 }, open(sys.argv[1], "w"), indent=2)
 open(sys.argv[1], "a").write("\n")
 EOF
   echo "stage 1 done: subscription $subId; stage 2 must deploy at $predicted with nonce $expected. Record: $RECORD"
 }
 
-stage2_env() {
-  export VRF_SUBSCRIPTION_ID SAFE_ADDRESS TERMS_HASH FUND_TARGET_WEI
-  VRF_SUBSCRIPTION_ID=$(record_get stage1.subscriptionId)
-  SAFE_ADDRESS=$(record_get safe); TERMS_HASH=$(record_get termsHash); FUND_TARGET_WEI=$(record_get fundTargetWei)
-}
-
-# Records every stage 2 transaction once it is mined, and the raffle CREATE.
-record_stage2() {
-  local run=$1 txs
-  txs=$(python3 -c "import json,sys; print(json.dumps([{'hash': t['hash'], 'type': t['transactionType'], 'to': t.get('contractAddress') or (t.get('transaction') or {}).get('to')} for t in json.load(open(sys.argv[1]))['transactions']]))" "$run")
-  for h in $(echo "$txs" | python3 -c 'import json,sys; print(" ".join(t["hash"] for t in json.load(sys.stdin)))'); do mined "$h" > /dev/null; done
-  record_set "stage2.$2" "$(python3 -c "import json,sys; print(json.dumps({'run': sys.argv[2], 'transactions': json.loads(sys.argv[1])}))" "$txs" "$(basename "$run")")"
-}
-
 stage2() {
   [ -f "$RECORD" ] || die "run stage1 first"
-  [ "$(record_get stage2)" = "None" ] || die "stage 2 already ran; use resume or verify"
-  local who expected predicted current run created
-  who=$(deployer); expected=$(record_get expectedNonce); predicted=$(record_get predictedRaffle)
-  [ "$(echo "$who" | lower)" = "$(record_get deployer | lower)" ] || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
-  current=$(cast nonce "$who" --rpc-url "$RPC_URL")
-  [ "$current" = "$expected" ] || die "deployer nonce is $current, the record expects $expected; see LAUNCH.md step 5 before doing anything"
-  stage2_env
+  [ -z "$(record_get create)" ] || die "the raffle CREATE is already recorded; use resume or verify"
+  local who expected current run created
+  who=$(deployer); expected=$(record_get expectedNonce)
+  same "$who" "$(record_get deployer)" || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
+  current=$(read_chain cast nonce "$who" --rpc-url "$RPC_URL")
+  [ "$current" = "$expected" ] || die "deployer nonce is $current, the record expects $expected; run resume, which checks the CREATE (LAUNCH.md step 5)"
+  [ "$(read_chain cast nonce "$who" --block pending --rpc-url "$RPC_URL")" = "$expected" ] || die "the deployer has a pending transaction; settle it first"
+  stage_env
   unset RAFFLE_ADDRESS
-  DEPLOY_MODE=fresh EXPECTED_NONCE=$expected forge_run DeployMainnet --broadcast || { run=$(keep_run stage2-failed); die "stage 2 stopped part way; forge's run file: ${run:-none}. Settle every transaction it sent, then follow LAUNCH.md step 5 (resume only after the CREATE receipt succeeded)"; }
-  run=$(keep_run stage2)
+  export DEPLOY_MODE=fresh EXPECTED_NONCE=$expected
+  broadcast stage2 DeployMainnet
+  run=$RUN
   [ -n "$run" ] || die "stage 2 sent no transaction"
-  created=$(python3 -c "import json,sys; c=[t['contractAddress'] for t in json.load(open(sys.argv[1]))['transactions'] if t['transactionType'] == 'CREATE']; assert len(c) == 1; print(c[0])" "$run")
-  [ "$(echo "$created" | lower)" = "$(echo "$predicted" | lower)" ] || die "raffle CREATE at $created, not the recorded $predicted"
-  record_set stage2 '{}'
-  record_stage2 "$run" fresh
-  record_set raffle "\"$created\""
+  created=$(python3 -c "import json,sys; c=[t['hash'] for t in json.load(open(sys.argv[1]))['transactions'] if t['transactionType'] == 'CREATE']; assert len(c) == 1; print(c[0])" "$run")
+  record_create "$created"
+  record_run "$run" stage2
   verify
 }
 
 resume() {
   [ -f "$RECORD" ] || die "no record; nothing to resume"
-  local predicted run
-  predicted=$(record_get predictedRaffle)
-  has_code "$predicted" || die "no code at the recorded raffle $predicted: the CREATE did not succeed; see LAUNCH.md step 5"
-  stage2_env
-  [ "$(record_get stage2)" != "None" ] || record_set stage2 '{}'
-  DEPLOY_MODE=resume RAFFLE_ADDRESS=$predicted forge_run DeployMainnet --broadcast || { run=$(keep_run resume-failed); die "resume stopped; forge's run file: ${run:-none}"; }
-  run=$(keep_run resume)
-  record_set raffle "\"$predicted\""
-  [ -z "$run" ] || record_stage2 "$run" "resume-$(date -u +%s)"
+  local who run
+  who=$(deployer)
+  same "$who" "$(record_get deployer)" || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
+  [ "$(read_chain cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
+    || die "the deployer has a pending transaction; settle it first"
+  reconcile_create
+  has_code "$(record_get create.address)" || die "no code at the recorded raffle"
+  stage_env
+  export DEPLOY_MODE=resume RAFFLE_ADDRESS
+  RAFFLE_ADDRESS=$(record_get create.address)
+  broadcast resume DeployMainnet
+  run=$RUN
+  [ -z "$run" ] || record_run "$run" "resume-$(date -u +%s)"
   verify
 }
 
-# Read-only: the resume path's simulation re-checks code, every setting, ownership and the postconditions without
-# sending anything, then the website manifest values are read from chain.
+# Read-only. DeployMainnet.verify() checks the mined state (code against a simulated fresh deployment, every setting,
+# native billing, the sole consumer, the funding target, ownership offered to or held by the Safe) and takes no missing
+# step. The website manifest is printed only for a recorded, successful CREATE and complete reads.
 verify() {
   [ -f "$RECORD" ] || die "no record"
-  local raffle block
-  raffle=$(record_get raffle 2>/dev/null || record_get predictedRaffle)
-  stage2_env
-  DEPLOY_MODE=resume RAFFLE_ADDRESS=$raffle forge_run DeployMainnet > /dev/null || die "the deployment does not validate; rerun without > /dev/null for the reason"
-  block=$(python3 -c "
-import json, sys
-d = json.load(open(sys.argv[1]))
-creates = [t['hash'] for run in (d.get('stage2') or {}).values() for t in run['transactions'] if t['type'] == 'CREATE']
-print(creates[0] if creates else '')" "$RECORD")
-  block=$([ -n "$block" ] && cast receipt "$block" blockNumber --rpc-url "$RPC_URL" || echo "unknown (read the CREATE receipt)")
-  echo "verified: raffle $raffle validates against a fresh deployment with these inputs"
-  echo "owner $(cast call "$raffle" "owner()(address)" --rpc-url "$RPC_URL"), pending owner $(cast call "$raffle" "pendingOwner()(address)" --rpc-url "$RPC_URL"), paused $(cast call "$raffle" "paused()(bool)" --rpc-url "$RPC_URL")"
-  echo "website manifest: address $raffle, runtimeCodeHash $(cast codehash "$raffle" --rpc-url "$RPC_URL"), deploymentBlock $block, expectedOwner $(record_get safe)"
+  reconcile_create
+  local raffle block owner pending paused codehash
+  raffle=$(record_get create.address); block=$(record_get create.block)
+  stage_env
+  DEPLOYER_ADDRESS=$(record_get deployer) RAFFLE_ADDRESS=$raffle \
+    forge script "$SCRIPT:DeployMainnet" --sig "verify()" --root contracts --rpc-url "$RPC_URL" > /tmp/mainnet-verify.log 2>&1 \
+    || { tail -20 /tmp/mainnet-verify.log >&2; die "the deployment does not verify; the reason is above"; }
+  owner=$(read_chain cast call "$raffle" "owner()(address)" --rpc-url "$RPC_URL")
+  pending=$(read_chain cast call "$raffle" "pendingOwner()(address)" --rpc-url "$RPC_URL")
+  paused=$(read_chain cast call "$raffle" "paused()(bool)" --rpc-url "$RPC_URL")
+  codehash=$(read_chain cast codehash "$raffle" --rpc-url "$RPC_URL")
+  [[ "$codehash" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "unexpected code hash $codehash"
+  [ "$paused" = "true" ] || echo "note: the raffle is unpaused" >&2
+  echo "verified: $raffle (owner $owner, pending owner $pending, paused $paused)"
+  echo "website manifest: address $raffle, runtimeCodeHash $codehash, deploymentBlock $block, expectedOwner $(record_get safe)"
 }
 
 case "${1:-}" in
   preflight|stage1|stage2|resume|verify) "$1" ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  *) sed -n '2,16p' "$0"; exit 2 ;;
 esac
