@@ -4,6 +4,7 @@ import {
 } from "viem";
 import { raffleAbi } from "../chain/abi";
 import { actionBuilder } from "../chain/actions";
+import { PRIORITY_FEE_FLOOR } from "../chain/network-fee";
 import { createReader } from "../chain/reader";
 import { sameAddress } from "../chain/validation";
 import type { DeploymentManifest } from "../chain/types";
@@ -126,7 +127,9 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
         client.estimateFeesPerGas(),
         client.estimateGas({ account: runner, to: prepared.to, data: prepared.data, value: 0n })
       ]);
-      return { gasLimit: gas * 6n / 5n, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas };
+      // Chain-1 RPCs can suggest a tip of 0 or a few wei, so the runner tips at least PRIORITY_FEE_FLOOR, as the site does.
+      const tip = fees.maxPriorityFeePerGas > PRIORITY_FEE_FLOOR ? fees.maxPriorityFeePerGas : PRIORITY_FEE_FLOOR;
+      return { gasLimit: gas * 6n / 5n, maxFeePerGas: fees.maxFeePerGas - fees.maxPriorityFeePerGas + tip, maxPriorityFeePerGas: tip };
     },
     async send(prepared, nonce, quote, timeoutMs) {
       const serializedTransaction = await account.signTransaction({

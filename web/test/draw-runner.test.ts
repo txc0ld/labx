@@ -10,6 +10,7 @@ import { MemoryStore } from "../lib/store";
 import type { Store } from "../lib/points";
 import { assertRunnerCall, finalPhase, mayNeedRunner, nextRunnerAction, SCAN_CONCURRENCY, scanRaffles, scanWindow, type RunnerAction, type ScanResult } from "../lib/draw-runner/decide";
 import { createDrawChain, privilegedAddresses } from "../lib/draw-runner/chain";
+import { PRIORITY_FEE_FLOOR } from "../lib/chain/network-fee";
 import { errorCategory, RunnerTimeoutError, within } from "../lib/draw-runner/errors";
 import { createDrawCronHandler, runnerAccount } from "../lib/draw-runner/http";
 import {
@@ -1185,6 +1186,19 @@ describe("draw runner chain errors", () => {
   }
   const call = prepared({ kind: "close", id: 7n });
   const sendWith = (answer: Answer, timeoutMs = 1_000) => rpcChain(method => method === "eth_sendRawTransaction" ? answer : { result: "0x1" }).send(call, 0, cheap, timeoutMs);
+
+  // Chain-1 RPCs answered eth_maxPriorityFeePerGas with 0x0 and 0x2453 (9,299 wei) during the November 2026 mainnet rehearsal.
+  const baseFee = parseGwei("0.15");
+  const quoteWith = (tip: Hex) => rpcChain(method => method === "eth_maxPriorityFeePerGas" ? { result: tip }
+    : method === "eth_getBlockByNumber" ? { result: { number: "0x1", hash: zeroHash, timestamp: "0x1", baseFeePerGas: toHex(baseFee), transactions: [] } }
+    : method === "eth_estimateGas" ? { result: toHex(40_000n) } : { result: "0x1" }).quote(call);
+  it.each([["no tip", "0x0"], ["a tip of a few thousand wei", "0x2453"]] as const)("tips at least the site's floor when the node suggests %s", async (_, tip) => {
+    expect(await quoteWith(tip)).toEqual({ gasLimit: 48_000n, maxFeePerGas: baseFee * 12n / 10n + PRIORITY_FEE_FLOOR, maxPriorityFeePerGas: PRIORITY_FEE_FLOOR });
+  });
+  it("keeps the node's tip when it is above the floor", async () => {
+    const tip = parseGwei("0.05");
+    expect(await quoteWith(toHex(tip))).toEqual({ gasLimit: 48_000n, maxFeePerGas: baseFee * 12n / 10n + tip, maxPriorityFeePerGas: tip });
+  });
 
   it("returns the hash when the node accepts the transaction", async () => {
     const result = await sendWith({ result: zeroHash });
