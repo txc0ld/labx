@@ -1193,11 +1193,11 @@ describe("draw runner chain errors", () => {
     : method === "eth_getBlockByNumber" ? { result: { number: "0x1", hash: zeroHash, timestamp: "0x1", baseFeePerGas: toHex(baseFee), transactions: [] } }
     : method === "eth_estimateGas" ? { result: toHex(40_000n) } : { result: "0x1" }).quote(call);
   it.each([["no tip", "0x0"], ["a tip of a few thousand wei", "0x2453"]] as const)("tips at least the site's floor when the node suggests %s", async (_, tip) => {
-    expect(await quoteWith(tip)).toEqual({ gasLimit: 48_000n, maxFeePerGas: baseFee * 12n / 10n + PRIORITY_FEE_FLOOR, maxPriorityFeePerGas: PRIORITY_FEE_FLOOR });
+    expect(await quoteWith(tip)).toEqual({ gasLimit: 48_000n, maxFeePerGas: baseFee * 2n + PRIORITY_FEE_FLOOR, maxPriorityFeePerGas: PRIORITY_FEE_FLOOR });
   });
   it("keeps the node's tip when it is above the floor", async () => {
     const tip = parseGwei("0.05");
-    expect(await quoteWith(toHex(tip))).toEqual({ gasLimit: 48_000n, maxFeePerGas: baseFee * 12n / 10n + tip, maxPriorityFeePerGas: tip });
+    expect(await quoteWith(toHex(tip))).toEqual({ gasLimit: 48_000n, maxFeePerGas: baseFee * 2n + tip, maxPriorityFeePerGas: tip });
   });
 
   it("returns the hash when the node accepts the transaction", async () => {

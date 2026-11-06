@@ -4,7 +4,7 @@ import {
 } from "viem";
 import { raffleAbi } from "../chain/abi";
 import { actionBuilder } from "../chain/actions";
-import { PRIORITY_FEE_FLOOR } from "../chain/network-fee";
+import { suggestFees } from "../chain/network-fee";
 import { createReader } from "../chain/reader";
 import { sameAddress } from "../chain/validation";
 import type { DeploymentManifest } from "../chain/types";
@@ -123,13 +123,13 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
       return { latest, pending };
     },
     async quote(prepared) {
+      // The site's fee rule: twice the latest base fee, so a send stays valid through several full blocks, plus the node's tip
+      // floored at 0.001 gwei, because chain-1 RPCs can suggest a tip of 0 or a few wei.
       const [fees, gas] = await Promise.all([
-        client.estimateFeesPerGas(),
+        suggestFees(client),
         client.estimateGas({ account: runner, to: prepared.to, data: prepared.data, value: 0n })
       ]);
-      // Chain-1 RPCs can suggest a tip of 0 or a few wei, so the runner tips at least PRIORITY_FEE_FLOOR, as the site does.
-      const tip = fees.maxPriorityFeePerGas > PRIORITY_FEE_FLOOR ? fees.maxPriorityFeePerGas : PRIORITY_FEE_FLOOR;
-      return { gasLimit: gas * 6n / 5n, maxFeePerGas: fees.maxFeePerGas - fees.maxPriorityFeePerGas + tip, maxPriorityFeePerGas: tip };
+      return { gasLimit: gas * 6n / 5n, ...fees };
     },
     async send(prepared, nonce, quote, timeoutMs) {
       const serializedTransaction = await account.signTransaction({
