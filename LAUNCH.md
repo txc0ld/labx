@@ -38,7 +38,7 @@ Present the frozen candidate, test/review evidence, deployment constructor value
 
 ### Mainnet procedure
 
-`contracts/script/DeployMainnet.s.sol` is the only mainnet path. Its NatSpec carries the same steps.
+`contracts/script/DeployMainnet.s.sol` is the only mainnet path. Its NatSpec carries the same steps. `contracts/script/mainnet-deploy.sh` runs steps 2 to 5 without hand-copied values: `preflight`, `stage1` (the subscription ID comes only from the mined receipt), `stage2` (refuses a moved nonce and a CREATE at any address but the recorded one), `resume` (only when the recorded address has code) and `verify` (the resume validation as a read-only simulation, then the website manifest values). It keeps the deployment record in `deployments/mainnet.json` and a timestamped copy of every forge run file beside it.
 
 1. The deployer key runs these two scripts and signs nothing else until the Safe has accepted both transfers.
 2. Stage 1, `CreateMainnetSubscription`, creates the VRF subscription. Read the ID from the mined receipt, never from the simulation: run `cast receipt <tx> --json` and take the `SubscriptionCreated` log whose emitter is the coordinator `0xD7f86b4b8Cae7D942340FF628F82735b7a20893a` and whose data (the owner) is the deployer. The ID is topic 1.
