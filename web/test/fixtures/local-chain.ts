@@ -51,6 +51,8 @@ export async function localChain() {
   const router = await deploy("Mocks.sol", "MockRouter", [weth.address, usdc.address]);
   const feed = await deploy("Mocks.sol", "MockFeed");
   const raffle = await deploy("LabxRaffle.sol", "LabxRaffle", [{ treasury, usdc: usdc.address, router: router.address, weth: weth.address, ethUsdFeed: feed.address, poolFee: 3000, vrfCoordinator: vrf.address, keyHash: keccak256("0x1234"), subscriptionId: 1n, termsHash: PUBLISHED_TERMS_HASH, callbackGasLimit: 500_000, requestConfirmations: 3 }]);
+  // Every deployment starts paused; the fixture owner unpauses so tests start from an active raffle.
+  await send(operator, raffle.address, encodeFunctionData({ abi: raffle.abi, functionName: "setPaused", args: [false] }));
   const code = await client.getCode({ address: raffle.address }); if (!code) throw new Error("Fixture code missing.");
   const manifest: DeploymentManifest = { chainId: 31337, version: 3, address: raffle.address, usdc: usdc.address, runtimeCodeHash: keccak256(code), deploymentBlock: raffle.block, expectedOwner: operator, expectedPolicy: { coordinator: vrf.address, treasury, termsHash: PUBLISHED_TERMS_HASH, keyHash: keccak256("0x1234"), subscriptionId: 1n, callbackGasLimit: 500_000, requestConfirmations: 3, nativePayment: false, buyerFeeBps: 200, sellerFeeBps: 200, minBuyerFeeUsdc: 2_500_000n } };
   async function write(contract: { address: Address; abi: Abi }, name: string, args: readonly unknown[] = [], from = operator) {

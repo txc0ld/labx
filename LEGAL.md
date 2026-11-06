@@ -18,7 +18,7 @@ The fixed draw-start, randomness and reveal grace periods are seven days each, m
 
 ## Publication and release
 
-On Sepolia, the v3 contract runs at `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327` and labx.art uses it; local source changes do not change that bytecode. Its constructor blocks Ethereum mainnet. The mainnet version (PR #16) removes that block, deploys paused through `contracts/script/DeployMainnet.s.sol`, and hands ownership to the Safe, which sets the final terms hash and unpauses at launch. Signed agreements are assertions, not verified age, identity or legal eligibility.
+On Sepolia, the v3 contract runs at `0x8b0332D0ca48908e174F42eA1b3123e63f3F4327` and labx.art uses it; local source changes do not change that bytecode. Its constructor blocks Ethereum mainnet. The mainnet version of the source removes that block, deploys paused through `contracts/script/DeployMainnet.s.sol`, and hands ownership to the Safe, which sets the final terms hash and unpauses at launch. A buyer's agreement (the purchase's on-chain terms acceptance and the 18-or-older checkbox) is an assertion, not verified age, identity or legal eligibility.
 
 Before non-test operation, qualified counsel must review the actual membership benefits, promotion structure, entry conditions, eligibility, jurisdiction restrictions, fees, cancellation/refund terms, privacy and partner offers. Calling a payment a membership does not itself determine its legal treatment. No legal conclusion has been supplied for this product.
 

@@ -53,6 +53,7 @@ contract DeploySepoliaTest is AdmissionFixture {
         emit LabxRaffle.OwnershipTransferStarted(deployer, safe);
         LabxRaffle labx = _deploy();
         assertTrue(labx.nativePayment());
+        assertFalse(labx.paused());
         assertFalse(labx.ethPathEnabled());
         assertEq(labx.router(), address(0));
         assertEq(labx.weth(), address(0));

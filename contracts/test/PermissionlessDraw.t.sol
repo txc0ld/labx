@@ -38,6 +38,7 @@ contract PermissionlessDrawTest is AdmissionFixture {
             })
         );
         labx.setNativePayment(true);
+        labx.setPaused(false);
     }
 
     function _open(uint32 lots) internal returns (uint256 id) {

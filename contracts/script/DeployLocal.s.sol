@@ -40,6 +40,7 @@ contract DeployLocal is Script {
         );
         if (safe != deployer) labx.transferOwnership(safe);
         usdc.mint(deployer, 1_000_000e6);
+        labx.setPaused(false);
         vm.stopBroadcast();
 
         console2.log("LabxRaffle", address(labx));

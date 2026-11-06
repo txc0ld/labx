@@ -252,7 +252,8 @@ run("draw runner on a local chain", () => {
       await chain.warp(small.salesEnd);
       await chain.write(chain.raffle, "close", [large.id], chain.stranger);
       await chain.rpc("anvil_setBalance", [runner, toHex(parseEther("0.05"))]);
-      await chain.rpc("anvil_setNextBlockBaseFeePerGas", [toHex(parseGwei("30"))]); await chain.mine();
+      // 20 gwei: twice the base fee stays under the runner's 50 gwei cap, so only the balance decides.
+      await chain.rpc("anvil_setNextBlockBaseFeePerGas", [toHex(parseGwei("20"))]); await chain.mine();
       const before = await runnerNonce();
       const result = await invoke();
       expect(result.body).toMatchObject({ ok: false, status: "complete", sends: 3 });

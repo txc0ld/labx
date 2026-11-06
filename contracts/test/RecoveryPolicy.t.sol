@@ -475,6 +475,7 @@ contract RecoveryPolicyTest is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        deployed.setPaused(false);
     }
 
     function _configs() internal pure returns (LabxRaffle.PackConfig[] memory configs) {

@@ -40,6 +40,7 @@ contract IndependentPercentageFeesVerificationTest is AdmissionFixture {
                 requestConfirmations: 3
             })
         );
+        raffle.setPaused(false);
     }
 
     function _open() internal returns (uint256 id) {

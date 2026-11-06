@@ -47,6 +47,7 @@ contract DeploySepolia is Script {
         );
         labx.setNativePayment(true);
         labx.transferOwnership(safe);
+        labx.setPaused(false);
         vm.stopBroadcast();
 
         console2.log("LabxRaffle", address(labx));
