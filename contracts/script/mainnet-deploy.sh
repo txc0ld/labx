@@ -97,7 +97,7 @@ has_code() { local c; c=$(read_chain "code at $1" cast code "$1" --rpc-url "$RPC
 # checked again before a receipt is accepted.
 mined() {
   local tx=$1 deadline=$((SECONDS + ${RECEIPT_TIMEOUT:-900})) raw receipt number hash head head_number head_hash canonical recheck status wait_for
-  left() { local l=$((deadline - SECONDS)); [ "$l" -gt 0 ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s"; echo "$l"; }
+  left() { local l=$((deadline - SECONDS)); [ "$l" -gt 0 ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s${MINED_HINT:-}"; echo "$l"; }
   while :; do
     receipt=""
     if raw=$(timeout "$(left)" cast receipt "$tx" --async --rpc-url "$RPC_URL" --json 2>/dev/null) && [ -n "$raw" ]; then
@@ -120,7 +120,7 @@ mined() {
     sleep $((wait_for < 5 ? wait_for : 5))
   done
   status=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
-  [ "$status" = "0x1" ] || [ "$status" = "1" ] || die "transaction $tx failed on chain"
+  [ "$status" = "0x1" ] || [ "$status" = "1" ] || die "transaction $tx failed on chain${MINED_HINT:-}"
   echo "$receipt"
 }
 
@@ -137,8 +137,8 @@ keep_run() {
 # nothing was sent). If forge fails or is interrupted, keeps whatever run file it wrote before stopping, and for stage 1
 # records the transaction in it as pending.
 # forge runs as a background child that the driver waits on: bash would defer a trap until a foreground forge finished,
-# so a signal to the driver alone would leave forge sending. On INT or TERM the driver stops forge, waits for it to exit,
-# then keeps its run file. (A background child ignores the terminal's Ctrl-C itself; the driver's trap stops it.)
+# so a signal to the driver alone would leave forge sending. On INT, TERM or HUP (a closed terminal or dropped SSH
+# session) the driver stops forge, waits for it to exit, then keeps its run file. (A background child ignores the terminal's Ctrl-C itself; the driver's trap stops it.)
 RUN=""
 broadcast() {
   local label=$1 status=0 kept child
@@ -146,9 +146,9 @@ broadcast() {
   forge script "$SCRIPT:$2" --root contracts --rpc-url "$RPC_URL" --slow --broadcast >&2 &
   child=$!
   # set -e applies inside trap handlers too, and wait reports the stopped forge as a failure, hence || true.
-  trap 'kill -TERM '"$child"' 2>/dev/null || true; wait '"$child"' 2>/dev/null || true; kept=$(keep_run "'"$label"'-interrupted"); if [ '"$label"' = stage1 ] && [ -n "$kept" ]; then stage1_start "$kept"; fi; echo "mainnet-deploy: interrupted; forge stopped; run file: ${kept:-none}. Settle every transaction it sent before anything else" >&2; exit 130' INT TERM
+  trap 'kill -TERM '"$child"' 2>/dev/null || true; wait '"$child"' 2>/dev/null || true; kept=$(keep_run "'"$label"'-interrupted"); if [ '"$label"' = stage1 ] && [ -n "$kept" ]; then stage1_start "$kept"; fi; echo "mainnet-deploy: interrupted; forge stopped; run file: ${kept:-none}. Settle every transaction it sent before anything else" >&2; exit 130' INT TERM HUP
   wait "$child" || status=$?
-  trap - INT TERM
+  trap - INT TERM HUP
   if [ "$status" -ne 0 ]; then
     kept=$(keep_run "$label-failed")
     if [ "$label" = stage1 ] && [ -n "$kept" ]; then stage1_start "$kept"; fi
@@ -288,7 +288,9 @@ preflight() {
   # Wei amounts exceed bash integers.
   python3 -c "import sys; sys.exit(0 if int(sys.argv[1]) > int(sys.argv[2]) + int(sys.argv[3]) * 8_000_000 else 1)" "$balance" "$FUND_TARGET_WEI" "$gas" \
     || die "the deployer holds less than FUND_TARGET_WEI plus 8M gas at the current price"
-  if [ ! -f "$RECORD" ]; then echo "record            none yet; stage1 starts it"
+  if [ ! -f "$RECORD" ]; then
+    [ ! -e "$LATEST" ] || die "$LATEST exists but there is no record; it may hold a sent stage 1 transaction. Settle any transaction it sent, then move it aside"
+    echo "record            none yet; stage1 starts it"
   elif stage1_pending; then echo "record            $RECORD exists (stage 1 transaction $(record_get stage1.tx) pending; rerun stage1)"
   else echo "record            $RECORD exists (subscription $(record_get stage1.subscriptionId))"; fi
 }
@@ -352,6 +354,8 @@ stage1() {
     for f in "$(dirname "$RECORD")"/stage1*.json; do
       [ ! -e "$f" ] || die "$f is a kept stage 1 run file but there is no record; settle any transaction it sent, then move it aside"
     done
+    # forge's own run file outlives a driver that was killed outright, and broadcast deletes it before sending.
+    [ ! -e "$LATEST" ] || die "$LATEST exists but there is no record; it may hold a sent stage 1 transaction. Settle any transaction it sent, then move it aside"
     mkdir -p "$(dirname "$RECORD")"
   fi
   if [ -z "$tx" ]; then
@@ -362,7 +366,9 @@ stage1() {
     [ "$(record_get stage1.run 2>/dev/null)" = "$(basename "$run")" ] || die "stage 1 run file $run holds no sent transaction"
     tx=$(record_get stage1.tx); nonce=$(record_get stage1.nonce)
   fi
+  MINED_HINT="; if it failed or was replaced, settle its nonce, then move $RECORD, the kept stage 1 run files and $LATEST aside before a fresh stage 1 (LAUNCH.md)"
   receipt=$(mined "$tx")
+  MINED_HINT=""
   # The ID comes only from the mined SubscriptionCreated log whose emitter is the coordinator and whose owner is the deployer.
   subId=$(echo "$receipt" | python3 -c "
 import json, sys
