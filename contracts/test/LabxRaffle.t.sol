@@ -448,6 +448,28 @@ contract LabxRaffleTest is AdmissionFixture {
         labx.cancel(id);
     }
 
+    /// @dev cancel's NatSpec: lots outlive the draw-start deadline, so a snapshot with lots counts them until then and the
+    ///      seller cannot cancel; at the deadline anyone can.
+    function test_snapshotWithLotsIsNeverEmptyBeforeTheDrawDeadline() public {
+        (uint256 id,,,) = _create();
+        _escrowOpen(id);
+        _fund(alice, 100e6);
+        _buy(alice, id, 0, 1);
+        _close(id);
+        uint256 deadline = uint256(labx.getRaffle(id).salesEnd) + labx.DRAW_START_GRACE();
+        vm.warp(deadline - 1);
+        labx.snapshot(id, 10);
+        assertTrue(labx.getRaffle(id).snapshotted);
+        assertEq(labx.getRaffle(id).snapshotTotal, 1);
+        vm.prank(seller);
+        vm.expectRevert(LabxRaffle.SalesStarted.selector);
+        labx.cancel(id);
+        vm.warp(deadline);
+        vm.prank(bob);
+        labx.cancel(id);
+        assertEq(uint8(labx.getRaffle(id).phase), uint8(LabxRaffle.Phase.Cancelled));
+    }
+
     function test_revealMismatchAndSettleGrace() public {
         (uint256 id, bytes32 publicHash, bytes32 privateHash,) = _create();
         _escrowOpen(id);

@@ -800,7 +800,8 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     }
 
     /// @notice Anyone may recover Open/Closed raffles after the draw-start deadline.
-    ///         Before then, seller/owner cancellation requires no lots or a completed empty snapshot.
+    ///         Before then, seller/owner cancellation requires no lots. Lots outlive that deadline, so a completed
+    ///         snapshot with lots is never empty before it; the empty-snapshot exemption is only defensive.
     function cancel(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
         if (r.seller == address(0)) revert BadPhase();
