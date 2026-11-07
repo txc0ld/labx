@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {AdmissionFixture} from "./AdmissionFixture.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {
@@ -15,6 +16,13 @@ import {
     StickyERC721,
     SyncVRF
 } from "./mocks/Mocks.sol";
+
+/// @notice A standard OpenZeppelin collection, for receiver behaviour as real NFTs implement it.
+contract OzERC721 is ERC721("Oz", "OZ") {
+    function mint(address to, uint256 id) external {
+        _mint(to, id);
+    }
+}
 
 contract LabxRaffleTest is AdmissionFixture {
     uint256 internal constant TERMS = uint256(keccak256("terms-v1"));
@@ -552,6 +560,50 @@ contract LabxRaffleTest is AdmissionFixture {
         vm.expectRevert();
         labx.escrow(id);
         assertFalse(labx.getRaffle(id).escrowed);
+    }
+
+    /// @dev A wallet's Send to the raffle would strand the NFT: escrow can no longer pull it and no path returns it. Only
+    ///      the transfer escrow itself makes is accepted.
+    function test_refusesAnNftItDidNotPullIntoEscrow() public {
+        bytes4 refused = LabxRaffle.DirectNftDisabled.selector;
+        vm.startPrank(seller);
+        vm.expectRevert(refused);
+        nft.safeTransferFrom(seller, address(labx), 1);
+        vm.expectRevert(refused);
+        nft.safeTransferFrom(seller, address(labx), 1, "gift");
+        vm.stopPrank();
+        assertEq(nft.ownerOf(1), seller);
+
+        (uint256 id,,,) = _create();
+        vm.prank(seller);
+        labx.escrow(id);
+        assertEq(nft.ownerOf(1), address(labx));
+        assertTrue(labx.getRaffle(id).escrowed);
+    }
+
+    function test_escrowsAStandardCollectionAndRefusesItsDirectTransfers() public {
+        OzERC721 oz = new OzERC721();
+        oz.mint(seller, 5);
+        vm.prank(seller);
+        vm.expectRevert(LabxRaffle.DirectNftDisabled.selector);
+        oz.safeTransferFrom(seller, address(labx), 5);
+        assertEq(oz.ownerOf(5), seller);
+
+        bytes32 nonce = keccak256("oz");
+        bytes32 commit = labx.hashCommitment(nonce, address(oz), 5, keccak256("a"), keccak256("b"), keccak256("c"));
+        vm.startPrank(seller);
+        oz.approve(address(labx), 5);
+        uint256 id =
+            labx.createRaffle(address(oz), 5, uint64(block.timestamp + 1 days), nonce, commit, "Patch Bay", _configs());
+        labx.escrow(id);
+        vm.stopPrank();
+        assertEq(oz.ownerOf(5), address(labx));
+        assertTrue(labx.getRaffle(id).escrowed);
+        vm.prank(seller);
+        labx.cancel(id);
+        vm.prank(seller);
+        labx.reclaimPrize(id);
+        assertEq(oz.ownerOf(5), seller);
     }
 
     function test_directEthIsRejected() public {

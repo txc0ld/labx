@@ -194,6 +194,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     error SwapShortfall();
     error RefundFailed();
     error DirectEthDisabled();
+    error DirectNftDisabled();
     error BadWindow();
     error BadConfig();
     error UsdcDecimals();
@@ -933,7 +934,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         ethWei = (usdcAmount * 1e20 + uint256(answer) - 1) / uint256(answer);
     }
 
-    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+    /// @notice Accepts only the transfer `escrow` makes. Any other NFT sent here could never leave, so it is refused.
+    function onERC721Received(address operator, address, uint256, bytes calldata) external view returns (bytes4) {
+        if (operator != address(this)) revert DirectNftDisabled();
         return IERC721Receiver.onERC721Received.selector;
     }
 
