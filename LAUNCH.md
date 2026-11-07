@@ -44,7 +44,7 @@ Present the frozen candidate, test/review evidence, deployment constructor value
 - `stage1` reads the subscription ID only from the mined `SubscriptionCreated` log (emitter the coordinator, owner the deployer) and starts the record.
 - `stage2` refuses a moved or pending nonce, and records the CREATE only after its receipt shows success, the recorded deployer, `EXPECTED_NONCE` and the predicted address.
 - `resume` first establishes that CREATE: from the record, a kept run file, `CREATE_TX` (checked the same way), or a search for the deployer's `EXPECTED_NONCE` on chain. It refuses when the CREATE failed or was replaced.
-- `verify` runs `DeployMainnet.verify()`. It is read-only: it checks the mined state and takes no missing step, so an incomplete deployment fails it. It prints the website manifest only for a recorded CREATE and complete reads.
+- `verify` runs `DeployMainnet.verify()`. It is read-only: it checks the mined state and takes no missing step, so an incomplete deployment fails it. After launch, when the Safe owns the raffle and has unpaused it, the pause flag and terms hash are reported instead of required. It prints the website manifest only for a recorded CREATE and complete reads.
 
 Any failed read stops the run. `CONFIRMATIONS` (default 3) applies when the driver records a receipt. Forge's `--slow` itself waits for one confirmation between its own transactions.
 

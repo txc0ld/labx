@@ -310,11 +310,13 @@ resume() {
 
 # Read-only. DeployMainnet.verify() checks the mined state (code against a simulated fresh deployment, every setting,
 # native billing, the sole consumer, the funding target, ownership offered to or held by the Safe) and takes no missing
-# step. The website manifest is printed only for a recorded, successful CREATE and complete reads.
+# step. After launch (the Safe owns the raffle and has unpaused it) the pause flag and terms hash are the Safe's, so
+# they are reported, not required. The website manifest is printed only for a recorded, successful CREATE and complete
+# reads.
 verify() {
   [ -f "$RECORD" ] || die "no record"
   reconcile_create
-  local raffle block owner pending paused codehash
+  local raffle block owner pending paused terms codehash
   raffle=$(record_get create.address); block=$(record_get create.block)
   stage_env
   DEPLOYER_ADDRESS=$(record_get deployer) RAFFLE_ADDRESS=$raffle \
@@ -323,9 +325,10 @@ verify() {
   owner=$(read_chain "the raffle owner" cast call "$raffle" "owner()(address)" --rpc-url "$RPC_URL")
   pending=$(read_chain "the raffle pending owner" cast call "$raffle" "pendingOwner()(address)" --rpc-url "$RPC_URL")
   paused=$(read_chain "the raffle pause flag" cast call "$raffle" "paused()(bool)" --rpc-url "$RPC_URL")
+  terms=$(read_chain "the raffle terms hash" cast call "$raffle" "termsHash()(bytes32)" --rpc-url "$RPC_URL")
   codehash=$(read_chain "the raffle code hash" cast codehash "$raffle" --rpc-url "$RPC_URL")
   [[ "$codehash" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "unexpected code hash $codehash"
-  [ "$paused" = "true" ] || echo "note: the raffle is unpaused" >&2
+  same "$terms" "$(record_get termsHash)" || echo "note: the raffle terms hash is $terms; the record has $(record_get termsHash)" >&2
   echo "verified: $raffle (owner $owner, pending owner $pending, paused $paused)"
   echo "website manifest: address $raffle, runtimeCodeHash $codehash, deploymentBlock $block, expectedOwner $(record_get safe)"
 }
