@@ -247,21 +247,54 @@ preflight() {
   # Wei amounts exceed bash integers.
   python3 -c "import sys; sys.exit(0 if int(sys.argv[1]) > int(sys.argv[2]) + int(sys.argv[3]) * 8_000_000 else 1)" "$balance" "$FUND_TARGET_WEI" "$gas" \
     || die "the deployer holds less than FUND_TARGET_WEI plus 8M gas at the current price"
-  if [ -f "$RECORD" ]; then echo "record            $RECORD exists (subscription $(record_get stage1.subscriptionId))"; else echo "record            none yet; stage1 starts it"; fi
+  if [ ! -f "$RECORD" ]; then echo "record            none yet; stage1 starts it"
+  elif stage1_pending; then echo "record            $RECORD exists (stage 1 transaction $(record_get stage1.tx) pending; rerun stage1)"
+  else echo "record            $RECORD exists (subscription $(record_get stage1.subscriptionId))"; fi
 }
 
+# A record whose stage 1 transaction was sent but not yet found deep enough. Later steps need a finished stage 1.
+stage1_pending() { [ "$(record_get stage1.status 2>/dev/null)" = "pending" ]; }
+
+# Records the stage 1 transaction as pending before waiting for it, so a rerun waits for that transaction instead of
+# sending another. Only a recorded transaction the RPC no longer knows, with its nonce still unused, is sent again.
 stage1() {
   need SAFE_ADDRESS; need TERMS_HASH; need FUND_TARGET_WEI
-  [ ! -f "$RECORD" ] || die "$RECORD already exists; a second stage 1 would create another subscription"
-  local who run tx receipt subId nonce expected predicted block
+  local who run="" tx="" receipt subId nonce expected predicted block
   who=$(deployer)
-  [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
-    || die "the deployer has a pending transaction; settle it first"
-  mkdir -p "$(dirname "$RECORD")"
-  broadcast stage1 CreateMainnetSubscription
-  run=$RUN
-  [ -n "$run" ] || die "stage 1 sent no transaction"
-  tx=$(python3 -c "import json,sys; t=json.load(open(sys.argv[1]))['transactions']; assert len(t) == 1; print(t[0]['hash'])" "$run")
+  if [ -f "$RECORD" ]; then
+    stage1_pending || die "$RECORD already exists; a second stage 1 would create another subscription"
+    same "$who" "$(record_get deployer)" || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
+    [ "$SAFE_ADDRESS $TERMS_HASH $FUND_TARGET_WEI" = "$(record_get safe) $(record_get termsHash) $(record_get fundTargetWei)" ] \
+      || die "SAFE_ADDRESS, TERMS_HASH or FUND_TARGET_WEI differs from $RECORD"
+    tx=$(record_get stage1.tx); nonce=$(record_get stage1.nonce); run=$(record_get stage1.run)
+    if ! cast tx "$tx" --rpc-url "$RPC_URL" > /dev/null 2>&1 \
+      && [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$nonce" ] \
+      && [ "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" = "$nonce" ]; then
+      echo "mainnet-deploy: the recorded stage 1 transaction $tx is gone and nonce $nonce is unused; sending stage 1 again" >&2
+      tx=""
+    else
+      echo "mainnet-deploy: waiting for the recorded stage 1 transaction $tx" >&2
+    fi
+  else
+    [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
+      || die "the deployer has a pending transaction; settle it first"
+    mkdir -p "$(dirname "$RECORD")"
+  fi
+  if [ -z "$tx" ]; then
+    broadcast stage1 CreateMainnetSubscription
+    run=$RUN
+    [ -n "$run" ] || die "stage 1 sent no transaction"
+    tx=$(python3 -c "import json,sys; t=json.load(open(sys.argv[1]))['transactions']; assert len(t) == 1; print(t[0]['hash'])" "$run")
+    nonce=$(python3 -c "import json,sys; print(int(json.load(open(sys.argv[1]))['transactions'][0]['transaction']['nonce'], 16))" "$run")
+    python3 - <<EOF | record_write
+import json
+print(json.dumps({
+  "chainId": 1, "deployer": "$who", "safe": "$SAFE_ADDRESS", "termsHash": "$TERMS_HASH", "fundTargetWei": "$FUND_TARGET_WEI",
+  "coordinator": "$COORDINATOR", "usdc": "$USDC",
+  "stage1": {"tx": "$tx", "nonce": $nonce, "run": "$(basename "$run")", "status": "pending"}
+}))
+EOF
+  fi
   receipt=$(mined "$tx")
   # The ID comes only from the mined SubscriptionCreated log whose emitter is the coordinator and whose owner is the deployer.
   subId=$(echo "$receipt" | python3 -c "
@@ -270,25 +303,23 @@ topic = '$(cast keccak "SubscriptionCreated(uint256,address)")'
 logs = [l for l in json.load(sys.stdin)['logs'] if l['address'].lower() == '$COORDINATOR'.lower() and l['topics'][0] == topic and int(l['data'], 16) == int('$who', 16)]
 assert len(logs) == 1, 'expected one SubscriptionCreated log for the deployer'
 print(int(logs[0]['topics'][1], 16))")
-  nonce=$(read_chain "the stage 1 nonce" cast tx "$tx" nonce --rpc-url "$RPC_URL")
+  [ "$(read_chain "the stage 1 nonce" cast tx "$tx" nonce --rpc-url "$RPC_URL")" = "$nonce" ] || die "stage 1 transaction $tx did not use the recorded nonce $nonce"
   expected=$((nonce + 1))
   predicted=$(read_chain "the predicted CREATE address" cast compute-address "$who" --nonce "$expected" | awk '{print $NF}')
   block=$(echo "$receipt" | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["blockNumber"], 16))')
-  python3 - "$RECORD" <<EOF
+  python3 - "$RECORD" <<EOF | record_write
 import json, sys
-json.dump({
-  "chainId": 1, "deployer": "$who", "safe": "$SAFE_ADDRESS", "termsHash": "$TERMS_HASH", "fundTargetWei": "$FUND_TARGET_WEI",
-  "coordinator": "$COORDINATOR", "usdc": "$USDC",
-  "stage1": {"tx": "$tx", "block": $block, "nonce": $nonce, "subscriptionId": "$subId", "run": "$(basename "$run")"},
-  "expectedNonce": $expected, "predictedRaffle": "$predicted", "create": None, "runs": {}
-}, open(sys.argv[1], "w"), indent=2)
-open(sys.argv[1], "a").write("\n")
+d = json.load(open(sys.argv[1]))
+d["stage1"] = {"tx": "$tx", "block": $block, "nonce": $nonce, "subscriptionId": "$subId", "run": "$(basename "$run")", "status": "mined"}
+d.update({"expectedNonce": $expected, "predictedRaffle": "$predicted", "create": None, "runs": {}})
+print(json.dumps(d))
 EOF
   echo "stage 1 done: subscription $subId; stage 2 must deploy at $predicted with nonce $expected. Record: $RECORD"
 }
 
 stage2() {
   [ -f "$RECORD" ] || die "run stage1 first"
+  ! stage1_pending || die "stage 1 has not finished; rerun stage1, which waits for its recorded transaction"
   [ -z "$(record_get create)" ] || die "the raffle CREATE is already recorded; use resume or verify"
   local who expected current run created
   who=$(deployer); expected=$(record_get expectedNonce)
@@ -310,6 +341,7 @@ stage2() {
 
 resume() {
   [ -f "$RECORD" ] || die "no record; nothing to resume"
+  ! stage1_pending || die "stage 1 has not finished; rerun stage1, which waits for its recorded transaction"
   local who run
   who=$(deployer)
   same "$who" "$(record_get deployer)" || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
@@ -333,6 +365,7 @@ resume() {
 # reads.
 verify() {
   [ -f "$RECORD" ] || die "no record"
+  ! stage1_pending || die "stage 1 has not finished; rerun stage1, which waits for its recorded transaction"
   reconcile_create
   local raffle block owner pending paused terms codehash
   raffle=$(record_get create.address); block=$(record_get create.block)
