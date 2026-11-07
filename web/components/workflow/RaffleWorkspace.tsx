@@ -254,20 +254,22 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   const pollDelaySeconds = pollFrom !== null && pollFrom > now ? Number(pollFrom - now) : 0;
   const walletBusy = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "overflow");
   const shouldPoll = pollFrom !== null && refreshState.kind === "idle" && !walletBusy;
+  const walletBusyRef = useRef(walletBusy);
+  walletBusyRef.current = walletBusy;
   useEffect(() => {
     if (!shouldPoll) return;
     const start = Date.now();
     let inFlight = false;
     // A review, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps the page still, so a re-read
-    // never remounts a control mid-sequence; a submission or confirmation already stops polling through walletBusy. A read that
-    // started before the control got busy is dropped. A finished panel, such as a cancellation, an error or a receipt, is not
-    // mid-sequence, so it does not hold the page.
+    // never remounts a control mid-sequence; a submission or confirmation stops polling through walletBusy. A read that started
+    // before the control or the wallet got busy is dropped. A finished panel, such as a cancellation, an error or a receipt, is
+    // not mid-sequence, so it does not hold the page.
     const busy = () => !!pieceRef.current?.querySelector(".transaction-review, [aria-busy=true]");
     const timer = window.setInterval(() => {
       if (Date.now() - start < pollDelaySeconds * 1000) return;
       if (inFlight || document.visibilityState !== "visible" || busy()) return;
       inFlight = true;
-      void pollRef.current(() => !busy()).finally(() => { inFlight = false; });
+      void pollRef.current(() => !busy() && !walletBusyRef.current).finally(() => { inFlight = false; });
     }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [shouldPoll, pollDelaySeconds, now]);

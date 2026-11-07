@@ -521,4 +521,49 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await fixture.page.unroute(`${chain.url}/`);
     }
   }, 60_000);
+
+  it("drops a background read that started before the click once the step is confirming", async () => {
+    await chain.write(chain.nft, "mint", [chain.seller, 905n]);
+    const id = await createOpenRaffle(905n, "Confirming raffle", standardMembershipPacks(() => ({ priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 20 })));
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
+    await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+    const { raffle } = await service.readRaffle({ id });
+    await chain.warp(raffle.salesEnd + 1n);
+    await fixture.switchAccount(chain.buyer);
+    await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" });
+    await fixture.page.getByText("Membership price paid", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    const wallet = await watchWallet(fixture.page);
+    // The page's next background read starts with a deployment check; hold its code read until the close is confirming.
+    const held: { continue(): Promise<void> }[] = [];
+    let holding = true;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const codeRead = (Array.isArray(body) ? body : [body]).some(request => !!request && typeof request === "object" && "method" in request && request.method === "eth_getCode");
+      if (holding && codeRead) { holding = false; held.push(route); return; }
+      await route.continue();
+    });
+    // The close stays one block deep, so it is still confirming when the held read lands.
+    fixture.setMineConfirmation(false);
+    try {
+      await expect.poll(() => held.length, { timeout: 30_000 }).toBe(1);
+      await fixture.page.locator("summary", { hasText: "Other actions" }).click();
+      await fixture.page.getByRole("button", { name: "Close sales", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Confirm close sales", exact: true }).click();
+      const confirming = fixture.page.getByText("Confirming on the network… usually under 30 seconds", { exact: true });
+      await confirming.waitFor({ state: "visible", timeout: 15_000 });
+      expect(Number((await service.readRaffle({ id })).raffle.phase)).toBe(2);
+
+      await held[0].continue();
+      await fixture.page.waitForTimeout(3_000);
+      expect(await confirming.isVisible()).toBe(true);
+      expect(await fixture.page.getByRole("heading", { name: "Sales closed", exact: true }).count()).toBe(0);
+    } finally {
+      fixture.setMineConfirmation(true);
+      for (const route of held) await route.continue().catch(() => {});
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+    await chain.mine();
+    await fixture.page.getByRole("heading", { name: "Sales closed", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+    expect((await wallet.requests()).map(request => request.method)).toEqual(["eth_sendTransaction"]);
+  }, 120_000);
 });
