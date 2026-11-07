@@ -61,16 +61,45 @@ describe("notification processor", () => {
     expect(sender).toHaveBeenCalledTimes(2);
   });
 
-  it("stops before ingestion and records reconciliation when the activation block changes", async () => {
+  it("reads and mails nothing before finality, then re-anchors a reorged activation block to the finalized block", async () => {
     const store = new MemoryStore();
     const input = source([event(1)]);
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    const canonicalHash = `0x${"44".repeat(32)}` as const;
     await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
-    input.block = async number => ({ number, hash: finalizedHash, timestamp: 1n, gasLimit: 30_000_000n });
+    let finalized = 99n;
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    input.block = async number => ({ number, hash: number === 100n ? canonicalHash : finalizedHash, timestamp: 1n, gasLimit: 30_000_000n });
+    const events = vi.spyOn(input, "events");
+    const sender = vi.fn(async () => true);
+    expect(await processNotifications({ store, source: input, sender, ...config, now: 2_000 })).toMatchObject({ status: "idle", finalizedBlock: "99" });
+    expect(events).not.toHaveBeenCalled();
+    expect(sender).not.toHaveBeenCalled();
+    expect(await store.get(`${prefix}:activation-verified`)).toBeNull();
+
+    finalized = 101n;
+    const report = await processNotifications({ store, source: input, sender, ...config, now: 3_000 });
+    expect(report).toMatchObject({ status: "ok", activationBlock: "100", ingestedEvents: 1, accepted: 1 });
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await store.get(`${prefix}:activation`))!)).toEqual({ version: 1, deployment: input.deployment, blockNumber: "100", blockHash: canonicalHash });
+    expect(JSON.parse((await store.get(`${prefix}:activation-verified`))!)).toEqual({ version: 1, blockNumber: "100", blockHash: canonicalHash });
+    expect(await store.get(`${prefix}:activation-reconciliation`)).toBeNull();
+  });
+
+  it("recovers a deployment that an earlier build marked for activation reconciliation", async () => {
+    const store = new MemoryStore();
+    const input = source([event(1)]);
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    const canonicalHash = `0x${"44".repeat(32)}` as const;
+    await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
+    await store.setIfAbsent({ [`${prefix}:activation-reconciliation`]: JSON.stringify({ version: 1, reason: "activation-boundary-changed", recordedAt: 1_500 }) });
+    input.block = async number => ({ number, hash: number === 100n ? canonicalHash : finalizedHash, timestamp: 1n, gasLimit: 30_000_000n });
     const sender = vi.fn(async () => true);
     const report = await processNotifications({ store, source: input, sender, ...config, now: 2_000 });
-    expect(report.status).toBe("reconciliation-required");
-    expect(report.reconciliation).toContain("activation boundary");
-    expect(sender).not.toHaveBeenCalled();
+    expect(report).toMatchObject({ status: "ok", accepted: 1, retryNextBlock: "102" });
+    expect(report).not.toHaveProperty("reconciliation");
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await store.get(`${prefix}:activation`))!).blockHash).toBe(canonicalHash);
   });
 
   it("treats unproved future progress hints as replay hints", async () => {

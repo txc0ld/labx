@@ -63,7 +63,6 @@ export type NotificationRunReport = {
   reconciliationRequired: number;
   ingestionNextBlock: string;
   retryNextBlock: string;
-  reconciliation?: string;
   ingestion: { status: "idle" | "advanced" | "blocked"; fromBlock?: string; toBlock?: string; reason?: IngestionFailureReason; incident?: string };
   lastIncident?: { id: string; kind: "ingestion" | "delivery" | "reconciliation"; reason: string };
 };
@@ -126,18 +125,11 @@ export async function processNotifications(args: {
   const createdActivation = await requestStore.setIfAbsent({ [activationKey]: JSON.stringify(activationCandidate) });
   const activationRaw = await requestStore.get(activationKey);
   if (activationRaw === null) throw new Error("Notification activation was not persisted.");
-  const activation = parseActivation(activationRaw, args.source.deployment);
+  let activation = parseActivation(activationRaw, args.source.deployment);
   const activationBlock = BigInt(activation.blockNumber);
   const firstEventBlock = activationBlock + 1n;
   const empty = baseReport(activation.blockNumber, activation.blockNumber, firstEventBlock);
   if (createdActivation) return { ...empty, status: "activated" };
-
-  const terminalKey = `${prefix}:activation-reconciliation`;
-  const existingTerminal = await requestStore.get(terminalKey);
-  if (existingTerminal !== null) {
-    parseActivationReconciliation(existingTerminal);
-    return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary needs reconciliation." };
-  }
 
   const verifiedBoundaryKey = `${prefix}:activation-verified`;
   const verifiedBoundary = await requestStore.get(verifiedBoundaryKey);
@@ -146,10 +138,11 @@ export async function processNotifications(args: {
     empty.finalizedBlock = finalized.number.toString();
     if (finalized.number < activationBlock) return { ...empty, status: "idle" };
     const boundary = await withinDeadline(() => args.source.block(activationBlock), SOURCE_CALL_MS, requestDeadline);
+    // Nothing is ingested or mailed until this boundary is verified, so a reorged activation block is safely replaced by
+    // the finalized block at the same height. This also recovers deployments an earlier build marked for reconciliation.
     if (boundary.hash.toLowerCase() !== activation.blockHash.toLowerCase()) {
-      const marker = JSON.stringify({ version: 1, reason: "activation-boundary-changed", recordedAt: now });
-      await requestStore.setIfAbsent({ [terminalKey]: marker });
-      return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary changed and needs reconciliation." };
+      activation = { ...activation, blockHash: boundary.hash };
+      await requestStore.set(activationKey, JSON.stringify(activation));
     }
     await requestStore.setIfAbsent({ [verifiedBoundaryKey]: JSON.stringify({ version: 1, blockNumber: activation.blockNumber, blockHash: activation.blockHash }) });
   } else {
@@ -623,14 +616,6 @@ function parseResume(raw: string | null, length: number): number {
   const index = Number(raw);
   if (!Number.isSafeInteger(index) || index < 0 || index >= length) return 0;
   return index;
-}
-
-function parseActivationReconciliation(raw: string): void {
-  const value = parseObject(raw, "Notification activation reconciliation record is invalid.");
-  if (
-    Reflect.get(value, "version") !== 1 || Reflect.get(value, "reason") !== "activation-boundary-changed"
-    || !Number.isSafeInteger(Reflect.get(value, "recordedAt"))
-  ) throw new Error("Notification activation reconciliation record is invalid.");
 }
 
 function parseVerifiedBoundary(raw: string, activation: StoredActivation): void {
