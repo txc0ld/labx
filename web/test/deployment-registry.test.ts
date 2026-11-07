@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createPublicClient, http, zeroAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APPROVED_DEPLOYMENTS, LEGACY_RAFFLE } from "../lib/chain/deployment";
@@ -27,6 +28,30 @@ const verifiedManifest = {
     minBuyerFeeUsdc: 2500000n,
   }
 } satisfies DeploymentManifest;
+// Mainnet deployment of 7 Nov 2026 from main 972f46c, checked by `mainnet-deploy.sh verify`; ownership offered to the Safe.
+// The address equals the Sepolia v2 contract's because the same deployer created both at nonce 19.
+const verifiedMainnetManifest = {
+  chainId: 1,
+  address: "0xef27306567a5ADA354fe9403008D041d0b468213",
+  runtimeCodeHash: "0xf7f4938d3c482fbde58a8eaec069d245d2869526ddcf0ac2a6547bd17a97929c",
+  version: 3,
+  deploymentBlock: 26364574n,
+  usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  expectedOwner: "0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1",
+  expectedPolicy: {
+    coordinator: "0xD7f86b4b8Cae7D942340FF628F82735b7a20893a",
+    treasury: "0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1",
+    termsHash: "0x60b0227346cc2217a96c89385ca06119826c2d8493afe9134974c0324db0c06a",
+    keyHash: "0x8077df514608a09f83e4e8d300645594e5d7234665448ba83f51a50f842bd3d9",
+    subscriptionId: 1165680495283281968999919437712128416672482874038033204695721395610623963137n,
+    callbackGasLimit: 400000,
+    requestConfirmations: 3,
+    nativePayment: true,
+    buyerFeeBps: 200,
+    sellerFeeBps: 200,
+    minBuyerFeeUsdc: 2500000n,
+  }
+} satisfies DeploymentManifest;
 const checkedBlock = { number: 11865827n, hash: "0x11cb316da9f58a5df51f07170704c2f17586032127a50b5535164fe0904c04fd", timestamp: 1791410352n } satisfies BlockRef;
 
 beforeEach(() => {
@@ -39,11 +64,42 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
-describe("verified Sepolia deployment registration", () => {
+describe("verified Sepolia and mainnet deployment registration", () => {
   it("registers only the canonical v3 runtime, creation block, Safe authority and complete opening policy", () => {
-    expect(APPROVED_DEPLOYMENTS).toEqual([verifiedManifest]);
+    expect(APPROVED_DEPLOYMENTS).toEqual([verifiedManifest, verifiedMainnetManifest]);
     expect(verifiedManifest.expectedPolicy.termsHash).toBe(PUBLISHED_TERMS_HASH);
-    expect(APPROVED_DEPLOYMENTS.every(item => item.chainId === 11155111)).toBe(true);
+  });
+
+  it("registers the mainnet deployment exactly as the deployment record and the mainnet terms describe it", async () => {
+    const record = JSON.parse(readFileSync(new URL("../../deployments/mainnet.json", import.meta.url), "utf8"));
+    expect(record.chainId).toBe(1);
+    expect(record.create.address.toLowerCase()).toBe(verifiedMainnetManifest.address.toLowerCase());
+    expect(BigInt(record.create.block)).toBe(verifiedMainnetManifest.deploymentBlock);
+    expect(BigInt(record.stage1.subscriptionId)).toBe(verifiedMainnetManifest.expectedPolicy.subscriptionId);
+    expect(record.safe).toBe(verifiedMainnetManifest.expectedOwner);
+    expect(record.termsHash).toBe(verifiedMainnetManifest.expectedPolicy.termsHash);
+    expect(record.coordinator).toBe(verifiedMainnetManifest.expectedPolicy.coordinator);
+    expect(record.usdc).toBe(verifiedMainnetManifest.usdc);
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    const mainnetTerms = await import("../lib/published-terms");
+    expect(mainnetTerms.PUBLISHED_TERMS_HASH).toBe(verifiedMainnetManifest.expectedPolicy.termsHash);
+  });
+
+  it("selects the mainnet entry for the shared address only in a chain 1 build", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    vi.stubEnv("NEXT_PUBLIC_RAFFLE_ADDRESS", verifiedMainnetManifest.address);
+    const deployment = await import("../lib/chain/deployment");
+    const attest = vi.spyOn(deployment, "attestDeployment").mockResolvedValue({ kind: "verified", manifest: verifiedMainnetManifest, block: checkedBlock });
+    const { configuredBrowserService } = await import("../lib/chain/browser");
+    const browser = configuredBrowserService();
+    expect(browser.kind).toBe("configured");
+    if (browser.kind !== "configured") throw new Error(browser.reason);
+    expect(browser.service.manifest).toEqual(verifiedMainnetManifest);
+    const { serverWorkflow } = await import("../lib/chain/server");
+    const server = await serverWorkflow();
+    expect(server.manifest).toEqual(verifiedMainnetManifest);
+    expect(server.context).toMatchObject({ chainId: 1, contract: verifiedMainnetManifest.address, termsHash: verifiedMainnetManifest.expectedPolicy.termsHash });
+    expect(attest).toHaveBeenCalledExactlyOnceWith(expect.any(Object), verifiedMainnetManifest);
   });
 
   it.each([verifiedManifest.address, verifiedManifest.address.toLowerCase()])("selects %s consistently in production browser and server configuration", async selected => {

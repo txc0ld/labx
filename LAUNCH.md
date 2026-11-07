@@ -12,7 +12,7 @@ The v3 policy pins the full randomness configuration, terms and treasury when a 
 
 ## 2. Inventory the historical deployment
 
-Before any deployment decision, recheck both the v2 contract `0xef27306567a5ADA354fe9403008D041d0b468213` and the older `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` read-only. Record the block, bytecode, ownership, raffle phases, escrowed NFTs, token balances, liabilities and VRF subscription billing/funding.
+Before any deployment decision, recheck both the Sepolia v2 contract `0xef27306567a5ADA354fe9403008D041d0b468213` (the mainnet v3 raffle shares this address: same deployer, nonce 19) and the older `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` read-only. Record the block, bytecode, ownership, raffle phases, escrowed NFTs, token balances, liabilities and VRF subscription billing/funding.
 
 Historical observation at block 11856552 on 2026-10-06: `nextId` was 1, the owner and pending owner/treasury addresses had no code, and the VRF subscription had 0 LINK, 0.05 native ETH and zero requests. The old randomness abort constant was 86,400 seconds. These observations may change and do not establish current readiness. Native ETH does not replace LINK for a LINK-billed request.
 

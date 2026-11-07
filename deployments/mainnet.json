@@ -1,0 +1,56 @@
+{
+  "chainId": 1,
+  "deployer": "0x710691b1a561442e66D7973eA24264F0247b131a",
+  "safe": "0x97C3C44378571FeE5D11593ee11f26a8626Bdfd1",
+  "termsHash": "0x60b0227346cc2217a96c89385ca06119826c2d8493afe9134974c0324db0c06a",
+  "fundTargetWei": "0",
+  "coordinator": "0xD7f86b4b8Cae7D942340FF628F82735b7a20893a",
+  "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  "stage1": {
+    "tx": "0x9fb4bcf797cce00a783a8b4a51d7b25563bfdcdfc5ca803588bdacd04de695ef",
+    "block": 26364570,
+    "nonce": 18,
+    "subscriptionId": "1165680495283281968999919437712128416672482874038033204695721395610623963137",
+    "run": "stage1-20261107T174801Z.json",
+    "status": "mined"
+  },
+  "expectedNonce": 19,
+  "predictedRaffle": "0xef27306567a5ADA354fe9403008D041d0b468213",
+  "create": {
+    "tx": "0x6358408db56641340ac785202f6e21c78210fb9e06400ed3677ffd1fff9458e2",
+    "block": 26364574,
+    "address": "0xef27306567a5ada354fe9403008d041d0b468213"
+  },
+  "runs": {
+    "stage2": {
+      "run": "stage2-20261107T174936Z.json",
+      "transactions": [
+        {
+          "hash": "0x6358408db56641340ac785202f6e21c78210fb9e06400ed3677ffd1fff9458e2",
+          "type": "CREATE",
+          "function": null
+        },
+        {
+          "hash": "0x60c7fe2e785093780795df07587fffe54f41069d815f513f40d17d506c4c788f",
+          "type": "CALL",
+          "function": "setNativePayment(bool)"
+        },
+        {
+          "hash": "0x4cc419d2c66f5a313ff287547773534744b338b0092f0027356e7cdf64b27ebe",
+          "type": "CALL",
+          "function": "addConsumer(uint256,address)"
+        },
+        {
+          "hash": "0x5ce092ad20cadfa7ac3a38faf7d5b67d517fd3d3649beb33b6ed860668bf2587",
+          "type": "CALL",
+          "function": "transferOwnership(address)"
+        },
+        {
+          "hash": "0x2d2ba5d900f0d33277979def1dece179c851a4abd3b291ca20e6964bb76dde2d",
+          "type": "CALL",
+          "function": "requestSubscriptionOwnerTransfer(uint256,address)"
+        }
+      ]
+    }
+  }
+}
