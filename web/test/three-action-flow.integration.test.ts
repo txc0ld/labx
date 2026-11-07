@@ -225,6 +225,16 @@ run("one-intent creation and capability-owned owner requests", () => {
     expect(flow.record().creationHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
+  it("finds that draft when the seller comes back more than 20,000 blocks later, and makes no second draft", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", true);
+    await c.mine(); await c.mine();
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending })).toEqual({ kind: "spent" });
+    await c.rpc("anvil_mine", [toHex(20_001)]);
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+  });
+
   it.each([true, false])("continues past an NFT approval whose record was cleared elsewhere, sending it again only if it never landed (landed: %s)", async landed => {
     const { flow, pending, requested } = await lostStep("approvePrize", landed);
     if (landed) { await c.mine(); await c.mine(); }
