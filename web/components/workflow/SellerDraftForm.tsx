@@ -138,6 +138,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const walletSnapshot = useWalletSnapshot(wallet);
   const [creation, setCreation] = useState<{ kind: "idle" } | { kind: "busy"; message: string } | { kind: "error"; message: string } | { kind: "done"; id: bigint }>({ kind: "idle" });
   const [savedCreation, setSavedCreation] = useState<CreateRecord | null>(null);
+  // The saved creation can't be read, so Start over is its only way back to a clean Create.
+  const [unreadableCreation, setUnreadableCreation] = useState(false);
   const [notice, setNotice] = useState("");
   const createLifetime = useRef({ mounted: false, generation: 0, busy: false, operation: 0, service, wallet, revision: walletSnapshot.revision });
   if (createLifetime.current.service !== service || createLifetime.current.wallet !== wallet || createLifetime.current.revision !== walletSnapshot.revision) {
@@ -149,8 +151,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }, []);
   useEffect(() => {
     if (existing || walletSnapshot.kind !== "connected") return;
-    try { setSavedCreation(readCreateRecord(window.localStorage, createStorageKey(service, walletSnapshot.account))); }
-    catch { setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
+    try { setSavedCreation(readCreateRecord(window.localStorage, createStorageKey(service, walletSnapshot.account))); setUnreadableCreation(false); }
+    catch { setUnreadableCreation(true); setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
   }, [service, existing, walletSnapshot]);
 
   const identityLocked = existing?.raffle.escrowed === true;
@@ -508,7 +510,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   async function editSavedCreation() {
     const lifetime = createLifetime.current;
-    if (lifetime.busy || !savedCreation) return;
+    if (lifetime.busy || !savedCreation && !unreadableCreation) return;
     const expected = savedCreation, session = wallet.getSnapshot(), generation = lifetime.generation;
     if (session.kind !== "connected") return;
     lifetime.busy = true;
@@ -523,10 +525,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         assertCreateGeneration(localStorage, key, clicked);
         await retireUnsentCreate({ service, wallet, storage: localStorage, key, expected, assertIntent });
         assertIntent();
-        const draft = decodeDraft(expected.data);
-        invalidateSelection(); invalidateInventory();
-        replaceForm(() => formFromDraft(draft));
-        setSavedCreation(null); setCreation({ kind: "idle" }); setState({ kind: "editing" });
+        if (expected) {
+          const draft = decodeDraft(expected.data);
+          invalidateSelection(); invalidateInventory();
+          replaceForm(() => formFromDraft(draft));
+        }
+        setSavedCreation(null); setUnreadableCreation(false); setCreation({ kind: "idle" }); setState({ kind: "editing" });
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: error instanceof Error ? error.message : "Saved creation could not be retired." });
@@ -684,6 +688,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       </fieldset>
 
       {!existing && creation.kind === "error" ? <p className="notice error" role="alert">{creation.message}</p> : null}
+      {!existing && unreadableCreation ? <CreateRecoveryControls disabled={false} onEdit={() => void editSavedCreation()} /> : null}
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
       <div className={formStyles.reviewAction}><div><strong>{existing ? "Ready to save?" : "Ready to create?"}</strong><span>{existing ? "Saving sends your raffle back to LABx for review." : "Create locks your NFT for the raffle. Your wallet will ask for 1 signature and up to 3 confirmations."}</span></div><button className="btn" type="submit">{existing ? "Save changes" : "Create"}</button></div>
     </form>

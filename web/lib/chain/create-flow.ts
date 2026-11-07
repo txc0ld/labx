@@ -68,14 +68,17 @@ export function advanceCreateGeneration(storage: Storage, key: string) {
   storage.setItem(`${key}:generation`, generation);
   if (storage.getItem(`${key}:generation`) !== generation) throw new Error("Creation recovery could not be saved.");
 }
+/** `expected` null retires a saved creation that can't be read at all, keeping its raw text in the archive. */
 export async function retireUnsentCreate({ service, wallet, storage, key, expected, assertIntent }: {
-  service: RaffleService; wallet: WalletSessionPort; storage: Storage; key: string; expected: CreateRecord; assertIntent: () => void;
+  service: RaffleService; wallet: WalletSessionPort; storage: Storage; key: string; expected: CreateRecord | null; assertIntent: () => void;
 }) {
   assertIntent();
   const raw = storage.getItem(key);
-  const saved = readCreateRecord(storage, key);
-  if (raw === null || saved === null || serializeCreateRecord(saved) !== serializeCreateRecord(expected)) throw new Error("The saved creation changed. Reload before editing.");
-  if (expected.kind === "draft" && (expected.id !== null || expected.creationHash !== null || expected.pending !== null)) throw new Error("Recover the on-chain creation before editing.");
+  let saved: CreateRecord | null | "unreadable";
+  try { saved = readCreateRecord(storage, key); } catch { saved = "unreadable"; }
+  const unchanged = expected ? saved !== "unreadable" && saved !== null && serializeCreateRecord(saved) === serializeCreateRecord(expected) : saved === "unreadable";
+  if (raw === null || !unchanged) throw new Error("The saved creation changed. Reload before editing.");
+  if (expected?.kind === "draft" && (expected.id !== null || expected.creationHash !== null || expected.pending !== null)) throw new Error("Recover the on-chain creation before editing.");
   if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before editing.");
   assertIntent();
   if (storage.getItem(key) !== raw) throw new Error("The saved creation changed. Reload before editing.");
