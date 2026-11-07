@@ -1,5 +1,5 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
-import { decodeEventLog, encodeFunctionData, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
+import { decodeEventLog, encodeFunctionData, getAbiItem, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
 import { EarlierSendError, NotSentError, SubmissionNotDispatchedError } from "./submission-errors";
 import { checkNetworkFee } from "./network-fee";
 import { raffleAbi } from "./abi";
@@ -33,6 +33,9 @@ export const UNSENT_CLEAR_BLOCKS = 25n;
 export const CODE_ONLY_RECHECK_MS = [2_000, 2_000] as const;
 /** Confirmations a canonical receipt needs: its own block and one more. A pending record's nonce is spent at the same depth. */
 export const RECEIPT_CONFIRMATIONS = 2;
+/** findCreation reads RaffleCreated events forward from a send's starting block in windows this size, at most this many. */
+const CREATION_LOG_WINDOW = 2_000n, CREATION_LOG_WINDOWS = 10n;
+const RAFFLE_CREATED = getAbiItem({ abi: raffleAbi, name: "RaffleCreated" });
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
   const sellerReader = createSellerReader(client, manifest, reader);
@@ -276,6 +279,30 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       return { kind: state === "spent" ? "spent" : "dropped" };
     });
   }
+  async function settleCheckpoint({ wallet, checkpoint }: Parameters<RaffleService["settleCheckpoint"]>[0]) {
+    const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
+    const account = session.account;
+    return journal.exclusive(account, async (): Promise<"unsent" | "spent" | "waiting"> => {
+      if (journal.read(account) || submitting.has(account.toLowerCase()) || await journal.requestOpen(account)) return "waiting";
+      const state = await nonceState(account, { ...checkpoint, hash: null });
+      if (state === "spent" && journal.readCleared(account)?.nonce === checkpoint.nonce) journal.writeCleared(account, null);
+      return state === "expired" ? "unsent" : state;
+    });
+  }
+  async function findCreation({ account, checkpoint }: Parameters<RaffleService["findCreation"]>[0]) {
+    const start = BigInt(checkpoint.startedBlock), head = await client.getBlockNumber({ cacheTime: 0 });
+    if (head - start >= CREATION_LOG_WINDOW * CREATION_LOG_WINDOWS) throw new Error("This creation is too old to find by itself. Open Advanced recovery and enter its Ethereum transaction hash.");
+    for (let fromBlock = start; fromBlock <= head; fromBlock += CREATION_LOG_WINDOW) {
+      const toBlock = fromBlock + CREATION_LOG_WINDOW - 1n < head ? fromBlock + CREATION_LOG_WINDOW - 1n : head;
+      const logs = await client.getLogs({ address: manifest.address, event: RAFFLE_CREATED, args: { seller: account }, fromBlock, toBlock, strict: true });
+      for (const log of logs) {
+        if (log.removed) continue;
+        const sent = await client.getTransaction({ hash: log.transactionHash });
+        if (sameAddress(sent.from, account) && sent.nonce === checkpoint.nonce) return sent.hash;
+      }
+    }
+    return null;
+  }
 
   async function validateReceipt(receipt: TransactionReceipt, account: Address): Promise<CanonicalReceipt> {
     const [actual, block, latest] = await Promise.all([
@@ -450,5 +477,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     return current ? { id: current.id, hash: current.hash, nonce: current.nonce, ...(expectedIntent ? { checkpoint: { id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock } } : {}) } : null;
   }
   return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, requestOwnerExecution, resolveCreatedDraft,
-    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume, settlePending };
+    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume, settlePending, settleCheckpoint, findCreation };
 }

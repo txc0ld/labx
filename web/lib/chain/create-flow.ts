@@ -272,6 +272,19 @@ export async function finishCreate({ service, wallet, draft, record, save, asser
   };
   await check();
   if (encodeDraft(draft) !== current.data) throw new Error("The saved draft differs from this creation intent.");
+  // The step's pending record was cleared elsewhere, by Continue, its expiry or a mined nonce, before LABx learned the hash.
+  // The chain settles the step here, so Create never waits on a record that is gone and never sends a second draft.
+  const lost = current.pending;
+  if (lost?.hash === null && lost.checkpoint && !await service.pending({ wallet })) {
+    const state = await service.settleCheckpoint({ wallet, checkpoint: lost.checkpoint });
+    await check();
+    if (state === "waiting") throw new Error("Creation stopped. Wait for canonical confirmation, then click Create to resume.");
+    const found = state === "spent" && lost.step === "createDraft" ? await service.findCreation({ account: session.account, checkpoint: lost.checkpoint }) : null;
+    await check();
+    // A found draft continues from its receipt. Otherwise nothing of this step can land any more, or nothing is at its nonce
+    // yet and the next send uses that nonce, so the steps below send only what the chain still needs.
+    persist({ ...current, pending: found ? { ...lost, hash: found } : null });
+  }
   let snapshot: RaffleSnapshot;
   if (current.creationHash) {
     snapshot = await service.resolveCreatedDraft({ receipt: await canonical(current.creationHash), draft });
