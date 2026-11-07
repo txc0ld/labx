@@ -9,8 +9,9 @@
 #
 # Environment: RPC_URL, DEPLOYER_PRIVATE_KEY (stage1, stage2, resume), SAFE_ADDRESS, TERMS_HASH and FUND_TARGET_WEI
 # (preflight and stage1; later steps read them from the record). RECORD defaults to deployments/mainnet.json.
-# CONFIRMATIONS (default 3) is how deep each receipt must be before it is recorded. CREATE_TX names the raffle CREATE
-# when an interrupted run left no run file and the RPC cannot search old nonces; it is checked like any other receipt.
+# CONFIRMATIONS (default 3) is how deep each receipt must be before it is recorded. CREATE_TX adds the raffle CREATE to
+# the candidates from the kept run files, for an interrupted run that left none for it; only the deployer's mined
+# transaction at EXPECTED_NONCE is taken, and it is checked like any other receipt.
 # Every value the procedure needs is read from mined receipts and kept in the record, which later steps require.
 # Nothing here prints the private key.
 set -euo pipefail
@@ -37,7 +38,26 @@ same() { [ "$(echo "$1" | lower)" = "$(echo "$2" | lower)" ]; }
 # from a failed read. Only LABEL is printed, never the command's arguments.
 read_chain() { local label=$1 v; shift; v=$("$@" 2>/dev/null) || die "could not read $label"; [ -n "$v" ] || die "empty answer for $label"; echo "$v"; }
 record_get() { python3 -c "import json,sys; v=json.load(open(sys.argv[2])); [v:=v[k] for k in sys.argv[1].split('.')]; print('' if v is None else v)" "$1" "$RECORD"; }
-record_set() { python3 - "$RECORD" "$1" "$2" <<'EOF'
+# Writes the JSON on stdin as the record: into a temp file in the same directory, flushed and synced, then renamed over
+# the record, so a write that fails or is cut short leaves the previous record whole.
+record_write() {
+  python3 -c '
+import json, os, sys, tempfile
+path = sys.argv[1]
+d = json.load(sys.stdin)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".record-")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise' "$RECORD"
+}
+record_set() { python3 - "$RECORD" "$1" "$2" <<'EOF' | record_write
 import json, sys
 path, key, value = sys.argv[1:]
 d = json.load(open(path))
@@ -45,8 +65,7 @@ node = d
 *parents, last = key.split(".")
 for k in parents: node = node.setdefault(k, {})
 node[last] = json.loads(value)
-json.dump(d, open(path, "w"), indent=2)
-open(path, "a").write("\n")
+print(json.dumps(d))
 EOF
 }
 
@@ -65,6 +84,9 @@ deployer() {
   need DEPLOYER_PRIVATE_KEY
   read_chain "the deployer address from DEPLOYER_PRIVATE_KEY" node -e 'const { Wallet } = require(process.argv[1]); console.log(new Wallet(process.env.DEPLOYER_PRIVATE_KEY).address)' "$ROOT/web/node_modules/ethers"
 }
+# tx_rpc METHOD HASH: the RPC's answer to eth_getTransactionByHash or eth_getTransactionReceipt, null when it knows none.
+# A failed read stops the run, so it is never taken for an unknown transaction.
+tx_rpc() { read_chain "$1 $2" cast rpc "$1" "$2" --rpc-url "$RPC_URL"; }
 has_code() { local c; c=$(read_chain "code at $1" cast code "$1" --rpc-url "$RPC_URL"); [ "$c" != "0x" ]; }
 
 # Waits until a transaction is CONFIRMATIONS deep in the canonical chain and prints its receipt JSON; fails on a
@@ -75,7 +97,7 @@ has_code() { local c; c=$(read_chain "code at $1" cast code "$1" --rpc-url "$RPC
 # checked again before a receipt is accepted.
 mined() {
   local tx=$1 deadline=$((SECONDS + ${RECEIPT_TIMEOUT:-900})) raw receipt number hash head head_number head_hash canonical recheck status wait_for
-  left() { local l=$((deadline - SECONDS)); [ "$l" -gt 0 ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s"; echo "$l"; }
+  left() { local l=$((deadline - SECONDS)); [ "$l" -gt 0 ] || die "transaction $tx is not $CONFIRMATIONS blocks deep in the canonical chain after ${RECEIPT_TIMEOUT:-900}s${MINED_HINT:-}"; echo "$l"; }
   while :; do
     receipt=""
     if raw=$(timeout "$(left)" cast receipt "$tx" --async --rpc-url "$RPC_URL" --json 2>/dev/null) && [ -n "$raw" ]; then
@@ -98,7 +120,7 @@ mined() {
     sleep $((wait_for < 5 ? wait_for : 5))
   done
   status=$(echo "$receipt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
-  [ "$status" = "0x1" ] || [ "$status" = "1" ] || die "transaction $tx failed on chain"
+  [ "$status" = "0x1" ] || [ "$status" = "1" ] || die "transaction $tx failed on chain${MINED_HINT:-}"
   echo "$receipt"
 }
 
@@ -112,10 +134,11 @@ keep_run() {
 }
 
 # Runs forge with --broadcast in the main shell, its output on the terminal, and sets RUN to the kept run file (empty when
-# nothing was sent). If forge fails or is interrupted, keeps whatever run file it wrote before stopping.
+# nothing was sent). If forge fails or is interrupted, keeps whatever run file it wrote before stopping, and for stage 1
+# records the transaction in it as pending.
 # forge runs as a background child that the driver waits on: bash would defer a trap until a foreground forge finished,
-# so a signal to the driver alone would leave forge sending. On INT or TERM the driver stops forge, waits for it to exit,
-# then keeps its run file. (A background child ignores the terminal's Ctrl-C itself; the driver's trap stops it.)
+# so a signal to the driver alone would leave forge sending. On INT, TERM or HUP (a closed terminal or dropped SSH
+# session) the driver stops forge, waits for it to exit, then keeps its run file. (A background child ignores the terminal's Ctrl-C itself; the driver's trap stops it.)
 RUN=""
 broadcast() {
   local label=$1 status=0 kept child
@@ -123,11 +146,12 @@ broadcast() {
   forge script "$SCRIPT:$2" --root contracts --rpc-url "$RPC_URL" --slow --broadcast >&2 &
   child=$!
   # set -e applies inside trap handlers too, and wait reports the stopped forge as a failure, hence || true.
-  trap 'kill -TERM '"$child"' 2>/dev/null || true; wait '"$child"' 2>/dev/null || true; kept=$(keep_run "'"$label"'-interrupted"); echo "mainnet-deploy: interrupted; forge stopped; run file: ${kept:-none}. Settle every transaction it sent before anything else" >&2; exit 130' INT TERM
+  trap 'kill -TERM '"$child"' 2>/dev/null || true; wait '"$child"' 2>/dev/null || true; kept=$(keep_run "'"$label"'-interrupted"); if [ '"$label"' = stage1 ] && [ -n "$kept" ]; then stage1_start "$kept"; fi; echo "mainnet-deploy: interrupted; forge stopped; run file: ${kept:-none}. Settle every transaction it sent before anything else" >&2; exit 130' INT TERM HUP
   wait "$child" || status=$?
-  trap - INT TERM
+  trap - INT TERM HUP
   if [ "$status" -ne 0 ]; then
     kept=$(keep_run "$label-failed")
+    if [ "$label" = stage1 ] && [ -n "$kept" ]; then stage1_start "$kept"; fi
     die "$label stopped (forge exit $status); run file: ${kept:-none}. Settle every transaction it sent before anything else; LAUNCH.md step 5"
   fi
   RUN=$(keep_run "$label")
@@ -168,16 +192,38 @@ print(txs[0] if txs else '')")
   echo "$tx"
 }
 
+# Succeeds when TX is mined now as the recorded deployer's transaction at EXPECTED_NONCE. A failed read stops the run.
+at_expected_nonce() {
+  local tx=$1 tx_json receipt
+  tx_json=$(tx_rpc eth_getTransactionByHash "$tx"); receipt=$(tx_rpc eth_getTransactionReceipt "$tx")
+  python3 -c '
+import json, sys
+t, r = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+sys.exit(0 if t and r and r.get("blockHash") and t["from"].lower() == sys.argv[3].lower() and int(t["nonce"], 16) == int(sys.argv[4]) else 1)' \
+    "$tx_json" "$receipt" "$(record_get deployer)" "$(record_get expectedNonce)"
+}
+
+# Stops when the deployer has not used EXPECTED_NONCE: a pending transaction at it must settle first, otherwise nothing
+# was created.
+nonce_unused() {
+  [ "$(read_chain "the deployer pending nonce" cast nonce "$(record_get deployer)" --block pending --rpc-url "$RPC_URL")" -le "$(record_get expectedNonce)" ] \
+    || die "the deployer's transaction at EXPECTED_NONCE is still pending; rerun once it is mined"
+  die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
+}
+
 # Makes sure the record names the CREATE, checked against its canonical receipt now: a recorded hash is checked again
-# (a reorg can move or drop it), otherwise it comes from a kept run file, CREATE_TX, or a search by nonce.
+# (a reorg can move or drop it). Otherwise the candidates are CREATE_TX and every CREATE in the kept run files; exactly
+# one of them must be mined as the deployer's transaction at EXPECTED_NONCE, and record_create checks it like any
+# other. With no candidate at all, the deployer's transaction at that nonce is searched for on chain.
 reconcile_create() {
-  local tx=""
+  local tx="" candidates c expected
+  local -a matches=()
   tx=$(record_get create.tx 2>/dev/null || true)
   if [ -n "$tx" ]; then record_create "$tx"; return 0; fi
-  tx=${CREATE_TX:-}
   # A run file cut short by an interruption can be unreadable: it is skipped with a note and left in place as evidence.
-  [ -n "$tx" ] || tx=$(python3 - "$(dirname "$RECORD")" <<'EOF'
+  candidates=$(python3 - "$(dirname "$RECORD")" "${CREATE_TX:-}" <<'EOF'
 import glob, json, os, sys
+found = [sys.argv[2]] if sys.argv[2] else []
 for path in sorted(glob.glob(os.path.join(sys.argv[1], "stage2*.json")) + glob.glob(os.path.join(sys.argv[1], "resume*.json"))):
     try:
         transactions = json.load(open(path)).get("transactions", [])
@@ -185,12 +231,25 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], "stage2*.json")) + glob.g
         print(f"mainnet-deploy: note: {os.path.basename(path)} is unreadable (cut short?); kept, not used", file=sys.stderr)
         continue
     for t in transactions:
-        if t.get("transactionType") == "CREATE" and t.get("hash"):
-            print(t["hash"]); sys.exit()
+        if t.get("transactionType") == "CREATE" and t.get("hash") and t["hash"] not in found:
+            found.append(t["hash"])
+print(" ".join(found))
 EOF
 )
-  [ -n "$tx" ] || tx=$(find_create) || die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
-  record_create "$tx"
+  if [ -z "$candidates" ]; then
+    tx=$(find_create) || nonce_unused
+    record_create "$tx"; return 0
+  fi
+  for c in $candidates; do
+    if at_expected_nonce "$c"; then matches+=("$c"); fi
+  done
+  expected=$(record_get expectedNonce)
+  if [ "${#matches[@]}" -eq 0 ]; then
+    [ "$(read_chain "the deployer nonce" cast nonce "$(record_get deployer)" --rpc-url "$RPC_URL")" -gt "$expected" ] || nonce_unused
+    die "no CREATE in the kept run files or CREATE_TX ($candidates) is the deployer's mined transaction at EXPECTED_NONCE $expected; set CREATE_TX to that transaction's hash"
+  fi
+  [ "${#matches[@]}" -eq 1 ] || die "more than one candidate CREATE (${matches[*]}) is mined at EXPECTED_NONCE $expected; settle which is canonical by hand"
+  record_create "${matches[0]}"
 }
 
 # Records every transaction of a kept run file once it is mined.
@@ -229,22 +288,87 @@ preflight() {
   # Wei amounts exceed bash integers.
   python3 -c "import sys; sys.exit(0 if int(sys.argv[1]) > int(sys.argv[2]) + int(sys.argv[3]) * 8_000_000 else 1)" "$balance" "$FUND_TARGET_WEI" "$gas" \
     || die "the deployer holds less than FUND_TARGET_WEI plus 8M gas at the current price"
-  if [ -f "$RECORD" ]; then echo "record            $RECORD exists (subscription $(record_get stage1.subscriptionId))"; else echo "record            none yet; stage1 starts it"; fi
+  if [ ! -f "$RECORD" ]; then
+    [ ! -e "$LATEST" ] || die "$LATEST exists but there is no record; it may hold a sent stage 1 transaction. Settle any transaction it sent, then move it aside"
+    echo "record            none yet; stage1 starts it"
+  elif stage1_pending; then echo "record            $RECORD exists (stage 1 transaction $(record_get stage1.tx) pending; rerun stage1)"
+  else echo "record            $RECORD exists (subscription $(record_get stage1.subscriptionId))"; fi
 }
 
+# A record whose stage 1 transaction was sent but not yet found deep enough. Later steps need a finished stage 1.
+stage1_pending() { [ "$(record_get stage1.status 2>/dev/null)" = "pending" ]; }
+
+# Records the stage 1 transaction of a run file as pending, before anything waits for it, so a rerun waits for that
+# transaction instead of sending another. stage1 calls it after forge succeeds, broadcast after forge fails or is
+# stopped. A resend at the same nonce keeps the earlier hashes, since any one of them may be the one that mines. Writes
+# nothing when the run file holds no sent transaction.
+stage1_start() {
+  local run=$1 tx
+  tx=$(python3 -c "import json,sys; t=json.load(open(sys.argv[1]))['transactions']; assert len(t) == 1; print(t[0].get('hash') or '')" "$run")
+  [ -n "$tx" ] || return 0
+  python3 - "$RECORD" "$run" <<EOF | record_write
+import json, os, sys
+path, run = sys.argv[1:]
+t = json.load(open(run))["transactions"][0]
+nonce = int(t["transaction"]["nonce"], 16)
+d = json.load(open(path)) if os.path.exists(path) else {
+  "chainId": 1, "deployer": "$(deployer)", "safe": "$SAFE_ADDRESS", "termsHash": "$TERMS_HASH", "fundTargetWei": "$FUND_TARGET_WEI",
+  "coordinator": "$COORDINATOR", "usdc": "$USDC"}
+s = d.get("stage1")
+assert s is None or (s["status"] == "pending" and s["nonce"] == nonce), "the resend is not at the recorded stage 1 nonce"
+previous = [{"tx": s["tx"], "run": s["run"]}] + s.get("previous", []) if s else []
+d["stage1"] = {"tx": t["hash"], "nonce": nonce, "run": os.path.basename(run), "status": "pending", "previous": previous}
+print(json.dumps(d))
+EOF
+  echo "mainnet-deploy: stage 1 transaction $tx recorded as pending; a rerun of stage1 waits for it" >&2
+}
+
+# Waits for the pending stage 1 transaction of the record, or sends stage 1 when there is none: only when no record
+# exists, or when the RPC knows none of the recorded hashes and their nonce is still unused.
 stage1() {
   need SAFE_ADDRESS; need TERMS_HASH; need FUND_TARGET_WEI
-  [ ! -f "$RECORD" ] || die "$RECORD already exists; a second stage 1 would create another subscription"
-  local who run tx receipt subId nonce expected predicted block
+  local who run="" tx="" h r f receipt subId nonce expected predicted block
   who=$(deployer)
-  [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
-    || die "the deployer has a pending transaction; settle it first"
-  mkdir -p "$(dirname "$RECORD")"
-  broadcast stage1 CreateMainnetSubscription
-  run=$RUN
-  [ -n "$run" ] || die "stage 1 sent no transaction"
-  tx=$(python3 -c "import json,sys; t=json.load(open(sys.argv[1]))['transactions']; assert len(t) == 1; print(t[0]['hash'])" "$run")
+  if [ -f "$RECORD" ]; then
+    stage1_pending || die "$RECORD already exists; a second stage 1 would create another subscription"
+    same "$who" "$(record_get deployer)" || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
+    [ "$SAFE_ADDRESS $TERMS_HASH $FUND_TARGET_WEI" = "$(record_get safe) $(record_get termsHash) $(record_get fundTargetWei)" ] \
+      || die "SAFE_ADDRESS, TERMS_HASH or FUND_TARGET_WEI differs from $RECORD"
+    nonce=$(record_get stage1.nonce)
+    while read -r h r; do
+      [ "$(tx_rpc eth_getTransactionByHash "$h")" = null ] || { tx=$h; run=$r; break; }
+    done <<< "$(python3 -c "import json,sys; s=json.load(open(sys.argv[1]))['stage1']; [print(p['tx'], p['run']) for p in [s] + s.get('previous', [])]" "$RECORD")"
+    if [ -n "$tx" ]; then
+      echo "mainnet-deploy: waiting for the recorded stage 1 transaction $tx" >&2
+    elif [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$nonce" ] \
+      && [ "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" = "$nonce" ]; then
+      echo "mainnet-deploy: the RPC knows no recorded stage 1 transaction and nonce $nonce is unused; sending stage 1 again" >&2
+    else
+      tx=$(record_get stage1.tx); run=$(record_get stage1.run)
+      echo "mainnet-deploy: waiting for the recorded stage 1 transaction $tx" >&2
+    fi
+  else
+    [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
+      || die "the deployer has a pending transaction; settle it first"
+    # A kept stage 1 run file without a record may hold a sent transaction that was never recorded.
+    for f in "$(dirname "$RECORD")"/stage1*.json; do
+      [ ! -e "$f" ] || die "$f is a kept stage 1 run file but there is no record; settle any transaction it sent, then move it aside"
+    done
+    # forge's own run file outlives a driver that was killed outright, and broadcast deletes it before sending.
+    [ ! -e "$LATEST" ] || die "$LATEST exists but there is no record; it may hold a sent stage 1 transaction. Settle any transaction it sent, then move it aside"
+    mkdir -p "$(dirname "$RECORD")"
+  fi
+  if [ -z "$tx" ]; then
+    broadcast stage1 CreateMainnetSubscription
+    run=$RUN
+    [ -n "$run" ] || die "stage 1 sent no transaction"
+    stage1_start "$run"
+    [ "$(record_get stage1.run 2>/dev/null)" = "$(basename "$run")" ] || die "stage 1 run file $run holds no sent transaction"
+    tx=$(record_get stage1.tx); nonce=$(record_get stage1.nonce)
+  fi
+  MINED_HINT="; if it failed or was replaced, settle its nonce, then move $RECORD, the kept stage 1 run files and $LATEST aside before a fresh stage 1 (LAUNCH.md)"
   receipt=$(mined "$tx")
+  MINED_HINT=""
   # The ID comes only from the mined SubscriptionCreated log whose emitter is the coordinator and whose owner is the deployer.
   subId=$(echo "$receipt" | python3 -c "
 import json, sys
@@ -252,25 +376,23 @@ topic = '$(cast keccak "SubscriptionCreated(uint256,address)")'
 logs = [l for l in json.load(sys.stdin)['logs'] if l['address'].lower() == '$COORDINATOR'.lower() and l['topics'][0] == topic and int(l['data'], 16) == int('$who', 16)]
 assert len(logs) == 1, 'expected one SubscriptionCreated log for the deployer'
 print(int(logs[0]['topics'][1], 16))")
-  nonce=$(read_chain "the stage 1 nonce" cast tx "$tx" nonce --rpc-url "$RPC_URL")
+  [ "$(read_chain "the stage 1 nonce" cast tx "$tx" nonce --rpc-url "$RPC_URL")" = "$nonce" ] || die "stage 1 transaction $tx did not use the recorded nonce $nonce"
   expected=$((nonce + 1))
   predicted=$(read_chain "the predicted CREATE address" cast compute-address "$who" --nonce "$expected" | awk '{print $NF}')
   block=$(echo "$receipt" | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["blockNumber"], 16))')
-  python3 - "$RECORD" <<EOF
+  python3 - "$RECORD" <<EOF | record_write
 import json, sys
-json.dump({
-  "chainId": 1, "deployer": "$who", "safe": "$SAFE_ADDRESS", "termsHash": "$TERMS_HASH", "fundTargetWei": "$FUND_TARGET_WEI",
-  "coordinator": "$COORDINATOR", "usdc": "$USDC",
-  "stage1": {"tx": "$tx", "block": $block, "nonce": $nonce, "subscriptionId": "$subId", "run": "$(basename "$run")"},
-  "expectedNonce": $expected, "predictedRaffle": "$predicted", "create": None, "runs": {}
-}, open(sys.argv[1], "w"), indent=2)
-open(sys.argv[1], "a").write("\n")
+d = json.load(open(sys.argv[1]))
+d["stage1"] = {"tx": "$tx", "block": $block, "nonce": $nonce, "subscriptionId": "$subId", "run": "$(basename "$run")", "status": "mined"}
+d.update({"expectedNonce": $expected, "predictedRaffle": "$predicted", "create": None, "runs": {}})
+print(json.dumps(d))
 EOF
   echo "stage 1 done: subscription $subId; stage 2 must deploy at $predicted with nonce $expected. Record: $RECORD"
 }
 
 stage2() {
   [ -f "$RECORD" ] || die "run stage1 first"
+  ! stage1_pending || die "stage 1 has not finished; rerun stage1, which waits for its recorded transaction"
   [ -z "$(record_get create)" ] || die "the raffle CREATE is already recorded; use resume or verify"
   local who expected current run created
   who=$(deployer); expected=$(record_get expectedNonce)
@@ -292,6 +414,7 @@ stage2() {
 
 resume() {
   [ -f "$RECORD" ] || die "no record; nothing to resume"
+  ! stage1_pending || die "stage 1 has not finished; rerun stage1, which waits for its recorded transaction"
   local who run
   who=$(deployer)
   same "$who" "$(record_get deployer)" || die "DEPLOYER_PRIVATE_KEY is not the recorded deployer"
@@ -310,11 +433,14 @@ resume() {
 
 # Read-only. DeployMainnet.verify() checks the mined state (code against a simulated fresh deployment, every setting,
 # native billing, the sole consumer, the funding target, ownership offered to or held by the Safe) and takes no missing
-# step. The website manifest is printed only for a recorded, successful CREATE and complete reads.
+# step. After launch (the Safe owns the raffle and has unpaused it) the pause flag and terms hash are the Safe's, so
+# they are reported, not required. The website manifest is printed only for a recorded, successful CREATE and complete
+# reads.
 verify() {
   [ -f "$RECORD" ] || die "no record"
+  ! stage1_pending || die "stage 1 has not finished; rerun stage1, which waits for its recorded transaction"
   reconcile_create
-  local raffle block owner pending paused codehash
+  local raffle block owner pending paused terms codehash
   raffle=$(record_get create.address); block=$(record_get create.block)
   stage_env
   DEPLOYER_ADDRESS=$(record_get deployer) RAFFLE_ADDRESS=$raffle \
@@ -323,9 +449,10 @@ verify() {
   owner=$(read_chain "the raffle owner" cast call "$raffle" "owner()(address)" --rpc-url "$RPC_URL")
   pending=$(read_chain "the raffle pending owner" cast call "$raffle" "pendingOwner()(address)" --rpc-url "$RPC_URL")
   paused=$(read_chain "the raffle pause flag" cast call "$raffle" "paused()(bool)" --rpc-url "$RPC_URL")
+  terms=$(read_chain "the raffle terms hash" cast call "$raffle" "termsHash()(bytes32)" --rpc-url "$RPC_URL")
   codehash=$(read_chain "the raffle code hash" cast codehash "$raffle" --rpc-url "$RPC_URL")
   [[ "$codehash" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "unexpected code hash $codehash"
-  [ "$paused" = "true" ] || echo "note: the raffle is unpaused" >&2
+  same "$terms" "$(record_get termsHash)" || echo "note: the raffle terms hash is $terms; the record has $(record_get termsHash)" >&2
   echo "verified: $raffle (owner $owner, pending owner $pending, paused $paused)"
   echo "website manifest: address $raffle, runtimeCodeHash $codehash, deploymentBlock $block, expectedOwner $(record_get safe)"
 }

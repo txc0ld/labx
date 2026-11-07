@@ -385,6 +385,43 @@ contract DeployMainnetForkTest is Test {
         _verified(changed, _settingMismatch("termsHash"));
     }
 
+    /// @dev After launch the Safe owns the raffle, has unpaused it and may publish new terms. verify reports those and
+    ///      keeps every other check. Before launch, unpaused or changed terms still fail.
+    function test_verifyPassesALaunchedDeploymentAndKeepsItsOtherChecks() public {
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
+        DeployMainnet.Config memory c = _resume(subId, address(labx));
+        vm.prank(deployer);
+        labx.setPaused(false);
+        _verified(c, _settingMismatch("paused"));
+        vm.prank(deployer);
+        labx.setPaused(true);
+
+        _accept(labx, subId);
+        vm.startPrank(SAFE);
+        labx.setTermsHash(keccak256("published terms v2"));
+        _verified(c, _settingMismatch("termsHash"));
+        labx.setPaused(false);
+        _verified(c, "");
+
+        labx.setTreasury(makeAddr("other treasury"));
+        _verified(c, _settingMismatch("treasury"));
+        labx.setTreasury(SAFE);
+        coordinator.addConsumer(subId, makeAddr("other consumer"));
+        _verified(c, abi.encodeWithSelector(DeployMainnet.SubscriptionConsumersUnexpected.selector, subId));
+        vm.stopPrank();
+
+        LabxRaffle other = _raffleFrom(deployer, subId, 500, CALLBACK_GAS);
+        vm.prank(deployer);
+        other.transferOwnership(SAFE);
+        vm.startPrank(SAFE);
+        other.acceptOwnership();
+        other.setPaused(false);
+        vm.stopPrank();
+        c.existing = address(other);
+        _verified(c, abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, address(other)));
+    }
+
     function test_fundsOnlyUpToTheTarget() public {
         uint256 subId = _minedSubscription();
         LabxRaffle labx = stage2.deploy(_fresh(subId));

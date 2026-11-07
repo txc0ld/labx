@@ -1245,7 +1245,7 @@ export const raffleAbi = [
     "name": "onERC721Received",
     "inputs": [
       {
-        "name": "",
+        "name": "operator",
         "type": "address",
         "internalType": "address"
       },
@@ -1272,7 +1272,7 @@ export const raffleAbi = [
         "internalType": "bytes4"
       }
     ],
-    "stateMutability": "pure"
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -2673,6 +2673,11 @@ export const raffleAbi = [
   {
     "type": "error",
     "name": "DirectEthDisabled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DirectNftDisabled",
     "inputs": []
   },
   {
