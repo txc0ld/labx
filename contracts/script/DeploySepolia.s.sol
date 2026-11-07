@@ -5,8 +5,8 @@ import {Script, console2} from "forge-std/Script.sol";
 import {LabxRaffle} from "../src/LabxRaffle.sol";
 import {IVRFSubscriptionV2Plus} from "../src/interfaces/External.sol";
 
-/// @notice Deploys LABx to Ethereum Sepolia and proposes Safe as owner.
-///         Mainnet and every other chain id are refused.
+/// @notice Deploys LABx to Ethereum Sepolia and proposes Safe as owner. The raffle stays paused, as it starts, so no
+///         raffle opens before it is a VRF consumer. Mainnet and every other chain id are refused.
 contract DeploySepolia is Script {
     error SafeNotDeployed(address safe);
 
@@ -47,7 +47,6 @@ contract DeploySepolia is Script {
         );
         labx.setNativePayment(true);
         labx.transferOwnership(safe);
-        labx.setPaused(false);
         vm.stopBroadcast();
 
         console2.log("LabxRaffle", address(labx));
@@ -56,6 +55,7 @@ contract DeploySepolia is Script {
         console2.log("VRF coordinator", VRF_COORDINATOR);
         console2.log("Safe must call acceptOwnership on LabxRaffle");
         console2.log("VRF subscription owner must add LabxRaffle as a consumer");
+        console2.log("Then the Safe unpauses LabxRaffle");
     }
 
     /// @dev Rejects an EOA or an undeployed counterfactual Safe before broadcasting.
