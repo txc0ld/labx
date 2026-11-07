@@ -283,11 +283,12 @@ export function usePendingSend(service: RaffleService, wallet: WalletSessionPort
   const continueUnsent = useCallback(() => entry?.check?.continueUnsent() ?? Promise.resolve(), [entry]);
   const showPanel = useCallback((element: Element | null) => {
     if (!entry || !element) return undefined;
-    // A panel inside a closed disclosure has no layout box, so it does not count as shown. Opening or closing a disclosure
-    // checks again; its toggle event does not bubble, so the document hears it while capturing.
+    // A panel inside a closed disclosure does not count as shown. Current browsers keep its layout box and hide it with
+    // content-visibility, which checkVisibility sees; older ones drop the box. Opening or closing a disclosure checks again;
+    // its toggle event does not bubble, so the document hears it while capturing.
     let shown = false;
     const check = () => {
-      const visible = element.getClientRects().length > 0;
+      const visible = typeof element.checkVisibility === "function" ? element.checkVisibility() : element.getClientRects().length > 0;
       if (visible === shown) return;
       shown = visible;
       entry.panels += shown ? 1 : -1;

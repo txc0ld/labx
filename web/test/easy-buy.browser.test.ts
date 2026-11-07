@@ -404,8 +404,15 @@ run("one-click membership purchase in a rendered browser", () => {
     await buy(entry).waitFor({ state: "visible", timeout: 15_000 });
     // The wallet still showed that approval, and the person approves it after all: it lands at the cleared nonce.
     await chain.write(chain.usdc, "approve", [chain.raffle.address, entry], chain.buyer);
+    // The page may swap the checkout as soon as it reads the approval, so the line is recorded the moment it shows.
+    await fixture.page.evaluate(() => {
+      const scope = window as unknown as Window & { __labxEarlierLine?: boolean };
+      scope.__labxEarlierLine = false;
+      new MutationObserver(() => { if (document.body.innerText.includes("Your wallet sent an earlier LABx request. Check the page before trying again.")) scope.__labxEarlierLine = true; })
+        .observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
     await buy(entry).click();
-    await fixture.page.getByText("Your wallet sent an earlier LABx request. Check the page before trying again.", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    await expect.poll(() => fixture.page.evaluate(() => (window as unknown as Window & { __labxEarlierLine?: boolean }).__labxEarlierLine), { timeout: 20_000 }).toBe(true);
     expect((await wallet.requests()).map(call).map(item => item.name)).toEqual(["approve"]);
     // The page read the chain again and found the approval, so the next click sends only the purchase.
     await expect.poll(() => fixture.page.getByText(/Your wallet asks twice/).count(), { timeout: 20_000 }).toBe(0);

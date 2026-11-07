@@ -896,7 +896,9 @@ run("independent transaction outcome ownership", () => {
     await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
     await chain.warp((await service.readRaffle({ id })).raffle.salesEnd + 1n);
     // A stranger's own send never reached the wallet: nothing is at its nonce yet.
-    await openPiece(id, chain.stranger);
+    // With sales ended the page has no checkout and no wallet identity; connecting shows Other actions.
+    await fixture.switchAccount(chain.stranger);
+    expect((await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" }))?.status()).toBe(200);
     const nonce = await chain.client.getTransactionCount({ address: chain.stranger, blockTag: "pending" });
     await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: journalKey(chain.stranger), value: JSON.stringify({
       id: "disclosure-unsent", intentHash: keccak256(toBytes("disclosure-unsent")), nonce, startedBlock: (await chain.client.getBlockNumber()).toString(), hash: null
@@ -905,7 +907,7 @@ run("independent transaction outcome ownership", () => {
     const unsent = fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true });
     const visible = () => unsent.evaluateAll(nodes => nodes.filter(node => (node as HTMLElement).checkVisibility()).length);
     const others = fixture.page.locator("details.help-finish");
-    await others.waitFor({ state: "attached", timeout: 20_000 });
+    await connectWallet(fixture.page, others.locator("summary"), 20_000);
     await expect.poll(visible, { timeout: 20_000 }).toBe(1);
     await others.locator("summary").click();
     await expect.poll(() => others.evaluate(element => (element as HTMLDetailsElement).open)).toBe(true);
