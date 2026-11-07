@@ -6,7 +6,11 @@ import { agreementMessage } from "./agreement-record";
 import { verifyWorkflowAuthorization } from "./chain/server";
 import { hash, sameAddress } from "./chain/validation";
 import type { SignedWorkflowInput, WorkflowVerifier } from "./workflow-records";
-import { receiptStatus } from "./receipt-delivery";
+import { receiptStatus, type ReceiptStatus } from "./receipt-delivery";
+/** The one status the previous client bundle reads, so a tab left open across a deploy still loads its records. */
+export function previousReceiptStatus({ sent }: ReceiptStatus): "missing" | "pending" | "delivered" {
+  return sent.length === 0 ? "missing" : sent.some(item => item.status === "delivered") ? "delivered" : "pending";
+}
 export function parseRecordsInput(input: unknown): RecordsInput {
   if (!input || typeof input !== "object" || !("raffleIds" in input) || !Array.isArray(input.raffleIds) || input.raffleIds.length > 30 || !("purchases" in input) || !Array.isArray(input.purchases) || input.purchases.length > 30) throw new Error("Record selection is invalid.");
   const raffleIds = input.raffleIds.map((id: unknown) => { if (typeof id !== "string" || !/^[1-9]\d{0,77}$/.test(id)) throw new Error("Raffle ID is invalid."); return id; });

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { workflowRequestBody } from "@/lib/chain/request-body";
 import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { parseEnvelope } from "@/lib/workflow-records";
-import { parseRecordsInput, privateRecords } from "@/lib/private-records";
+import { parseRecordsInput, previousReceiptStatus, privateRecords } from "@/lib/private-records";
 import { activeStore } from "@/lib/store";
 import { workflowFailure, type WorkflowStage } from "@/lib/workflow-failure";
 export async function POST(request: Request) {
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     stage = "records";
     const mailKey = process.env.RESEND_API_KEY;
     const records = await privateRecords(activeStore(), { ...body, input }, context, signatureVerifier(client), mailKey ? createHash("sha256").update(mailKey).digest("hex") : null);
-    return Response.json({ ok: true, ...records }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, agreements: records.agreements, receipts: records.receipts.map(row => ({ ...row, status: previousReceiptStatus(row) })) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return workflowFailure("records", stage, error, {
       invalid: "The records request was invalid.",

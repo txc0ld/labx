@@ -2,7 +2,7 @@ import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
 import { describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbiParameters, toBytes, verifyMessage, type Address, type Hex } from "viem";
 import { workflowMessage } from "../lib/chain/messages";
-import { privateRecords } from "../lib/private-records";
+import { previousReceiptStatus, privateRecords } from "../lib/private-records";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { agreementMessage, recordAgreement, type AgreementRequest } from "../lib/agreement-record";
 import { deliverPurchaseReceipt, receiptAuthorizationMessage, resendSender, type MailPayload, type ReceiptRequest } from "../lib/receipt-delivery";
@@ -167,6 +167,13 @@ describe("verified purchase receipts", () => {
     // Once three addresses are used, private records say so, because a fourth would be refused.
     await deliverPurchaseReceipt(store, await receipt({ to: "work@example.com" }, context, later), context, reader(), async () => true, from, transport, later);
     expect(await receipts(later + 1_000)).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }, { to: "buyer@example.com", status: "delivered" }, { to: "work@example.com", status: "delivered" }], full: true }]);
+  });
+
+  it("keeps the status the previous client bundle reads for each receipt", () => {
+    expect(previousReceiptStatus({ sent: [], full: false })).toBe("missing");
+    expect(previousReceiptStatus({ sent: [{ to: "buyer@exmaple.com", status: "pending" }], full: false })).toBe("pending");
+    expect(previousReceiptStatus({ sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }], full: false })).toBe("pending");
+    expect(previousReceiptStatus({ sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }, { to: "buyer@example.com", status: "delivered" }], full: false })).toBe("delivered");
   });
 
   it("reuses the exact payload/key after send uncertainty but refuses retries beyond provider retention", async () => {
