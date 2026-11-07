@@ -102,6 +102,52 @@ describe("notification processor", () => {
     expect(JSON.parse((await store.get(`${prefix}:activation`))!).blockHash).toBe(canonicalHash);
   });
 
+  it("retries a later page's failed event inside its window while an earlier page stays pending", async () => {
+    const backing = new MemoryStore();
+    const blocker = event(1);
+    const later = { ...event(2), blockNumber: "1101" };
+    let finalized = 100n;
+    const input = source();
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    input.events = async (fromBlock, toBlock) => ({
+      events: [blocker, later].filter(item => BigInt(item.blockNumber) >= fromBlock && BigInt(item.blockNumber) <= toBlock),
+      range: { fromBlock, toBlock },
+      finalized: { number: finalized, hash: finalizedHash, timestamp: 2n }
+    });
+    // The earlier event can never be reserved, so its page stays non-terminal and the retry cursor stays on it.
+    const blockedKey = reservationKey(blocker, input.deployment);
+    const store: Store = {
+      get: key => backing.get(key),
+      set: (key, value) => backing.set(key, value),
+      async setIfAbsent(entries) {
+        if (Object.hasOwn(entries, blockedKey)) throw new Error("reservation storage failure");
+        return backing.setIfAbsent(entries);
+      }
+    };
+    const laterKey = reservationKey(later, input.deployment);
+    let providerUp = false;
+    const sender = vi.fn(async (_payload: unknown, key: string) => key !== laterKey || providerUp);
+    const minute = 60_000;
+    const run = (at: number) => processNotifications({ store, source: input, sender, ...config, now: at });
+    await run(1_000);
+    finalized = 600n;
+    await run(1_000 + 5 * minute);
+    finalized = 1_100n;
+    await run(1_000 + 10 * minute);
+    finalized = 1_600n;
+    const firstAttempt = await run(1_000 + 15 * minute);
+    expect(firstAttempt).toMatchObject({ sends: 1, pending: 2, accepted: 0 });
+    expect(JSON.parse((await backing.get(laterKey))!).createdAt).toBe(1_000 + 15 * minute);
+
+    providerUp = true;
+    finalized = 2_100n;
+    const report = await run(1_000 + 15 * minute + 22 * 60 * minute);
+    expect(report).toMatchObject({ accepted: 1, reconciliationRequired: 0, retryNextBlock: "101" });
+    expect(sender.mock.calls.map(([, key]) => key)).toEqual([laterKey, laterKey]);
+    expect(await backing.get(`${laterKey}:accepted`)).toBe("accepted");
+    expect(await backing.get(blockedKey)).toBeNull();
+  });
+
   it("treats unproved future progress hints as replay hints", async () => {
     const store = new MemoryStore();
     const input = source([event(1), event(2)]);

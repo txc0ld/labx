@@ -9,6 +9,8 @@ import { adaptNotificationWorkflow, createNotificationReadBudget, NotificationRa
 const PAGE_BLOCKS = 250n;
 const MAX_INGESTION_PAGES = 2;
 const MAX_RETRY_PAGES = 4;
+/** Pages read past the retry window for later pages with events still to deliver: over two days of 12-second blocks. */
+const MAX_RETRY_SCAN_PAGES = 64;
 const MAX_EVENT_CHECKS = 400;
 const TERMINAL_CHECKPOINT_EVENTS = 32;
 const MAX_SENDS = 3;
@@ -444,14 +446,24 @@ function canStartDeliveryWork(state: DeliveryState): boolean {
   return Date.now() + MAIL_SEND_RUNTIME_MS <= state.deadline;
 }
 
+/**
+ * The consecutive retry window from the retry cursor, then up to as many later pages whose events are not all terminal,
+ * so a page behind an earlier pending page is still retried inside its delivery window.
+ */
 async function retryPageStarts(store: Store, prefix: string, start: bigint): Promise<bigint[]> {
   const starts: bigint[] = [];
   let current = start;
-  for (let count = 0; count < MAX_RETRY_PAGES; count += 1) {
-    const raw = await store.get(pageKey(prefix, current));
+  let later = 0;
+  for (let count = 0; count < MAX_RETRY_SCAN_PAGES && later < MAX_RETRY_PAGES; count += 1) {
+    const key = pageKey(prefix, current);
+    const raw = await store.get(key);
     if (raw === null) break;
     const page = parsePage(raw, prefix.slice("raffle-notifications:v1:".length), current);
-    starts.push(current);
+    if (count < MAX_RETRY_PAGES) starts.push(current);
+    else if (page.events.length > 0 && await verifiedTerminalPrefix(store, prefix, current, page.events.length, await store.get(`${key}:terminal-prefix`)) < page.events.length) {
+      starts.push(current);
+      later += 1;
+    }
     current = BigInt(page.nextBlock);
   }
   return starts;
