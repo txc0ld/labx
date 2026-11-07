@@ -71,6 +71,16 @@ export interface RaffleService {
    * before the record is removed; if it throws, the record stays.
    */
   settlePending(input: { wallet: WalletSessionPort; expected: OutcomeJournal; continueUnsent?: boolean; beforeJournalClear?: (input: { account: Address; pending: OutcomeJournal }) => void }): Promise<PendingSettlement>;
+  /**
+   * Reads the chain for a send at `checkpoint` whose pending record is gone and whose `hash` was never saved or is no
+   * longer known to the chain: "known" when the chain still knows `hash`, "unsent" when nothing is at its nonce, "spent"
+   * when that nonce is mined two blocks deep with nothing pending, otherwise "waiting", as also while the account has a
+   * pending record. "spent" removes an earlier cleared record's marker at that nonce, because the caller then shows what
+   * landed there.
+   */
+  settleCheckpoint(input: { wallet: WalletSessionPort; checkpoint: SubmissionCheckpoint; hash?: Hex | null }): Promise<"unsent" | "spent" | "waiting" | "known">;
+  /** The hash of `account`'s createRaffle call at `checkpoint`'s nonce, mined at or after its block, or null when that nonce went to another transaction. */
+  findCreation(input: { account: Address; checkpoint: SubmissionCheckpoint }): Promise<Hex | null>;
 }
 
 export type BrowserService =

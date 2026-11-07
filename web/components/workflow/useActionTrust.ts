@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import type { RaffleService } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 
+/** The reason shown while the check for the current raffle read is still running. */
+export const CHECKING_TRUST = "Checking authority and policy for new approvals, openings and purchases.";
+
 // Presentation only. Preparation and submission independently check current chain state.
 export function useActionTrust(service: RaffleService, snapshot: RaffleSnapshot): string | null {
   const [result, setResult] = useState<{ snapshot: RaffleSnapshot; reason: string | null } | null>(null);
@@ -15,5 +18,5 @@ export function useActionTrust(service: RaffleService, snapshot: RaffleSnapshot)
     return () => { active = false; };
   }, [service, snapshot]);
   if (snapshot.raffle.phase !== 0 && snapshot.raffle.phase !== 1) return null;
-  return result?.snapshot === snapshot ? result.reason : "Checking authority and policy for new approvals, openings and purchases.";
+  return result?.snapshot === snapshot ? result.reason : CHECKING_TRUST;
 }

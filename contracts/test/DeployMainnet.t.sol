@@ -24,8 +24,8 @@ interface IUsdc {
 }
 
 contract CreateMainnetSubscriptionHarness is CreateMainnetSubscription {
-    function create(uint256 pk) external {
-        _create(pk);
+    function create(uint256 pk, uint256 expectedNonce) external {
+        _create(pk, expectedNonce);
     }
 }
 
@@ -63,7 +63,15 @@ contract DeployMainnetRefusalTest is Test {
         script.run();
         CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
         vm.expectRevert("LABx: mainnet only.");
-        stage1.create(0xB0B);
+        stage1.create(0xB0B, 0);
+    }
+
+    function test_stage1RefusesANonceOtherThanTheCheckedOne() public {
+        vm.chainId(1);
+        CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
+        vm.setNonce(vm.addr(0xB0B), 1);
+        vm.expectRevert(abi.encodeWithSelector(CreateMainnetSubscription.NonceMoved.selector, uint256(0), uint256(1)));
+        stage1.create(0xB0B, 0);
     }
 
     function test_refusesASafeWithoutCodeOrBelowTwoSignatures() public {
@@ -149,7 +157,7 @@ contract DeployMainnetForkTest is Test {
         CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
         vm.recordLogs();
         uint256 stage1Nonce = vm.getNonce(deployer);
-        stage1.create(TEST_KEY);
+        stage1.create(TEST_KEY, stage1Nonce);
         recordedNonce = stage1Nonce + 1;
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
@@ -383,6 +391,43 @@ contract DeployMainnetForkTest is Test {
         DeployMainnet.Config memory changed = _resume(subId, address(labx));
         changed.terms = keccak256("other terms");
         _verified(changed, _settingMismatch("termsHash"));
+    }
+
+    /// @dev After launch the Safe owns the raffle, has unpaused it and may publish new terms. verify reports those and
+    ///      keeps every other check. Before launch, unpaused or changed terms still fail.
+    function test_verifyPassesALaunchedDeploymentAndKeepsItsOtherChecks() public {
+        uint256 subId = _minedSubscription();
+        LabxRaffle labx = stage2.deploy(_fresh(subId));
+        DeployMainnet.Config memory c = _resume(subId, address(labx));
+        vm.prank(deployer);
+        labx.setPaused(false);
+        _verified(c, _settingMismatch("paused"));
+        vm.prank(deployer);
+        labx.setPaused(true);
+
+        _accept(labx, subId);
+        vm.startPrank(SAFE);
+        labx.setTermsHash(keccak256("published terms v2"));
+        _verified(c, _settingMismatch("termsHash"));
+        labx.setPaused(false);
+        _verified(c, "");
+
+        labx.setTreasury(makeAddr("other treasury"));
+        _verified(c, _settingMismatch("treasury"));
+        labx.setTreasury(SAFE);
+        coordinator.addConsumer(subId, makeAddr("other consumer"));
+        _verified(c, abi.encodeWithSelector(DeployMainnet.SubscriptionConsumersUnexpected.selector, subId));
+        vm.stopPrank();
+
+        LabxRaffle other = _raffleFrom(deployer, subId, 500, CALLBACK_GAS);
+        vm.prank(deployer);
+        other.transferOwnership(SAFE);
+        vm.startPrank(SAFE);
+        other.acceptOwnership();
+        other.setPaused(false);
+        vm.stopPrank();
+        c.existing = address(other);
+        _verified(c, abi.encodeWithSelector(DeployMainnet.RaffleCodeMismatch.selector, address(other)));
     }
 
     function test_fundsOnlyUpToTheTarget() public {

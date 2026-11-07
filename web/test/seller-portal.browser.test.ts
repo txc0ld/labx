@@ -1,10 +1,11 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { erc20Abi, erc721Abi, keccak256, numberToHex, toBytes } from "viem";
 import { hashCommitment } from "../lib/commitment";
 import { raffleAbi } from "../lib/chain/abi";
+import { encodeDraft } from "../lib/chain/create-flow";
 import type { WalletSessionPort } from "../lib/chain/ports";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { browserChain } from "./fixtures/browser-chain";
@@ -323,13 +324,55 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(secret).toMatch(/^0x[0-9a-f]{64}$/);
     expect(await fixture.page.locator("body").innerText()).not.toContain(secret);
     expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(secret);
-    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByText(/Your raffle setup couldn.t be restored right now/).waitFor();
+    // The server never saved that setup, so the next Create retires it and returns the filled-in form instead of asking to sign again.
+    const rpc = chain.rpc;
+    let signatures = 0;
+    chain.rpc = (method, params) => { if (method === "personal_sign") signatures++; return rpc(method, params); };
+    try {
+      await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+      await fixture.page.getByText("Your raffle setup wasn't saved. Press Create to start again.", { exact: true }).waitFor();
+    } finally { chain.rpc = rpc; }
+    expect(signatures).toBe(1);
     expect(posts).toBe(1);
+    expect(await fixture.page.getByLabel("Raffle title").inputValue()).toBe("Private preparation failure");
+    expect(await fixture.page.getByLabel("Token ID").inputValue()).toBe("999");
+    const createKeys = await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:create:")));
+    expect(createKeys.filter(key => !key.includes(":retired:") && !key.endsWith(":generation"))).toEqual([]);
+    expect(createKeys.filter(key => key.includes(":retired:"))).toHaveLength(1);
     expect(await chain.client.getBlockNumber()).toBe(block.number);
     await fixture.page.unroute("**/api/reserve");
     // Isolated fixture cleanup: its intercepted request never reached storage or chain.
     await fixture.page.evaluate(() => { for (const key of Object.keys(localStorage)) if (key.startsWith("labx:create:")) localStorage.removeItem(key); });
+  }, 45_000);
+
+  it("lets a seller start over from a saved creation that became unreadable after it was shown", async () => {
+    const m = chain.manifest;
+    const key = `labx:create:v1:${m.chainId}:${m.address.toLowerCase()}:${m.runtimeCodeHash.toLowerCase()}:${chain.seller.toLowerCase()}`;
+    const block = await chain.client.getBlock();
+    const data = encodeDraft({ nft: chain.nft.address, tokenId: 999n, salesEnd: block.timestamp + 86_400n, reserveNonce: keccak256("0x12"), reserveCommit: keccak256("0x34"), title: "Unreadable later",
+      packs: STANDARD_MEMBERSHIP_TIERS.map(name => ({ name, priceUsdc: 1_000_000n, bonusEntries: 1, maxSupply: 10 })) });
+    await fixture.switchAccount(chain.seller);
+    await fixture.page.goto(`${fixture.baseUrl}/seller`, { waitUntil: "domcontentloaded" });
+    await fixture.page.evaluate(([name, record]) => localStorage.setItem(name, record), [key, JSON.stringify({ kind: "draft", data, creationHash: null, id: null, pending: null })]);
+    await connectWallet(fixture.page, fixture.page.locator("summary").filter({ hasText: "Create a raffle" }));
+    await openCreatePanel(fixture.page);
+    await fixture.page.getByRole("heading", { name: "Finish creating your raffle" }).waitFor();
+    // Another tab leaves the record unreadable, and the wallet reports its account again.
+    await fixture.page.evaluate(name => localStorage.setItem(name, "{not json"), key);
+    await fixture.switchAccount(chain.seller);
+    await openCreatePanel(fixture.page);
+    await fixture.page.getByText("Saved creation could not be read. Recover wallet activity before continuing.", { exact: true }).waitFor();
+    expect(await fixture.page.getByRole("heading", { name: "Finish creating your raffle" }).count()).toBe(0);
+    await fixture.page.getByText("Advanced recovery", { exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Start over and edit details" }).click();
+    await fixture.page.waitForFunction(name => localStorage.getItem(name) === null, key);
+    expect(await fixture.page.getByText("Saved creation could not be read. Recover wallet activity before continuing.", { exact: true }).count()).toBe(0);
+    expect(await fixture.page.getByText("The saved creation changed. Reload before editing.").count()).toBe(0);
+    expect(await fixture.page.getByRole("button", { name: "Start over and edit details" }).count()).toBe(0);
+    const stored = await fixture.page.evaluate(() => Object.fromEntries(Object.entries(localStorage).filter(([name]) => name.startsWith("labx:create:") && !name.endsWith(":generation"))));
+    expect(Object.entries(stored).filter(([name]) => name.startsWith(`${key}:retired:`)).map(([, value]) => value)).toEqual(["{not json"]);
+    expect(stored[key]).toBeUndefined();
+    await fixture.page.evaluate(() => { for (const name of Object.keys(localStorage)) if (name.startsWith("labx:create:")) localStorage.removeItem(name); });
   }, 45_000);
 
   it("fails closed before storage or transaction review when browser entropy fails", async () => {
@@ -445,6 +488,55 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(reserveRequests).toBe(0);
     await fixture.page.unroute("**/api/reserve");
   }, 60_000);
+
+  it("keeps unsaved draft edits open through the page Refresh", async () => {
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const editDraft = fixture.page.locator("summary").filter({ hasText: "Edit draft" });
+    await connectWallet(fixture.page, editDraft);
+    await editDraft.click();
+    const pack = fixture.page.getByRole("group", { name: "Membership 1: Membership", exact: true });
+    await fixture.page.getByLabel("Raffle title").fill("Unsaved title change");
+    await pack.getByLabel("Price in USDC", { exact: true }).fill("33");
+
+    await chain.mine();
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).click();
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await editDraft.waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByLabel("Raffle title").inputValue()).toBe("Unsaved title change");
+    expect(await pack.getByLabel("Price in USDC", { exact: true }).inputValue()).toBe("33");
+    expect((await chain.service.readRaffle({ id: 3n })).raffle.title).toBe("Canonical NFT retention");
+    await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+    const review = fixture.page.locator(".studio-review");
+    await review.getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
+    expect(await review.locator("dd").first().innerText()).toBe("Unsaved title change");
+    expect(await review.getByText("33 USDC · 2 bonus entries · 100 supply", { exact: true }).isVisible()).toBe(true);
+  }, 45_000);
+
+  it("shows the escrowed NFT, not an unsaved token edit, after the draft's NFT is locked", async () => {
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/5`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const editDraft = fixture.page.locator("summary").filter({ hasText: "Edit draft" });
+    await connectWallet(fixture.page, editDraft);
+    await editDraft.click();
+    await fixture.page.getByLabel("Raffle title").fill("Unsaved title before escrow");
+    await fixture.page.getByLabel("Token ID").fill("806");
+
+    await chain.write(chain.nft, "approve", [chain.raffle.address, 805n], chain.seller);
+    await chain.write(chain.raffle, "escrow", [5n], chain.seller);
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).click();
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByLabel("Token ID").waitFor({ state: "visible", timeout: 15_000 });
+    await vi.waitFor(async () => expect(await fixture.page.getByLabel("Token ID").isDisabled()).toBe(true), { timeout: 15_000 });
+    expect(await fixture.page.getByLabel("Token ID").inputValue()).toBe("805");
+    expect((await fixture.page.getByLabel("NFT contract").inputValue()).toLowerCase()).toBe(chain.nft.address.toLowerCase());
+    expect(await fixture.page.getByLabel("Raffle title").inputValue()).toBe("Unsaved title before escrow");
+    await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await fixture.page.locator(".studio-review").getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
+  }, 45_000);
 
   it("gates a direct seller route immediately after the wallet changes", async () => {
     await fixture.page.setViewportSize({ width: 390, height: 844 });

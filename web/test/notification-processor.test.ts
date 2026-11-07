@@ -61,16 +61,137 @@ describe("notification processor", () => {
     expect(sender).toHaveBeenCalledTimes(2);
   });
 
-  it("stops before ingestion and records reconciliation when the activation block changes", async () => {
+  it("reads and mails nothing before finality, then re-anchors a reorged activation block to the finalized block", async () => {
     const store = new MemoryStore();
     const input = source([event(1)]);
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    const canonicalHash = `0x${"44".repeat(32)}` as const;
     await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
-    input.block = async number => ({ number, hash: finalizedHash, timestamp: 1n, gasLimit: 30_000_000n });
+    let finalized = 99n;
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    input.block = async number => ({ number, hash: number === 100n ? canonicalHash : finalizedHash, timestamp: 1n, gasLimit: 30_000_000n });
+    const events = vi.spyOn(input, "events");
+    const sender = vi.fn(async () => true);
+    expect(await processNotifications({ store, source: input, sender, ...config, now: 2_000 })).toMatchObject({ status: "idle", finalizedBlock: "99" });
+    expect(events).not.toHaveBeenCalled();
+    expect(sender).not.toHaveBeenCalled();
+    expect(await store.get(`${prefix}:activation-verified`)).toBeNull();
+
+    finalized = 101n;
+    const report = await processNotifications({ store, source: input, sender, ...config, now: 3_000 });
+    expect(report).toMatchObject({ status: "ok", activationBlock: "100", ingestedEvents: 1, accepted: 1 });
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await store.get(`${prefix}:activation`))!)).toEqual({ version: 1, deployment: input.deployment, blockNumber: "100", blockHash: canonicalHash });
+    expect(JSON.parse((await store.get(`${prefix}:activation-verified`))!)).toEqual({ version: 1, blockNumber: "100", blockHash: canonicalHash });
+    expect(await store.get(`${prefix}:activation-reconciliation`)).toBeNull();
+  });
+
+  it("recovers a deployment that an earlier build marked for activation reconciliation", async () => {
+    const store = new MemoryStore();
+    const input = source([event(1)]);
+    const prefix = `raffle-notifications:v1:${input.deployment}`;
+    const canonicalHash = `0x${"44".repeat(32)}` as const;
+    await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
+    await store.setIfAbsent({ [`${prefix}:activation-reconciliation`]: JSON.stringify({ version: 1, reason: "activation-boundary-changed", recordedAt: 1_500 }) });
+    input.block = async number => ({ number, hash: number === 100n ? canonicalHash : finalizedHash, timestamp: 1n, gasLimit: 30_000_000n });
     const sender = vi.fn(async () => true);
     const report = await processNotifications({ store, source: input, sender, ...config, now: 2_000 });
-    expect(report.status).toBe("reconciliation-required");
-    expect(report.reconciliation).toContain("activation boundary");
-    expect(sender).not.toHaveBeenCalled();
+    expect(report).toMatchObject({ status: "ok", accepted: 1, retryNextBlock: "102" });
+    expect(report).not.toHaveProperty("reconciliation");
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await store.get(`${prefix}:activation`))!).blockHash).toBe(canonicalHash);
+  });
+
+  it("retries a later page's failed event inside its window while an earlier page stays pending", async () => {
+    const backing = new MemoryStore();
+    const blocker = event(1);
+    const later = { ...event(2), blockNumber: "1101" };
+    let finalized = 100n;
+    const input = source();
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    input.events = async (fromBlock, toBlock) => ({
+      events: [blocker, later].filter(item => BigInt(item.blockNumber) >= fromBlock && BigInt(item.blockNumber) <= toBlock),
+      range: { fromBlock, toBlock },
+      finalized: { number: finalized, hash: finalizedHash, timestamp: 2n }
+    });
+    // The earlier event can never be reserved, so its page stays non-terminal and the retry cursor stays on it.
+    const blockedKey = reservationKey(blocker, input.deployment);
+    const store: Store = {
+      get: key => backing.get(key),
+      set: (key, value) => backing.set(key, value),
+      async setIfAbsent(entries) {
+        if (Object.hasOwn(entries, blockedKey)) throw new Error("reservation storage failure");
+        return backing.setIfAbsent(entries);
+      }
+    };
+    const laterKey = reservationKey(later, input.deployment);
+    let providerUp = false;
+    const sender = vi.fn(async (_payload: unknown, key: string) => key !== laterKey || providerUp);
+    const minute = 60_000;
+    const run = (at: number) => processNotifications({ store, source: input, sender, ...config, now: at });
+    await run(1_000);
+    finalized = 600n;
+    await run(1_000 + 5 * minute);
+    finalized = 1_100n;
+    await run(1_000 + 10 * minute);
+    finalized = 1_600n;
+    const firstAttempt = await run(1_000 + 15 * minute);
+    expect(firstAttempt).toMatchObject({ sends: 1, pending: 2, accepted: 0 });
+    expect(JSON.parse((await backing.get(laterKey))!).createdAt).toBe(1_000 + 15 * minute);
+
+    providerUp = true;
+    finalized = 2_100n;
+    const report = await run(1_000 + 15 * minute + 22 * 60 * minute);
+    expect(report).toMatchObject({ accepted: 1, reconciliationRequired: 0, retryNextBlock: "101" });
+    expect(sender.mock.calls.map(([, key]) => key)).toEqual([laterKey, laterKey]);
+    expect(await backing.get(`${laterKey}:accepted`)).toBe("accepted");
+    expect(await backing.get(blockedKey)).toBeNull();
+  });
+
+  it.each([64, 130])("reaches a later failed event %s pages past a page that stays pending, inside its window", async pageIndex => {
+    const backing = new MemoryStore();
+    const blocker = event(1);
+    const later = { ...event(2), blockNumber: String(101 + 25 * pageIndex) };
+    let finalized = 100n;
+    const input = source();
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    input.events = async (fromBlock, toBlock) => ({
+      events: [blocker, later].filter(item => BigInt(item.blockNumber) >= fromBlock && BigInt(item.blockNumber) <= toBlock),
+      range: { fromBlock, toBlock },
+      finalized: { number: finalized, hash: finalizedHash, timestamp: 2n }
+    });
+    // The first page's event can never be reserved, so the retry cursor stays on it for the whole test.
+    const blockedKey = reservationKey(blocker, input.deployment), laterKey = reservationKey(later, input.deployment);
+    const store: Store = {
+      get: key => backing.get(key),
+      set: (key, value) => backing.set(key, value),
+      async setIfAbsent(entries) {
+        if (Object.hasOwn(entries, blockedKey)) throw new Error("reservation storage failure");
+        return backing.setIfAbsent(entries);
+      }
+    };
+    let providerUp = false;
+    const sender = vi.fn(async (_payload: unknown, key: string) => key !== laterKey || providerUp);
+    const fiveMinutes = 5 * 60_000;
+    const run = (at: number) => processNotifications({ store, source: input, sender, ...config, now: at });
+    // One short page of 25 blocks per five-minute run, as when ingestion has caught up with the finalized head.
+    await run(1_000);
+    for (let index = 0; index < pageIndex + 3; index += 1) {
+      finalized = 125n + 25n * BigInt(index);
+      await run(1_000 + (index + 1) * fiveMinutes);
+    }
+    const reserved = JSON.parse((await backing.get(laterKey))!).createdAt as number;
+
+    // The provider recovers 22 hours after the reservation; the next few runs, still inside the 23 hour window, retry it.
+    providerUp = true;
+    let accepted = 0;
+    for (let runs = 0; runs < 4; runs += 1) {
+      const report = await run(reserved + 22 * 60 * 60_000 + runs * fiveMinutes);
+      accepted += report.accepted;
+      expect(report.retryNextBlock).toBe("101");
+    }
+    expect(accepted).toBe(1);
+    expect(await backing.get(`${laterKey}:accepted`)).toBe("accepted");
   });
 
   it("treats unproved future progress hints as replay hints", async () => {

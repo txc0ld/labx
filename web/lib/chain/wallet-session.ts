@@ -17,17 +17,30 @@ export class WalletSession implements WalletSessionPort {
   private listen() {
     const provider = this.provider, epoch = this.epoch;
     const current = () => this.provider === provider && this.epoch === epoch && !this.disposed;
+    // The session read after a wallet event is tried up to three times, then again whenever the window regains focus.
+    let unread = false;
+    const reread = async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt) await new Promise(resolve => setTimeout(resolve, attempt * 1_000));
+        if (!current()) return;
+        try { await this.refresh(); unread = false; return; } catch { unread = true; }
+      }
+    };
     const invalidate = () => {
       if (!current()) return;
       this.invalidateSnapshot();
-      void this.refresh().catch(() => {});
+      void reread();
     };
+    const focused = () => { if (unread && current()) void reread(); };
     const disconnected = () => { if (current()) this.disconnect(); };
+    const page = provider && typeof window !== "undefined" ? window : undefined;
     provider?.on?.("accountsChanged", invalidate);
     provider?.on?.("chainChanged", invalidate);
     provider?.on?.("disconnect", disconnected);
     provider?.on?.("session_delete", disconnected);
+    page?.addEventListener?.("focus", focused);
     this.retireListeners = () => {
+      page?.removeEventListener?.("focus", focused);
       provider?.removeListener?.("accountsChanged", invalidate);
       provider?.removeListener?.("chainChanged", invalidate);
       provider?.removeListener?.("disconnect", disconnected);

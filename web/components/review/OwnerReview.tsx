@@ -764,10 +764,14 @@ function OwnerExecutionFlowScope({ service, wallet, currentWallet, review, onRec
         } else if (scopeCurrent()) {
           setState(current => current.kind === "executed" ? current : handoffState(rejected, false, "The wallet request stopped. Saved recovery is still being watched; check Advanced recovery before another request."));
         }
-      } else if (isCurrent(operation)) {
+      } else if (isCurrent(operation) || exported && dispatch && scopeCurrent()) {
+        // persist released the operation once the request was handed off, so discovery may own the latest one by now.
+        // The warning then replaces only this request's own handoff screen, and stays there while discovery reports.
         if (exported) {
-          setState(handoffState(exported));
-          setDiscovery({ kind: "error", message: "The wallet response is uncertain. Watching for canonical execution. Do not send another approval." });
+          const sent = exported, owned = isCurrent(operation);
+          setState(current => owned || (current.kind === "exported" || current.kind === "requested") && current.intent === sent
+            ? handoffState(sent, false, "The wallet response is uncertain. Watching for canonical execution. Do not send another approval.")
+            : current);
         } else {
           exported = null;
           setState({ kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Review and click Approve to try again." : error instanceof Error ? error.message : "The owner execution could not be prepared." });

@@ -100,17 +100,23 @@ abstract contract MainnetDeployment is Script {
 /// @notice Stage 1: creates the VRF subscription, owned by the deployer. The coordinator derives the ID from the mined
 ///         block and its subscription nonce, so a simulated ID can differ from the real one. Read the ID from the
 ///         SubscriptionCreated event in the mined receipt and pass that to DeployMainnet; never reuse this script's output.
+///         STAGE1_NONCE is the deployer nonce the operator checked was unused. Any other nonce means a transaction has
+///         landed since, possibly an earlier stage 1, so nothing is sent.
 contract CreateMainnetSubscription is MainnetDeployment {
+    error NonceMoved(uint256 expected, uint256 actual);
+
     function run() external {
         _requireMainnet();
-        _create(vm.envUint("DEPLOYER_PRIVATE_KEY"));
+        _create(vm.envUint("DEPLOYER_PRIVATE_KEY"), vm.envUint("STAGE1_NONCE"));
         console2.log(
             "Read the subscription ID from SubscriptionCreated in the mined receipt, not from this simulation."
         );
     }
 
-    function _create(uint256 pk) internal {
+    function _create(uint256 pk, uint256 expectedNonce) internal {
         _requireMainnet();
+        uint256 nonce = vm.getNonce(vm.addr(pk));
+        if (nonce != expectedNonce) revert NonceMoved(expectedNonce, nonce);
         vm.startBroadcast(pk);
         IVRFSubscriptionAdmin(VRF_COORDINATOR).createSubscription();
         vm.stopBroadcast();
@@ -190,7 +196,7 @@ contract DeployMainnet is MainnetDeployment {
             }
             console2.log("Raffle CREATE address", vm.computeCreateAddress(deployer, c.expectedNonce));
         } else {
-            _requireResumable(LabxRaffle(payable(c.existing)), init, c, deployer);
+            _requireResumable(LabxRaffle(payable(c.existing)), init, c, deployer, false);
         }
 
         IVRFSubscriptionAdmin coordinator = IVRFSubscriptionAdmin(VRF_COORDINATOR);
@@ -209,7 +215,7 @@ contract DeployMainnet is MainnetDeployment {
         }
         vm.stopBroadcast();
 
-        _requireHandoff(labx, c, deployer);
+        _requireHandoff(labx, c, deployer, false);
         console2.log("LabxRaffle", address(labx));
         console2.log("VRF subscription", c.subId);
         console2.log(
@@ -221,8 +227,10 @@ contract DeployMainnet is MainnetDeployment {
     ///         exactly what a fresh run deploys with these inputs, every reviewed setting and native billing hold, it is the
     ///         subscription's only consumer, the subscription holds at least the funding target, and the raffle and the
     ///         subscription are both owned by or offered to the Safe. It sends nothing and takes no missing step (the
-    ///         reference raffle exists only in the simulation), so an incomplete deployment fails here. It needs no
-    ///         private key: DEPLOYER_ADDRESS and RAFFLE_ADDRESS come from the deployment record.
+    ///         reference raffle exists only in the simulation), so an incomplete deployment fails here. Once launched
+    ///         (the Safe owns the raffle and has unpaused it), the pause flag and the terms hash are the Safe's to set,
+    ///         so they are logged instead of required; every other check stays. It needs no private key:
+    ///         DEPLOYER_ADDRESS and RAFFLE_ADDRESS come from the deployment record.
     function verify() external {
         _requireMainnet();
         Config memory c;
@@ -237,10 +245,14 @@ contract DeployMainnet is MainnetDeployment {
     function _verify(Config memory c, address deployer) internal {
         _validateSafe(c.safe);
         LabxRaffle labx = LabxRaffle(payable(c.existing));
-        _requireResumable(labx, _init(c), c, deployer);
-        _requireHandoff(labx, c, deployer);
+        _requireResumable(labx, _init(c), c, deployer, true);
+        _requireHandoff(labx, c, deployer, true);
         uint256 balance = _subscription(c.subId).nativeBalance;
         if (balance < c.fundTarget) revert SubscriptionUnderfunded(c.subId, balance, c.fundTarget);
+        if (_launched(labx, c.safe)) {
+            console2.log("Launched: the Safe owns the raffle and has unpaused it. Terms hash:");
+            console2.logBytes32(labx.termsHash());
+        }
         console2.log("Verified LabxRaffle", c.existing);
     }
 
@@ -264,13 +276,17 @@ contract DeployMainnet is MainnetDeployment {
     /// @dev The raffle must be what a fresh run of this script deploys, still owned by the deployer (with nothing or the
     ///      Safe pending) or already by the Safe. The reference raffle is created outside the broadcast, so it exists
     ///      only in the simulation; its code hash covers the compiled code and every immutable.
-    function _requireResumable(LabxRaffle labx, LabxRaffle.Init memory init, Config memory c, address deployer)
-        private
-    {
+    function _requireResumable(
+        LabxRaffle labx,
+        LabxRaffle.Init memory init,
+        Config memory c,
+        address deployer,
+        bool launchedAllowed
+    ) private {
         if (address(labx).codehash != address(new LabxRaffle(init)).codehash) {
             revert RaffleCodeMismatch(address(labx));
         }
-        _requireReviewedSettings(labx, c);
+        _requireReviewedSettings(labx, c, launchedAllowed);
         address owner = labx.owner();
         address pending = labx.pendingOwner();
         if (!_offeredTo(owner, pending, deployer, c.safe) && !(owner == deployer && pending == address(0))) {
@@ -280,25 +296,32 @@ contract DeployMainnet is MainnetDeployment {
 
     /// @dev Every owner-settable default, as a fresh deployment has it. USDC, the unwired ETH route and the fee
     ///      constants are part of the code, so the code hash covers them. Native billing is the one default this script
-    ///      changes, and _requireHandoff checks it.
-    function _requireReviewedSettings(LabxRaffle labx, Config memory c) private view {
+    ///      changes, and _requireHandoff checks it. With launchedAllowed (verify only), a launched raffle's pause flag
+    ///      and terms hash are not required.
+    function _requireReviewedSettings(LabxRaffle labx, Config memory c, bool launchedAllowed) private view {
+        bool launched = launchedAllowed && _launched(labx, c.safe);
         _requireSetting(labx.treasury() == c.safe, "treasury");
         _requireSetting(labx.vrfCoordinator() == VRF_COORDINATOR, "vrfCoordinator");
         _requireSetting(labx.pendingCoordinator() == address(0) && labx.coordinatorEta() == 0, "pendingCoordinator");
         _requireSetting(labx.keyHash() == VRF_KEY_HASH, "keyHash");
         _requireSetting(labx.subscriptionId() == c.subId, "subscriptionId");
-        _requireSetting(labx.termsHash() == c.terms, "termsHash");
+        _requireSetting(launched || labx.termsHash() == c.terms, "termsHash");
         _requireSetting(labx.callbackGasLimit() == CALLBACK_GAS_LIMIT, "callbackGasLimit");
         _requireSetting(labx.requestConfirmations() == REQUEST_CONFIRMATIONS, "requestConfirmations");
         _requireSetting(!labx.ethPathEnabled(), "ethPathEnabled");
-        _requireSetting(labx.paused(), "paused");
+        _requireSetting(launched || labx.paused(), "paused");
+    }
+
+    /// @dev The Safe owns the raffle with nothing pending and has unpaused it.
+    function _launched(LabxRaffle labx, address safe) private view returns (bool) {
+        return labx.owner() == safe && labx.pendingOwner() == address(0) && !labx.paused();
     }
 
     /// @dev What the Safe should find before accepting: the reviewed settings, native billing, the raffle as the
     ///      subscription's only consumer, and both resources owned by or offered to the Safe. A step the deployer can no
     ///      longer take is named as a Safe action instead of being reported as done.
-    function _requireHandoff(LabxRaffle labx, Config memory c, address deployer) private view {
-        _requireReviewedSettings(labx, c);
+    function _requireHandoff(LabxRaffle labx, Config memory c, address deployer, bool launchedAllowed) private view {
+        _requireReviewedSettings(labx, c, launchedAllowed);
         Subscription memory sub = _subscription(c.subId);
         if (!_contains(sub.consumers, address(labx))) {
             revert SafeActionRequired("coordinator.addConsumer(subId, raffle)");

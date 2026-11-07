@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WalletSession } from "../lib/chain/wallet-session";
 import type { WalletProvider } from "../lib/chain/types";
 const account = "0x1111111111111111111111111111111111111111";
@@ -44,4 +44,54 @@ describe("wallet session revision boundary", () => {
     expect(providerInvoked).toBe(false); expect(f.calls).not.toContain("eth_sendTransaction");
   });
 
+  describe("after a wallet event whose session read fails", () => {
+    function flaky() {
+      let failures = 0, chainReads = 0; const listeners = new Map<string, (...args: unknown[]) => void>();
+      const provider: WalletProvider = { async request({ method }) { if (method === "eth_chainId") { chainReads++; if (failures > 0) { failures--; throw new Error("Wallet read failed"); } return "0xaa36a7"; } if (method === "eth_accounts") return [account]; throw new Error("Unexpected request"); }, on(event, fn) { listeners.set(event, fn); }, removeListener(event) { listeners.delete(event); } };
+      return { wallet: new WalletSession(provider, 11155111), listeners, fail(count: number) { failures = count; }, chainReads: () => chainReads };
+    }
+    afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+    it.each(["accountsChanged", "chainChanged"])("retries the read after %s so a transient failure does not leave it disconnected", async event => {
+      vi.useFakeTimers();
+      const f = flaky(); const before = await f.wallet.refresh();
+      f.fail(2);
+      f.listeners.get(event)?.([account]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.wallet.getSnapshot()).toEqual({ kind: "disconnected", revision: before.revision + 1 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.wallet.getSnapshot()).toEqual({ kind: "connected", account, chainId: 11155111, revision: before.revision + 2 });
+    });
+
+    it("stops after three failed reads and reads again when the window regains focus", async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("window", new EventTarget());
+      const f = flaky(); const before = await f.wallet.refresh();
+      f.fail(3);
+      f.listeners.get("accountsChanged")?.([account]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.wallet.getSnapshot()).toEqual({ kind: "disconnected", revision: before.revision + 1 });
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.wallet.getSnapshot()).toEqual({ kind: "connected", account, chainId: 11155111, revision: before.revision + 2 });
+    });
+
+    it("does not read the wallet on focus after a local disconnect or once disposed", async () => {
+      vi.useFakeTimers();
+      const page = new EventTarget(); vi.stubGlobal("window", page);
+      const removed = vi.spyOn(page, "removeEventListener");
+      const f = flaky(); await f.wallet.refresh();
+      f.fail(3);
+      f.listeners.get("accountsChanged")?.([account]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.chainReads()).toBe(4);
+      f.wallet.disconnect();
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.chainReads()).toBe(4);
+      expect(f.wallet.getSnapshot().kind).toBe("disconnected");
+      f.wallet.dispose();
+      expect(removed).toHaveBeenCalledWith("focus", expect.any(Function));
+    });
+  });
 });

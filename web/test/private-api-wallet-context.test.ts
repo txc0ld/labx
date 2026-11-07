@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPublicClient, http, keccak256, toBytes } from "viem";
 import { configuredBrowserService } from "../lib/chain/browser";
 import { createRaffleService } from "../lib/chain/service";
-import { createCommitment, readPrivateRecords, recoverCommitment, saveAgreement, sendPurchaseReceipt } from "../lib/chain/api";
+import { createCommitment, readPrivateRecords, recoverCommitment, recoverPreparation, saveAgreement, sendPurchaseReceipt, WorkflowMissingError } from "../lib/chain/api";
 import { PreparationNotDispatchedError } from "../lib/chain/submission-errors";
 import { WalletSession } from "../lib/chain/wallet-session";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
@@ -63,6 +63,22 @@ describe("private API wallet binding before context fetch", () => {
     await expect(createCommitment(control.wallet, { nft: manifest.address, tokenId: "1", publicSummary: "Summary", privateCommitment: "Private" }, { assertIntent: () => {}, beforeRequest })).rejects.toBeInstanceOf(PreparationNotDispatchedError);
     expect(beforeRequest).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("tells a setup the server never saved apart from an outage, keeping the server's plain message", async () => {
+    const control = await fixture();
+    const input = { requestIdentity: digest, nft: manifest.address, tokenId: "1" };
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, context })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: "Your raffle setup wasn't saved. Press Create to start again." }), { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, context })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: "Your raffle setup couldn't be restored right now. Try again in a minute." }), { status: 503 }));
+    vi.stubGlobal("fetch", fetcher);
+    const missing = recoverPreparation(control.wallet, input, () => {});
+    await expect(missing).rejects.toBeInstanceOf(WorkflowMissingError);
+    await expect(missing).rejects.toThrow("Your raffle setup wasn't saved. Press Create to start again.");
+    const outage = recoverPreparation(control.wallet, input, () => {});
+    await expect(outage).rejects.toThrow("Your raffle setup couldn't be restored right now. Try again in a minute.");
+    await expect(outage).rejects.not.toBeInstanceOf(WorkflowMissingError);
   });
   it("allows unchanged-wallet records and preserves origin/terms/deployment validation", async () => {
     const control = await fixture();

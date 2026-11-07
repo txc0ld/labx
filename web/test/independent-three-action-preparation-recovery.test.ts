@@ -6,6 +6,7 @@ import { workflowMessage } from "../lib/chain/messages";
 import type { CommitmentInput, PreparationRecoveryInput, WorkflowContext } from "../lib/chain/api-types";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
 import { recoverAuthenticatedPreparation, saveAuthenticatedCommitment } from "../lib/workflow-records";
+import { WorkflowMissing } from "../lib/workflow-failure";
 
 const now = 1_791_000_000_000;
 const seller = privateKeyToAccount(generatePrivateKey());
@@ -121,7 +122,7 @@ describe("independent lost preparation response recovery", () => {
       await signed("preparation recovery", recovery({ requestIdentity: missingIdentity })),
       context,
       verifyMessage
-    )).rejects.toThrow(/not yet available|without creating a new setup/i);
+    )).rejects.toThrow(WorkflowMissing);
 
     if (raw === null) throw new Error("Fixture preparation record missing.");
     await store.set(`reserve:${created.commit}`, JSON.stringify({ ...JSON.parse(raw), tokenId: "7" }));

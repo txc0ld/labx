@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { PreparationNotDispatchedError } from "@/lib/chain/submission-errors";
+import { isEarlierSend, PreparationNotDispatchedError } from "@/lib/chain/submission-errors";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { isAddress, zeroHash, type Hex, type Address } from "viem";
 import { NETWORKS } from "@/lib/chain/networks";
@@ -13,7 +13,7 @@ import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { STANDARD_MEMBERSHIP_TIERS, type MembershipTierName } from "@/lib/membership-tiers";
 import { canApplyWalletNftSelection, fetchWalletNfts, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
 import { captureCreateGeneration, assertCreateGeneration, advanceCreateGeneration, retireUnsentCreate, retireStaleCreate, recoverCreateTransaction, createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, serializeCreateRecord, writeCreateRecord, retireCompletedCreate, type CreateRecord } from "@/lib/chain/create-flow";
-import { recoverPreparation } from "@/lib/chain/api";
+import { recoverPreparation, WorkflowMissingError } from "@/lib/chain/api";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
 import { TransactionFlow } from "./TransactionFlow";
 import { CREATE_STEPS, createStepMessage } from "./create-progress";
@@ -25,7 +25,7 @@ import formStyles from "./SellerDraftForm.module.css";
 
 type PackDraft = { id: string; name: string; price: string; bonusEntries: string; maxSupply: string };
 type PackEconomicsKey = "price" | "bonusEntries" | "maxSupply";
-type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
+export type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
 type CommitmentPreparation = { key: string; input: { publicSummary: string; privateCommitment: string } };
 type InventoryState =
   | { kind: "idle" }
@@ -101,6 +101,10 @@ const UNSUPPORTED_BROWSER = "This browser isn't supported. Try a current Chrome,
 const DEADLINE_SKIPPED = "That time doesn't exist in your time zone because of a clock change. Choose another time.";
 const STALE_CREATE = "Your last raffle changed or passed its deadline, so it can't be finished here. Find it in Your raffles, or create a new one below.";
 
+function formFromDraft(draft: DraftInput): FormDraft {
+  return { nft: draft.nft, tokenId: draft.tokenId.toString(), title: draft.title, closing: localDeadlineInput(draft.salesEnd), packs: draft.packs.map((pack, index) => ({ id: `recovered-${index}`, name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() })) };
+}
+
 function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
   if (!snapshot) return INITIAL;
   return {
@@ -112,17 +116,24 @@ function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
   };
 }
 
-export function SellerDraftForm({ service, wallet, saveCommitment, existing, onConfirmed, onCreatingChange }: {
+export function SellerDraftForm({ service, wallet, saveCommitment, existing, edits, onEdit, onConfirmed, onCreatingChange }: {
   service: RaffleService;
   wallet: WalletSessionPort;
   saveCommitment: SaveCommitment;
   existing?: RaffleSnapshot;
+  /** Unsaved values to start from instead of the draft's own, after the form remounted. */
+  edits?: FormDraft;
+  /** Reports every change to the form's values. */
+  onEdit?: (form: FormDraft) => void;
   onConfirmed?: () => void | Promise<void>;
   /** Reports whether a Create activation is running or has just finished. */
   onCreatingChange?: (creating: boolean) => void;
 }) {
   const router = useRouter();
-  const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
+  // An escrowed draft's NFT is locked, so saved edits never replace it.
+  const [form, setForm] = useState<FormDraft>(() => edits && existing?.raffle.escrowed
+    ? { ...edits, nft: existing.raffle.nft, tokenId: existing.raffle.tokenId.toString() }
+    : edits ?? formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
@@ -134,6 +145,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   const walletSnapshot = useWalletSnapshot(wallet);
   const [creation, setCreation] = useState<{ kind: "idle" } | { kind: "busy"; message: string } | { kind: "error"; message: string } | { kind: "done"; id: bigint }>({ kind: "idle" });
   const [savedCreation, setSavedCreation] = useState<CreateRecord | null>(null);
+  // The saved creation can't be read, so Start over is its only way back to a clean Create.
+  const [unreadableCreation, setUnreadableCreation] = useState(false);
   const [notice, setNotice] = useState("");
   const createLifetime = useRef({ mounted: false, generation: 0, busy: false, operation: 0, service, wallet, revision: walletSnapshot.revision });
   if (createLifetime.current.service !== service || createLifetime.current.wallet !== wallet || createLifetime.current.revision !== walletSnapshot.revision) {
@@ -145,8 +158,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   }, []);
   useEffect(() => {
     if (existing || walletSnapshot.kind !== "connected") return;
-    try { setSavedCreation(readCreateRecord(window.localStorage, createStorageKey(service, walletSnapshot.account))); }
-    catch { setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
+    try { setSavedCreation(readCreateRecord(window.localStorage, createStorageKey(service, walletSnapshot.account))); setUnreadableCreation(false); }
+    catch { setSavedCreation(null); setUnreadableCreation(true); setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
   }, [service, existing, walletSnapshot]);
 
   const identityLocked = existing?.raffle.escrowed === true;
@@ -185,6 +198,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     const next = update(formRef.current);
     formRef.current = next;
     setForm(next);
+    onEdit?.(next);
   }
 
   function invalidateInventory() {
@@ -440,15 +454,27 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
             if (reserve.nft.toLowerCase() !== action.nft.toLowerCase() || reserve.tokenId !== action.tokenId.toString() || reserve.seller.toLowerCase() !== session.account.toLowerCase() || reserve.labx.toLowerCase() !== service.manifest.address.toLowerCase() || reserve.chainId !== String(service.manifest.chainId) || reserve.publicSummary !== input.publicSummary) throw new Error("Saved draw setup differs from this NFT or seller.");
             persist({ kind: "draft", data: encodeDraft({ ...action, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
           } catch (error) {
-            if (error instanceof PreparationNotDispatchedError || isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
-            if (isWalletRequestRejected(error)) throw error;
+            // The server saved nothing when the wallet refused, the request never left, or it found no such NFT.
+            if (error instanceof PreparationNotDispatchedError || error instanceof WorkflowMissingError || isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
+            if (isWalletRequestRejected(error) || error instanceof WorkflowMissingError) throw error;
             throw new Error("Couldn't save the raffle setup. Press Create to try again.");
           }
         } else if (record.kind === "preparing") {
           if (record.requestIdentity === null) throw new Error("Your raffle setup wasn't saved. Open Advanced recovery to start over and edit details.");
           const draft = decodeDraft(record.data);
           status(CREATE_STEPS.restoreSetup);
-          const reserve = await recoverPreparation(wallet, { requestIdentity: record.requestIdentity, nft: draft.nft, tokenId: draft.tokenId.toString() }, assertIntent);
+          let reserve: PublicReserve;
+          try { reserve = await recoverPreparation(wallet, { requestIdentity: record.requestIdentity, nft: draft.nft, tokenId: draft.tokenId.toString() }, assertIntent); }
+          catch (error) {
+            if (!(error instanceof WorkflowMissingError)) throw error;
+            // The server never saved this setup, so nothing can be restored: retire it, keep the details, and let Create start over.
+            await retireUnsentCreate({ service, wallet, storage: localStorage, key, expected: record, assertIntent });
+            invalidateSelection(); invalidateInventory();
+            replaceForm(() => formFromDraft(draft));
+            setSavedCreation(null); setState({ kind: "editing" });
+            setCreation({ kind: "error", message: error.message });
+            return;
+          }
           persist({ kind: "draft", data: encodeDraft({ ...draft, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
         }
         const saved = readCreateRecord(localStorage, key);
@@ -480,6 +506,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation(current => current.kind === "done" ? current : { kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Press Create to continue when you're ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });
+      // An earlier request may have landed: the page reads the chain again so the seller can see it.
+      if (isEarlierSend(error)) void Promise.resolve(onConfirmed?.()).catch(() => {});
     } finally {
       if (lifetime.operation === operation) {
         lifetime.busy = false;
@@ -490,7 +518,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
 
   async function editSavedCreation() {
     const lifetime = createLifetime.current;
-    if (lifetime.busy || !savedCreation) return;
+    if (lifetime.busy || !savedCreation && !unreadableCreation) return;
     const expected = savedCreation, session = wallet.getSnapshot(), generation = lifetime.generation;
     if (session.kind !== "connected") return;
     lifetime.busy = true;
@@ -505,10 +533,12 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         assertCreateGeneration(localStorage, key, clicked);
         await retireUnsentCreate({ service, wallet, storage: localStorage, key, expected, assertIntent });
         assertIntent();
-        const draft = decodeDraft(expected.data);
-        invalidateSelection(); invalidateInventory();
-        replaceForm(() => ({ nft: draft.nft, tokenId: draft.tokenId.toString(), title: draft.title, closing: localDeadlineInput(draft.salesEnd), packs: draft.packs.map((pack, index) => ({ id: `recovered-${index}`, name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() })) }));
-        setSavedCreation(null); setCreation({ kind: "idle" }); setState({ kind: "editing" });
+        if (expected) {
+          const draft = decodeDraft(expected.data);
+          invalidateSelection(); invalidateInventory();
+          replaceForm(() => formFromDraft(draft));
+        }
+        setSavedCreation(null); setUnreadableCreation(false); setCreation({ kind: "idle" }); setState({ kind: "editing" });
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation({ kind: "error", message: error instanceof Error ? error.message : "Saved creation could not be retired." });
@@ -666,6 +696,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       </fieldset>
 
       {!existing && creation.kind === "error" ? <p className="notice error" role="alert">{creation.message}</p> : null}
+      {!existing && unreadableCreation ? <CreateRecoveryControls disabled={false} onEdit={() => void editSavedCreation()} /> : null}
       {state.kind === "error" ? <p className={`${formStyles.formError} notice error`} role="alert">{state.message}</p> : null}
       <div className={formStyles.reviewAction}><div><strong>{existing ? "Ready to save?" : "Ready to create?"}</strong><span>{existing ? "Saving sends your raffle back to LABx for review." : "Create locks your NFT for the raffle. Your wallet will ask for 1 signature and up to 3 confirmations."}</span></div><button className="btn" type="submit">{existing ? "Save changes" : "Create"}</button></div>
     </form>

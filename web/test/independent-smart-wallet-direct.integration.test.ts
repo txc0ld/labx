@@ -119,7 +119,8 @@ run("independent EIP-7702 direct-wallet boundaries on isolated Anvil", () => {
     await expect(service.pending({ wallet })).resolves.toMatchObject({ hash: submitted.hash });
   });
 
-  it("rejects an exact-intent transaction sent at the next nonce and preserves the expected nonce", async () => {
+  // The wallet chose its own nonce for the hash it returned: the record follows that hash to its nonce and settles there.
+  it("follows an exact-intent transaction the wallet sent at the next nonce and settles the record at that nonce", async () => {
     const { service, wallet, prepared } = await reviewedApproval();
     let expectedNonce: number | undefined;
     replaceRequest(wallet, async transaction => {
@@ -144,9 +145,11 @@ run("independent EIP-7702 direct-wallet boundaries on isolated Anvil", () => {
 
     const submitted = await service.submit({ prepared, wallet });
     await confirmedBlock(submitted);
-    await expect(service.resume({ hash: submitted.hash, wallet })).rejects.toThrow(/unrelated/i);
-    await expect(service.confirm({ transaction: submitted, timeoutMs: 3_000 })).rejects.toThrow(/does not reconcile/i);
-    await expect(service.pending({ wallet })).resolves.toMatchObject({ hash: submitted.hash, nonce: expectedNonce });
+    if (expectedNonce === undefined) throw new Error("Service did not bind an explicit nonce.");
+    await expect(service.resume({ hash: submitted.hash, wallet })).resolves.toMatchObject({ hash: submitted.hash });
+    await expect(service.pending({ wallet })).resolves.toMatchObject({ hash: submitted.hash, nonce: expectedNonce + 1 });
+    await expect(service.confirm({ transaction: submitted, timeoutMs: 3_000 })).resolves.toMatchObject({ kind: "confirmed", receipt: { nonce: expectedNonce + 1 } });
+    await expect(service.pending({ wallet })).resolves.toBeNull();
   });
 
   it("does not accept an operation-like identifier as an Ethereum transaction", async () => {

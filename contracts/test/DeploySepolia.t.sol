@@ -53,7 +53,7 @@ contract DeploySepoliaTest is AdmissionFixture {
         emit LabxRaffle.OwnershipTransferStarted(deployer, safe);
         LabxRaffle labx = _deploy();
         assertTrue(labx.nativePayment());
-        assertFalse(labx.paused());
+        assertTrue(labx.paused());
         assertFalse(labx.ethPathEnabled());
         assertEq(labx.router(), address(0));
         assertEq(labx.weth(), address(0));
@@ -92,6 +92,35 @@ contract DeploySepoliaTest is AdmissionFixture {
         assertEq(vm.getNonce(deployer), nonce);
     }
 
+    /// @dev No raffle can open before the subscription lists the raffle as a consumer: the script leaves it paused, and
+    ///      the owner unpauses once the consumer is added.
+    function test_runLeavesTheRafflePausedUntilTheOwnerUnpauses() public {
+        LabxRaffle labx = _deploy();
+        vm.prank(safe);
+        labx.acceptOwnership();
+        address seller = makeAddr("seller");
+        MockERC721 nft = new MockERC721();
+        nft.mint(seller, 1);
+        LabxRaffle.PackConfig[] memory packs = new LabxRaffle.PackConfig[](1);
+        packs[0] = LabxRaffle.PackConfig("Membership", 25e6, 3, 100);
+        vm.startPrank(seller);
+        nft.approve(address(labx), 1);
+        uint256 id = labx.createRaffle(
+            address(nft), 1, uint64(vm.getBlockTimestamp() + 2 days), bytes32(uint256(1)), keccak256("commit"), "Paused", packs
+        );
+        labx.escrow(id);
+        _approveAdmission(labx, id);
+        vm.expectRevert(LabxRaffle.Paused.selector);
+        labx.open(id);
+        vm.stopPrank();
+
+        vm.prank(safe);
+        labx.setPaused(false);
+        vm.prank(seller);
+        labx.open(id);
+        assertEq(uint8(labx.getRaffle(id).phase), uint8(LabxRaffle.Phase.Open));
+    }
+
     function test_safeAcceptancePreservesBillingAndRevokesDeployerAuthority() public {
         LabxRaffle labx = _deploy();
         vm.prank(safe);
@@ -109,8 +138,10 @@ contract DeploySepoliaTest is AdmissionFixture {
 
     function test_scriptDeploymentPinsRequestBillingAndRecoveryDeadline() public {
         LabxRaffle labx = _deploy();
-        vm.prank(safe);
+        vm.startPrank(safe);
         labx.acceptOwnership();
+        labx.setPaused(false);
+        vm.stopPrank();
         uint64 end = uint64(vm.getBlockTimestamp() + 2 days);
         uint256 nativeId = _openAndBuy(labx, end, 1);
         assertTrue(labx.getRafflePolicy(nativeId).nativePayment);

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import { isTransactionNotFound } from "@/lib/chain/service";
@@ -45,11 +45,18 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   // This tab's own wallet request is open: its result settles the record, so the chain check waits.
   const ownRequestOpen = outcomes.some(item => item.kind === "submitting");
   const pendingSend = usePendingSend(browser.service, browser.wallet, ownRequestOpen ? null : pending);
+  const getEarlierSends = useCallback(() => wallet.kind === "connected" ? owner.earlierSendCount(wallet.account) : 0, [owner, wallet]);
+  const earlierSends = useSyncExternalStore(owner.subscribe, getEarlierSends, getEarlierSends);
+  const seenEarlierSends = useRef(earlierSends);
+  // The line for a send stopped by an earlier cleared request. The page re-reads the chain at once, which remounts the
+  // control that stopped, so the line stays here, above the page, until the next send or another wallet.
+  const [earlierStop, setEarlierStop] = useState(false);
+  const notedEarlierSends = useRef(earlierSends);
 
   useEffect(() => {
     const version = ++generation.current;
     inFlight.current = null; editedHash.current = false;
-    setChecking(false); setError(""); setHash(""); setPending(null);
+    setChecking(false); setError(""); setHash(""); setPending(null); setEarlierStop(false);
     return () => { if (generation.current === version) generation.current++; };
   }, [browser.service, browser.wallet, wallet]);
 
@@ -70,14 +77,23 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     return () => { active = false; };
   }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck, pendingSend.status]);
 
-  // A send at the record's nonce was mined and the record cleared: the page reads the chain again.
+  // A send at the record's nonce was mined and the record cleared, or a send stopped because an earlier cleared request may
+  // have landed: the page reads the chain again.
+  const earlierSendSeen = earlierSends !== seenEarlierSends.current;
   useEffect(() => {
-    if (pendingSend.status !== "spent" || deferRefresh || !callback.current) return;
+    if (earlierSends === notedEarlierSends.current) return;
+    notedEarlierSends.current = earlierSends;
+    setEarlierStop(true);
+  }, [earlierSends]);
+  useEffect(() => { if (ownRequestOpen) setEarlierStop(false); }, [ownRequestOpen]);
+  useEffect(() => {
+    if (pendingSend.status !== "spent" && !earlierSendSeen || deferRefresh || !callback.current) return;
+    seenEarlierSends.current = earlierSends;
     const version = generation.current;
     void Promise.resolve(callback.current()).catch(reason => {
       if (version === generation.current) setError(reason instanceof Error ? reason.message : "Refresh the current state before another action.");
     });
-  }, [pendingSend.status, deferRefresh]);
+  }, [pendingSend.status, earlierSendSeen, earlierSends, deferRefresh]);
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;
@@ -145,7 +161,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const normalWait = pending !== null && !error && (pending.hash ? savedCheck !== null && savedCheck !== "attention" : unresolved.some(outcome => outcome.kind === "submitting"));
   const waiting = (outcome: TransactionOutcome) => normalWait && (outcome.kind === "submitting"
     || pending?.hash != null && outcomeTransactionHash(outcome)?.toLowerCase() === pending.hash.toLowerCase());
-  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error) return null;
+  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error && !earlierStop) return null;
   const form = (heading: ReactNode) => <form className="well pad stack" onSubmit={submit}>
     {heading}
     <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => { editedHash.current = true; setHash(event.target.value.trim()); }} placeholder="0x…" /></label>
@@ -163,7 +179,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     // TransactionFlow that shows this record already, such as the checkout, keeps the page to one panel.
     panel = pendingSend.panelShown ? null
       : pendingSend.status === "unsent"
-      ? <div className="well pad stack" role="status"><h2>Your wallet didn’t send your last transaction.</h2><button className="btn btn-dark" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button><details><summary>Details</summary>{rejectFirst}</details></div>
+      ? <div className="well pad stack" role="status"><h2>Your wallet didn’t send your last transaction.</h2><button className="btn btn-dark" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button>{rejectFirst}</div>
       : pendingSend.status === "unknown"
         ? <div className="stack">{progress("Can’t reach the network to check your last transaction. Trying again…")}<details className="workflow-details"><summary>Details</summary><div className="stack">{form(null)}{rejectFirst}</div></details></div>
         : progress(pendingSend.status === "waiting" ? "Waiting for your last transaction to confirm…" : "Checking your last transaction…");
@@ -177,6 +193,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     <section className="stack resume-transaction" aria-label="Wallet transaction outcomes">
       {unresolved.filter(outcome => !waiting(outcome)).map(renderOutcome)}
       {history.length ? <details className="workflow-details"><summary>Activity ({history.length})</summary><div className="stack">{history.map(renderOutcome)}</div></details> : null}
+      {earlierStop ? <p className="notice warning" role="status">Your wallet sent an earlier LABx request. Check the page before trying again.</p> : null}
       {panel}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </section>

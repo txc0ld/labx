@@ -139,6 +139,24 @@ describe("a pending send without a hash settles from the account's nonces", () =
     expect(journal.read(ACCOUNT)).toBeNull();
   });
 
+  it("remembers nonce 18 when Continue or the 25-block rule clears it, since neither proves the wallet sent nothing", async () => {
+    const continued = setup({ latest: 18, pending: 18, block: STARTED + 1n });
+    expect(await continued.service.settlePending({ wallet: continued.wallet, expected: continued.expected, continueUnsent: true })).toEqual({ kind: "dropped" });
+    expect(continued.journal.readCleared(ACCOUNT)).toEqual({ nonce: 18, startedBlock: STARTED.toString() });
+    const expired = setup({ latest: 18, pending: 18, block: STARTED + UNSENT_CLEAR_BLOCKS });
+    expect(await expired.service.settlePending({ wallet: expired.wallet, expected: expired.expected })).toEqual({ kind: "dropped" });
+    expect(expired.journal.readCleared(ACCOUNT)).toEqual({ nonce: 18, startedBlock: STARTED.toString() });
+  });
+
+  it("remembers nothing when nonce 18 is spent, and nothing while the record waits", async () => {
+    const spent = setup({ latest: 19, pending: 19, block: STARTED + 1n });
+    expect(await spent.service.settlePending({ wallet: spent.wallet, expected: spent.expected })).toEqual({ kind: "spent" });
+    expect(spent.journal.readCleared(ACCOUNT)).toBeNull();
+    const waiting = setup({ latest: 18, pending: 19, block: STARTED + 100n });
+    expect(await waiting.service.settlePending({ wallet: waiting.wallet, expected: waiting.expected, continueUnsent: true })).toEqual({ kind: "waiting" });
+    expect(waiting.journal.readCleared(ACCOUNT)).toBeNull();
+  });
+
   it("keeps the record when the RPC returns a pending nonce below the latest one", async () => {
     const { service, wallet, expected, journal } = setup({ latest: 19, pending: 18, block: STARTED + 100n });
     await expect(service.settlePending({ wallet, expected })).rejects.toThrow(/inconsistent nonces/);

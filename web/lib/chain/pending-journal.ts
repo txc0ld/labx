@@ -3,10 +3,15 @@ import type { DeploymentManifest } from "./types";
 import { hash } from "./validation";
 
 export type PendingIntent = { id: string; intentHash: Hex; nonce: number; startedBlock: string; hash: Hex | null };
+/** A record LABx cleared without proof that nothing was sent at its nonce, such as after Continue. */
+export type ClearedSend = { nonce: number; startedBlock: string };
 export interface PendingJournal {
   read(account: Address): PendingIntent | null;
   write(account: Address, intent: PendingIntent): void;
   remove(account: Address): void;
+  /** The last record cleared without proof that nothing was sent, which the account's next send checks first. */
+  readCleared(account: Address): ClearedSend | null;
+  writeCleared(account: Address, cleared: ClearedSend | null): void;
   exclusive<T>(account: Address, run: () => Promise<T>): Promise<T>;
   /** Runs `run` while every tab can see that this account has a wallet request open. Refuses at once when one already is. */
   holdRequest<T>(account: Address, run: () => Promise<T>): Promise<T>;
@@ -17,6 +22,14 @@ export const REQUEST_OPEN_ELSEWHERE = "Your wallet already has a request from LA
 export function transactionIntent(tx: { to: Address; data: Hex; value: bigint }): Hex {
   return keccak256(encodeAbiParameters([{ type: "address" }, { type: "bytes32" }, { type: "uint256" }], [tx.to, keccak256(tx.data), tx.value]));
 }
+/** An unreadable marker reads as one below every nonce, so the account's next send stops once and removes it. */
+function parseCleared(raw: string | null): ClearedSend | null {
+  if (raw === null) return null;
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { value = null; }
+  if (!value || typeof value !== "object" || !("nonce" in value) || typeof value.nonce !== "number" || !Number.isSafeInteger(value.nonce) || value.nonce < 0 || !("startedBlock" in value) || typeof value.startedBlock !== "string" || !/^\d+$/.test(value.startedBlock)) return { nonce: -1, startedBlock: "0" };
+  return { nonce: value.nonce, startedBlock: value.startedBlock };
+}
 function parse(raw: string | null): PendingIntent | null {
   if (raw === null) return null;
   const value: unknown = JSON.parse(raw);
@@ -24,11 +37,13 @@ function parse(raw: string | null): PendingIntent | null {
   return { id: value.id, intentHash: hash(value.intentHash), nonce: value.nonce, startedBlock: value.startedBlock, hash: value.hash === null ? null : hash(value.hash) };
 }
 export function memoryPendingJournal(): PendingJournal {
-  const records = new Map<string, string>(), locks = new Map<string, Promise<unknown>>(), requests = new Set<string>();
+  const records = new Map<string, string>(), cleared = new Map<string, string>(), locks = new Map<string, Promise<unknown>>(), requests = new Set<string>();
   return {
     read: account => parse(records.get(account.toLowerCase()) ?? null),
     write: (account, intent) => { records.set(account.toLowerCase(), JSON.stringify(intent)); },
     remove: account => { records.delete(account.toLowerCase()); },
+    readCleared: account => parseCleared(cleared.get(account.toLowerCase()) ?? null),
+    writeCleared(account, value) { if (value) cleared.set(account.toLowerCase(), JSON.stringify(value)); else cleared.delete(account.toLowerCase()); },
     exclusive(account, run) { const key = account.toLowerCase(); const next = (locks.get(key) ?? Promise.resolve()).catch(() => {}).then(run); locks.set(key, next); return next; },
     async holdRequest(account, run) {
       const key = account.toLowerCase();
@@ -42,6 +57,7 @@ export function memoryPendingJournal(): PendingJournal {
 export function browserPendingJournal(manifest: DeploymentManifest): PendingJournal {
   const scope = `labx:pending:v1:${manifest.chainId}:${manifest.address.toLowerCase()}:${manifest.runtimeCodeHash.toLowerCase()}`;
   const key = (account: Address) => `${scope}:${account.toLowerCase()}`;
+  const clearedKey = (account: Address) => `labx:pending-cleared:v1:${manifest.chainId}:${manifest.address.toLowerCase()}:${manifest.runtimeCodeHash.toLowerCase()}:${account.toLowerCase()}`;
   function storage() {
     if (typeof window === "undefined" || !window.navigator.locks) throw new Error("Safe transaction recovery requires browser storage and Web Locks. Use a supported secure wallet browser.");
     return window.localStorage;
@@ -50,6 +66,12 @@ export function browserPendingJournal(manifest: DeploymentManifest): PendingJour
     read: account => parse(storage().getItem(key(account))),
     write(account, intent) { const data = JSON.stringify(intent); storage().setItem(key(account), data); if (storage().getItem(key(account)) !== data) throw new Error("Pending transaction could not be saved. No new transaction is allowed."); },
     remove: account => { storage().removeItem(key(account)); },
+    readCleared: account => parseCleared(storage().getItem(clearedKey(account))),
+    writeCleared(account, value) {
+      if (!value) { storage().removeItem(clearedKey(account)); return; }
+      const data = JSON.stringify(value); storage().setItem(clearedKey(account), data);
+      if (storage().getItem(clearedKey(account)) !== data) throw new Error("Pending transaction could not be saved. No new transaction is allowed.");
+    },
     async exclusive(account, run) { storage(); return await window.navigator.locks.request(key(account), run); },
     async holdRequest(account, run) {
       storage();

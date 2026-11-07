@@ -194,6 +194,7 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     error SwapShortfall();
     error RefundFailed();
     error DirectEthDisabled();
+    error DirectNftDisabled();
     error BadWindow();
     error BadConfig();
     error UsdcDecimals();
@@ -799,7 +800,8 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
     }
 
     /// @notice Anyone may recover Open/Closed raffles after the draw-start deadline.
-    ///         Before then, seller/owner cancellation requires no lots or a completed empty snapshot.
+    ///         Before then, seller/owner cancellation requires no lots. Lots outlive that deadline, so a completed
+    ///         snapshot with lots is never empty before it; the empty-snapshot exemption is only defensive.
     function cancel(uint256 id) external nonReentrant {
         Raffle storage r = _raffles[id];
         if (r.seller == address(0)) revert BadPhase();
@@ -933,7 +935,9 @@ contract LabxRaffle is ReentrancyGuard, IERC721Receiver {
         ethWei = (usdcAmount * 1e20 + uint256(answer) - 1) / uint256(answer);
     }
 
-    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+    /// @notice Accepts only the transfer `escrow` makes. Any other NFT sent here could never leave, so it is refused.
+    function onERC721Received(address operator, address, uint256, bytes calldata) external view returns (bytes4) {
+        if (operator != address(this)) revert DirectNftDisabled();
         return IERC721Receiver.onERC721Received.selector;
     }
 

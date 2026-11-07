@@ -3,6 +3,7 @@ import type { Store } from "../points";
 import type { PreparedAction, RaffleSnapshot } from "../chain/types";
 import { assertRunnerCall, nextRunnerAction, SNAPSHOT_BATCH, type RunnerAction, type ScanResult } from "./decide";
 import { errorCategory, within, type ErrorCategory } from "./errors";
+import { sameAddress } from "../chain/validation";
 
 export const RUN_MS = 56_000;
 /** All chain and store work ends this long before the run deadline, which leaves time for the cursor write and the report. */
@@ -32,6 +33,8 @@ export const LEASE_BUCKET_MS = 300_000;
 const CURSOR_KEY = "draw-runner:cursor";
 /** "<contract>:<id>": every raffle below id was settled or cancelled when a scan read it. */
 const LOW_WATER_KEY = "draw-runner:low-water";
+/** The runner's last send: its nonce, hash and fees. */
+const LAST_SEND_KEY = "draw-runner:last-send";
 
 export type Quote = { gasLimit: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
 export type SendResult =
@@ -59,6 +62,8 @@ export type DrawChain = {
   nonces(): Promise<{ latest: number; pending: number }>;
   /** Current fees and a gas limit from a fresh estimate. Throws when the estimate fails, for example because someone else took the step. */
   quote(prepared: PreparedAction): Promise<Quote>;
+  /** Whether the node holds `hash` as the runner's own unmined transaction at `nonce`. False when it does not know the hash. */
+  pendingAt(hash: Hex, nonce: number): Promise<boolean>;
   /** Signs with the quote and broadcasts, waiting at most timeoutMs for the node. */
   send(prepared: PreparedAction, nonce: number, quote: Quote, timeoutMs: number): Promise<SendResult>;
   /** Throws when no receipt arrives within timeoutMs. */
@@ -85,6 +90,30 @@ export function leaseKeys(start: number, deadline: number): string[] {
 /** Balance a send needs: every unit of its gas limit at the maximum fee, plus a tenth for fee movement before it lands. */
 export function requiredBalance(quote: Quote): bigint {
   return quote.gasLimit * quote.maxFeePerGas * 11n / 10n;
+}
+
+/** Nodes accept a transaction at a pending nonce only when its max fee and its tip are both at least a tenth higher. */
+const bumped = (fee: bigint) => (fee * 11n + 9n) / 10n;
+const larger = (left: bigint, right: bigint) => left > right ? left : right;
+
+/**
+ * The runner's last send and the fees that would replace it, when its record matches the one pending nonce and the
+ * suggested max fee has risen past its own. Null otherwise. The caller still checks that the send is the pending one.
+ */
+function replacementQuote(raw: string | null, runner: Address, nonce: { latest: number; pending: number }, quote: Quote): { hash: Hex; quote: Quote } | null {
+  if (raw === null || nonce.pending !== nonce.latest + 1) return null;
+  let last: unknown;
+  try { last = JSON.parse(raw); } catch { return null; }
+  if (
+    !last || typeof last !== "object" || !("runner" in last) || typeof last.runner !== "string" || !sameAddress(last.runner, runner)
+    || !("nonce" in last) || last.nonce !== nonce.latest
+    || !("hash" in last) || typeof last.hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(last.hash)
+    || !("maxFeePerGas" in last) || typeof last.maxFeePerGas !== "string" || !/^\d{1,30}$/.test(last.maxFeePerGas)
+    || !("maxPriorityFeePerGas" in last) || typeof last.maxPriorityFeePerGas !== "string" || !/^\d{1,30}$/.test(last.maxPriorityFeePerGas)
+  ) return null;
+  const maxFeePerGas = BigInt(last.maxFeePerGas), maxPriorityFeePerGas = BigInt(last.maxPriorityFeePerGas);
+  if (quote.maxFeePerGas <= maxFeePerGas) return null;
+  return { hash: last.hash as Hex, quote: { gasLimit: quote.gasLimit, maxFeePerGas: larger(quote.maxFeePerGas, bumped(maxFeePerGas)), maxPriorityFeePerGas: larger(quote.maxPriorityFeePerGas, bumped(maxPriorityFeePerGas)) } };
 }
 
 export async function runDraw({ chain, store, now, deadline }: { chain: DrawChain; store: Store; now: () => number; deadline: number }): Promise<RunReport> {
@@ -163,15 +192,30 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         // An unaffordable step is left for a later run. Cheaper steps on later raffles still go ahead.
         if (await bounded(chain.balance()) < requiredBalance(quote)) { record(action, null, "low-funds", null); break; }
         const nonce = await bounded(chain.nonces());
-        if (nonce.pending !== nonce.latest) { stop("pending-transaction", id); break raffles; }
+        if (nonce.pending !== nonce.latest) {
+          // Only the runner's own last send, alone in the pool, is replaced, and only once fees have risen past it. A
+          // transaction that took its place, such as an operator's cancellation, is waited for. So is a failed read.
+          const replacement = replacementQuote(await bounded(store.get(LAST_SEND_KEY)).catch(() => null), chain.runner, nonce, quote);
+          if (!replacement || !await bounded(chain.pendingAt(replacement.hash, nonce.latest)).catch(() => false)) { stop("pending-transaction", id); break raffles; }
+          if (replacement.quote.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
+          if (await bounded(chain.balance()) < requiredBalance(replacement.quote)) { record(action, null, "low-funds", null); break; }
+          quote = replacement.quote;
+        }
         if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
-        const sent = await chain.send(prepared, nonce.pending, quote, Math.min(SEND_TIMEOUT_MS, workEnd - now()));
+        const sent = await chain.send(prepared, nonce.latest, quote, Math.min(SEND_TIMEOUT_MS, workEnd - now()));
         if (sent.kind === "refused") {
           if (sent.error === "InsufficientFunds") { record(action, null, "low-funds", sent.error); break; }
           record(action, null, "failed", sent.error);
           stop("send-failed", id + 1n); break raffles;
         }
         report.sends++;
+        try {
+          await bounded(store.set(LAST_SEND_KEY, JSON.stringify({
+            runner: chain.runner, nonce: nonce.latest, hash: sent.hash, maxFeePerGas: quote.maxFeePerGas.toString(), maxPriorityFeePerGas: quote.maxPriorityFeePerGas.toString()
+          })));
+        } catch {
+          // Without this record a later run waits for the transaction instead of replacing it.
+        }
         if (sent.kind === "unknown") {
           record(action, sent.hash, "unknown", sent.error);
           stop("pending-transaction", id); break raffles;

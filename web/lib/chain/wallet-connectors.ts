@@ -52,12 +52,14 @@ export async function bounded<T>(operation: Promise<T>, milliseconds: number): P
 
 export class BrowserWalletSession extends WalletSession {
   private connection: ConnectionStatus = { kind: "idle" };
+  /** The status showing that an unconfirmed cleanup blocks connecting, cleared when that cleanup finishes after all. */
+  private cleanupNotice: ConnectionStatus | undefined;
   private attempt = 0;
   private abort: AbortController | undefined;
   private chooser: WalletChooser | undefined;
   private chooserLoad: Promise<WalletChooser> | undefined;
   private cleanup: Promise<void> = Promise.resolve();
-  private cleanupFailed = false;
+  private cleanupFailures = 0;
   private inFlight: Promise<WalletSnapshot> | undefined;
   private activeOwner: object | undefined;
   private restoring = false;
@@ -118,31 +120,40 @@ export class BrowserWalletSession extends WalletSession {
   }
 
   private queueCleanup(resource: WalletChooser | Promise<WalletChooser>, mode: "disconnect" | "release", attempt: number) {
+    let cleanup: Promise<void> | undefined;
     this.cleanup = this.cleanup.catch(() => {}).then(async () => {
       // Own a pending SDK load immediately so a new chooser cannot overtake its retirement.
       const chooser = await resource;
-      const cleanup = mode === "disconnect"
+      cleanup = mode === "disconnect"
         ? chooser.disconnect()
         : chooser.release
           ? chooser.release()
           : Promise.reject(new WalletChooserReloadError());
       await bounded(cleanup, 8_000);
     }).catch(error => {
-      this.cleanupFailed = true;
+      this.cleanupFailures += 1;
+      let failure: ConnectionStatus | undefined;
       if (attempt === this.attempt && this.connection.kind === "idle") {
-        this.status({
+        failure = {
           kind: "error",
           message: error instanceof WalletChooserReloadError
             ? error.message
             : "Wallet cleanup could not be confirmed. Reload this page before connecting again."
-        });
+        };
+        this.status(failure);
+        this.cleanupNotice = failure;
       }
+      // A cleanup that outlasted its bound and then finishes cleanly is confirmed after all.
+      cleanup?.then(() => {
+        this.cleanupFailures -= 1;
+        if (this.cleanupFailures === 0 && this.connection === this.cleanupNotice) this.status({ kind: "idle" });
+      }, () => {});
     });
   }
 
   private async waitForCleanup() {
     await this.cleanup;
-    if (this.cleanupFailed) throw new WalletChooserReloadError();
+    if (this.cleanupFailures > 0) throw new WalletChooserReloadError();
   }
 
   override dispose() {
@@ -348,7 +359,9 @@ export class BrowserWalletSession extends WalletSession {
           : error instanceof Error && /still pending|finish or reject/i.test(error.message)
             ? error.message
             : `Wallet connection was cancelled or could not connect to ${chainName(this.chainId)}. Please retry.`;
-        this.status({ kind: "error", message });
+        const status: ConnectionStatus = { kind: "error", message };
+        this.status(status);
+        if (error instanceof WalletChooserReloadError && this.cleanupFailures > 0) this.cleanupNotice = status;
       }
       throw error;
     }

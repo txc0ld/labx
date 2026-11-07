@@ -1,5 +1,6 @@
 import type { Address, Hex } from "viem";
 import type { PublicReserve, ReserveRecord } from "../reserve";
+import type { ReceiptStatus } from "../receipt-delivery";
 import type { SupportedChainId } from "./networks";
 export type WorkflowContext = { origin: string; chainId: SupportedChainId; contract: Address; termsHash: Hex; termsVersion: string };
 export type CommitmentInput = { nft: Address; tokenId: string; publicSummary: string; privateCommitment: string };
@@ -10,6 +11,6 @@ export type ReceiptResult = { delivered: boolean; repeated?: boolean; reason?: s
 export type RecordsInput = { raffleIds: string[]; purchases: { transactionHash: Hex; logIndex: number }[] };
 export type PrivateRecords = {
   agreements: { raffleId: string; recorded: boolean; at: string | null }[];
-  receipts: { transactionHash: Hex; logIndex: number; status: "missing" | "pending" | "delivered" }[];
+  receipts: ({ transactionHash: Hex; logIndex: number } & ReceiptStatus)[];
 };
 export type { PublicReserve, ReserveRecord };

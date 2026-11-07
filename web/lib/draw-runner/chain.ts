@@ -1,5 +1,5 @@
 import {
-  decodeFunctionResult, encodeFunctionData, keccak256, parseAbi, toHex, zeroAddress,
+  decodeFunctionResult, encodeFunctionData, keccak256, parseAbi, toHex, TransactionNotFoundError, zeroAddress,
   type Address, type Hex, type PrivateKeyAccount, type PublicClient
 } from "viem";
 import { raffleAbi } from "../chain/abi";
@@ -130,6 +130,15 @@ export function createDrawChain({ client, manifest, account }: { client: PublicC
         client.estimateGas({ account: runner, to: prepared.to, data: prepared.data, value: 0n })
       ]);
       return { gasLimit: gas * 6n / 5n, ...fees };
+    },
+    async pendingAt(hash, nonce) {
+      try {
+        const transaction = await client.getTransaction({ hash });
+        return transaction.blockNumber === null && transaction.nonce === nonce && sameAddress(transaction.from, runner);
+      } catch (error) {
+        if (error instanceof TransactionNotFoundError) return false;
+        throw error;
+      }
     },
     async send(prepared, nonce, quote, timeoutMs) {
       const serializedTransaction = await account.signTransaction({

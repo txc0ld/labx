@@ -18,6 +18,7 @@ const PRICES = { Entry: 10_000_000n, Bronze: 20_000_000n, Silver: 30_000_000n, G
 const TIERS = Object.keys(PRICES) as (keyof typeof PRICES)[];
 const total = (principal: bigint) => principal + (principal * 200n / 10_000n > 2_500_000n ? principal * 200n / 10_000n : 2_500_000n);
 const APPROVE = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: ["0x0000000000000000000000000000000000000000", 0n] }).slice(0, 10);
+const PENDING_OWNER = encodeFunctionData({ abi: raffleAbi, functionName: "pendingOwner" });
 const BUY_PACK = encodeFunctionData({ abi: raffleAbi, functionName: "buyPack", args: [0n, 0, 1, PUBLISHED_TERMS_HASH] }).slice(0, 10);
 
 run("one-click membership purchase in a rendered browser", () => {
@@ -91,6 +92,7 @@ run("one-click membership purchase in a rendered browser", () => {
     await expect.poll(() => youreIn().count(), { timeout: 10_000 }).toBe(0);
   }
   const journalKey = (account: Address) => `labx:pending:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${account.toLowerCase()}`;
+  const clearedKey = (account: Address) => `labx:pending-cleared:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${account.toLowerCase()}`;
   const allowance = (account: Address) => chain.client.readContract({ address: chain.usdc.address, abi: erc20Abi, functionName: "allowance", args: [account, chain.raffle.address] });
 
   it("buys every membership the raffle offers with one click: two wallet transactions without an allowance and no signatures", async () => {
@@ -205,7 +207,8 @@ run("one-click membership purchase in a rendered browser", () => {
     await unsentPanel.first().waitFor({ state: "visible", timeout: 20_000 });
     expect(await fixture.page.getByText(/needs a check|paste/i).count()).toBe(0);
     expect(await hashField.count()).toBe(0);
-    await fixture.page.locator(".resume-transaction summary", { hasText: /^Details$/ }).click();
+    // The reject-it-first line sits next to Continue, not behind Details.
+    expect(await fixture.page.locator(".resume-transaction summary", { hasText: /^Details$/ }).count()).toBe(0);
     expect(await fixture.page.getByText("If your wallet still shows a request from LABx, reject it first.", { exact: true }).first().isVisible()).toBe(true);
     await agreement().check();
     await fixture.page.locator(".checkout-bar").getByText("Your wallet didn’t send your last transaction.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
@@ -283,6 +286,9 @@ run("one-click membership purchase in a rendered browser", () => {
     expect(await hashField.count()).toBe(0);
     // Only the test's own sends went out: the page never asked the wallet for anything.
     expect(await chain.client.getTransactionCount({ address: chain.buyer })).toBe(nonce + 1);
+    // The cleared records left a check on that nonce, which the test's own transfer then used. The next tests start without it.
+    expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), clearedKey(chain.buyer))).not.toBeNull();
+    await fixture.page.evaluate((key: string) => localStorage.removeItem(key), clearedKey(chain.buyer));
   }, 180_000);
 
   it("does not open the wallet when it cannot pay the network fee, and says how much it needs", async () => {
@@ -386,6 +392,36 @@ run("one-click membership purchase in a rendered browser", () => {
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
   }, 90_000);
 
+  it("after Continue, stops Buy once when the old approval lands meanwhile, shows it, then buys with one more wallet step", async () => {
+    await openPiece(chain.buyer);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Entry");
+    const entry = total(PRICES.Entry);
+    expect(await allowance(chain.buyer)).toBe(0n);
+    await wallet.fail(APPROVE, "Request expired. Please try again.");
+    await buy(entry).click();
+    await fixture.page.getByRole("button", { name: "Continue", exact: true }).click();
+    await buy(entry).waitFor({ state: "visible", timeout: 15_000 });
+    // The wallet still showed that approval, and the person approves it after all: it lands at the cleared nonce.
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, entry], chain.buyer);
+    await buy(entry).click();
+    const earlier = fixture.page.locator(".resume-transaction").getByText("Your wallet sent an earlier LABx request. Check the page before trying again.", { exact: true });
+    await earlier.waitFor({ state: "visible", timeout: 20_000 });
+    expect((await wallet.requests()).map(call).map(item => item.name)).toEqual(["approve"]);
+    // The page read the chain again and found the approval, so the next click sends only the purchase. The line stays.
+    await expect.poll(() => fixture.page.getByText(/Your wallet asks twice/).count(), { timeout: 20_000 }).toBe(0);
+    await expect.poll(() => buy(entry).isEnabled(), { timeout: 20_000 }).toBe(true);
+    expect(await earlier.isVisible()).toBe(true);
+    await buy(entry).click();
+    await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+    expect(await earlier.count()).toBe(0);
+    expect((await wallet.requests()).map(call).map(item => item.name)).toEqual(["approve", "buyPack"]);
+    expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), clearedKey(chain.buyer))).toBeNull();
+    await buyAgain();
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+  }, 90_000);
+
   it("opens the purchase by itself when the approval confirms after the first one-minute watch", async () => {
     await openPiece(chain.buyer);
     const wallet = await watchWallet(fixture.page);
@@ -414,4 +450,40 @@ run("one-click membership purchase in a rendered browser", () => {
     await buyAgain();
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
   }, 200_000);
+
+  it("still opens the purchase by itself when the action check finishes after the account and quote", async () => {
+    await openPiece(chain.buyer);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Bronze");
+    const amount = total(PRICES.Bronze);
+    expect(await allowance(chain.buyer)).toBe(0n);
+    // The first action check after the approval's block is the page's own check of the refreshed raffle. Holding it for a few
+    // seconds lets the account and the quote of that read finish first.
+    const approvalBlock = await chain.client.getBlockNumber();
+    let held = 0;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const check = (Array.isArray(body) ? body : [body]).some(request => {
+        if (!request || typeof request !== "object" || !("method" in request) || request.method !== "eth_call" || !("params" in request) || !Array.isArray(request.params)) return false;
+        const [call, block] = request.params as unknown[];
+        return !!call && typeof call === "object" && "data" in call && call.data === PENDING_OWNER && typeof block === "string" && BigInt(block) > approvalBlock;
+      });
+      if (check && held++ === 0) await new Promise(resolve => setTimeout(resolve, 4_000));
+      await route.continue();
+    });
+    try {
+      await buy(amount).click();
+      await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+    expect(held).toBeGreaterThan(1);
+    expect((await wallet.requests()).map(call)).toEqual([
+      { name: "approve", args: [chain.raffle.address, amount] },
+      { name: "buyPack", args: [id, 1, 1, PUBLISHED_TERMS_HASH] }
+    ]);
+    await buyAgain();
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+  }, 90_000);
 });
