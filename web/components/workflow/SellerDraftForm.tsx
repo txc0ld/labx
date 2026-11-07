@@ -25,7 +25,7 @@ import formStyles from "./SellerDraftForm.module.css";
 
 type PackDraft = { id: string; name: string; price: string; bonusEntries: string; maxSupply: string };
 type PackEconomicsKey = "price" | "bonusEntries" | "maxSupply";
-type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
+export type FormDraft = { nft: string; tokenId: string; title: string; closing: string; packs: PackDraft[] };
 type CommitmentPreparation = { key: string; input: { publicSummary: string; privateCommitment: string } };
 type InventoryState =
   | { kind: "idle" }
@@ -116,17 +116,24 @@ function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
   };
 }
 
-export function SellerDraftForm({ service, wallet, saveCommitment, existing, onConfirmed, onCreatingChange }: {
+export function SellerDraftForm({ service, wallet, saveCommitment, existing, edits, onEdit, onConfirmed, onCreatingChange }: {
   service: RaffleService;
   wallet: WalletSessionPort;
   saveCommitment: SaveCommitment;
   existing?: RaffleSnapshot;
+  /** Unsaved values to start from instead of the draft's own, after the form remounted. */
+  edits?: FormDraft;
+  /** Reports every change to the form's values. */
+  onEdit?: (form: FormDraft) => void;
   onConfirmed?: () => void | Promise<void>;
   /** Reports whether a Create activation is running or has just finished. */
   onCreatingChange?: (creating: boolean) => void;
 }) {
   const router = useRouter();
-  const [form, setForm] = useState<FormDraft>(() => formFromSnapshot(existing));
+  // An escrowed draft's NFT is locked, so saved edits never replace it.
+  const [form, setForm] = useState<FormDraft>(() => edits && existing?.raffle.escrowed
+    ? { ...edits, nft: existing.raffle.nft, tokenId: existing.raffle.tokenId.toString() }
+    : edits ?? formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
@@ -191,6 +198,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
     const next = update(formRef.current);
     formRef.current = next;
     setForm(next);
+    onEdit?.(next);
   }
 
   function invalidateInventory() {

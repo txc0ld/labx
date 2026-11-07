@@ -14,7 +14,8 @@ export function DrawProgress({ service, snapshot }: { service: RaffleService; sn
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0), busy = useRef(false);
-  useEffect(() => { generation.current += 1; setLots([]); setCursor(0n); setLoading(false); setError(""); }, [snapshot.id, snapshot.block.hash]);
+  // A new read discards a load still in flight, so the next click starts a fresh one at once.
+  useEffect(() => { generation.current += 1; busy.current = false; setLots([]); setCursor(0n); setLoading(false); setError(""); }, [snapshot.id, snapshot.block.hash]);
   async function load() {
     if (busy.current || cursor === null) return;
     busy.current = true; setLoading(true); setError(""); const version = generation.current;
@@ -22,7 +23,7 @@ export function DrawProgress({ service, snapshot }: { service: RaffleService; sn
       const page = await service.listLots({ id: snapshot.id, cursor, limit: 25, block: snapshot.block });
       if (version === generation.current) { setLots(current => [...current, ...page.items]); setCursor(page.nextCursor); }
     } catch (error) { if (version === generation.current) setError(error instanceof Error ? error.message : "Entry records are unavailable."); }
-    finally { busy.current = false; if (version === generation.current) setLoading(false); }
+    finally { if (version === generation.current) { busy.current = false; setLoading(false); } }
   }
   const r = snapshot.raffle;
   const deadline = (value: bigint) => <><LocalTime at={value} /> · {snapshot.block.timestamp >= value ? "Reached" : "Upcoming"}</>;

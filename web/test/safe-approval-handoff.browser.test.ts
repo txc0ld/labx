@@ -50,6 +50,18 @@ run("Safe approval handoff", () => {
     ], chain.seller);
     await chain.write(chain.nft, "approve", [chain.raffle.address, 903n], chain.seller);
     await chain.write(chain.raffle, "escrow", [3n], chain.seller);
+    await chain.write(chain.nft, "mint", [chain.seller, 904n]);
+    await chain.write(chain.raffle, "createRaffle", [
+      chain.nft.address,
+      904n,
+      block.timestamp + 86_400n,
+      digest,
+      digest,
+      "Safe uncertain response",
+      [{ name: "Membership", priceUsdc: 25_000_000n, bonusEntries: 1, maxSupply: 10 }]
+    ], chain.seller);
+    await chain.write(chain.nft, "approve", [chain.raffle.address, 904n], chain.seller);
+    await chain.write(chain.raffle, "escrow", [4n], chain.seller);
     fixture = await browserChain(chain, chain.seller);
   }, 60_000);
 
@@ -264,5 +276,45 @@ run("Safe approval handoff", () => {
     await fixture.page.unroute(`${chain.url}/`);
     await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await fixture.page.getByRole("heading", { name: "Approval recorded", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  }, 45_000);
+
+  it("warns that the wallet response is uncertain when the Safe request fails after discovery started", async () => {
+    const response = await fixture.page.goto(`${fixture.baseUrl}/review/4`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    await connectCurrentOwner();
+    await fixture.switchAccount(chain.operator);
+    await fixture.page.getByRole("heading", { name: "Approve this raffle", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    // The Safe holds the handed-off request while LABx starts watching, then the connection fails without a rejection code.
+    await fixture.page.evaluate(() => {
+      const w = window as unknown as Window & { __labxFailSafe?: () => void; ethereum: { request(input: { method: string; params?: readonly unknown[] }): Promise<unknown> } };
+      const original = w.ethereum.request.bind(w.ethereum);
+      w.ethereum.request = input => input.method === "eth_sendTransaction"
+        ? new Promise((_, reject) => { w.__labxFailSafe = () => reject(new Error("Safe connection lost")); })
+        : original(input);
+    });
+    let logCalls = 0;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body = route.request().postDataJSON() as { method?: string } | undefined;
+      if (body?.method === "eth_getLogs") logCalls += 1;
+      await route.continue();
+    });
+    await fixture.page.getByRole("button", { name: "Approve", exact: true }).click();
+    const heading = fixture.page.getByRole("heading", { name: "Finish the approval in Safe", exact: true });
+    await heading.waitFor({ state: "visible", timeout: 10_000 });
+    const flow = heading.locator("../..");
+    await expect.poll(() => logCalls, { timeout: 10_000 }).toBeGreaterThan(0);
+
+    await fixture.page.evaluate(() => (window as unknown as Window & { __labxFailSafe(): void }).__labxFailSafe());
+    const warning = flow.getByRole("alert").filter({ hasText: "The wallet response is uncertain. Watching for canonical execution. Do not send another approval." });
+    await warning.waitFor({ state: "visible", timeout: 10_000 });
+    const watched = logCalls;
+    await chain.mine();
+    await fixture.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect.poll(() => logCalls, { timeout: 10_000 }).toBeGreaterThan(watched);
+    await expect.poll(() => flow.getAttribute("aria-busy"), { timeout: 10_000 }).toBe("false");
+    expect(await warning.isVisible()).toBe(true);
+    expect(await heading.isVisible()).toBe(true);
+    expect(await fixture.page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(0);
+    await fixture.page.unroute(`${chain.url}/`);
   }, 45_000);
 });

@@ -14,6 +14,8 @@ import { watchWallet } from "./fixtures/wallet-watch";
 const run = process.env.RUN_BUYER_UI_REPAIRS_BROWSER === "1" ? describe : describe.skip;
 
 const APPROVE = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: ["0x0000000000000000000000000000000000000000", 0n] }).slice(0, 10);
+const CLOSE = encodeFunctionData({ abi: raffleAbi, functionName: "close", args: [0n] }).slice(0, 10);
+const LOT_AT = encodeFunctionData({ abi: raffleAbi, functionName: "lotAt", args: [0n, 0n] }).slice(0, 10);
 
 run("buyer UI repair invariants in a rendered browser", () => {
   let chain: LocalChain;
@@ -457,4 +459,111 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await chain.write(chain.raffle, "setPaused", [false]);
     }
   }, 90_000);
+
+  it("keeps re-reading after a step is cancelled in the wallet, so the page moves on when someone else runs it", async () => {
+    await chain.write(chain.nft, "mint", [chain.seller, 904n]);
+    expect(await createOpenRaffle(904n, "Counting raffle", standardMembershipPacks(() => ({ priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 20 })))).toBe(4n);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
+    await chain.write(chain.raffle, "buyPack", [4n, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+    const { raffle } = await service.readRaffle({ id: 4n });
+    await chain.warp(raffle.salesEnd + 1n);
+    await fixture.page.setViewportSize({ width: 1280, height: 900 });
+    // With sales over, a connected buyer's page shows what they paid instead of a wallet badge.
+    await fixture.switchAccount(chain.buyer);
+    await fixture.page.goto(`${fixture.baseUrl}/piece/4`, { waitUntil: "domcontentloaded" });
+    await fixture.page.getByText("Membership price paid", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    const wallet = await watchWallet(fixture.page);
+    await wallet.reject(CLOSE);
+    await fixture.page.locator("summary", { hasText: "Other actions" }).click();
+    await fixture.page.getByRole("button", { name: "Close sales", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Confirm close sales", exact: true }).click();
+    const cancelled = fixture.page.getByText("Cancelled in your wallet. Nothing was sent.", { exact: true });
+    await cancelled.waitFor({ state: "visible", timeout: 15_000 });
+
+    await chain.write(chain.raffle, "close", [4n]);
+    await expect.poll(() => cancelled.count(), { timeout: 40_000 }).toBe(0);
+    await fixture.page.getByRole("heading", { name: "Sales closed", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByRole("button", { name: "Close sales", exact: true }).count()).toBe(0);
+    expect((await wallet.requests()).map(request => request.method)).toEqual(["eth_sendTransaction"]);
+  }, 120_000);
+
+  it("loads entry records on the first click after a refresh replaced a load still in flight", async () => {
+    const records = fixture.page.locator(".draw-details .private-record-list li");
+    await fixture.page.locator("summary", { hasText: "Draw details" }).click();
+    await fixture.page.locator("summary", { hasText: "Entry records (1 purchase)" }).click();
+    const held: { continue(): Promise<void> }[] = [];
+    let holding = true;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const lotRead = (Array.isArray(body) ? body : [body]).some(request => !!request && typeof request === "object" && "method" in request && request.method === "eth_call"
+        && "params" in request && Array.isArray(request.params) && typeof request.params[0]?.data === "string" && request.params[0].data.startsWith(LOT_AT));
+      if (holding && lotRead) { holding = false; held.push(route); return; }
+      await route.continue();
+    });
+    try {
+      await fixture.page.getByRole("button", { name: "Load entry records", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Loading entries…", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => held.length, { timeout: 10_000 }).toBe(1);
+      await chain.mine();
+      await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
+      const load = fixture.page.getByRole("button", { name: "Load entry records", exact: true });
+      await expect.poll(() => load.isEnabled().catch(() => false), { timeout: 15_000 }).toBe(true);
+      await expect.poll(() => fixture.page.getByRole("button", { name: "Updating…", exact: true }).count(), { timeout: 15_000 }).toBe(0);
+
+      await load.click();
+      await expect.poll(() => records.count(), { timeout: 10_000 }).toBe(1);
+      await held[0].continue();
+      await fixture.page.waitForTimeout(1_000);
+      expect(await records.count()).toBe(1);
+      expect(await records.first().innerText()).toContain(chain.buyer);
+    } finally {
+      for (const route of held) await route.continue().catch(() => {});
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+  }, 60_000);
+
+  it("drops a background read that started before the click once the step is confirming", async () => {
+    await chain.write(chain.nft, "mint", [chain.seller, 905n]);
+    const id = await createOpenRaffle(905n, "Confirming raffle", standardMembershipPacks(() => ({ priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 20 })));
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
+    await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+    const { raffle } = await service.readRaffle({ id });
+    await chain.warp(raffle.salesEnd + 1n);
+    await fixture.switchAccount(chain.buyer);
+    await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" });
+    await fixture.page.getByText("Membership price paid", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    const wallet = await watchWallet(fixture.page);
+    // The page's next background read starts with a deployment check; hold its code read until the close is confirming.
+    const held: { continue(): Promise<void> }[] = [];
+    let holding = true;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const codeRead = (Array.isArray(body) ? body : [body]).some(request => !!request && typeof request === "object" && "method" in request && request.method === "eth_getCode");
+      if (holding && codeRead) { holding = false; held.push(route); return; }
+      await route.continue();
+    });
+    // The close stays one block deep, so it is still confirming when the held read lands.
+    fixture.setMineConfirmation(false);
+    try {
+      await expect.poll(() => held.length, { timeout: 30_000 }).toBe(1);
+      await fixture.page.locator("summary", { hasText: "Other actions" }).click();
+      await fixture.page.getByRole("button", { name: "Close sales", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Confirm close sales", exact: true }).click();
+      const confirming = fixture.page.getByText("Confirming on the network… usually under 30 seconds", { exact: true });
+      await confirming.waitFor({ state: "visible", timeout: 15_000 });
+      expect(Number((await service.readRaffle({ id })).raffle.phase)).toBe(2);
+
+      await held[0].continue();
+      await fixture.page.waitForTimeout(3_000);
+      expect(await confirming.isVisible()).toBe(true);
+      expect(await fixture.page.getByRole("heading", { name: "Sales closed", exact: true }).count()).toBe(0);
+    } finally {
+      fixture.setMineConfirmation(true);
+      for (const route of held) await route.continue().catch(() => {});
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+    await chain.mine();
+    await fixture.page.getByRole("heading", { name: "Sales closed", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+    expect((await wallet.requests()).map(request => request.method)).toEqual(["eth_sendTransaction"]);
+  }, 120_000);
 });

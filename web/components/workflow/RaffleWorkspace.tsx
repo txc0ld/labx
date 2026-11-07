@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionTrust } from "./useActionTrust";
+import { CHECKING_TRUST, useActionTrust } from "./useActionTrust";
 import { MembershipPackCard } from "@/components/ui/squishy-card-component";
 
 import Link from "next/link";
@@ -17,7 +17,7 @@ import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import { sameAddress } from "@/lib/chain/validation";
 import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";
-import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
+import { SellerDraftForm, type FormDraft, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { catalogAvailability, formatUsdcAmount, fromPriceLabel, networkName, prizeStatus, shortAddress } from "./format";
 import { LocalTime } from "./LocalTime";
@@ -205,6 +205,8 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   const pieceRef = useRef<HTMLElement>(null);
   const pollRef = useRef(poll);
   pollRef.current = poll;
+  // The seller's unsaved draft edits. A refresh or account re-read remounts the edit form, which starts again from these.
+  const draftEdits = useRef<{ id: bigint; form: FormDraft } | null>(null);
   const { outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
 
   useEffect(() => {
@@ -252,19 +254,22 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   const pollDelaySeconds = pollFrom !== null && pollFrom > now ? Number(pollFrom - now) : 0;
   const walletBusy = outcomes.some(item => item.kind === "submitting" || item.kind === "checking" || item.kind === "pending" || item.kind === "recovery" || item.kind === "unverified" || item.kind === "overflow");
   const shouldPoll = pollFrom !== null && refreshState.kind === "idle" && !walletBusy;
+  const walletBusyRef = useRef(walletBusy);
+  walletBusyRef.current = walletBusy;
   useEffect(() => {
     if (!shouldPoll) return;
     const start = Date.now();
     let inFlight = false;
-    // A review, a submission or confirmation, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps
-    // the page still, so a re-read never remounts a control mid-sequence. A read that started before the control got busy is dropped.
-    // A purchase receipt is not mid-sequence, so it does not hold the page.
-    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, .transaction-state:not(.purchase-receipt), [aria-busy=true]");
+    // A review, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps the page still, so a re-read
+    // never remounts a control mid-sequence; a submission or confirmation stops polling through walletBusy. A read that started
+    // before the control or the wallet got busy is dropped. A finished panel, such as a cancellation, an error or a receipt, is
+    // not mid-sequence, so it does not hold the page.
+    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, [aria-busy=true]");
     const timer = window.setInterval(() => {
       if (Date.now() - start < pollDelaySeconds * 1000) return;
       if (inFlight || document.visibilityState !== "visible" || busy()) return;
       inFlight = true;
-      void pollRef.current(() => !busy()).finally(() => { inFlight = false; });
+      void pollRef.current(() => !busy() && !walletBusyRef.current).finally(() => { inFlight = false; });
     }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [shouldPoll, pollDelaySeconds, now]);
@@ -281,8 +286,9 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
 
   const fromPrice = mode === "public" && availabilityStatus.purchasable ? fromPriceLabel(snapshot) : null;
   const chainId = browser.service.manifest.chainId;
+  const edits = draftEdits.current?.id === snapshot.id ? draftEdits.current.form : undefined;
   const editDraft = mode === "seller" && seller && phase === 0 && saveCommitment && writesEnabled
-    ? <SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} />
+    ? <details className="workflow-details" open={edits !== undefined || undefined}><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} edits={edits} onEdit={form => { draftEdits.current = { id: snapshot.id, form }; }} onConfirmed={async () => { draftEdits.current = null; await reload(); }} /></details>
     : null;
 
   return (
@@ -309,7 +315,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
             ? <SellerActions browser={browser} snapshot={snapshot} revealedAt={revealedAt} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} onUnavailable={recheck} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
-            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} onConfirmed={reload} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
+            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} onConfirmed={reload} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading" || trustReason === CHECKING_TRUST} />}
           {mode === "seller" && phase >= 1 ? <SellerProgress snapshot={snapshot} /> : null}
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Earnings</summary><SellerEarnings snapshot={snapshot} /></details> : null}
           {phase >= 1 ? <DrawProgress service={browser.service} snapshot={snapshot} /> : null}
@@ -498,7 +504,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   reloadFailed: boolean;
   writesEnabled: boolean;
   writeDisabledReason?: string;
-  /** The raffle or this wallet's account is being re-read. */
+  /** The raffle or this wallet's account is being re-read, or the action check for this read is still running. */
   updating: boolean;
 }) {
   const [packId, setPackId] = useState(() => Math.max(0, snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply)));
@@ -603,10 +609,11 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const total = quote ? formatUsdcAmount(quote.totalUsdc) : null;
   const buyLabel = payment === "eth" && quote?.eth.kind === "available" ? `Buy for up to ${formatEther(quote.eth.maxEth)} ETH` : `Buy for ${total} USDC`;
 
-  // After the approval confirms, the page re-reads the raffle and this wallet. The first fresh read decides once: with the
-  // allowance in place the purchase opens in the wallet; anything else ends the sequence and the button waits for a click.
+  // After the approval confirms, the page re-reads the raffle and this wallet. The first fresh read decides once, after its
+  // account, quote and action check have all finished: with the allowance in place the purchase opens in the wallet; anything
+  // else ends the sequence and the button waits for a click.
   const order = quote && selected ? `${packId}:${quantity}:${quote.totalUsdc}` : null;
-  const buyReady = buyAfterApproval !== null && account !== null && quote !== null
+  const buyReady = buyAfterApproval !== null && account !== null && quote !== null && !updating
     && account.snapshot.block.number >= buyAfterApproval.block && quote.block.number >= buyAfterApproval.block;
   const autoBuy = buyReady && buyAfterApproval.order === order && buyAfterApproval.revision === buyerWallet.revision && payment === "usdc" && !needsApproval;
   useEffect(() => {
@@ -776,7 +783,7 @@ function SellerActions({ browser, snapshot, revealedAt, account, availability, r
         : next.kind === "automatic" ? <><section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section><details className="workflow-details"><summary>Run it yourself</summary>{control(next.action)}</details></>
         : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p>{paid !== null ? <p className="workflow-fact">Paid to you: {formatUsdcAmount(paid)} USDC</p> : null}</section> : null}
       {editDraft || secondary.length ? <div className="seller-more">
-        {editDraft ? <details className="workflow-details"><summary>Edit draft</summary>{editDraft}</details> : null}
+        {editDraft}
         {Number(snapshot.raffle.phase) === 0
           ? secondary.map(item => <details key={item.kind} className="workflow-details"><summary>{item.label}</summary>{control(item)}</details>)
           : secondary.length ? <details className="workflow-details"><summary>Advanced ({secondary.length})</summary><div className="stack">{secondary.map(control)}</div></details> : null}
