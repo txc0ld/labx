@@ -9,6 +9,8 @@ import { adaptNotificationWorkflow, createNotificationReadBudget, NotificationRa
 const PAGE_BLOCKS = 250n;
 const MAX_INGESTION_PAGES = 2;
 const MAX_RETRY_PAGES = 4;
+/** Pages read past the retry window for later pages with events still to deliver: over two days of 12-second blocks. */
+const MAX_RETRY_SCAN_PAGES = 64;
 const MAX_EVENT_CHECKS = 400;
 const TERMINAL_CHECKPOINT_EVENTS = 32;
 const MAX_SENDS = 3;
@@ -63,7 +65,6 @@ export type NotificationRunReport = {
   reconciliationRequired: number;
   ingestionNextBlock: string;
   retryNextBlock: string;
-  reconciliation?: string;
   ingestion: { status: "idle" | "advanced" | "blocked"; fromBlock?: string; toBlock?: string; reason?: IngestionFailureReason; incident?: string };
   lastIncident?: { id: string; kind: "ingestion" | "delivery" | "reconciliation"; reason: string };
 };
@@ -126,18 +127,11 @@ export async function processNotifications(args: {
   const createdActivation = await requestStore.setIfAbsent({ [activationKey]: JSON.stringify(activationCandidate) });
   const activationRaw = await requestStore.get(activationKey);
   if (activationRaw === null) throw new Error("Notification activation was not persisted.");
-  const activation = parseActivation(activationRaw, args.source.deployment);
+  let activation = parseActivation(activationRaw, args.source.deployment);
   const activationBlock = BigInt(activation.blockNumber);
   const firstEventBlock = activationBlock + 1n;
   const empty = baseReport(activation.blockNumber, activation.blockNumber, firstEventBlock);
   if (createdActivation) return { ...empty, status: "activated" };
-
-  const terminalKey = `${prefix}:activation-reconciliation`;
-  const existingTerminal = await requestStore.get(terminalKey);
-  if (existingTerminal !== null) {
-    parseActivationReconciliation(existingTerminal);
-    return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary needs reconciliation." };
-  }
 
   const verifiedBoundaryKey = `${prefix}:activation-verified`;
   const verifiedBoundary = await requestStore.get(verifiedBoundaryKey);
@@ -146,10 +140,11 @@ export async function processNotifications(args: {
     empty.finalizedBlock = finalized.number.toString();
     if (finalized.number < activationBlock) return { ...empty, status: "idle" };
     const boundary = await withinDeadline(() => args.source.block(activationBlock), SOURCE_CALL_MS, requestDeadline);
+    // Nothing is ingested or mailed until this boundary is verified, so a reorged activation block is safely replaced by
+    // the finalized block at the same height. This also recovers deployments an earlier build marked for reconciliation.
     if (boundary.hash.toLowerCase() !== activation.blockHash.toLowerCase()) {
-      const marker = JSON.stringify({ version: 1, reason: "activation-boundary-changed", recordedAt: now });
-      await requestStore.setIfAbsent({ [terminalKey]: marker });
-      return { ...empty, status: "reconciliation-required", reconciliation: "The activation boundary changed and needs reconciliation." };
+      activation = { ...activation, blockHash: boundary.hash };
+      await requestStore.set(activationKey, JSON.stringify(activation));
     }
     await requestStore.setIfAbsent({ [verifiedBoundaryKey]: JSON.stringify({ version: 1, blockNumber: activation.blockNumber, blockHash: activation.blockHash }) });
   } else {
@@ -451,14 +446,24 @@ function canStartDeliveryWork(state: DeliveryState): boolean {
   return Date.now() + MAIL_SEND_RUNTIME_MS <= state.deadline;
 }
 
+/**
+ * The consecutive retry window from the retry cursor, then up to as many later pages whose events are not all terminal,
+ * so a page behind an earlier pending page is still retried inside its delivery window.
+ */
 async function retryPageStarts(store: Store, prefix: string, start: bigint): Promise<bigint[]> {
   const starts: bigint[] = [];
   let current = start;
-  for (let count = 0; count < MAX_RETRY_PAGES; count += 1) {
-    const raw = await store.get(pageKey(prefix, current));
+  let later = 0;
+  for (let count = 0; count < MAX_RETRY_SCAN_PAGES && later < MAX_RETRY_PAGES; count += 1) {
+    const key = pageKey(prefix, current);
+    const raw = await store.get(key);
     if (raw === null) break;
     const page = parsePage(raw, prefix.slice("raffle-notifications:v1:".length), current);
-    starts.push(current);
+    if (count < MAX_RETRY_PAGES) starts.push(current);
+    else if (page.events.length > 0 && await verifiedTerminalPrefix(store, prefix, current, page.events.length, await store.get(`${key}:terminal-prefix`)) < page.events.length) {
+      starts.push(current);
+      later += 1;
+    }
     current = BigInt(page.nextBlock);
   }
   return starts;
@@ -623,14 +628,6 @@ function parseResume(raw: string | null, length: number): number {
   const index = Number(raw);
   if (!Number.isSafeInteger(index) || index < 0 || index >= length) return 0;
   return index;
-}
-
-function parseActivationReconciliation(raw: string): void {
-  const value = parseObject(raw, "Notification activation reconciliation record is invalid.");
-  if (
-    Reflect.get(value, "version") !== 1 || Reflect.get(value, "reason") !== "activation-boundary-changed"
-    || !Number.isSafeInteger(Reflect.get(value, "recordedAt"))
-  ) throw new Error("Notification activation reconciliation record is invalid.");
 }
 
 function parseVerifiedBoundary(raw: string, activation: StoredActivation): void {

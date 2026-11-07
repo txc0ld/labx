@@ -10,6 +10,7 @@ import type { CommitmentInput, WorkflowContext } from "../lib/chain/api-types";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
 import { agreementMessage, recordAgreement, type AgreementRequest } from "../lib/agreement-record";
 import { hashCommitment } from "../lib/commitment";
+import { signatureVerifier } from "../lib/chain/server";
 
 const now = 1_791_000_000_000;
 const seller = privateKeyToAccount(generatePrivateKey()), other = privateKeyToAccount(generatePrivateKey());
@@ -78,5 +79,39 @@ describe("authenticated durable workflow records", () => {
     expect((await privateRecords(store, victimRequest, context, verifyMessage)).agreements.every(record => !record.recorded)).toBe(true);
     const different: Hex = `0x${"ab".repeat(32)}`;
     await expect(recordAgreement(store, { ...agreement, termsHash: different }, { ...context, termsHash: different }, now)).rejects.toThrow(/published/);
+  });
+  it("leaves out a stored agreement its contract signer no longer validates and returns the other records", async () => {
+    const store = new MemoryStore();
+    const wallet = "0x5555555555555555555555555555555555555555" as const;
+    const agreementSignature: Hex = `0x${"ab".repeat(40)}`, recordsSignature: Hex = `0x${"cd".repeat(40)}`;
+    // The wallet contract's verdict on the stored agreement signature, as after the Safe owners who made it were removed.
+    let storedVerdict: "valid" | "invalid" | "no answer" = "valid";
+    const verify = signatureVerifier({
+      async request({ method, params }: { method: string; params?: unknown }) {
+        if (method === "eth_getCode") return "0x";
+        if (method !== "eth_call") throw new Error("unsupported");
+        if (!JSON.stringify(params).includes(agreementSignature.slice(2))) return "0x01";
+        if (storedVerdict === "no answer") throw new Error("socket hang up");
+        return storedVerdict === "valid" ? "0x01" : "0x00";
+      }
+    } as Parameters<typeof signatureVerifier>[0]);
+    const agreement: AgreementRequest = { address: wallet, pieceId: "1", terms: true, rules: true, age: true, termsHash: PUBLISHED_TERMS_HASH, deadline, signature: agreementSignature };
+    await recordAgreement(store, agreement, context, now, verify);
+    const selection = { raffleIds: ["1", "2"], purchases: [{ transactionHash: `0x${"12".repeat(32)}` as Hex, logIndex: 0 }] };
+    const request = { address: wallet, input: selection, deadline, signature: recordsSignature };
+    expect((await privateRecords(store, request, context, verify)).agreements[0]).toEqual({ raffleId: "1", recorded: true, at: new Date(now).toISOString() });
+
+    storedVerdict = "invalid";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await privateRecords(store, request, context, verify)).toEqual({
+      agreements: [{ raffleId: "1", recorded: false, at: null }, { raffleId: "2", recorded: false, at: null }],
+      receipts: [{ ...selection.purchases[0], sent: [], full: false }]
+    });
+    expect(warn).toHaveBeenCalledWith("private-records stored-agreement-unverified", { raffleId: "1" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(agreementSignature.slice(2));
+
+    // A node that gives no verdict is still a failure the caller can retry, not a missing agreement.
+    storedVerdict = "no answer";
+    await expect(privateRecords(store, request, context, verify)).rejects.toThrow(/did not check the signature/);
   });
 });

@@ -18,7 +18,7 @@ type PendingReceipt = {
 };
 
 type PendingRecords = {
-  respond(input?: { receiptStatus?: "missing" | "pending" | "delivered"; raffleId?: string }): Promise<void>;
+  respond(input?: { receiptStatus?: "missing" | "pending" | "unconfirmed" | "delivered"; to?: string; sent?: { to: string; status: "pending" | "unconfirmed" | "delivered" }[]; full?: boolean; raffleId?: string }): Promise<void>;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -71,10 +71,12 @@ run("wallet-scoped private-record feedback", () => {
       const purchases = Array.isArray(input.purchases) ? input.purchases : [];
       const raffleIds = Array.isArray(input.raffleIds) ? input.raffleIds : [];
       recordRequests.push(purchases.map(value => String(record(value).transactionHash).toLowerCase()));
-      const respond = async (response: { receiptStatus?: "missing" | "pending" | "delivered"; raffleId?: string } = {}) => {
+      const respond = async (response: { receiptStatus?: "missing" | "pending" | "unconfirmed" | "delivered"; to?: string; sent?: { to: string; status: "pending" | "unconfirmed" | "delivered" }[]; full?: boolean; raffleId?: string } = {}) => {
+        const status = response.receiptStatus ?? "missing";
         const receipts = purchases.map((value) => {
           const purchase = record(value);
-          return { transactionHash: purchase.transactionHash, logIndex: purchase.logIndex, status: response.receiptStatus ?? "missing" };
+          const sent = response.sent ?? (status === "missing" ? [] : [{ to: response.to ?? savedEmail, status }]);
+          return { transactionHash: purchase.transactionHash, logIndex: purchase.logIndex, sent, full: response.full ?? false };
         });
         await route.fulfill({
           status: 200,
@@ -364,4 +366,42 @@ run("wallet-scoped private-record feedback", () => {
     expect(requests[1][0]).not.toBe(newest);
     expect(await loadMore.count()).toBe(0);
   }, 90_000);
+
+  it("offers the saved address after a receipt went to another one and hides a resend that can only fail", async () => {
+    await setFixtureSession({ chainId: 31337, account: chain.buyer });
+    await openRecords(chain.buyer);
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const elsewhere = await startRecordLoad();
+    await elsewhere.respond({ receiptStatus: "delivered", to: "receipts@exmaple.test" });
+    await fixture.page.getByText("Sent to receipts@exmaple.test", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const corrected = await startDelivery();
+    expect(corrected.recipient).toBe(savedEmail);
+    await corrected.respond({ delivered: true });
+    await fixture.page.getByText("Sent", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Email receipt", exact: true }).count()).toBe(0);
+
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const unconfirmed = await startRecordLoad();
+    await unconfirmed.respond({ receiptStatus: "unconfirmed" });
+    await fixture.page.getByText("Not confirmed", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("button", { name: "Email receipt", exact: true }).count()).toBe(0);
+
+    // The saved address matches an earlier, unconfirmed send, so a resend could only fail.
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const earlier = await startRecordLoad();
+    await earlier.respond({ sent: [{ to: "Receipts@Example.test", status: "unconfirmed" }, { to: "work@example.test", status: "delivered" }] });
+    await fixture.page.getByText("Not confirmed", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("button", { name: "Email receipt", exact: true }).count()).toBe(0);
+
+    // Every address is used, so a new one would be refused.
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const full = await startRecordLoad();
+    await full.respond({ sent: [{ to: "a@example.test", status: "delivered" }, { to: "b@example.test", status: "delivered" }, { to: "c@example.test", status: "delivered" }], full: true });
+    await fixture.page.getByText("Sent to c@example.test", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("button", { name: "Email receipt", exact: true }).count()).toBe(0);
+  }, 60_000);
 });
