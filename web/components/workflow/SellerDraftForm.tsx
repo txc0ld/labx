@@ -152,7 +152,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
   useEffect(() => {
     if (existing || walletSnapshot.kind !== "connected") return;
     try { setSavedCreation(readCreateRecord(window.localStorage, createStorageKey(service, walletSnapshot.account))); setUnreadableCreation(false); }
-    catch { setUnreadableCreation(true); setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
+    catch { setSavedCreation(null); setUnreadableCreation(true); setCreation({ kind: "error", message: "Saved creation could not be read. Recover wallet activity before continuing." }); }
   }, [service, existing, walletSnapshot]);
 
   const identityLocked = existing?.raffle.escrowed === true;
