@@ -2,13 +2,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { concat, decodeFunctionData, encodeAbiParameters, encodeErrorResult, encodeFunctionData, maxUint256, parseAbi, parseEther, parseGwei, toHex, type Address, type Hex } from "viem";
-import { mnemonicToAccount } from "viem/accounts";
+import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { raffleAbi } from "../lib/chain/abi";
 import { serverWorkflow } from "../lib/chain/server";
 import { createDrawChain, SAFE_SENTINEL } from "../lib/draw-runner/chain";
 import { createDrawCronHandler } from "../lib/draw-runner/http";
-import { GAS_CAP } from "../lib/draw-runner/run";
+import { GAS_CAP, LEASE_BUCKET_MS, RUN_MS, runDraw } from "../lib/draw-runner/run";
 import { activeStore, MemoryStore } from "../lib/store";
 import { createReserve, readReserveRecord } from "../lib/reserve";
 import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
@@ -134,6 +134,47 @@ run("draw runner on a local chain", () => {
 
   let first: Awaited<ReturnType<typeof listed>>;
   const measured: string[] = [];
+  /** Runs the runner once with a close that stays pending, then calls `then` with its record and a second run at higher fees. */
+  async function stuckClose(then: (saved: { nonce: number; hash: Hex }, rerun: () => ReturnType<typeof runDraw>, store: MemoryStore) => Promise<void>) {
+    await isolated(async () => {
+      const raffle = await listed(500n, 1); await chain.warp(raffle.salesEnd);
+      const drawChain = createDrawChain({ client: chain.client, manifest: chain.manifest, account: privateKeyToAccount(anvilKey(5)) });
+      const store = new MemoryStore();
+      drawChain.quote = async () => ({ gasLimit: 100_000n, maxFeePerGas: parseGwei("2"), maxPriorityFeePerGas: parseGwei("1") });
+      drawChain.wait = async () => { throw new Error("still pending"); };
+      const start = realNow();
+      await chain.rpc("evm_setAutomine", [false]);
+      try {
+        expect((await runDraw({ chain: drawChain, store, now: () => start, deadline: start + RUN_MS })).sends).toBe(1);
+        const saved = JSON.parse((await store.get("draw-runner:last-send"))!);
+        drawChain.quote = async () => ({ gasLimit: 100_000n, maxFeePerGas: parseGwei("20"), maxPriorityFeePerGas: parseGwei("3") });
+        // Two buckets on, so the second run never shares a lease bucket with the first.
+        const next = start + 2 * LEASE_BUCKET_MS;
+        await then(saved, () => runDraw({ chain: drawChain, store, now: () => next, deadline: next + RUN_MS }), store);
+      } finally { await chain.rpc("evm_setAutomine", [true]); }
+    });
+  }
+
+  it("replaces its own close at the same nonce once fees rise past it", async () => {
+    await stuckClose(async (saved, rerun, store) => {
+      expect(await rerun()).toMatchObject({ sends: 1 });
+      const replacement = JSON.parse((await store.get("draw-runner:last-send"))!);
+      expect(replacement).toMatchObject({ nonce: saved.nonce, maxFeePerGas: parseGwei("20").toString() });
+      expect(replacement.hash).not.toBe(saved.hash);
+      const sent = await chain.client.getTransaction({ hash: replacement.hash });
+      expect(sent.nonce).toBe(saved.nonce);
+      expect(decodeFunctionData({ abi: raffleAbi, data: sent.input }).functionName).toBe("close");
+    });
+  }, 30_000);
+
+  it("waits instead of replacing a transaction that took its close's place, such as an operator's cancellation", async () => {
+    await stuckClose(async (saved, rerun, store) => {
+      await chain.rpc("eth_sendTransaction", [{ from: runner, to: runner, value: "0x0", nonce: toHex(saved.nonce), gas: "0x5208", maxFeePerGas: toHex(parseGwei("4")), maxPriorityFeePerGas: toHex(parseGwei("2")) }]);
+      expect(await rerun()).toMatchObject({ ok: false, status: "pending-transaction", sends: 0 });
+      expect(JSON.parse((await store.get("draw-runner:last-send"))!)).toEqual(saved);
+    });
+  }, 30_000);
+
   it("leaves an open raffle alone until its sales deadline, then closes, counts in batches and starts the draw", async () => {
     first = await listed(1n, 101);
     const early = await invoke();

@@ -62,6 +62,8 @@ export type DrawChain = {
   nonces(): Promise<{ latest: number; pending: number }>;
   /** Current fees and a gas limit from a fresh estimate. Throws when the estimate fails, for example because someone else took the step. */
   quote(prepared: PreparedAction): Promise<Quote>;
+  /** Whether the node holds `hash` as the runner's own unmined transaction at `nonce`. False when it does not know the hash. */
+  pendingAt(hash: Hex, nonce: number): Promise<boolean>;
   /** Signs with the quote and broadcasts, waiting at most timeoutMs for the node. */
   send(prepared: PreparedAction, nonce: number, quote: Quote, timeoutMs: number): Promise<SendResult>;
   /** Throws when no receipt arrives within timeoutMs. */
@@ -95,22 +97,23 @@ const bumped = (fee: bigint) => (fee * 11n + 9n) / 10n;
 const larger = (left: bigint, right: bigint) => left > right ? left : right;
 
 /**
- * Fees that replace the runner's last send when that send is the one transaction still pending and the suggested max
- * fee has risen past its own. Null when the pending transaction is not that send or fees have not risen.
+ * The runner's last send and the fees that would replace it, when its record matches the one pending nonce and the
+ * suggested max fee has risen past its own. Null otherwise. The caller still checks that the send is the pending one.
  */
-function replacementQuote(raw: string | null, runner: Address, nonce: { latest: number; pending: number }, quote: Quote): Quote | null {
+function replacementQuote(raw: string | null, runner: Address, nonce: { latest: number; pending: number }, quote: Quote): { hash: Hex; quote: Quote } | null {
   if (raw === null || nonce.pending !== nonce.latest + 1) return null;
   let last: unknown;
   try { last = JSON.parse(raw); } catch { return null; }
   if (
     !last || typeof last !== "object" || !("runner" in last) || typeof last.runner !== "string" || !sameAddress(last.runner, runner)
     || !("nonce" in last) || last.nonce !== nonce.latest
+    || !("hash" in last) || typeof last.hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(last.hash)
     || !("maxFeePerGas" in last) || typeof last.maxFeePerGas !== "string" || !/^\d{1,30}$/.test(last.maxFeePerGas)
     || !("maxPriorityFeePerGas" in last) || typeof last.maxPriorityFeePerGas !== "string" || !/^\d{1,30}$/.test(last.maxPriorityFeePerGas)
   ) return null;
   const maxFeePerGas = BigInt(last.maxFeePerGas), maxPriorityFeePerGas = BigInt(last.maxPriorityFeePerGas);
   if (quote.maxFeePerGas <= maxFeePerGas) return null;
-  return { gasLimit: quote.gasLimit, maxFeePerGas: larger(quote.maxFeePerGas, bumped(maxFeePerGas)), maxPriorityFeePerGas: larger(quote.maxPriorityFeePerGas, bumped(maxPriorityFeePerGas)) };
+  return { hash: last.hash as Hex, quote: { gasLimit: quote.gasLimit, maxFeePerGas: larger(quote.maxFeePerGas, bumped(maxFeePerGas)), maxPriorityFeePerGas: larger(quote.maxPriorityFeePerGas, bumped(maxPriorityFeePerGas)) } };
 }
 
 export async function runDraw({ chain, store, now, deadline }: { chain: DrawChain; store: Store; now: () => number; deadline: number }): Promise<RunReport> {
@@ -190,13 +193,13 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         if (await bounded(chain.balance()) < requiredBalance(quote)) { record(action, null, "low-funds", null); break; }
         const nonce = await bounded(chain.nonces());
         if (nonce.pending !== nonce.latest) {
-          // Only the runner's own last send, alone in the pool, is replaced, and only once fees have risen past it.
-          // A failed record read leaves the transaction to be waited for, as before.
+          // Only the runner's own last send, alone in the pool, is replaced, and only once fees have risen past it. A
+          // transaction that took its place, such as an operator's cancellation, is waited for. So is a failed read.
           const replacement = replacementQuote(await bounded(store.get(LAST_SEND_KEY)).catch(() => null), chain.runner, nonce, quote);
-          if (!replacement) { stop("pending-transaction", id); break raffles; }
-          if (replacement.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
-          if (await bounded(chain.balance()) < requiredBalance(replacement)) { record(action, null, "low-funds", null); break; }
-          quote = replacement;
+          if (!replacement || !await bounded(chain.pendingAt(replacement.hash, nonce.latest)).catch(() => false)) { stop("pending-transaction", id); break raffles; }
+          if (replacement.quote.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
+          if (await bounded(chain.balance()) < requiredBalance(replacement.quote)) { record(action, null, "low-funds", null); break; }
+          quote = replacement.quote;
         }
         if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
         const sent = await chain.send(prepared, nonce.latest, quote, Math.min(SEND_TIMEOUT_MS, workEnd - now()));

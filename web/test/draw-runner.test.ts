@@ -450,6 +450,7 @@ function fakeChain(raffles: Record<string, FakeRaffle>, options: FakeOptions = {
       return prepared(action, action.id === 1n ? options.prepareWrong : {});
     },
     async balance() { return options.balance ?? parseEther("1"); },
+    async pendingAt() { return false; },
     async nonces() { options.onNonces?.(); return { latest: nonce, pending: nonce + (options.pending ?? 0) }; },
     async quote(call) {
       const result = options.quote?.(call.action as RunnerAction) ?? cheap;
@@ -1323,18 +1324,20 @@ describe("draw runner stuck transaction replacement", () => {
   function stuckChain(store: Store) {
     const raffle = open();
     const { chain } = fakeChain({ 1: raffle });
-    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, nonceReads: 0 };
+    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, nonceReads: 0, pendingHash: null as Hex | null };
     const sends: string[] = [];
     chain.nonces = async () => { state.nonceReads++; return { latest: state.latest, pending: state.pending }; };
     chain.quote = async () => state.quote;
+    chain.pendingAt = async (hash, nonce) => hash === state.pendingHash && nonce === state.latest && state.pending === state.latest + 1;
     chain.send = async (prepared, nonce, quote) => {
       const action = prepared.action as RunnerAction;
       if (state.mineBeforeNextSend) { state.mineBeforeNextSend = false; state.latest = state.pending; advance(raffle, "close"); }
       sends.push(`${action.kind}:${nonce}:${quote.maxFeePerGas}:${quote.maxPriorityFeePerGas}`);
       const hash = pad(toHex(sends.length), { size: 32 });
       if (nonce < state.latest) return { kind: "unknown", hash, error: "NonceTooLow" };
-      if (!state.mine) { state.pending = nonce + 1; return { kind: "sent", hash }; }
+      if (!state.mine) { state.pending = nonce + 1; state.pendingHash = hash; return { kind: "sent", hash }; }
       state.latest = state.pending = nonce + 1;
+      state.pendingHash = null;
       advance(raffle, action.kind, action.kind === "snapshot" ? action.maxSteps : undefined);
       return { kind: "sent", hash };
     };
@@ -1376,6 +1379,16 @@ describe("draw runner stuck transaction replacement", () => {
     expect(await run(LAST)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0 });
     await store.set("draw-runner:last-send", JSON.stringify({ ...recorded, runner: owner }));
     expect(await run(LAST + LEASE_BUCKET_MS)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0 });
+    expect(sends).toHaveLength(1);
+  });
+
+  it("waits instead of replacing a transaction that took its recorded send's place, such as an operator's cancellation", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    state.pendingHash = pad(toHex(99), { size: 32 });
+    state.quote = fees("20");
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0, nextCursor: "1" });
     expect(sends).toHaveLength(1);
   });
 
