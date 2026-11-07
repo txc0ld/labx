@@ -244,6 +244,29 @@ describe("unified wallet authority", () => {
     vi.useRealTimers();
   });
 
+  it("clears the reload message a Connect click showed once that cleanup finishes after all", async () => {
+    vi.useFakeTimers();
+    const selected = providerFixture();
+    const chooser = chooserFixture(selected.provider);
+    const late = deferred<void>();
+    chooser.disconnect = vi.fn()
+      .mockImplementationOnce(() => late.promise)
+      .mockResolvedValue(undefined);
+    const wallet = new BrowserWalletSession(undefined, 11155111, projectId, async () => chooser);
+    await wallet.connect();
+
+    wallet.disconnect();
+    await vi.advanceTimersByTimeAsync(8_001);
+    await expect(wallet.connect()).rejects.toThrow("The wallet chooser could not initialize safely. Reload this page before retrying.");
+    expect(wallet.getConnectionStatus()).toEqual({ kind: "error", message: "The wallet chooser could not initialize safely. Reload this page before retrying." });
+
+    late.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wallet.getConnectionStatus()).toEqual({ kind: "idle" });
+    expect(await wallet.connect()).toMatchObject({ kind: "connected", account });
+    vi.useRealTimers();
+  });
+
   it("keeps requiring a reload when a cleanup that outlasted its bound later fails", async () => {
     vi.useFakeTimers();
     const selected = providerFixture();

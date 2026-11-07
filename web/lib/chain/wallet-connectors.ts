@@ -52,6 +52,8 @@ export async function bounded<T>(operation: Promise<T>, milliseconds: number): P
 
 export class BrowserWalletSession extends WalletSession {
   private connection: ConnectionStatus = { kind: "idle" };
+  /** The status showing that an unconfirmed cleanup blocks connecting, cleared when that cleanup finishes after all. */
+  private cleanupNotice: ConnectionStatus | undefined;
   private attempt = 0;
   private abort: AbortController | undefined;
   private chooser: WalletChooser | undefined;
@@ -139,11 +141,12 @@ export class BrowserWalletSession extends WalletSession {
             : "Wallet cleanup could not be confirmed. Reload this page before connecting again."
         };
         this.status(failure);
+        this.cleanupNotice = failure;
       }
       // A cleanup that outlasted its bound and then finishes cleanly is confirmed after all.
       cleanup?.then(() => {
         this.cleanupFailures -= 1;
-        if (this.cleanupFailures === 0 && this.connection === failure) this.status({ kind: "idle" });
+        if (this.cleanupFailures === 0 && this.connection === this.cleanupNotice) this.status({ kind: "idle" });
       }, () => {});
     });
   }
@@ -356,7 +359,9 @@ export class BrowserWalletSession extends WalletSession {
           : error instanceof Error && /still pending|finish or reject/i.test(error.message)
             ? error.message
             : `Wallet connection was cancelled or could not connect to ${chainName(this.chainId)}. Please retry.`;
-        this.status({ kind: "error", message });
+        const status: ConnectionStatus = { kind: "error", message };
+        this.status(status);
+        if (error instanceof WalletChooserReloadError && this.cleanupFailures > 0) this.cleanupNotice = status;
       }
       throw error;
     }
