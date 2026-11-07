@@ -57,7 +57,7 @@ export class BrowserWalletSession extends WalletSession {
   private chooser: WalletChooser | undefined;
   private chooserLoad: Promise<WalletChooser> | undefined;
   private cleanup: Promise<void> = Promise.resolve();
-  private cleanupFailed = false;
+  private cleanupFailures = 0;
   private inFlight: Promise<WalletSnapshot> | undefined;
   private activeOwner: object | undefined;
   private restoring = false;
@@ -118,31 +118,39 @@ export class BrowserWalletSession extends WalletSession {
   }
 
   private queueCleanup(resource: WalletChooser | Promise<WalletChooser>, mode: "disconnect" | "release", attempt: number) {
+    let cleanup: Promise<void> | undefined;
     this.cleanup = this.cleanup.catch(() => {}).then(async () => {
       // Own a pending SDK load immediately so a new chooser cannot overtake its retirement.
       const chooser = await resource;
-      const cleanup = mode === "disconnect"
+      cleanup = mode === "disconnect"
         ? chooser.disconnect()
         : chooser.release
           ? chooser.release()
           : Promise.reject(new WalletChooserReloadError());
       await bounded(cleanup, 8_000);
     }).catch(error => {
-      this.cleanupFailed = true;
+      this.cleanupFailures += 1;
+      let failure: ConnectionStatus | undefined;
       if (attempt === this.attempt && this.connection.kind === "idle") {
-        this.status({
+        failure = {
           kind: "error",
           message: error instanceof WalletChooserReloadError
             ? error.message
             : "Wallet cleanup could not be confirmed. Reload this page before connecting again."
-        });
+        };
+        this.status(failure);
       }
+      // A cleanup that outlasted its bound and then finishes cleanly is confirmed after all.
+      cleanup?.then(() => {
+        this.cleanupFailures -= 1;
+        if (this.cleanupFailures === 0 && this.connection === failure) this.status({ kind: "idle" });
+      }, () => {});
     });
   }
 
   private async waitForCleanup() {
     await this.cleanup;
-    if (this.cleanupFailed) throw new WalletChooserReloadError();
+    if (this.cleanupFailures > 0) throw new WalletChooserReloadError();
   }
 
   override dispose() {
