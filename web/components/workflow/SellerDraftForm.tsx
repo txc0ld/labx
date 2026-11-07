@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { PreparationNotDispatchedError } from "@/lib/chain/submission-errors";
+import { isEarlierSend, PreparationNotDispatchedError } from "@/lib/chain/submission-errors";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { isAddress, zeroHash, type Hex, type Address } from "viem";
 import { NETWORKS } from "@/lib/chain/networks";
@@ -496,6 +496,8 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
       });
     } catch (error) {
       if (lifetime.mounted && lifetime.generation === generation) setCreation(current => current.kind === "done" ? current : { kind: "error", message: isWalletRequestRejected(error) ? "The wallet request was cancelled. Press Create to continue when you're ready." : error instanceof Error ? error.message : "Creation stopped. Recover the saved stage before trying again." });
+      // An earlier request may have landed: the page reads the chain again so the seller can see it.
+      if (isEarlierSend(error)) void Promise.resolve(onConfirmed?.()).catch(() => {});
     } finally {
       if (lifetime.operation === operation) {
         lifetime.busy = false;

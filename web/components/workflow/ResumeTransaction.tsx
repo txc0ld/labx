@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import { isHex, type Hex } from "viem";
 import type { BrowserService } from "@/lib/chain/ports";
 import { isTransactionNotFound } from "@/lib/chain/service";
@@ -45,6 +45,9 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   // This tab's own wallet request is open: its result settles the record, so the chain check waits.
   const ownRequestOpen = outcomes.some(item => item.kind === "submitting");
   const pendingSend = usePendingSend(browser.service, browser.wallet, ownRequestOpen ? null : pending);
+  const getEarlierSends = useCallback(() => wallet.kind === "connected" ? owner.earlierSendCount(wallet.account) : 0, [owner, wallet]);
+  const earlierSends = useSyncExternalStore(owner.subscribe, getEarlierSends, getEarlierSends);
+  const seenEarlierSends = useRef(earlierSends);
 
   useEffect(() => {
     const version = ++generation.current;
@@ -70,14 +73,17 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     return () => { active = false; };
   }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck, pendingSend.status]);
 
-  // A send at the record's nonce was mined and the record cleared: the page reads the chain again.
+  // A send at the record's nonce was mined and the record cleared, or a send stopped because an earlier cleared request may
+  // have landed: the page reads the chain again.
+  const earlierSendSeen = earlierSends !== seenEarlierSends.current;
   useEffect(() => {
-    if (pendingSend.status !== "spent" || deferRefresh || !callback.current) return;
+    if (pendingSend.status !== "spent" && !earlierSendSeen || deferRefresh || !callback.current) return;
+    seenEarlierSends.current = earlierSends;
     const version = generation.current;
     void Promise.resolve(callback.current()).catch(reason => {
       if (version === generation.current) setError(reason instanceof Error ? reason.message : "Refresh the current state before another action.");
     });
-  }, [pendingSend.status, deferRefresh]);
+  }, [pendingSend.status, earlierSendSeen, earlierSends, deferRefresh]);
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;
@@ -163,7 +169,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     // TransactionFlow that shows this record already, such as the checkout, keeps the page to one panel.
     panel = pendingSend.panelShown ? null
       : pendingSend.status === "unsent"
-      ? <div className="well pad stack" role="status"><h2>Your wallet didn’t send your last transaction.</h2><button className="btn btn-dark" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button><details><summary>Details</summary>{rejectFirst}</details></div>
+      ? <div className="well pad stack" role="status"><h2>Your wallet didn’t send your last transaction.</h2><button className="btn btn-dark" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button>{rejectFirst}</div>
       : pendingSend.status === "unknown"
         ? <div className="stack">{progress("Can’t reach the network to check your last transaction. Trying again…")}<details className="workflow-details"><summary>Details</summary><div className="stack">{form(null)}{rejectFirst}</div></details></div>
         : progress(pendingSend.status === "waiting" ? "Waiting for your last transaction to confirm…" : "Checking your last transaction…");

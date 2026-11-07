@@ -205,7 +205,8 @@ run("one-click membership purchase in a rendered browser", () => {
     await unsentPanel.first().waitFor({ state: "visible", timeout: 20_000 });
     expect(await fixture.page.getByText(/needs a check|paste/i).count()).toBe(0);
     expect(await hashField.count()).toBe(0);
-    await fixture.page.locator(".resume-transaction summary", { hasText: /^Details$/ }).click();
+    // The reject-it-first line sits next to Continue, not behind Details.
+    expect(await fixture.page.locator(".resume-transaction summary", { hasText: /^Details$/ }).count()).toBe(0);
     expect(await fixture.page.getByText("If your wallet still shows a request from LABx, reject it first.", { exact: true }).first().isVisible()).toBe(true);
     await agreement().check();
     await fixture.page.locator(".checkout-bar").getByText("Your wallet didn’t send your last transaction.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });

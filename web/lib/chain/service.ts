@@ -1,6 +1,6 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
 import { decodeEventLog, encodeFunctionData, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
-import { NotSentError, SubmissionNotDispatchedError } from "./submission-errors";
+import { EarlierSendError, NotSentError, SubmissionNotDispatchedError } from "./submission-errors";
 import { checkNetworkFee } from "./network-fee";
 import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
@@ -150,6 +150,16 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
         const fees = await checkNetworkFee(client, manifest.chainId, { account, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value, blockNumber: fresh.block.number });
         const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
+        // A record cleared without proof that nothing was sent may have reached its nonce since: the page shows it before
+        // another send. Once it is mined the marker goes, so the next click sends.
+        const cleared = journal.readCleared(account);
+        if (cleared && nonce > cleared.nonce) {
+          if (await client.getTransactionCount({ address: account, blockTag: "latest" }) > cleared.nonce) await journal.exclusive(account, async () => {
+            const current = journal.readCleared(account);
+            if (current?.nonce === cleared.nonce && current.startedBlock === cleared.startedBlock) journal.writeCleared(account, null);
+          });
+          throw new EarlierSendError();
+        }
         await wallet.assertCurrent(entry.session);
         const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce, ...fees }, async () => {
           await journal.exclusive(account, async () => {
@@ -202,6 +212,8 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
               const latest = journal.read(account);
               if (!latest || latest.id !== current.id || latest.hash !== null) return;
               onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
+              // A bare code does not prove the wallet sent nothing, so the next send first checks this nonce.
+              if (evidence === "code") journal.writeCleared(account, { nonce: current.nonce, startedBlock: current.startedBlock });
               journal.remove(account);
               notSent = true;
             });
@@ -258,6 +270,8 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       if (state === "waiting" || state === "unsent" && (!continueUnsent || current.hash !== null)) return { kind: state };
       if (!inspected(journal.read(account))) return { kind: "changed" };
       beforeJournalClear?.({ account, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
+      // Nothing at its nonce yet does not prove the wallet will never send it, so the next send first checks this nonce.
+      if (state !== "spent") journal.writeCleared(account, { nonce: current.nonce, startedBlock: current.startedBlock });
       journal.remove(account);
       return { kind: state === "spent" ? "spent" : "dropped" };
     });
@@ -358,6 +372,8 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         }
         beforeJournalClear?.({ receipt, pending: current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null });
         if (current) journal.remove(transaction.account);
+        // This receipt is what landed at that nonce, so an earlier cleared record there needs no further check.
+        if (journal.readCleared(transaction.account)?.nonce === receipt.nonce) journal.writeCleared(transaction.account, null);
       });
       if (!receipt.to || transactionIntent({ ...receipt, to: receipt.to }) !== expectedIntent) return { kind: "replaced", hash: receipt.hash, reason: "The wallet replaced this transaction with a different action.", receipt };
       if (receipt.status !== "success") return { kind: "reverted", hash: receipt.hash, reason: "The transaction reverted. No successful action was recorded.", receipt };

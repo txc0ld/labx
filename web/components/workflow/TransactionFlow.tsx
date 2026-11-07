@@ -425,7 +425,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
         <section ref={pendingPanel} className="transaction-state notice warning stack" role="status">
           <strong>Your wallet didn’t send your last transaction.</strong>
           <button className="btn" type="button" onClick={() => void pendingSend.continueUnsent()}>Continue</button>
-          <details><summary>Details</summary>{rejectFirst}</details>
+          {rejectFirst}
         </section>
       );
       return (

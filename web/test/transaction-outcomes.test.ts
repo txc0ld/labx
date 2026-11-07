@@ -6,6 +6,7 @@ import { raffleAbi } from "../lib/chain/abi";
 import { createTransactionOutcomes, transactionMeaning, type OutcomeStorage } from "../lib/chain/transaction-outcomes";
 import type { CanonicalReceipt, Confirmation, OutcomeInspection, DeploymentManifest, PreparedAction, SubmittedAction, WalletSnapshot } from "../lib/chain/types";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
+import { EarlierSendError, NotSentError, SubmissionNotDispatchedError } from "../lib/chain/submission-errors";
 
 const account = "0x1111111111111111111111111111111111111111";
 const other = "0x2222222222222222222222222222222222222222";
@@ -449,6 +450,21 @@ describe("operation ownership beyond transaction controls", () => {
     await owner.synchronize(account);
     expect(owner.getSnapshot(account)).toMatchObject([{ kind: "error", id: "storage-error" }]);
     expect(f.map.size).toBe(1);
+  });
+
+  it("counts a send stopped by an earlier cleared request, so the page re-reads the chain, and adds no activity row", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const listener = vi.fn();
+    owner.subscribe(listener);
+    f.service.submit.mockRejectedValueOnce(new SubmissionNotDispatchedError(new EarlierSendError()));
+    expect(await owner.submit(prepared, f.wallet)).toMatchObject({ kind: "error", notSent: true, message: "Your wallet sent an earlier LABx request. Check the page before trying again." });
+    expect(owner.earlierSendCount(account)).toBe(1);
+    expect(owner.earlierSendCount(other)).toBe(0);
+    expect(owner.getSnapshot(account)).toEqual([]);
+    expect(listener).toHaveBeenCalled();
+    f.service.submit.mockRejectedValueOnce(new SubmissionNotDispatchedError(new NotSentError("Your wallet couldn't send this transaction. Nothing was sent.")));
+    await owner.submit(prepared, f.wallet);
+    expect(owner.earlierSendCount(account)).toBe(1);
   });
 
   it("removes its storage-error row once storage reads clean again, so new actions are no longer blocked", async () => {
