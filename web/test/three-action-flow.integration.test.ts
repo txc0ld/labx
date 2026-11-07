@@ -235,6 +235,39 @@ run("one-intent creation and capability-owned owner requests", () => {
     expect(await raffles()).toBe(1n);
   });
 
+  it("finds a draft that landed more than 20,000 blocks after its start, and makes no second draft", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", false);
+    await c.rpc("anvil_mine", [toHex(20_001)]);
+    // The person approves the old request after all, long after it started.
+    await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.manifest.address, data: flow.record().data, value: "0x0", nonce: toHex(pending.nonce), gas: "0x989680" }]);
+    await c.mine(); await c.mine();
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending })).toEqual({ kind: "spent" });
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+  });
+
+  it("keeps the lost draft step when a read fails part way through the search, then finds the draft", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", false);
+    const started = BigInt(flow.record().pending?.checkpoint?.startedBlock ?? -1);
+    await c.rpc("anvil_mine", [toHex(4_001)]);
+    await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.manifest.address, data: flow.record().data, value: "0x0", nonce: toHex(pending.nonce), gas: "0x989680" }]);
+    await c.mine(); await c.mine();
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending })).toEqual({ kind: "spent" });
+    // The second 2,000-block window fails, before the window that holds the draft.
+    const getLogs = c.client.getLogs.bind(c.client);
+    vi.spyOn(c.client, "getLogs").mockImplementation((async (input: Parameters<typeof getLogs>[0]) => {
+      if (input && "fromBlock" in input && input.fromBlock === started + 2_000n) throw new Error("log read failed");
+      return getLogs(input);
+    }) as typeof getLogs);
+    await expect(flow.execute()).rejects.toThrow("log read failed");
+    expect(flow.record().pending).toMatchObject({ step: "createDraft", hash: null });
+    vi.mocked(c.client.getLogs).mockRestore();
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+  });
+
   it.each([true, false])("continues past an NFT approval whose record was cleared elsewhere, sending it again only if it never landed (landed: %s)", async landed => {
     const { flow, pending, requested } = await lostStep("approvePrize", landed);
     if (landed) { await c.mine(); await c.mine(); }
