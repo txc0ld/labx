@@ -17,7 +17,7 @@ export class WalletSession implements WalletSessionPort {
   private listen() {
     const provider = this.provider, epoch = this.epoch;
     const current = () => this.provider === provider && this.epoch === epoch && !this.disposed;
-    // A failed session read after a wallet event is retried three times, then again whenever the window regains focus.
+    // The session read after a wallet event is tried up to three times, then again whenever the window regains focus.
     let unread = false;
     const reread = async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
