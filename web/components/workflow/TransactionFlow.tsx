@@ -168,7 +168,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   const [clearJournalScope, setClearJournalScope] = useState<number | null>(null);
   const ownSubmission = useRef<{ scope: number; submitted: SubmittedAction } | null>(null);
   // Read once at mount, and spent on the first decision: a later prop, scope or journal change never sends on its own.
-  const [autoSubmit] = useState(submitOnMount);
+  const [autoSubmit, setAutoSubmit] = useState(submitOnMount);
   const autoSubmitSpent = useRef(false);
   const callbacks = useRef({ onConfirmed, onCancel, onUnavailable, onSubmitted });
   callbacks.current = { onConfirmed, onCancel, onUnavailable, onSubmitted };
@@ -321,8 +321,11 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (!autoSubmit || autoSubmitSpent.current) return;
     // A saved transaction that needs a check, or an unreadable journal, ends the automatic send. The button stays.
     if (state.kind === "recovery" || state.kind === "error") { autoSubmitSpent.current = true; return; }
-    if (state.kind !== "idle" || clearJournalScope !== scope || disabled || activeOutcome) return;
+    if (state.kind !== "idle" || clearJournalScope !== scope) return;
     autoSubmitSpent.current = true;
+    // So does a saved transaction that needs a check, or a disabled control, once the journal is read: when either clears
+    // later, the button waits for a click.
+    if (disabled || activeOutcome) { setAutoSubmit(false); return; }
     void prepare(true, true);
     // prepare re-reads the journal and checks the wallet and network before anything reaches the wallet.
     // eslint-disable-next-line react-hooks/exhaustive-deps
