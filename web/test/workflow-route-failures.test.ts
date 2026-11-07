@@ -37,7 +37,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.doUnmock("@/lib/chain/server"); vi.do
  * A node that reads `owner` as the NFT's owner and, asked to check a signature on chain, finds it is not the claimed wallet's.
  * "reverts" is a token ID the NFT contract does not know; "no-code" is an address with no contract.
  */
-function node(owner: Address | "unavailable" | "reverts" | "no-code") {
+function node(owner: Address | "unavailable" | "reverts" | "no-code" | "internal" | "no-header") {
   return createPublicClient({ ccipRead: false, transport: custom({
     async request({ method, params }: { method: string; params: [{ to?: Address }] }) {
       if (method !== "eth_call") throw new Error(`Unexpected ${method}`);
@@ -45,12 +45,14 @@ function node(owner: Address | "unavailable" | "reverts" | "no-code") {
       if (owner === "unavailable") throw new Error(RAW_ERROR);
       if (owner === "reverts") throw Object.assign(new Error("execution reverted: ERC721: invalid token ID"), { code: 3, data: "0x" });
       if (owner === "no-code") return "0x";
+      if (owner === "internal") throw Object.assign(new Error("Internal error"), { code: -32603 });
+      if (owner === "no-header") throw Object.assign(new Error("header not found"), { code: -32000 });
       return encodeAbiParameters([{ type: "address" }], [owner]);
     }
   }, { retryCount: 0 }) });
 }
 
-async function post(route: RouteName, input: unknown, options: { signer?: PrivateKeyAccount; deadline?: string; deployment?: "fails"; store?: Store; owner?: Address | "unavailable" | "reverts" | "no-code" } = {}) {
+async function post(route: RouteName, input: unknown, options: { signer?: PrivateKeyAccount; deadline?: string; deployment?: "fails"; store?: Store; owner?: Address | "unavailable" | "reverts" | "no-code" | "internal" | "no-header" } = {}) {
   const { signer = seller, deadline = String(Math.floor(Date.now() / 1000) + 120), store = new MemoryStore(), owner = seller.address } = options;
   vi.doMock("@/lib/chain/server", async original => ({
     ...await original<typeof import("../lib/chain/server")>(),
@@ -172,6 +174,12 @@ describe("sibling signed workflow routes", () => {
     vi.resetModules();
     const failed = await post("reserve", inputs.reserve, { owner: "unavailable" });
     expect(failed.status).toBe(503);
+  });
+
+  it.each(["internal", "no-header"] as const)("reserve answers 503, not a missing NFT, when the node fails the ownership read (%s)", async owner => {
+    const result = await post("reserve", inputs.reserve, { owner });
+    expect(result.status).toBe(503);
+    expect(result.body).toEqual({ ok: false, error: "The raffle setup couldn't be saved right now. Try again in a minute." });
   });
 
   it.each(["reverts", "no-code"] as const)("reserve answers 404 with a plain message, and saves nothing, when the NFT read %s", async owner => {

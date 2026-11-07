@@ -2,12 +2,16 @@ import { workflowRequestBody } from "@/lib/chain/request-body";
 import { activeStore } from "@/lib/store";
 import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { parseCommitmentInput, parseEnvelope, saveAuthenticatedCommitment } from "@/lib/workflow-records";
-import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, erc721Abi } from "viem";
+import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, InternalRpcError, erc721Abi } from "viem";
 import { sameAddress } from "@/lib/chain/validation";
 import { WorkflowMissing, WorkflowRefusal, workflowFailure, type WorkflowStage } from "@/lib/workflow-failure";
-/** Whether ownerOf failed because the contract has no such token or no code, not because the node couldn't be reached. */
+/**
+ * Whether ownerOf failed because the contract has no such token or no code, not because the node couldn't be reached.
+ * viem also reports a node's internal error (-32603) as a revert, so that stays an outage.
+ */
 function missingToken(error: unknown) {
-  return error instanceof BaseError && error.walk(cause => cause instanceof ContractFunctionRevertedError || cause instanceof ContractFunctionZeroDataError) !== null;
+  return error instanceof BaseError && error.walk(cause => cause instanceof ContractFunctionRevertedError || cause instanceof ContractFunctionZeroDataError) !== null
+    && error.walk(cause => cause instanceof InternalRpcError) === null;
 }
 export async function POST(request: Request) {
   let stage: WorkflowStage = "request";
