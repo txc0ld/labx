@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionTrust } from "./useActionTrust";
+import { CHECKING_TRUST, useActionTrust } from "./useActionTrust";
 import { MembershipPackCard } from "@/components/ui/squishy-card-component";
 
 import Link from "next/link";
@@ -309,7 +309,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
           {accountState === "error" ? <p className="notice error" role="alert">{accountError}</p> : null}
           {mode === "seller"
             ? <SellerActions browser={browser} snapshot={snapshot} revealedAt={revealedAt} account={currentAccount} availability={availability} recoverCommitment={recoverCommitment} onConfirmed={reload} onUnavailable={recheck} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} editDraft={editDraft} />
-            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} onConfirmed={reload} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading"} />}
+            : <BuyerActions browser={browser} snapshot={snapshot} account={currentAccount} availability={availability} termsHash={termsHash} onConfirmed={reload} reloadFailed={refreshState.kind === "error" || accountState === "error"} writesEnabled={writesEnabled} writeDisabledReason={writeDisabledReason} updating={refreshState.kind === "loading" || accountState === "loading" || trustReason === CHECKING_TRUST} />}
           {mode === "seller" && phase >= 1 ? <SellerProgress snapshot={snapshot} /> : null}
           {mode === "seller" && phase >= 1 ? <details className="workflow-details"><summary>Earnings</summary><SellerEarnings snapshot={snapshot} /></details> : null}
           {phase >= 1 ? <DrawProgress service={browser.service} snapshot={snapshot} /> : null}
@@ -498,7 +498,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   reloadFailed: boolean;
   writesEnabled: boolean;
   writeDisabledReason?: string;
-  /** The raffle or this wallet's account is being re-read. */
+  /** The raffle or this wallet's account is being re-read, or the action check for this read is still running. */
   updating: boolean;
 }) {
   const [packId, setPackId] = useState(() => Math.max(0, snapshot.packs.findIndex((pack) => pack.active && pack.sold < pack.maxSupply)));
@@ -603,10 +603,11 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const total = quote ? formatUsdcAmount(quote.totalUsdc) : null;
   const buyLabel = payment === "eth" && quote?.eth.kind === "available" ? `Buy for up to ${formatEther(quote.eth.maxEth)} ETH` : `Buy for ${total} USDC`;
 
-  // After the approval confirms, the page re-reads the raffle and this wallet. The first fresh read decides once: with the
-  // allowance in place the purchase opens in the wallet; anything else ends the sequence and the button waits for a click.
+  // After the approval confirms, the page re-reads the raffle and this wallet. The first fresh read decides once, after its
+  // account, quote and action check have all finished: with the allowance in place the purchase opens in the wallet; anything
+  // else ends the sequence and the button waits for a click.
   const order = quote && selected ? `${packId}:${quantity}:${quote.totalUsdc}` : null;
-  const buyReady = buyAfterApproval !== null && account !== null && quote !== null
+  const buyReady = buyAfterApproval !== null && account !== null && quote !== null && !updating
     && account.snapshot.block.number >= buyAfterApproval.block && quote.block.number >= buyAfterApproval.block;
   const autoBuy = buyReady && buyAfterApproval.order === order && buyAfterApproval.revision === buyerWallet.revision && payment === "usdc" && !needsApproval;
   useEffect(() => {

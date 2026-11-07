@@ -18,6 +18,7 @@ const PRICES = { Entry: 10_000_000n, Bronze: 20_000_000n, Silver: 30_000_000n, G
 const TIERS = Object.keys(PRICES) as (keyof typeof PRICES)[];
 const total = (principal: bigint) => principal + (principal * 200n / 10_000n > 2_500_000n ? principal * 200n / 10_000n : 2_500_000n);
 const APPROVE = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: ["0x0000000000000000000000000000000000000000", 0n] }).slice(0, 10);
+const PENDING_OWNER = encodeFunctionData({ abi: raffleAbi, functionName: "pendingOwner" });
 const BUY_PACK = encodeFunctionData({ abi: raffleAbi, functionName: "buyPack", args: [0n, 0, 1, PUBLISHED_TERMS_HASH] }).slice(0, 10);
 
 run("one-click membership purchase in a rendered browser", () => {
@@ -414,4 +415,40 @@ run("one-click membership purchase in a rendered browser", () => {
     await buyAgain();
     await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
   }, 200_000);
+
+  it("still opens the purchase by itself when the action check finishes after the account and quote", async () => {
+    await openPiece(chain.buyer);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    await choose("Bronze");
+    const amount = total(PRICES.Bronze);
+    expect(await allowance(chain.buyer)).toBe(0n);
+    // The first action check after the approval's block is the page's own check of the refreshed raffle. Holding it for a few
+    // seconds lets the account and the quote of that read finish first.
+    const approvalBlock = await chain.client.getBlockNumber();
+    let held = 0;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const check = (Array.isArray(body) ? body : [body]).some(request => {
+        if (!request || typeof request !== "object" || !("method" in request) || request.method !== "eth_call" || !("params" in request) || !Array.isArray(request.params)) return false;
+        const [call, block] = request.params as unknown[];
+        return !!call && typeof call === "object" && "data" in call && call.data === PENDING_OWNER && typeof block === "string" && BigInt(block) > approvalBlock;
+      });
+      if (check && held++ === 0) await new Promise(resolve => setTimeout(resolve, 4_000));
+      await route.continue();
+    });
+    try {
+      await buy(amount).click();
+      await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+    expect(held).toBeGreaterThan(1);
+    expect((await wallet.requests()).map(call)).toEqual([
+      { name: "approve", args: [chain.raffle.address, amount] },
+      { name: "buyPack", args: [id, 1, 1, PUBLISHED_TERMS_HASH] }
+    ]);
+    await buyAgain();
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 0n], chain.buyer);
+  }, 90_000);
 });
