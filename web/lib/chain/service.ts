@@ -279,11 +279,13 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       return { kind: state === "spent" ? "spent" : "dropped" };
     });
   }
-  async function settleCheckpoint({ wallet, checkpoint }: Parameters<RaffleService["settleCheckpoint"]>[0]) {
+  async function settleCheckpoint({ wallet, checkpoint, hash: txHash = null }: Parameters<RaffleService["settleCheckpoint"]>[0]) {
     const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
     const account = session.account;
-    return journal.exclusive(account, async (): Promise<"unsent" | "spent" | "waiting"> => {
-      if (journal.read(account) || submitting.has(account.toLowerCase()) || await journal.requestOpen(account)) return "waiting";
+    return journal.exclusive(account, async (): Promise<"unsent" | "spent" | "waiting" | "known"> => {
+      if (journal.read(account)) return "waiting";
+      if (txHash !== null && await knownTransaction(txHash)) return "known";
+      if (submitting.has(account.toLowerCase()) || await journal.requestOpen(account)) return "waiting";
       const state = await nonceState(account, { ...checkpoint, hash: null });
       if (state === "spent" && journal.readCleared(account)?.nonce === checkpoint.nonce) journal.writeCleared(account, null);
       return state === "expired" ? "unsent" : state;
