@@ -56,6 +56,23 @@ describe("explicit unsent creation recovery", () => {
     await expect(retireUnsentCreate(input)).rejects.toThrow("storage refused");
     expect(readCreateRecord(input.storage, input.key)).toEqual(input.expected);
   });
+  it("archives an unreadable saved creation as it is, so the seller can start over, and keeps it while a send is pending", async () => {
+    const input = setup({ kind: "preparing", data, requestIdentity: zeroHash });
+    const corrupt = JSON.stringify({ kind: "draft", data, id: "not an id", creationHash: null, pending: null });
+    input.storage.setItem(input.key, corrupt);
+    expect(() => readCreateRecord(input.storage, input.key)).toThrow(/Invalid saved raffle ID/);
+    input.pending.mockResolvedValueOnce({ id: "unknown-send", nonce: 8, hash: null });
+    await expect(retireUnsentCreate({ ...input, expected: null })).rejects.toThrow(/unresolved wallet/);
+    expect(input.storage.getItem(input.key)).toBe(corrupt);
+    await retireUnsentCreate({ ...input, expected: null });
+    expect(input.storage.getItem(input.key)).toBeNull();
+    expect([...input.storage.values.entries()].filter(([key]) => key.includes(":retired:")).map(([, raw]) => raw)).toEqual([corrupt]);
+    // A record that reads cleanly is not retired as unreadable.
+    writeCreateRecord(input.storage, input.key, input.expected);
+    await expect(retireUnsentCreate({ ...input, expected: null })).rejects.toThrow(/changed/);
+    expect(readCreateRecord(input.storage, input.key)).toEqual(input.expected);
+    expect(input.submit).not.toHaveBeenCalled();
+  });
   it("rejects queued null-to-null creation even if the first tab has completed", () => {
     const storage = new StorageFixture(), key = "creation";
     const clicked = captureCreateGeneration(storage, key);

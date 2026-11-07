@@ -33,19 +33,26 @@ let log: MockInstance;
 beforeEach(() => { log = vi.spyOn(console, "error").mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); vi.doUnmock("@/lib/chain/server"); vi.doUnmock("@/lib/store"); vi.resetModules(); });
 
-/** A node that reads `owner` as the NFT's owner and, asked to check a signature on chain, finds it is not the claimed wallet's. */
-function node(owner: Address | "unavailable") {
+/**
+ * A node that reads `owner` as the NFT's owner and, asked to check a signature on chain, finds it is not the claimed wallet's.
+ * "reverts" is a token ID the NFT contract does not know; "no-code" is an address with no contract.
+ */
+function node(owner: Address | "unavailable" | "reverts" | "no-code" | "internal" | "no-header") {
   return createPublicClient({ ccipRead: false, transport: custom({
     async request({ method, params }: { method: string; params: [{ to?: Address }] }) {
       if (method !== "eth_call") throw new Error(`Unexpected ${method}`);
       if (!params[0].to) return "0x00";
       if (owner === "unavailable") throw new Error(RAW_ERROR);
+      if (owner === "reverts") throw Object.assign(new Error("execution reverted: ERC721: invalid token ID"), { code: 3, data: "0x" });
+      if (owner === "no-code") return "0x";
+      if (owner === "internal") throw Object.assign(new Error("Internal error"), { code: -32603 });
+      if (owner === "no-header") throw Object.assign(new Error("header not found"), { code: -32000 });
       return encodeAbiParameters([{ type: "address" }], [owner]);
     }
   }, { retryCount: 0 }) });
 }
 
-async function post(route: RouteName, input: unknown, options: { signer?: PrivateKeyAccount; deadline?: string; deployment?: "fails"; store?: Store; owner?: Address | "unavailable" } = {}) {
+async function post(route: RouteName, input: unknown, options: { signer?: PrivateKeyAccount; deadline?: string; deployment?: "fails"; store?: Store; owner?: Address | "unavailable" | "reverts" | "no-code" | "internal" | "no-header" } = {}) {
   const { signer = seller, deadline = String(Math.floor(Date.now() / 1000) + 120), store = new MemoryStore(), owner = seller.address } = options;
   vi.doMock("@/lib/chain/server", async original => ({
     ...await original<typeof import("../lib/chain/server")>(),
@@ -68,6 +75,11 @@ async function savedSetup(owner: Address) {
   const store = new MemoryStore();
   const { commit } = await createReserve(store, { seller: owner, nft, tokenId: "1", publicSummary: "Escrowed NFT prize.", privateCommitment: PRIVATE_NOTE, chainId: 11155111n, labx: context.contract });
   return { store, commit };
+}
+
+/** The identity the reserve route saves a setup under, as the browser computes it before signing. */
+function requestIdentity(input: unknown) {
+  return keccak256(toBytes(JSON.stringify([context.chainId, context.contract.toLowerCase(), seller.address.toLowerCase(), input])));
 }
 
 const inputs: Record<RouteName, unknown> = {
@@ -164,9 +176,41 @@ describe("sibling signed workflow routes", () => {
     expect(failed.status).toBe(503);
   });
 
-  it("reserve/preparation answers 503, so the seller retries, while the saved setup is not yet available", async () => {
+  it.each(["internal", "no-header"] as const)("reserve answers 503, not a missing NFT, when the node fails the ownership read (%s)", async owner => {
+    const result = await post("reserve", inputs.reserve, { owner });
+    expect(result.status).toBe(503);
+    expect(result.body).toEqual({ ok: false, error: "The raffle setup couldn't be saved right now. Try again in a minute." });
+  });
+
+  it.each(["reverts", "no-code"] as const)("reserve answers 404 with a plain message, and saves nothing, when the NFT read %s", async owner => {
+    const store = new MemoryStore();
+    const result = await post("reserve", inputs.reserve, { owner, store });
+    expect(result.status).toBe(404);
+    expect(result.body).toEqual({ ok: false, error: "That NFT couldn't be found. Check the contract and token ID." });
+    expect(result.logs).toEqual([["workflow-request reserve 404 missing"]]);
+    vi.resetModules();
+    expect((await post("reserve/preparation", { requestIdentity: requestIdentity(inputs.reserve), nft, tokenId: "1" }, { store })).status).toBe(404);
+  });
+
+  it("reserve/preparation answers 404, so the seller starts over, when the server never saved that setup", async () => {
     const result = await post("reserve/preparation", inputs["reserve/preparation"]);
+    expect(result.status).toBe(404);
+    expect(result.body).toEqual({ ok: false, error: "Your raffle setup wasn't saved. Press Create to start again." });
+    expect(result.logs).toEqual([["workflow-request reserve/preparation 404 missing"]]);
+  });
+
+  it("reserve/preparation still answers 503 and keeps the setup recoverable when the store can't be read", async () => {
+    const result = await post("reserve/preparation", inputs["reserve/preparation"], { store: brokenStore });
     expect(result.status).toBe(503);
     expect(result.body.error).toBe("Your raffle setup couldn't be restored right now. Try again in a minute.");
+  });
+
+  it("reserve/preparation returns a setup the server saved", async () => {
+    const store = new MemoryStore();
+    expect((await post("reserve", inputs.reserve, { store })).status).toBe(200);
+    vi.resetModules();
+    const result = await post("reserve/preparation", { requestIdentity: requestIdentity(inputs.reserve), nft, tokenId: "1" }, { store });
+    expect(result.status).toBe(200);
+    expect(result.body.ok).toBe(true);
   });
 });

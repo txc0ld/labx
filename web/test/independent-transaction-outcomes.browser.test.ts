@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { decodeEventLog, encodeFunctionData, erc20Abi, keccak256, toBytes, toHex, type Address, type Hex } from "viem";
 import type { Route } from "playwright";
 import { raffleAbi } from "../lib/chain/abi";
+import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
 import { transactionIntent } from "../lib/chain/pending-journal";
 import type { RaffleService, WalletSessionPort } from "../lib/chain/ports";
 import type { DraftInput, WorkflowAction } from "../lib/chain/types";
@@ -885,5 +886,37 @@ run("independent transaction outcome ownership", () => {
       if (!automine) await chain.rpc("evm_setAutomine", [true]);
       await fixture.page.unroute(`${chain.url}/`);
     }
+  }, 90_000);
+
+  // Last in this file: it moves the chain past every raffle's sales deadline.
+  it("shows exactly one Continue panel for an unsent record while Other actions opens and closes", async () => {
+    await chain.write(chain.nft, "mint", [chain.seller, 985n]);
+    const id = await createOpenRaffle(985n, "Other actions disclosure", 10_000_000n);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 12_500_000n], chain.buyer);
+    await chain.write(chain.raffle, "buyPack", [id, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+    await chain.warp((await service.readRaffle({ id })).raffle.salesEnd + 1n);
+    // A stranger's own send never reached the wallet: nothing is at its nonce yet.
+    // With sales ended the page has no checkout and no wallet identity; connecting shows Other actions.
+    await fixture.switchAccount(chain.stranger);
+    expect((await fixture.page.goto(`${fixture.baseUrl}/piece/${id.toString()}`, { waitUntil: "domcontentloaded" }))?.status()).toBe(200);
+    const nonce = await chain.client.getTransactionCount({ address: chain.stranger, blockTag: "pending" });
+    await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: journalKey(chain.stranger), value: JSON.stringify({
+      id: "disclosure-unsent", intentHash: keccak256(toBytes("disclosure-unsent")), nonce, startedBlock: (await chain.client.getBlockNumber()).toString(), hash: null
+    }) });
+    await fixture.page.reload({ waitUntil: "domcontentloaded" });
+    const unsent = fixture.page.getByText("Your wallet didn’t send your last transaction.", { exact: true });
+    const visible = () => unsent.evaluateAll(nodes => nodes.filter(node => (node as HTMLElement).checkVisibility()).length);
+    const others = fixture.page.locator("details.help-finish");
+    await connectWallet(fixture.page, others.locator("summary"), 20_000);
+    await expect.poll(visible, { timeout: 20_000 }).toBe(1);
+    await others.locator("summary").click();
+    await expect.poll(() => others.evaluate(element => (element as HTMLDetailsElement).open)).toBe(true);
+    await expect.poll(visible, { timeout: 10_000 }).toBe(1);
+    expect(await others.getByText("Your wallet didn’t send your last transaction.", { exact: true }).isVisible()).toBe(true);
+    await others.locator("summary").click();
+    await expect.poll(() => others.evaluate(element => (element as HTMLDetailsElement).open)).toBe(false);
+    await expect.poll(visible, { timeout: 10_000 }).toBe(1);
+    expect(await fixture.page.getByRole("button", { name: "Continue", exact: true }).evaluateAll(nodes => nodes.filter(node => (node as HTMLElement).checkVisibility()).length)).toBe(1);
+    await fixture.page.evaluate((key: string) => localStorage.removeItem(key), journalKey(chain.stranger));
   }, 90_000);
 });

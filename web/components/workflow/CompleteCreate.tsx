@@ -5,6 +5,7 @@ import type { RaffleService, WalletSessionPort } from "@/lib/chain/ports";
 import type { RaffleSnapshot } from "@/lib/chain/types";
 import type { Hex } from "viem";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
+import { isEarlierSend } from "@/lib/chain/submission-errors";
 import { createStepMessage, unnumberedStep } from "./create-progress";
 import { useWalletSnapshot } from "./WalletGate";
 
@@ -49,6 +50,8 @@ export function CompleteCreate({ service, wallet, snapshot, disabled, onConfirme
       });
     } catch (error) {
       if (lifetime.current.mounted && generation === lifetime.current.generation) setState({ kind: "error", message: error instanceof Error ? error.message : "Creation stopped. Recover this stage before continuing." });
+      // An earlier request may have landed: the page reads the chain again so the seller can see it.
+      if (isEarlierSend(error)) void onConfirmed().catch(() => {});
     } finally {
       if (lifetime.current.operation === operation) {
         lifetime.current.busy = false;

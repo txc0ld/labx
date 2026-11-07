@@ -3,6 +3,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { verifyMessage, keccak256, toBytes, type Hex } from "viem";
 import { MemoryStore } from "../lib/store";
 import { saveAuthenticatedCommitment, recoverAuthenticatedCommitment, recoverAuthenticatedPreparation } from "../lib/workflow-records";
+import { WorkflowMissing } from "../lib/workflow-failure";
 import { privateRecords } from "../lib/private-records";
 import { workflowMessage } from "../lib/chain/messages";
 import type { CommitmentInput, WorkflowContext } from "../lib/chain/api-types";
@@ -62,7 +63,7 @@ describe("authenticated durable workflow records", () => {
     await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", recovery, other), context, verifyMessage)).rejects.toThrow(/does not belong/);
     await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", { ...recovery, tokenId: "2" }), context, verifyMessage)).rejects.toThrow(/does not belong/);
     await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", recovery), { ...context, origin: "https://other.example" }, verifyMessage)).rejects.toThrow(/authorization/);
-    await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", { ...recovery, requestIdentity: keccak256(toBytes("missing")) }), context, verifyMessage)).rejects.toThrow(/not yet available/);
+    await expect(recoverAuthenticatedPreparation(store, await signed("preparation recovery", { ...recovery, requestIdentity: keccak256(toBytes("missing")) }), context, verifyMessage)).rejects.toThrow(WorkflowMissing);
   });
   it("retrieves only authenticated wallet agreements and rejects unpublished legal hashes", async () => {
     const store = new MemoryStore();

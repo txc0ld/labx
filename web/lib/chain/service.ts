@@ -1,6 +1,6 @@
 import { browserPendingJournal, memoryPendingJournal, transactionIntent, type PendingJournal, type PendingIntent } from "./pending-journal";
-import { decodeEventLog, encodeFunctionData, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
-import { NotSentError, SubmissionNotDispatchedError } from "./submission-errors";
+import { decodeEventLog, encodeFunctionData, getAbiItem, BaseError, HttpRequestError, InternalRpcError, LimitExceededRpcError, SocketClosedError, TimeoutError, TransactionNotFoundError, WebSocketRequestError, type Address, type Hex, type PublicClient, type TransactionReceipt } from "viem";
+import { EarlierSendError, NotSentError, SubmissionNotDispatchedError } from "./submission-errors";
 import { checkNetworkFee } from "./network-fee";
 import { raffleAbi } from "./abi";
 import { attestDeployment } from "./deployment";
@@ -33,6 +33,12 @@ export const UNSENT_CLEAR_BLOCKS = 25n;
 export const CODE_ONLY_RECHECK_MS = [2_000, 2_000] as const;
 /** Confirmations a canonical receipt needs: its own block and one more. A pending record's nonce is spent at the same depth. */
 export const RECEIPT_CONFIRMATIONS = 2;
+/**
+ * findCreation reads RaffleCreated events forward from a send's starting block in windows this size, at most this many,
+ * however long ago that block was. A draft mined later than that after its start is not found.
+ */
+const CREATION_LOG_WINDOW = 2_000n, CREATION_LOG_WINDOWS = 10n;
+const RAFFLE_CREATED = getAbiItem({ abi: raffleAbi, name: "RaffleCreated" });
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
   const sellerReader = createSellerReader(client, manifest, reader);
@@ -150,6 +156,16 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         if (!sameTransaction(fresh, entry.transaction) || fresh.amountUsdc !== entry.transaction.amountUsdc || !sameAddress(fresh.recipient, entry.transaction.recipient)) throw new Error("Amounts or recipients changed. Review this action again.");
         const fees = await checkNetworkFee(client, manifest.chainId, { account, to: entry.transaction.to, data: entry.transaction.data, value: entry.transaction.value, blockNumber: fresh.block.number });
         const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
+        // A record cleared without proof that nothing was sent may have reached its nonce since: the page shows it before
+        // another send. Once it is mined the marker goes, so the next click sends.
+        const cleared = journal.readCleared(account);
+        if (cleared && nonce > cleared.nonce) {
+          if (await client.getTransactionCount({ address: account, blockTag: "latest" }) > cleared.nonce) await journal.exclusive(account, async () => {
+            const current = journal.readCleared(account);
+            if (current?.nonce === cleared.nonce && current.startedBlock === cleared.startedBlock) journal.writeCleared(account, null);
+          });
+          throw new EarlierSendError();
+        }
         await wallet.assertCurrent(entry.session);
         const txHash = await wallet.requestTransaction(entry.session, { ...entry.transaction, nonce, ...fees }, async () => {
           await journal.exclusive(account, async () => {
@@ -202,6 +218,8 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
               const latest = journal.read(account);
               if (!latest || latest.id !== current.id || latest.hash !== null) return;
               onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
+              // A bare code does not prove the wallet sent nothing, so the next send first checks this nonce.
+              if (evidence === "code") journal.writeCleared(account, { nonce: current.nonce, startedBlock: current.startedBlock });
               journal.remove(account);
               notSent = true;
             });
@@ -258,9 +276,37 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       if (state === "waiting" || state === "unsent" && (!continueUnsent || current.hash !== null)) return { kind: state };
       if (!inspected(journal.read(account))) return { kind: "changed" };
       beforeJournalClear?.({ account, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
+      // Nothing at its nonce yet does not prove the wallet will never send it, so the next send first checks this nonce.
+      if (state !== "spent") journal.writeCleared(account, { nonce: current.nonce, startedBlock: current.startedBlock });
       journal.remove(account);
       return { kind: state === "spent" ? "spent" : "dropped" };
     });
+  }
+  async function settleCheckpoint({ wallet, checkpoint, hash: txHash = null }: Parameters<RaffleService["settleCheckpoint"]>[0]) {
+    const session = connected(wallet, manifest.chainId); await wallet.assertCurrent(session);
+    const account = session.account;
+    return journal.exclusive(account, async (): Promise<"unsent" | "spent" | "waiting" | "known"> => {
+      if (journal.read(account)) return "waiting";
+      if (txHash !== null && await knownTransaction(txHash)) return "known";
+      if (submitting.has(account.toLowerCase()) || await journal.requestOpen(account)) return "waiting";
+      const state = await nonceState(account, { ...checkpoint, hash: null });
+      if (state === "spent" && journal.readCleared(account)?.nonce === checkpoint.nonce) journal.writeCleared(account, null);
+      return state === "expired" ? "unsent" : state;
+    });
+  }
+  async function findCreation({ account, checkpoint }: Parameters<RaffleService["findCreation"]>[0]) {
+    const start = BigInt(checkpoint.startedBlock), head = await client.getBlockNumber({ cacheTime: 0 });
+    const last = start + CREATION_LOG_WINDOW * CREATION_LOG_WINDOWS - 1n < head ? start + CREATION_LOG_WINDOW * CREATION_LOG_WINDOWS - 1n : head;
+    for (let fromBlock = start; fromBlock <= last; fromBlock += CREATION_LOG_WINDOW) {
+      const toBlock = fromBlock + CREATION_LOG_WINDOW - 1n < last ? fromBlock + CREATION_LOG_WINDOW - 1n : last;
+      const logs = await client.getLogs({ address: manifest.address, event: RAFFLE_CREATED, args: { seller: account }, fromBlock, toBlock, strict: true });
+      for (const log of logs) {
+        if (log.removed) continue;
+        const sent = await client.getTransaction({ hash: log.transactionHash });
+        if (sameAddress(sent.from, account) && sent.nonce === checkpoint.nonce) return sent.hash;
+      }
+    }
+    return null;
   }
 
   async function validateReceipt(receipt: TransactionReceipt, account: Address): Promise<CanonicalReceipt> {
@@ -341,8 +387,13 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         if (!actual) return { kind: "pending", hash: transaction.hash };
         if (actual.hash.toLowerCase() !== transaction.hash.toLowerCase() || !sameAddress(actual.from, transaction.account)) throw new Error("Transaction sender or hash does not match this wallet request.");
         await journal.exclusive(transaction.account, async () => {
-          const current = journal.read(transaction.account);
+          let current = journal.read(transaction.account);
           if (!current) return;
+          // The wallet sent the hash it returned at a nonce of its own: the record follows it, so it settles when that hash mines.
+          if (current.hash?.toLowerCase() === actual.hash.toLowerCase() && actual.nonce !== current.nonce) {
+            current = { ...current, nonce: actual.nonce };
+            journal.write(transaction.account, current);
+          }
           if (actual.nonce !== current.nonce || actual.blockNumber !== null && actual.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash.toLowerCase() !== actual.hash.toLowerCase()) throw new Error("This transaction does not match the current unresolved wallet action.");
           beforeJournalWatch({ transaction: { hash: actual.hash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value, nonce: actual.nonce }, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
         });
@@ -353,11 +404,15 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await journal.exclusive(transaction.account, async () => {
         const current = journal.read(transaction.account);
         if (current) {
-          if (receipt.nonce !== current.nonce || receipt.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash !== transaction.hash && current.hash !== receipt.hash) throw new Error("This transaction does not reconcile the unresolved wallet action.");
+          // A hash the wallet returned for this record settles it at whatever nonce the wallet chose.
+          const returned = current.hash !== null && (current.hash === transaction.hash || current.hash === receipt.hash);
+          if (receipt.nonce !== current.nonce && !returned || receipt.blockNumber < BigInt(current.startedBlock) || current.hash !== null && !returned) throw new Error("This transaction does not reconcile the unresolved wallet action.");
           expectedIntent = current.intentHash;
         }
         beforeJournalClear?.({ receipt, pending: current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null });
         if (current) journal.remove(transaction.account);
+        // This receipt is what landed at that nonce, so an earlier cleared record there needs no further check.
+        if (journal.readCleared(transaction.account)?.nonce === receipt.nonce) journal.writeCleared(transaction.account, null);
       });
       if (!receipt.to || transactionIntent({ ...receipt, to: receipt.to }) !== expectedIntent) return { kind: "replaced", hash: receipt.hash, reason: "The wallet replaced this transaction with a different action.", receipt };
       if (receipt.status !== "success") return { kind: "reverted", hash: receipt.hash, reason: "The transaction reverted. No successful action was recorded.", receipt };
@@ -384,9 +439,11 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await wallet.assertCurrent(session);
       const current = journal.read(session.account);
       if (!current || !matches(current)) return null;
-      if (tx.nonce !== current.nonce || tx.blockNumber !== null && tx.blockNumber < BigInt(current.startedBlock)) throw new Error("This hash is unrelated to the unresolved wallet action.");
+      // Only the hash the wallet returned for this record may sit at another nonce: the wallet chose its own, and the record follows it.
+      const returned = current.hash?.toLowerCase() === tx.hash.toLowerCase();
+      if (tx.nonce !== current.nonce && !returned || tx.blockNumber !== null && tx.blockNumber < BigInt(current.startedBlock)) throw new Error("This hash is unrelated to the unresolved wallet action.");
       beforeJournalUpdate?.({ transaction: result, nonce: tx.nonce, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
-      journal.write(session.account, { ...current, hash: tx.hash });
+      journal.write(session.account, { ...current, nonce: tx.nonce, hash: tx.hash });
       return result;
     });
   }
@@ -425,5 +482,5 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
     return current ? { id: current.id, hash: current.hash, nonce: current.nonce, ...(expectedIntent ? { checkpoint: { id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock } } : {}) } : null;
   }
   return { manifest, pending, captureOutcomeLineage, retainOutcome, acknowledgeOutcome, attest: () => attestDeployment(client, manifest), ...reader, ...sellerReader, inspectOutcome, prepare, exportOwnerExecution, requestOwnerExecution, resolveCreatedDraft,
-    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume, settlePending };
+    discoverOwnerExecutions: ownerExecutionDiscoverer(client, manifest, reader), confirmOwnerExecution: ownerExecutionConfirmer(client, manifest, reader), submit, confirm, resume, settlePending, settleCheckpoint, findCreation };
 }

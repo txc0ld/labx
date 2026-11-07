@@ -381,6 +381,43 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
       } finally { await fixture.page.unroute(`${fixture.baseUrl}/api/reserve/reveal`, tamper); }
     }, 90_000);
 
+    it("never opens the wallet by itself once a saved transaction that held the confirmation is checked", async () => {
+      // An earlier send of the seller's whose check fails while the network refuses that hash, so it needs a check.
+      const earlier = hash(await chain.rpc("eth_sendTransaction", [{ from: chain.seller, to: chain.seller, value: "0x0", gas: "0x5208" }]));
+      await chain.client.waitForTransactionReceipt({ hash: earlier });
+      await chain.mine(); await chain.mine();
+      const checkpoint = `labx:outcome:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.seller.toLowerCase()}:${earlier.toLowerCase()}`;
+      let refused = true;
+      const refuse = async (route: Route) => {
+        if (refused && (route.request().postData() ?? "").toLowerCase().includes(earlier.slice(2).toLowerCase())) return route.fulfill({ status: 503, body: "unavailable" });
+        return route.fallback();
+      };
+      await fixture.page.route(`${chain.url}/`, refuse);
+      try {
+        await open(`/seller/${confirmId.toString()}`, "Confirm the draw");
+        await fixture.page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: checkpoint, value: earlier.toLowerCase() });
+        await fixture.page.reload({ waitUntil: "domcontentloaded" });
+        await connectWallet(fixture.page, fixture.page.getByText("Confirm the draw", { exact: true }).first(), 30_000);
+        const confirm = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });
+        await confirm.waitFor({ state: "visible", timeout: 15_000 });
+        const wallet = await watchWallet(fixture.page);
+        await confirm.click();
+        // The signature loads the draw setup; the confirmation it would send waits behind the saved transaction's check.
+        await expect.poll(async () => (await wallet.requests()).map(request => request.method), { timeout: 15_000 }).toEqual(["personal_sign"]);
+        const send = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });
+        await expect.poll(() => send.isDisabled(), { timeout: 15_000 }).toBe(true);
+        refused = false;
+        await fixture.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect.poll(() => send.isEnabled(), { timeout: 30_000 }).toBe(true);
+        await fixture.page.waitForTimeout(3_000);
+        expect((await wallet.requests()).map(request => request.method)).toEqual(["personal_sign"]);
+        expect(await revealed()).toBe(false);
+      } finally {
+        await fixture.page.unroute(`${chain.url}/`, refuse);
+        await fixture.page.evaluate((key: string) => localStorage.removeItem(key), checkpoint);
+      }
+    }, 120_000);
+
     it("stops at a rejected confirmation and sends it again only when the seller clicks", async () => {
       await open(`/seller/${confirmId.toString()}`, "Confirm the draw");
       const confirm = confirmCard().getByRole("button", { name: "Confirm the draw", exact: true });

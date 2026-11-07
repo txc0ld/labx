@@ -20,3 +20,13 @@ export class NotSentError extends Error {
 export function isNotSent(error: unknown): boolean {
   return error instanceof NotSentError || error instanceof SubmissionNotDispatchedError && error.cause instanceof NotSentError;
 }
+
+/** A record LABx cleared without proof that nothing was sent may have landed since, so this send stopped before the wallet. */
+export class EarlierSendError extends NotSentError {
+  constructor() { super("Your wallet sent an earlier LABx request. Check the page before trying again."); this.name = "EarlierSendError"; }
+}
+
+/** Whether an error, or the error a not-dispatched wrapper carries, is an EarlierSendError. */
+export function isEarlierSend(error: unknown): boolean {
+  return error instanceof EarlierSendError || error instanceof SubmissionNotDispatchedError && error.cause instanceof EarlierSendError;
+}

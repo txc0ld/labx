@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { keccak256 } from "viem";
+import { keccak256, toHex } from "viem";
+import { raffleAbi } from "../lib/chain/abi";
 import { localChain, type LocalChain } from "./fixtures/local-chain";
 import { encodeDraft, finishCreate, recoverCreateTransaction, type CreateRecord } from "../lib/chain/create-flow";
 import type { DraftInput } from "../lib/chain/types";
@@ -173,5 +174,154 @@ run("one-intent creation and capability-owned owner requests", () => {
     expect(nonce).not.toHaveBeenCalled(); expect(receipt).not.toHaveBeenCalled();
     await expect(c.service.requestOwnerExecution({ prepared, wallet, beforeRequest, assertIntent: () => {} })).rejects.toThrow(/Review an owner/);
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * A seller wallet whose request for `step` fails without a hash, as a WalletConnect error can. With `broadcast` it still sent
+   * the request, as a wallet whose own RPC took it does. Every request it is asked for is counted by step.
+   */
+  async function lostStep(step: string, broadcast: boolean) {
+    const journal = memoryPendingJournal(); c.service = createRaffleService(c.client, c.manifest, journal);
+    const flow = await setup();
+    const prepare = c.service.prepare;
+    let currentStep = "", failed = false;
+    const requested: string[] = [];
+    vi.spyOn(c.service, "prepare").mockImplementation(async input => { currentStep = input.action.kind; return prepare(input); });
+    const request = flow.wallet.session.requestTransaction.bind(flow.wallet.session);
+    vi.spyOn(flow.wallet.session, "requestTransaction").mockImplementation(async (session, tx, before, dispatched) => {
+      requested.push(currentStep);
+      if (currentStep !== step || failed) return request(session, tx, before, dispatched);
+      failed = true;
+      await before?.();
+      dispatched?.();
+      if (broadcast) await c.rpc("eth_sendTransaction", [{ from: c.seller, to: tx.to, data: tx.data, value: "0x0", nonce: toHex(tx.nonce ?? 0), gas: "0x989680" }]);
+      throw new Error("Request expired. Please try again.");
+    });
+    await expect(flow.execute()).rejects.toThrow(/uncertain/);
+    const pending = await c.service.pending({ wallet: flow.wallet.session });
+    if (!pending) throw new Error("The wallet's uncertain answer left no pending record.");
+    expect(flow.record().pending).toMatchObject({ step, hash: null, checkpoint: { id: pending.id, nonce: pending.nonce } });
+    return { flow, journal, pending, requested };
+  }
+  const raffles = async () => await c.client.readContract({ address: c.manifest.address, abi: raffleAbi, functionName: "nextId" }) - 1n;
+
+  it("sends the draft again after Continue clears its unsent record on another page, and makes one draft", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", false);
+    // The dashboard's Continue clears the record; the creation record still points at it.
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending, continueUnsent: true })).toEqual({ kind: "dropped" });
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+    expect(flow.record()).toMatchObject({ id: "1", pending: null });
+  });
+
+  it("finds the draft a wallet sent despite its error, after the mined nonce clears the record, and makes no second draft", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", true);
+    await c.mine(); await c.mine();
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending })).toEqual({ kind: "spent" });
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+    expect(flow.record().creationHash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
+  it("finds that draft when the seller comes back more than 20,000 blocks later, and makes no second draft", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", true);
+    await c.mine(); await c.mine();
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending })).toEqual({ kind: "spent" });
+    await c.rpc("anvil_mine", [toHex(20_001)]);
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+  });
+
+  it.each([true, false])("continues past an NFT approval whose record was cleared elsewhere, sending it again only if it never landed (landed: %s)", async landed => {
+    const { flow, pending, requested } = await lostStep("approvePrize", landed);
+    if (landed) { await c.mine(); await c.mine(); }
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending, continueUnsent: !landed })).toEqual({ kind: landed ? "spent" : "dropped" });
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(landed ? ["createDraft", "approvePrize", "escrow"] : ["createDraft", "approvePrize", "approvePrize", "escrow"]);
+  });
+
+  it("waits while something is pending at a lost step's nonce, then finds the draft once it is mined", async () => {
+    const { flow, pending, requested } = await lostStep("createDraft", false);
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending, continueUnsent: true })).toEqual({ kind: "dropped" });
+    await c.rpc("evm_setAutomine", [false]);
+    try {
+      // The person approves the old request after all; it waits to be mined.
+      await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.manifest.address, data: flow.record().data, value: "0x0", nonce: toHex(pending.nonce), gas: "0x989680" }]);
+      await expect(flow.execute()).rejects.toThrow("Creation stopped. Wait for canonical confirmation, then click Create to resume.");
+      expect(flow.record().pending).toMatchObject({ step: "createDraft", hash: null });
+      await c.mine(); await c.mine();
+    } finally {
+      await c.rpc("evm_setAutomine", [true]);
+    }
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+  });
+
+  /**
+   * A draft whose wallet hash was saved, then the page closed before its receipt. The wallet then drops that hash, and
+   * `mode` says what lands at its nonce instead: a faster copy of the draft, a cancel, or nothing for 30 blocks. The
+   * dashboard then clears the record, and the creation record still holds the hash the chain no longer knows.
+   */
+  async function lostHash(mode: "speedup" | "cancel" | "expired") {
+    const journal = memoryPendingJournal(); c.service = createRaffleService(c.client, c.manifest, journal);
+    const submit = c.service.submit;
+    const flow = await setup();
+    vi.mocked(c.service.submit).mockImplementationOnce(submit);
+    vi.spyOn(c.service, "confirm").mockRejectedValueOnce(new Error("The page closed."));
+    await c.rpc("evm_setAutomine", [false]);
+    let pending;
+    try {
+      await expect(flow.execute()).rejects.toThrow("The page closed.");
+      pending = journal.read(c.seller);
+      if (!pending?.hash) throw new Error("The draft's wallet hash was not saved.");
+      expect(flow.record().pending).toMatchObject({ step: "createDraft", hash: pending.hash });
+      await c.rpc("anvil_dropTransaction", [pending.hash]);
+    } finally {
+      await c.rpc("evm_setAutomine", [true]);
+    }
+    if (mode === "speedup") await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.manifest.address, data: flow.record().data, value: "0x0", nonce: toHex(pending.nonce), gas: "0x989681" }]);
+    if (mode === "cancel") await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.seller, value: "0x0", nonce: toHex(pending.nonce), gas: "0x5208" }]);
+    if (mode === "expired") await c.rpc("anvil_mine", [toHex(30)]);
+    else { await c.mine(); await c.mine(); }
+    expect(await c.service.settlePending({ wallet: flow.wallet.session, expected: pending })).toEqual({ kind: mode === "expired" ? "dropped" : "spent" });
+    expect(journal.read(c.seller)).toBeNull();
+    return flow;
+  }
+
+  it("continues from the faster copy of a draft whose saved hash was replaced, and makes no second draft", async () => {
+    const flow = await lostHash("speedup");
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(flow.sent).toEqual(["approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+    expect(flow.record()).toMatchObject({ id: "1", pending: null });
+  });
+
+  it.each(["cancel", "expired"] as const)("sends the draft again once when its saved hash never landed (%s)", async mode => {
+    const flow = await lostHash(mode);
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(flow.sent).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+    expect(flow.record()).toMatchObject({ id: "1", pending: null });
+  });
+
+  it("finishes a draft that a wallet sent at a nonce of its own", async () => {
+    const journal = memoryPendingJournal(); c.service = createRaffleService(c.client, c.manifest, journal);
+    const flow = await setup();
+    const request = flow.wallet.session.requestTransaction.bind(flow.wallet.session);
+    let first = true;
+    vi.spyOn(flow.wallet.session, "requestTransaction").mockImplementation(async (session, tx, before, dispatched) => {
+      if (!first) return request(session, tx, before, dispatched);
+      first = false;
+      // The wallet has a send of its own pending, so it puts this request at the next nonce.
+      await c.rpc("eth_sendTransaction", [{ from: c.seller, to: c.seller, value: "0x0", nonce: toHex(tx.nonce ?? 0), gas: "0x5208" }]);
+      return request(session, { ...tx, nonce: (tx.nonce ?? 0) + 1 }, before, dispatched);
+    });
+    expect((await flow.execute()).raffle.escrowed).toBe(true);
+    expect(await raffles()).toBe(1n);
+    expect(journal.read(c.seller)).toBeNull();
   });
 });

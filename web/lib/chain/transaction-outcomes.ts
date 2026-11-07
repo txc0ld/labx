@@ -4,7 +4,7 @@ import type { RaffleService, WalletSessionPort } from "./ports";
 import type { Confirmation, PreparedAction, SubmittedAction, ObservedTransaction, OutcomeLineage } from "./types";
 import { sameAddress } from "./validation";
 import { isWalletRequestRejected } from "./wallet-errors";
-import { isNotSent } from "./submission-errors";
+import { isEarlierSend, isNotSent } from "./submission-errors";
 
 type TerminalConfirmation = Exclude<Confirmation, { kind: "pending" }>;
 export type TransactionOutcome = { id: string; account: Address } & (
@@ -50,6 +50,8 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
   const handledPointers = new Map<string, string>();
   const rescan = new Set<string>();
   const observed = new Map<Address, number>();
+  // How many sends stopped because an earlier cleared request may have landed, so pages showing it can re-read the chain.
+  const earlierSends = new Map<string, number>();
   let sequence = 0;
   const accountKey = (account: Address) => account.toLowerCase();
   const checkpointKey = (account: Address, id: string) => `${prefix}${accountKey(account)}:${id.toLowerCase()}`;
@@ -178,6 +180,10 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       if (hints.length > 100) put({ id: "overflow", account, kind: "overflow", message: "More saved transactions need verification. Acknowledge verified receipts to load the next batch before submitting another action." });
       else if (getSnapshot(account).some(item => item.kind === "overflow")) {
         records.set(key, getSnapshot(account).filter(item => item.kind !== "overflow")); notify();
+      }
+      // Every saved checkpoint read cleanly, so an earlier storage failure no longer applies.
+      if (getSnapshot(account).some(item => item.id === "storage-error")) {
+        records.set(key, getSnapshot(account).filter(item => item.id !== "storage-error")); notify();
       }
     } catch (error) {
       put({ id: "storage-error", account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "Transaction recovery storage is unavailable." });
@@ -342,6 +348,7 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     } catch (error) {
       if (isNotSent(error) && error instanceof Error) {
         // Nothing was sent and no pending record remains, so nothing joins the activity list.
+        if (isEarlierSend(error)) earlierSends.set(key, (earlierSends.get(key) ?? 0) + 1);
         records.set(key, getSnapshot(prepared.account).filter(item => item.id !== id)); notify();
         return { id, account: prepared.account, kind: "error", submitted: null, message: error.message, notSent: true };
       }
@@ -440,7 +447,8 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
     } });
   }
   function claimRefresh(key: string) { if (refreshed.has(key)) return false; refreshed.add(key); return true; }
-  return { getSnapshot, claimRefresh, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, synchronize, observe, submit, resume, settlePending, belongsToSubmission, acknowledge };
+  const earlierSendCount = (account: Address) => earlierSends.get(accountKey(account)) ?? 0;
+  return { getSnapshot, claimRefresh, earlierSendCount, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, hydrate, recover, synchronize, observe, submit, resume, settlePending, belongsToSubmission, acknowledge };
 }
 export type TransactionOutcomes = ReturnType<typeof createTransactionOutcomes>;
 const owners = new WeakMap<RaffleService, TransactionOutcomes>();

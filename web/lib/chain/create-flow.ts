@@ -68,14 +68,17 @@ export function advanceCreateGeneration(storage: Storage, key: string) {
   storage.setItem(`${key}:generation`, generation);
   if (storage.getItem(`${key}:generation`) !== generation) throw new Error("Creation recovery could not be saved.");
 }
+/** `expected` null retires a saved creation that can't be read at all, keeping its raw text in the archive. */
 export async function retireUnsentCreate({ service, wallet, storage, key, expected, assertIntent }: {
-  service: RaffleService; wallet: WalletSessionPort; storage: Storage; key: string; expected: CreateRecord; assertIntent: () => void;
+  service: RaffleService; wallet: WalletSessionPort; storage: Storage; key: string; expected: CreateRecord | null; assertIntent: () => void;
 }) {
   assertIntent();
   const raw = storage.getItem(key);
-  const saved = readCreateRecord(storage, key);
-  if (raw === null || saved === null || serializeCreateRecord(saved) !== serializeCreateRecord(expected)) throw new Error("The saved creation changed. Reload before editing.");
-  if (expected.kind === "draft" && (expected.id !== null || expected.creationHash !== null || expected.pending !== null)) throw new Error("Recover the on-chain creation before editing.");
+  let saved: CreateRecord | null | "unreadable";
+  try { saved = readCreateRecord(storage, key); } catch { saved = "unreadable"; }
+  const unchanged = expected ? saved !== "unreadable" && saved !== null && serializeCreateRecord(saved) === serializeCreateRecord(expected) : saved === "unreadable";
+  if (raw === null || !unchanged) throw new Error("The saved creation changed. Reload before editing.");
+  if (expected?.kind === "draft" && (expected.id !== null || expected.creationHash !== null || expected.pending !== null)) throw new Error("Recover the on-chain creation before editing.");
   if (await service.pending({ wallet })) throw new Error("Recover the unresolved wallet transaction before editing.");
   assertIntent();
   if (storage.getItem(key) !== raw) throw new Error("The saved creation changed. Reload before editing.");
@@ -183,8 +186,10 @@ async function settleCreateStep({ service, wallet, record, save, assertIntent, t
   if (recoveryHash && !pending.checkpoint && pending.step !== "createDraft") throw new Error("This older saved custody send has no nonce checkpoint. Recover its original wallet transaction before continuing.");
   const txHash = recoveryHash ?? pending.hash ?? journal?.hash;
   if (!txHash) throw new Error("The wallet response is uncertain. Open Advanced recovery and enter its Ethereum transaction hash. An unknown send cannot be discarded.");
+  // A hash the wallet returned for this step may sit at a nonce the wallet chose; a pasted one must match the checkpoint's.
+  const nonceMatters = recoveryHash !== undefined;
   const persistHash = (receipt: CanonicalReceipt) => {
-    if (pending.checkpoint && (receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
+    if (pending.checkpoint && (nonceMatters && receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
     pending = { ...pending, hash: receipt.hash };
     current = { ...current, pending }; save(current);
   };
@@ -196,7 +201,7 @@ async function settleCreateStep({ service, wallet, record, save, assertIntent, t
   if (outcome.kind === "pending" || outcome.kind === "unknown") throw new Error("Creation stopped. Wait for canonical confirmation, then click Create to resume.");
   const receipt = outcome.receipt;
   if (receipt.chainId !== service.manifest.chainId || !sameAddress(receipt.account, session.account)) throw new Error("The creation receipt belongs to another wallet or network.");
-  if (pending.checkpoint && (receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
+  if (pending.checkpoint && (nonceMatters && receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
   const exact = receipt.to !== null && sameAddress(receipt.to, expected.to) && receipt.data.toLowerCase() === expected.data.toLowerCase() && receipt.value === expected.value;
   if (receipt.status !== "success" || !exact) {
     if (!pending.checkpoint) throw new Error("This older saved send has no nonce checkpoint. Recover its original transaction or matching creation receipt before continuing.");
@@ -270,6 +275,22 @@ export async function finishCreate({ service, wallet, draft, record, save, asser
   };
   await check();
   if (encodeDraft(draft) !== current.data) throw new Error("The saved draft differs from this creation intent.");
+  // The step's pending record was cleared elsewhere, by Continue, its expiry or a mined nonce, before LABx learned the hash,
+  // or after the wallet replaced or dropped the hash it saved. The chain settles the step here, so Create never waits on a
+  // record that is gone and never sends a second draft. A saved hash the chain still knows settles by its own receipt below.
+  const lost = current.pending;
+  if (lost?.checkpoint && !await service.pending({ wallet })) {
+    const state = await service.settleCheckpoint({ wallet, checkpoint: lost.checkpoint, hash: lost.hash });
+    await check();
+    if (state === "waiting") throw new Error("Creation stopped. Wait for canonical confirmation, then click Create to resume.");
+    if (state !== "known") {
+      const found = state === "spent" && lost.step === "createDraft" ? await service.findCreation({ account: session.account, checkpoint: lost.checkpoint }) : null;
+      await check();
+      // A found draft continues from its receipt. Otherwise nothing of this step can land any more, or nothing is at its nonce
+      // yet and the next send uses that nonce, so the steps below send only what the chain still needs.
+      persist({ ...current, pending: found ? { ...lost, hash: found } : null });
+    }
+  }
   let snapshot: RaffleSnapshot;
   if (current.creationHash) {
     snapshot = await service.resolveCreatedDraft({ receipt: await canonical(current.creationHash), draft });

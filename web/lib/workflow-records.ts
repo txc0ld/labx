@@ -4,7 +4,7 @@ import { address, hash, sameAddress } from "./chain/validation";
 import { verifyWorkflowAuthorization } from "./chain/server";
 import type { CommitmentInput, PreparationRecoveryInput, WorkflowContext } from "./chain/api-types";
 import type { Store } from "./points";
-import { WorkflowRefusal } from "./workflow-failure";
+import { WorkflowMissing, WorkflowRefusal } from "./workflow-failure";
 export type SignedWorkflowInput<T> = { address: Address; input: T; deadline: string; signature: Hex };
 export type WorkflowVerifier = (args: { address: Address; message: string; signature: Hex }) => Promise<boolean>;
 export function parseEnvelope(body: unknown): SignedWorkflowInput<unknown> {
@@ -41,7 +41,8 @@ export async function recoverAuthenticatedPreparation(store: Store, request: Sig
   const input = parsePreparationRecovery(request.input);
   await verifyWorkflowAuthorization({ operation: "preparation recovery", context, account: request.address, input, deadline: request.deadline, signature: request.signature, verify });
   const commit = await store.get(`reserve-request:v3:${input.requestIdentity}`);
-  if (!commit) throw new Error("The saved preparation is not yet available. Retry recovery without creating a new setup.");
+  // The setup's request never reached the store, so nothing was saved under this identity and Create can start over.
+  if (!commit) throw new WorkflowMissing("No raffle setup was saved for this request.");
   const record = await readReserveRecord(store, hash(commit));
   if (!sameAddress(record.seller, request.address) || !sameAddress(record.labx, context.contract) || record.chainId !== String(context.chainId) || !sameAddress(record.nft, input.nft) || record.tokenId !== input.tokenId) throw new WorkflowRefusal("Preparation does not belong to this wallet, deployment and NFT.");
   return publishedReserve(record);
