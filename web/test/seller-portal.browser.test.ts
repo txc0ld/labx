@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { erc20Abi, erc721Abi, keccak256, numberToHex, toBytes } from "viem";
 import { hashCommitment } from "../lib/commitment";
 import { raffleAbi } from "../lib/chain/abi";
@@ -470,6 +470,29 @@ run("rendered seller portal on isolated Anvil", () => {
     await review.getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
     expect(await review.locator("dd").first().innerText()).toBe("Unsaved title change");
     expect(await review.getByText("33 USDC · 2 bonus entries · 100 supply", { exact: true }).isVisible()).toBe(true);
+  }, 45_000);
+
+  it("shows the escrowed NFT, not an unsaved token edit, after the draft's NFT is locked", async () => {
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/5`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const editDraft = fixture.page.locator("summary").filter({ hasText: "Edit draft" });
+    await connectWallet(fixture.page, editDraft);
+    await editDraft.click();
+    await fixture.page.getByLabel("Raffle title").fill("Unsaved title before escrow");
+    await fixture.page.getByLabel("Token ID").fill("806");
+
+    await chain.write(chain.nft, "approve", [chain.raffle.address, 805n], chain.seller);
+    await chain.write(chain.raffle, "escrow", [5n], chain.seller);
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).click();
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByLabel("Token ID").waitFor({ state: "visible", timeout: 15_000 });
+    await vi.waitFor(async () => expect(await fixture.page.getByLabel("Token ID").isDisabled()).toBe(true), { timeout: 15_000 });
+    expect(await fixture.page.getByLabel("Token ID").inputValue()).toBe("805");
+    expect((await fixture.page.getByLabel("NFT contract").inputValue()).toLowerCase()).toBe(chain.nft.address.toLowerCase());
+    expect(await fixture.page.getByLabel("Raffle title").inputValue()).toBe("Unsaved title before escrow");
+    await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await fixture.page.locator(".studio-review").getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
   }, 45_000);
 
   it("gates a direct seller route immediately after the wallet changes", async () => {

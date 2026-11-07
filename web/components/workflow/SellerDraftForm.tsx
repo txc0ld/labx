@@ -126,7 +126,10 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, edi
   onCreatingChange?: (creating: boolean) => void;
 }) {
   const router = useRouter();
-  const [form, setForm] = useState<FormDraft>(() => edits ?? formFromSnapshot(existing));
+  // An escrowed draft's NFT is locked, so saved edits never replace it.
+  const [form, setForm] = useState<FormDraft>(() => edits && existing?.raffle.escrowed
+    ? { ...edits, nft: existing.raffle.nft, tokenId: existing.raffle.tokenId.toString() }
+    : edits ?? formFromSnapshot(existing));
   const [state, setState] = useState<DraftState>({ kind: "editing" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
