@@ -191,7 +191,8 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         const nonce = await bounded(chain.nonces());
         if (nonce.pending !== nonce.latest) {
           // Only the runner's own last send, alone in the pool, is replaced, and only once fees have risen past it.
-          const replacement = replacementQuote(await bounded(store.get(LAST_SEND_KEY)), chain.runner, nonce, quote);
+          // A failed record read leaves the transaction to be waited for, as before.
+          const replacement = replacementQuote(await bounded(store.get(LAST_SEND_KEY)).catch(() => null), chain.runner, nonce, quote);
           if (!replacement) { stop("pending-transaction", id); break raffles; }
           if (replacement.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
           if (await bounded(chain.balance()) < requiredBalance(replacement)) { record(action, null, "low-funds", null); break; }

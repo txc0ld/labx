@@ -1379,6 +1379,20 @@ describe("draw runner stuck transaction replacement", () => {
     expect(sends).toHaveLength(1);
   });
 
+  it("waits for the pending transaction, as before, when its record cannot be read", async () => {
+    const memory = new MemoryStore();
+    const store: Store = {
+      async get(key) { if (key === "draw-runner:last-send") throw new Error("store unavailable"); return memory.get(key); },
+      set: (key, value) => memory.set(key, value),
+      setIfAbsent: entries => memory.setIfAbsent(entries)
+    };
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    state.quote = fees("20");
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0, nextCursor: "1" });
+    expect(sends).toHaveLength(1);
+  });
+
   it("stops at the 50 gwei fee cap instead of replacing above it", async () => {
     const store = new MemoryStore();
     const { state, sends, run } = stuckChain(store);
