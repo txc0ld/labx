@@ -37,7 +37,26 @@ same() { [ "$(echo "$1" | lower)" = "$(echo "$2" | lower)" ]; }
 # from a failed read. Only LABEL is printed, never the command's arguments.
 read_chain() { local label=$1 v; shift; v=$("$@" 2>/dev/null) || die "could not read $label"; [ -n "$v" ] || die "empty answer for $label"; echo "$v"; }
 record_get() { python3 -c "import json,sys; v=json.load(open(sys.argv[2])); [v:=v[k] for k in sys.argv[1].split('.')]; print('' if v is None else v)" "$1" "$RECORD"; }
-record_set() { python3 - "$RECORD" "$1" "$2" <<'EOF'
+# Writes the JSON on stdin as the record: into a temp file in the same directory, flushed and synced, then renamed over
+# the record, so a write that fails or is cut short leaves the previous record whole.
+record_write() {
+  python3 -c '
+import json, os, sys, tempfile
+path = sys.argv[1]
+d = json.load(sys.stdin)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".record-")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise' "$RECORD"
+}
+record_set() { python3 - "$RECORD" "$1" "$2" <<'EOF' | record_write
 import json, sys
 path, key, value = sys.argv[1:]
 d = json.load(open(path))
@@ -45,8 +64,7 @@ node = d
 *parents, last = key.split(".")
 for k in parents: node = node.setdefault(k, {})
 node[last] = json.loads(value)
-json.dump(d, open(path, "w"), indent=2)
-open(path, "a").write("\n")
+print(json.dumps(d))
 EOF
 }
 
