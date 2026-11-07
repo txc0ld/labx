@@ -27,9 +27,16 @@ export async function privateRecords(store: Store, request: SignedWorkflowInput<
       const record: unknown = JSON.parse(raw);
       if (!record || typeof record !== "object" || !("address" in record) || typeof record.address !== "string" || !sameAddress(record.address, request.address) || !("deadline" in record) || typeof record.deadline !== "string" || !("signature" in record) || !("at" in record) || typeof record.at !== "string" || !Number.isFinite(Date.parse(record.at)) || !("identity" in record) || record.identity !== identity) throw new Error("Stored agreement is invalid.");
       const message = agreementMessage({ address: request.address, pieceId: raffleId, terms: true, rules: true, age: true, termsHash: context.termsHash, deadline: record.deadline, signature: "0x" }, context);
-      recorded = await authorizedRequest(request.address, record.deadline, record.signature, message, Date.parse(record.at), verify);
-      if (!recorded) throw new Error("Stored agreement signature is invalid.");
-      at = record.at;
+      let unanswered: unknown = null;
+      recorded = await authorizedRequest(request.address, record.deadline, record.signature, message, Date.parse(record.at), async args => {
+        try { return await verify(args); } catch (error) { unanswered = error; throw error; }
+      });
+      // A node that gave no verdict fails the request so it can be retried.
+      if (unanswered) throw unanswered;
+      // A contract wallet can stop validating a signature it once accepted, for example after its owners change.
+      // That agreement is shown as not recorded, so it cannot hide the wallet's other records.
+      if (recorded) at = record.at;
+      else console.warn("private-records stored-agreement-unverified", { raffleId });
     }
     result.agreements.push({ raffleId, recorded, at });
   }
