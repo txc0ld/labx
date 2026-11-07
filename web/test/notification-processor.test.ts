@@ -148,6 +148,52 @@ describe("notification processor", () => {
     expect(await backing.get(blockedKey)).toBeNull();
   });
 
+  it.each([64, 130])("reaches a later failed event %s pages past a page that stays pending, inside its window", async pageIndex => {
+    const backing = new MemoryStore();
+    const blocker = event(1);
+    const later = { ...event(2), blockNumber: String(101 + 25 * pageIndex) };
+    let finalized = 100n;
+    const input = source();
+    input.finalized = async () => ({ number: finalized, hash: finalizedHash, timestamp: 2n });
+    input.events = async (fromBlock, toBlock) => ({
+      events: [blocker, later].filter(item => BigInt(item.blockNumber) >= fromBlock && BigInt(item.blockNumber) <= toBlock),
+      range: { fromBlock, toBlock },
+      finalized: { number: finalized, hash: finalizedHash, timestamp: 2n }
+    });
+    // The first page's event can never be reserved, so the retry cursor stays on it for the whole test.
+    const blockedKey = reservationKey(blocker, input.deployment), laterKey = reservationKey(later, input.deployment);
+    const store: Store = {
+      get: key => backing.get(key),
+      set: (key, value) => backing.set(key, value),
+      async setIfAbsent(entries) {
+        if (Object.hasOwn(entries, blockedKey)) throw new Error("reservation storage failure");
+        return backing.setIfAbsent(entries);
+      }
+    };
+    let providerUp = false;
+    const sender = vi.fn(async (_payload: unknown, key: string) => key !== laterKey || providerUp);
+    const fiveMinutes = 5 * 60_000;
+    const run = (at: number) => processNotifications({ store, source: input, sender, ...config, now: at });
+    // One short page of 25 blocks per five-minute run, as when ingestion has caught up with the finalized head.
+    await run(1_000);
+    for (let index = 0; index < pageIndex + 3; index += 1) {
+      finalized = 125n + 25n * BigInt(index);
+      await run(1_000 + (index + 1) * fiveMinutes);
+    }
+    const reserved = JSON.parse((await backing.get(laterKey))!).createdAt as number;
+
+    // The provider recovers 22 hours after the reservation; the next few runs, still inside the 23 hour window, retry it.
+    providerUp = true;
+    let accepted = 0;
+    for (let runs = 0; runs < 4; runs += 1) {
+      const report = await run(reserved + 22 * 60 * 60_000 + runs * fiveMinutes);
+      accepted += report.accepted;
+      expect(report.retryNextBlock).toBe("101");
+    }
+    expect(accepted).toBe(1);
+    expect(await backing.get(`${laterKey}:accepted`)).toBe("accepted");
+  });
+
   it("treats unproved future progress hints as replay hints", async () => {
     const store = new MemoryStore();
     const input = source([event(1), event(2)]);

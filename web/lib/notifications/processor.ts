@@ -9,7 +9,7 @@ import { adaptNotificationWorkflow, createNotificationReadBudget, NotificationRa
 const PAGE_BLOCKS = 250n;
 const MAX_INGESTION_PAGES = 2;
 const MAX_RETRY_PAGES = 4;
-/** Pages read past the retry window for later pages with events still to deliver: over two days of 12-second blocks. */
+/** Pages each run reads past the retry window for later pages with events still to deliver. */
 const MAX_RETRY_SCAN_PAGES = 64;
 const MAX_EVENT_CHECKS = 400;
 const TERMINAL_CHECKPOINT_EVENTS = 32;
@@ -448,24 +448,47 @@ function canStartDeliveryWork(state: DeliveryState): boolean {
 
 /**
  * The consecutive retry window from the retry cursor, then up to as many later pages whose events are not all terminal,
- * so a page behind an earlier pending page is still retried inside its delivery window.
+ * so a page behind an earlier pending page is still retried inside its delivery window. The search for later pages reads
+ * at most MAX_RETRY_SCAN_PAGES per run. It resumes where the previous run stopped and wraps to the end of the window
+ * after the newest page, so every later page is reached in turn however long the earliest page stays pending.
  */
 async function retryPageStarts(store: Store, prefix: string, start: bigint): Promise<bigint[]> {
+  const deployment = prefix.slice("raffle-notifications:v1:".length);
   const starts: bigint[] = [];
   let current = start;
+  for (let count = 0; count < MAX_RETRY_PAGES; count += 1) {
+    const raw = await store.get(pageKey(prefix, current));
+    if (raw === null) return starts;
+    starts.push(current);
+    current = BigInt(parsePage(raw, deployment, current).nextBlock);
+  }
+  const windowEnd = current;
+  const scanKey = `${prefix}:retry-scan-hint`;
+  // A hint that names no stored page past the window, such as one left from before the cursor moved, starts the search over.
+  const hinted = parseOptionalHint(await store.get(scanKey));
+  if (hinted !== null && hinted > windowEnd && await store.get(pageKey(prefix, hinted)) !== null) current = hinted;
+  const scanStart = current;
+  let wrapped = scanStart === windowEnd;
   let later = 0;
   for (let count = 0; count < MAX_RETRY_SCAN_PAGES && later < MAX_RETRY_PAGES; count += 1) {
     const key = pageKey(prefix, current);
     const raw = await store.get(key);
-    if (raw === null) break;
-    const page = parsePage(raw, prefix.slice("raffle-notifications:v1:".length), current);
-    if (count < MAX_RETRY_PAGES) starts.push(current);
-    else if (page.events.length > 0 && await verifiedTerminalPrefix(store, prefix, current, page.events.length, await store.get(`${key}:terminal-prefix`)) < page.events.length) {
+    if (raw === null) {
+      if (wrapped) break;
+      current = windowEnd;
+      wrapped = true;
+      if (current === scanStart) break;
+      continue;
+    }
+    const page = parsePage(raw, deployment, current);
+    if (page.events.length > 0 && await verifiedTerminalPrefix(store, prefix, current, page.events.length, await store.get(`${key}:terminal-prefix`)) < page.events.length) {
       starts.push(current);
       later += 1;
     }
     current = BigInt(page.nextBlock);
+    if (wrapped && current === scanStart) break;
   }
+  await store.set(scanKey, current.toString());
   return starts;
 }
 
