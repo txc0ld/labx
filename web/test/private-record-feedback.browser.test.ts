@@ -354,6 +354,8 @@ run("wallet-scoped private-record feedback", () => {
     await loadMore.click();
     await sign.waitFor({ state: "visible", timeout: 20_000 });
     expect(await fixture.page.getByText(/You’ll sign \d+ times/).count()).toBe(0);
+    expect(await purchases.count()).toBe(1);
+    expect(await purchases.first().innerText()).toContain("Not sent");
     await sign.click();
     await expect.poll(() => purchases.count(), { timeout: 10_000 }).toBe(2);
     const requests = recordRequests.slice(before);

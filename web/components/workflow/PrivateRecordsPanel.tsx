@@ -147,6 +147,9 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
   if (loading) return <p className="notice" role="status">Loading your purchases…</p>;
   if (browser.kind === "unavailable") return <p className="notice warning" role="status">{browser.reason}</p>;
   const signatures = state.kind === "ready-history" || state.kind === "loading-records" ? Math.ceil((state.purchases.length - (state.signed?.count ?? 0)) / 30) : 0;
+  // Signed receipts stay listed while older purchases wait for their signature.
+  const shown = state.kind === "ready" ? state
+    : (state.kind === "ready-history" || state.kind === "loading-records") && state.signed ? { purchases: state.purchases.slice(0, state.signed.count), records: state.signed.records } : null;
   return (
     <WalletGate wallet={browser.wallet}>
       {state.kind === "loading-history" ? <p className="notice" role="status">Loading your purchases…</p> : null}
@@ -154,15 +157,15 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
       {state.kind === "ready-history" && !state.purchases.length ? <div className="well pad stack"><h2>{continuation ? "No purchases found yet" : "No purchases yet"}</h2><Link className="btn btn-dark" href="/">Browse raffles</Link></div> : null}
       {(state.kind === "ready-history" || state.kind === "loading-records") && state.purchases.length ? <div className="well pad stack"><h2>See your receipts</h2><p>Signing is free and doesn’t send a transaction.{signatures > 1 ? ` You’ll sign ${signatures} times.` : ""}</p><button className="btn" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadRecords(state.purchases, state.signed)}>{state.kind === "loading-records" ? "Opening wallet…" : "Sign to see receipts"}</button></div> : null}
       {continuation && state.kind !== "loading-history" ? <div className="stack"><p className="muted" role="status">Older purchases aren’t shown yet.</p><button className="btn btn-dark" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadHistory(true)}>Load more</button></div> : null}
-      {state.kind === "ready" ? (
+      {shown ? (
         <div className="workflow-grid">
-          <section className="pearl pad stack"><h2>Your purchases</h2>{email ? <p className="notice">Receipts go to {email}. <Link href="/profile#email-preferences">Change</Link></p> : <p className="notice warning">Add your email to get receipts. <Link href="/profile#email-preferences">Add email</Link></p>}<ol className="private-record-list">{state.purchases.map((purchase) => {
+          <section className="pearl pad stack"><h2>Your purchases</h2>{email ? <p className="notice">Receipts go to {email}. <Link href="/profile#email-preferences">Change</Link></p> : <p className="notice warning">Add your email to get receipts. <Link href="/profile#email-preferences">Add email</Link></p>}<ol className="private-record-list">{shown.purchases.map((purchase) => {
             const key = `${purchase.transactionHash}-${purchase.logIndex}`;
-            const record = state.records.receipts.find((item) => item.transactionHash.toLowerCase() === purchase.transactionHash.toLowerCase() && item.logIndex === purchase.logIndex);
+            const record = shown.records.receipts.find((item) => item.transactionHash.toLowerCase() === purchase.transactionHash.toLowerCase() && item.logIndex === purchase.logIndex);
             const status = delivery[key] === "delivered" ? "delivered" : record?.status ?? "missing";
             return <li key={key}><div><strong>Raffle #{purchase.raffleId.toString()}</strong><span>{formatUsdcAmount(purchase.principal + purchase.fee)} USDC</span><span>{status === "delivered" ? "Sent" : status === "pending" ? "Pending" : "Not sent"}</span></div><details><summary>Transaction details</summary><p className="hash">{purchase.transactionHash}</p></details>{status !== "delivered" ? <button className="btn btn-dark" type="button" disabled={!email || delivery[key] === "sending"} onClick={() => void send(purchase.transactionHash, purchase.logIndex)}>{delivery[key] === "sending" ? "Sending…" : "Email receipt"}</button> : null}</li>;
           })}</ol>{deliveryError ? <p className="notice error" role="alert">{deliveryError}</p> : null}</section>
-          <section className="well pad stack"><h2>Agreements</h2>{!state.records.agreements.length ? <p>No agreements yet.</p> : <ol className="private-record-list">{state.records.agreements.map((agreement) => <li key={agreement.raffleId}><strong>Raffle #{agreement.raffleId}</strong><span>{agreement.recorded ? `Recorded${agreement.at ? ` · ${new Date(agreement.at).toLocaleString("en-AU")}` : ""}` : "Not recorded"}</span></li>)}</ol>}</section>
+          <section className="well pad stack"><h2>Agreements</h2>{!shown.records.agreements.length ? <p>No agreements yet.</p> : <ol className="private-record-list">{shown.records.agreements.map((agreement) => <li key={agreement.raffleId}><strong>Raffle #{agreement.raffleId}</strong><span>{agreement.recorded ? `Recorded${agreement.at ? ` · ${new Date(agreement.at).toLocaleString("en-AU")}` : ""}` : "Not recorded"}</span></li>)}</ol>}</section>
         </div>
       ) : null}
     </WalletGate>
