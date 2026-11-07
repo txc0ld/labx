@@ -1,6 +1,6 @@
 # LABx
 
-Membership packs for escrowed NFTs. Each purchased pack includes its published number of bonus raffle entries. The current contract source targets Ethereum Sepolia and uses Chainlink VRF v2.5 after a completed entry snapshot. It has no free-entry issuance.
+Membership packs for escrowed NFTs. Each purchased pack includes its published number of bonus raffle entries. The current contract source runs on Ethereum Sepolia and Ethereum mainnet and uses Chainlink VRF v2.5 after a completed entry snapshot. It has no free-entry issuance.
 
 Operator: Fantom Labs Pty Ltd · ABN 56 702 056 166 · ACN 702 056 166. The public origin is configured with `NEXT_PUBLIC_SITE_URL`.
 
@@ -10,13 +10,15 @@ The source registry now includes the verified v3 Sepolia contract `0x8b0332D0ca4
 
 When enabled, a server-side draw runner (`/api/cron/draw`, every five minutes) closes sales, counts entries, starts the draw and finishes the raffle with its own dedicated Sepolia key. It can make only those four public calls. See [the draw runner record](docs/build/draw-runner-20261010.md) for its limits and operation.
 
-This is a Sepolia testing deployment. The Safe's threshold of one is testing-only. Human review remains required for each raffle. Deployment verification does not establish a completed live Chainlink raffle lifecycle; that test remains separate.
+labx.art is a Sepolia testing deployment. The Safe's threshold of one there is testing-only.
+
+The mainnet v3 raffle `0xef27306567a5ADA354fe9403008D041d0b468213` was deployed paused on 7 Nov 2026 (record: `deployments/mainnet.json`; procedure: `LAUNCH.md`). On mainnet the same Safe address is a 2-of-3 Safe and the pending owner. The `labx-mainnet` site stays behind Vercel authentication until launch. Human review remains required for each raffle. Deployment verification does not establish a completed live Chainlink raffle lifecycle; that test remains separate.
 
 The Sepolia v2 contract `0xef27306567a5ADA354fe9403008D041d0b468213` and older contract `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` remain excluded from current transactions. The mainnet v3 raffle has the same address `0xef27…8213`, because the same deployer created both at nonce 19; on chain 1 that address is the registered v3 deployment. Updating the website does not change their bytecode or migrate their entries, balances or claims.
 
 ## Layout
 
-- `contracts`: Solidity source, Foundry tests and isolated local/Sepolia deployment scripts.
+- `contracts`: Solidity source, Foundry tests and isolated local, Sepolia and mainnet deployment scripts.
 - `web`: Next.js pages, wallet/contract services and authenticated records.
 - `docs/build`: task contracts, candidate revisions and evidence pointers.
 - `docs/build/README.md`: current documentation index and superseded-report labels.

@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
-describe("verified Sepolia deployment registration", () => {
+describe("verified Sepolia and mainnet deployment registration", () => {
   it("registers only the canonical v3 runtime, creation block, Safe authority and complete opening policy", () => {
     expect(APPROVED_DEPLOYMENTS).toEqual([verifiedManifest, verifiedMainnetManifest]);
     expect(verifiedManifest.expectedPolicy.termsHash).toBe(PUBLISHED_TERMS_HASH);
@@ -83,6 +83,23 @@ describe("verified Sepolia deployment registration", () => {
     vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
     const mainnetTerms = await import("../lib/published-terms");
     expect(mainnetTerms.PUBLISHED_TERMS_HASH).toBe(verifiedMainnetManifest.expectedPolicy.termsHash);
+  });
+
+  it("selects the mainnet entry for the shared address only in a chain 1 build", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "1");
+    vi.stubEnv("NEXT_PUBLIC_RAFFLE_ADDRESS", verifiedMainnetManifest.address);
+    const deployment = await import("../lib/chain/deployment");
+    const attest = vi.spyOn(deployment, "attestDeployment").mockResolvedValue({ kind: "verified", manifest: verifiedMainnetManifest, block: checkedBlock });
+    const { configuredBrowserService } = await import("../lib/chain/browser");
+    const browser = configuredBrowserService();
+    expect(browser.kind).toBe("configured");
+    if (browser.kind !== "configured") throw new Error(browser.reason);
+    expect(browser.service.manifest).toEqual(verifiedMainnetManifest);
+    const { serverWorkflow } = await import("../lib/chain/server");
+    const server = await serverWorkflow();
+    expect(server.manifest).toEqual(verifiedMainnetManifest);
+    expect(server.context).toMatchObject({ chainId: 1, contract: verifiedMainnetManifest.address, termsHash: verifiedMainnetManifest.expectedPolicy.termsHash });
+    expect(attest).toHaveBeenCalledExactlyOnceWith(expect.any(Object), verifiedMainnetManifest);
   });
 
   it.each([verifiedManifest.address, verifiedManifest.address.toLowerCase()])("selects %s consistently in production browser and server configuration", async selected => {
