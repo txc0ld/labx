@@ -323,7 +323,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     if (state.kind === "recovery" || state.kind === "error") { autoSubmitSpent.current = true; return; }
     if (state.kind !== "idle" || clearJournalScope !== scope) return;
     autoSubmitSpent.current = true;
-    // So does a saved transaction that needs a check, or a disabled control, once the journal is read: when either clears
+    // So does an outcome that still needs a check, or a disabled control, once the journal is read: when either clears
     // later, the button waits for a click.
     if (disabled || activeOutcome) { setAutoSubmit(false); return; }
     void prepare(true, true);
