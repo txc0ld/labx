@@ -384,7 +384,8 @@ describe.runIf(process.env.RUN_SELLER_DRAW_RUNNER_BROWSER === "1")("seller page 
     it("never opens the wallet by itself once a saved transaction that held the confirmation is checked", async () => {
       // An earlier send of the seller's whose check fails while the network refuses that hash, so it needs a check.
       const earlier = hash(await chain.rpc("eth_sendTransaction", [{ from: chain.seller, to: chain.seller, value: "0x0", gas: "0x5208" }]));
-      await chain.mine();
+      await chain.client.waitForTransactionReceipt({ hash: earlier });
+      await chain.mine(); await chain.mine();
       const checkpoint = `labx:outcome:v1:${chain.manifest.chainId}:${chain.manifest.address.toLowerCase()}:${chain.manifest.runtimeCodeHash.toLowerCase()}:${chain.seller.toLowerCase()}:${earlier.toLowerCase()}`;
       let refused = true;
       const refuse = async (route: Route) => {
