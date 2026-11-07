@@ -1308,3 +1308,113 @@ describe("bounded waits", () => {
     await expect(within(Promise.reject(new Error("late")), -1)).rejects.toBeInstanceOf(RunnerTimeoutError);
   });
 });
+
+describe("draw runner stuck transaction replacement", () => {
+  beforeEach(() => {
+    vi.stubEnv("CRON_SECRET", secret);
+    vi.stubEnv("LABX_KEEPER_PRIVATE_KEY", runnerKey);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+  const LATER = START + LEASE_BUCKET_MS, LAST = START + 2 * LEASE_BUCKET_MS;
+  const fees = (maxFee: string, tip = "1"): Quote => ({ gasLimit: 100_000n, maxFeePerGas: parseGwei(maxFee), maxPriorityFeePerGas: parseGwei(tip) });
+
+  /** One open raffle on a chain whose sends stay pending until `mine` is set, at fees the test chooses. */
+  function stuckChain(store: Store) {
+    const raffle = open();
+    const { chain } = fakeChain({ 1: raffle });
+    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, nonceReads: 0 };
+    const sends: string[] = [];
+    chain.nonces = async () => { state.nonceReads++; return { latest: state.latest, pending: state.pending }; };
+    chain.quote = async () => state.quote;
+    chain.send = async (prepared, nonce, quote) => {
+      const action = prepared.action as RunnerAction;
+      if (state.mineBeforeNextSend) { state.mineBeforeNextSend = false; state.latest = state.pending; advance(raffle, "close"); }
+      sends.push(`${action.kind}:${nonce}:${quote.maxFeePerGas}:${quote.maxPriorityFeePerGas}`);
+      const hash = pad(toHex(sends.length), { size: 32 });
+      if (nonce < state.latest) return { kind: "unknown", hash, error: "NonceTooLow" };
+      if (!state.mine) { state.pending = nonce + 1; return { kind: "sent", hash }; }
+      state.latest = state.pending = nonce + 1;
+      advance(raffle, action.kind, action.kind === "snapshot" ? action.maxSteps : undefined);
+      return { kind: "sent", hash };
+    };
+    chain.wait = async () => { if (state.mine) return "succeeded"; throw new WaitForTransactionReceiptTimeoutError({ hash: zeroHash }); };
+    const run = async (at: number) => (await call(chain, store, () => at)).body;
+    return { state, sends, run };
+  }
+  const record = async (store: Store) => JSON.parse((await store.get("draw-runner:last-send"))!);
+
+  it("replaces its own stuck transaction at the same nonce with bumped fees once suggested fees rise", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    expect(await run(START)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
+    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(1), { size: 32 }), maxFeePerGas: parseGwei("2").toString(), maxPriorityFeePerGas: parseGwei("1").toString() });
+
+    state.quote = fees("20");
+    state.mine = true;
+    const body = await run(LATER);
+    expect(body).toMatchObject({ ok: true, status: "complete", sends: 3 });
+    expect(sends).toEqual([
+      `close:0:${parseGwei("2")}:${parseGwei("1")}`,
+      // The stuck close is replaced at its nonce: the new suggested max fee, and the old tip plus a tenth.
+      `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
+      `snapshot:1:${parseGwei("20")}:${parseGwei("1")}`,
+      `requestRandomness:2:${parseGwei("20")}:${parseGwei("1")}`
+    ]);
+    expect(outcomes(body)).toEqual(["1:close:succeeded:null", "1:snapshot:succeeded:null", "1:requestRandomness:succeeded:null"]);
+    expect(await record(store)).toMatchObject({ nonce: 2, maxFeePerGas: parseGwei("20").toString() });
+  });
+
+  it("keeps waiting while suggested fees have not risen or the pending transaction is not the one it recorded", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0 });
+    const recorded = await record(store);
+    await store.set("draw-runner:last-send", JSON.stringify({ ...recorded, nonce: 1 }));
+    state.quote = fees("20");
+    expect(await run(LAST)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0 });
+    await store.set("draw-runner:last-send", JSON.stringify({ ...recorded, runner: owner }));
+    expect(await run(LAST + LEASE_BUCKET_MS)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0 });
+    expect(sends).toHaveLength(1);
+  });
+
+  it("stops at the 50 gwei fee cap instead of replacing above it", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    state.quote = fees("46");
+    await run(START);
+    // 48 gwei is under the cap, but replacing a 46 gwei transaction needs at least 50.6 gwei.
+    state.quote = fees("48");
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "fee-cap", sends: 0, nextCursor: "1" });
+    expect(sends).toHaveLength(1);
+    expect(await record(store)).toMatchObject({ nonce: 0, maxFeePerGas: parseGwei("46").toString() });
+  });
+
+  it("moves on from the next step when the stuck transaction is mined just before its replacement", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    state.quote = fees("20");
+    state.mineBeforeNextSend = true;
+    const raced = await run(LATER);
+    expect(raced).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
+    expect(outcomes(raced)).toEqual(["1:close:unknown:NonceTooLow"]);
+    state.mine = true;
+    expect(await run(LAST)).toMatchObject({ ok: true, status: "complete", sends: 2 });
+    expect(sends.map(item => item.split(":").slice(0, 2).join(":"))).toEqual(["close:0", "close:0", "snapshot:1", "requestRandomness:2"]);
+  });
+
+  it("sends no replacement while another run holds the lease", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    state.quote = fees("20");
+    await store.setIfAbsent(Object.fromEntries(leaseKeys(LATER, LATER + RUN_MS).map(key => [key, "another run"])));
+    const reads = state.nonceReads;
+    expect(await run(LATER)).toMatchObject({ ok: true, status: "busy", sends: 0, items: [] });
+    expect(state.nonceReads).toBe(reads);
+    expect(sends).toHaveLength(1);
+    expect(await record(store)).toMatchObject({ nonce: 0, maxFeePerGas: parseGwei("2").toString() });
+  });
+});
