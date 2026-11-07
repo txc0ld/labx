@@ -224,6 +224,11 @@ run("buyer UI repair invariants in a rendered browser", () => {
     await fixture.page.getByRole("button", { name: "Continue", exact: true }).first().click();
     await expect.poll(saved, { timeout: 10_000 }).toBeNull();
     await expect.poll(() => unsent.count(), { timeout: 10_000 }).toBe(0);
+    // Continue leaves a marker that the buyer's next send checks. Later tests send from the buyer outside LABx, which
+    // would stop their first LABx send once, so this test removes the marker it caused.
+    const clearedKey = journalKey.replace("labx:pending:v1:", "labx:pending-cleared:v1:");
+    expect(await fixture.page.evaluate((key: string) => localStorage.getItem(key), clearedKey)).not.toBeNull();
+    await fixture.page.evaluate((key: string) => { localStorage.removeItem(key); }, clearedKey);
   }, 60_000);
 
   it("drops a delayed prepare from an old wallet session and allows the fresh wallet action", async () => {

@@ -48,11 +48,15 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const getEarlierSends = useCallback(() => wallet.kind === "connected" ? owner.earlierSendCount(wallet.account) : 0, [owner, wallet]);
   const earlierSends = useSyncExternalStore(owner.subscribe, getEarlierSends, getEarlierSends);
   const seenEarlierSends = useRef(earlierSends);
+  // The line for a send stopped by an earlier cleared request. The page re-reads the chain at once, which remounts the
+  // control that stopped, so the line stays here, above the page, until the next send or another wallet.
+  const [earlierStop, setEarlierStop] = useState(false);
+  const notedEarlierSends = useRef(earlierSends);
 
   useEffect(() => {
     const version = ++generation.current;
     inFlight.current = null; editedHash.current = false;
-    setChecking(false); setError(""); setHash(""); setPending(null);
+    setChecking(false); setError(""); setHash(""); setPending(null); setEarlierStop(false);
     return () => { if (generation.current === version) generation.current++; };
   }, [browser.service, browser.wallet, wallet]);
 
@@ -76,6 +80,12 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   // A send at the record's nonce was mined and the record cleared, or a send stopped because an earlier cleared request may
   // have landed: the page reads the chain again.
   const earlierSendSeen = earlierSends !== seenEarlierSends.current;
+  useEffect(() => {
+    if (earlierSends === notedEarlierSends.current) return;
+    notedEarlierSends.current = earlierSends;
+    setEarlierStop(true);
+  }, [earlierSends]);
+  useEffect(() => { if (ownRequestOpen) setEarlierStop(false); }, [ownRequestOpen]);
   useEffect(() => {
     if (pendingSend.status !== "spent" && !earlierSendSeen || deferRefresh || !callback.current) return;
     seenEarlierSends.current = earlierSends;
@@ -151,7 +161,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const normalWait = pending !== null && !error && (pending.hash ? savedCheck !== null && savedCheck !== "attention" : unresolved.some(outcome => outcome.kind === "submitting"));
   const waiting = (outcome: TransactionOutcome) => normalWait && (outcome.kind === "submitting"
     || pending?.hash != null && outcomeTransactionHash(outcome)?.toLowerCase() === pending.hash.toLowerCase());
-  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error) return null;
+  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error && !earlierStop) return null;
   const form = (heading: ReactNode) => <form className="well pad stack" onSubmit={submit}>
     {heading}
     <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => { editedHash.current = true; setHash(event.target.value.trim()); }} placeholder="0x…" /></label>
@@ -183,6 +193,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     <section className="stack resume-transaction" aria-label="Wallet transaction outcomes">
       {unresolved.filter(outcome => !waiting(outcome)).map(renderOutcome)}
       {history.length ? <details className="workflow-details"><summary>Activity ({history.length})</summary><div className="stack">{history.map(renderOutcome)}</div></details> : null}
+      {earlierStop ? <p className="notice warning" role="status">Your wallet sent an earlier LABx request. Check the page before trying again.</p> : null}
       {panel}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </section>
