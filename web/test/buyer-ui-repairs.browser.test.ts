@@ -15,6 +15,7 @@ const run = process.env.RUN_BUYER_UI_REPAIRS_BROWSER === "1" ? describe : descri
 
 const APPROVE = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: ["0x0000000000000000000000000000000000000000", 0n] }).slice(0, 10);
 const CLOSE = encodeFunctionData({ abi: raffleAbi, functionName: "close", args: [0n] }).slice(0, 10);
+const LOT_AT = encodeFunctionData({ abi: raffleAbi, functionName: "lotAt", args: [0n, 0n] }).slice(0, 10);
 
 run("buyer UI repair invariants in a rendered browser", () => {
   let chain: LocalChain;
@@ -485,4 +486,39 @@ run("buyer UI repair invariants in a rendered browser", () => {
     expect(await fixture.page.getByRole("button", { name: "Close sales", exact: true }).count()).toBe(0);
     expect((await wallet.requests()).map(request => request.method)).toEqual(["eth_sendTransaction"]);
   }, 120_000);
+
+  it("loads entry records on the first click after a refresh replaced a load still in flight", async () => {
+    const records = fixture.page.locator(".draw-details .private-record-list li");
+    await fixture.page.locator("summary", { hasText: "Draw details" }).click();
+    await fixture.page.locator("summary", { hasText: "Entry records (1 purchase)" }).click();
+    const held: { continue(): Promise<void> }[] = [];
+    let holding = true;
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const body: unknown = route.request().postDataJSON();
+      const lotRead = (Array.isArray(body) ? body : [body]).some(request => !!request && typeof request === "object" && "method" in request && request.method === "eth_call"
+        && "params" in request && Array.isArray(request.params) && typeof request.params[0]?.data === "string" && request.params[0].data.startsWith(LOT_AT));
+      if (holding && lotRead) { holding = false; held.push(route); return; }
+      await route.continue();
+    });
+    try {
+      await fixture.page.getByRole("button", { name: "Load entry records", exact: true }).click();
+      await fixture.page.getByRole("button", { name: "Loading entries…", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => held.length, { timeout: 10_000 }).toBe(1);
+      await chain.mine();
+      await fixture.page.getByRole("button", { name: "Refresh", exact: true }).click();
+      const load = fixture.page.getByRole("button", { name: "Load entry records", exact: true });
+      await expect.poll(() => load.isEnabled().catch(() => false), { timeout: 15_000 }).toBe(true);
+      await expect.poll(() => fixture.page.getByRole("button", { name: "Updating…", exact: true }).count(), { timeout: 15_000 }).toBe(0);
+
+      await load.click();
+      await expect.poll(() => records.count(), { timeout: 10_000 }).toBe(1);
+      await held[0].continue();
+      await fixture.page.waitForTimeout(1_000);
+      expect(await records.count()).toBe(1);
+      expect(await records.first().innerText()).toContain(chain.buyer);
+    } finally {
+      for (const route of held) await route.continue().catch(() => {});
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+  }, 60_000);
 });
