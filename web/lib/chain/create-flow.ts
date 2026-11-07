@@ -183,8 +183,10 @@ async function settleCreateStep({ service, wallet, record, save, assertIntent, t
   if (recoveryHash && !pending.checkpoint && pending.step !== "createDraft") throw new Error("This older saved custody send has no nonce checkpoint. Recover its original wallet transaction before continuing.");
   const txHash = recoveryHash ?? pending.hash ?? journal?.hash;
   if (!txHash) throw new Error("The wallet response is uncertain. Open Advanced recovery and enter its Ethereum transaction hash. An unknown send cannot be discarded.");
+  // A hash the wallet returned for this step may sit at a nonce the wallet chose; a pasted one must match the checkpoint's.
+  const nonceMatters = recoveryHash !== undefined;
   const persistHash = (receipt: CanonicalReceipt) => {
-    if (pending.checkpoint && (receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
+    if (pending.checkpoint && (nonceMatters && receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
     pending = { ...pending, hash: receipt.hash };
     current = { ...current, pending }; save(current);
   };
@@ -196,7 +198,7 @@ async function settleCreateStep({ service, wallet, record, save, assertIntent, t
   if (outcome.kind === "pending" || outcome.kind === "unknown") throw new Error("Creation stopped. Wait for canonical confirmation, then click Create to resume.");
   const receipt = outcome.receipt;
   if (receipt.chainId !== service.manifest.chainId || !sameAddress(receipt.account, session.account)) throw new Error("The creation receipt belongs to another wallet or network.");
-  if (pending.checkpoint && (receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
+  if (pending.checkpoint && (nonceMatters && receipt.nonce !== pending.checkpoint.nonce || receipt.blockNumber < BigInt(pending.checkpoint.startedBlock))) throw new Error("This receipt does not match the saved creation nonce.");
   const exact = receipt.to !== null && sameAddress(receipt.to, expected.to) && receipt.data.toLowerCase() === expected.data.toLowerCase() && receipt.value === expected.value;
   if (receipt.status !== "success" || !exact) {
     if (!pending.checkpoint) throw new Error("This older saved send has no nonce checkpoint. Recover its original transaction or matching creation receipt before continuing.");

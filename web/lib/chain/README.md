@@ -57,6 +57,6 @@ The wallet adapter invokes `beforeRequest` after its initial session check so th
 
 Before any wallet request, the service estimates the transaction's gas and refuses, without a pending record, when gas × 1.5 × maxFeePerGas + value is more than the account's ETH. The 1.5 matches the gas limit wallets set over their own estimate. Every direct `eth_sendTransaction` carries the configured RPC's EIP-1559 suggestion: its tip, at least 0.001 gwei, on top of twice the latest base fee.
 
-This protects normal website use, not deliberate browser-storage deletion, another device, or transactions sent outside LABx. Wallets must honor the requested sender/network/nonce. A wallet that still holds an unanswered LABx request after a reload should reject it before the person chooses Continue. Contract rules remain authoritative.
+This protects normal website use, not deliberate browser-storage deletion, another device, or transactions sent outside LABx. Wallets must honor the requested sender and network. A wallet may send its returned hash at a nonce of its own, for example behind a send LABx's RPC can't see: once that transaction is visible, the record moves to its nonce and settles when it mines. A hash someone enters must still be at the record's nonce. A wallet that still holds an unanswered LABx request after a reload should reject it before the person chooses Continue. Contract rules remain authoritative.
 
 For deterministic Node/Anvil tests, inject one shared `memoryPendingJournal()` into recreated service instances. It is never the browser persistence fallback.

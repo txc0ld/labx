@@ -355,8 +355,13 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
         if (!actual) return { kind: "pending", hash: transaction.hash };
         if (actual.hash.toLowerCase() !== transaction.hash.toLowerCase() || !sameAddress(actual.from, transaction.account)) throw new Error("Transaction sender or hash does not match this wallet request.");
         await journal.exclusive(transaction.account, async () => {
-          const current = journal.read(transaction.account);
+          let current = journal.read(transaction.account);
           if (!current) return;
+          // The wallet sent the hash it returned at a nonce of its own: the record follows it, so it settles when that hash mines.
+          if (current.hash?.toLowerCase() === actual.hash.toLowerCase() && actual.nonce !== current.nonce) {
+            current = { ...current, nonce: actual.nonce };
+            journal.write(transaction.account, current);
+          }
           if (actual.nonce !== current.nonce || actual.blockNumber !== null && actual.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash.toLowerCase() !== actual.hash.toLowerCase()) throw new Error("This transaction does not match the current unresolved wallet action.");
           beforeJournalWatch({ transaction: { hash: actual.hash, account: actual.from, chainId: manifest.chainId, to: actual.to, data: actual.input, value: actual.value, nonce: actual.nonce }, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
         });
@@ -367,7 +372,9 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await journal.exclusive(transaction.account, async () => {
         const current = journal.read(transaction.account);
         if (current) {
-          if (receipt.nonce !== current.nonce || receipt.blockNumber < BigInt(current.startedBlock) || current.hash !== null && current.hash !== transaction.hash && current.hash !== receipt.hash) throw new Error("This transaction does not reconcile the unresolved wallet action.");
+          // A hash the wallet returned for this record settles it at whatever nonce the wallet chose.
+          const returned = current.hash !== null && (current.hash === transaction.hash || current.hash === receipt.hash);
+          if (receipt.nonce !== current.nonce && !returned || receipt.blockNumber < BigInt(current.startedBlock) || current.hash !== null && !returned) throw new Error("This transaction does not reconcile the unresolved wallet action.");
           expectedIntent = current.intentHash;
         }
         beforeJournalClear?.({ receipt, pending: current ? { id: current.id, hash: current.hash, nonce: current.nonce } : null });
@@ -400,9 +407,11 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
       await wallet.assertCurrent(session);
       const current = journal.read(session.account);
       if (!current || !matches(current)) return null;
-      if (tx.nonce !== current.nonce || tx.blockNumber !== null && tx.blockNumber < BigInt(current.startedBlock)) throw new Error("This hash is unrelated to the unresolved wallet action.");
+      // Only the hash the wallet returned for this record may sit at another nonce: the wallet chose its own, and the record follows it.
+      const returned = current.hash?.toLowerCase() === tx.hash.toLowerCase();
+      if (tx.nonce !== current.nonce && !returned || tx.blockNumber !== null && tx.blockNumber < BigInt(current.startedBlock)) throw new Error("This hash is unrelated to the unresolved wallet action.");
       beforeJournalUpdate?.({ transaction: result, nonce: tx.nonce, pending: { id: current.id, hash: current.hash, nonce: current.nonce } });
-      journal.write(session.account, { ...current, hash: tx.hash });
+      journal.write(session.account, { ...current, nonce: tx.nonce, hash: tx.hash });
       return result;
     });
   }

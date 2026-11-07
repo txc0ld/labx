@@ -482,4 +482,56 @@ run("buyer sends: fee suggestion, gas pre-check and pending records on isolated 
     await service.submit({ prepared: await service.prepare({ action: approval(), wallet: buyer.session }), wallet: buyer.session });
     expect(buyer.requests.map(request => request.nonce)).toEqual([toHex(cleared.nonce), toHex(cleared.nonce + 1)]);
   }, 20_000);
+
+  /** A wallet that first sends a transfer of its own, which LABx can't know about, then sends LABx's request at the next nonce. */
+  async function ownNonceWallet() {
+    return wallet(chain.buyer, async params => {
+      const own = BigInt(params.nonce ?? "0x0");
+      await transfer(chain.buyer, Number(own));
+      return broadcast({ ...params, nonce: toHex(own + 1n) });
+    });
+  }
+
+  it.each([true, false])("moves the record to the nonce a wallet chose for its returned hash, so it settles when that hash mines (watched: %s)", async watched => {
+    const { service, journal } = await fresh();
+    const buyer = await ownNonceWallet();
+    const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
+    const transaction = await service.submit({ prepared: await service.prepare({ action: approval(), wallet: buyer.session }), wallet: buyer.session });
+    expect(journal.read(chain.buyer)).toMatchObject({ nonce, hash: transaction.hash });
+    await chain.mine(); await chain.mine();
+    const confirmed = await service.confirm({ transaction, timeoutMs: 3_000, ...(watched ? { beforeJournalWatch: () => {} } : {}) });
+    expect(confirmed).toMatchObject({ kind: "confirmed", receipt: { nonce: nonce + 1 } });
+    expect(journal.read(chain.buyer)).toBeNull();
+  });
+
+  it("after a reload, checks a saved hash that a wallet sent at its own nonce and clears the record", async () => {
+    const { service, journal } = await fresh();
+    const buyer = await ownNonceWallet();
+    const nonce = await chain.client.getTransactionCount({ address: chain.buyer, blockTag: "pending" });
+    const transaction = await service.submit({ prepared: await service.prepare({ action: approval(), wallet: buyer.session }), wallet: buyer.session });
+    await chain.mine(); await chain.mine();
+    const reloaded = createRaffleService(chain.client, chain.manifest, journal) as RaffleService;
+    const pending = await reloaded.pending({ wallet: buyer.session });
+    expect(pending).toEqual({ id: expect.any(String), hash: transaction.hash, nonce });
+    const resumed = await reloaded.resume({ hash: transaction.hash, wallet: buyer.session, expectedJournal: pending ?? undefined });
+    expect(resumed?.hash).toBe(transaction.hash);
+    expect(journal.read(chain.buyer)).toMatchObject({ nonce: nonce + 1, hash: transaction.hash });
+    if (!resumed) throw new Error("The saved hash was not resumed.");
+    expect(await reloaded.confirm({ transaction: resumed, timeoutMs: 3_000 })).toMatchObject({ kind: "confirmed" });
+    expect(journal.read(chain.buyer)).toBeNull();
+  });
+
+  it("still refuses a pasted hash at another nonce than the record's", async () => {
+    const { service, journal } = await fresh();
+    const silent = await wallet(chain.buyer, async () => { throw new Error("provider timed out"); });
+    await expect(service.submit({ prepared: await service.prepare({ action: approval(), wallet: silent.session }), wallet: silent.session })).rejects.toThrow(/uncertain/);
+    const pending = await service.pending({ wallet: silent.session });
+    if (!pending) throw new Error("The record was not kept.");
+    const other = await transfer(chain.buyer, pending.nonce);
+    await chain.client.waitForTransactionReceipt({ hash: other });
+    const later = await transfer(chain.buyer, pending.nonce + 1);
+    await chain.client.waitForTransactionReceipt({ hash: later });
+    await expect(service.resume({ hash: later, wallet: silent.session, expectedJournal: pending })).rejects.toThrow(/unrelated/);
+    expect(journal.read(chain.buyer)).toMatchObject({ nonce: pending.nonce, hash: null });
+  });
 });
