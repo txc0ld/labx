@@ -179,6 +179,10 @@ export function createTransactionOutcomes(service: OutcomeService, storage: () =
       else if (getSnapshot(account).some(item => item.kind === "overflow")) {
         records.set(key, getSnapshot(account).filter(item => item.kind !== "overflow")); notify();
       }
+      // Every saved checkpoint read cleanly, so an earlier storage failure no longer applies.
+      if (getSnapshot(account).some(item => item.id === "storage-error")) {
+        records.set(key, getSnapshot(account).filter(item => item.id !== "storage-error")); notify();
+      }
     } catch (error) {
       put({ id: "storage-error", account, kind: "error", submitted: null, message: error instanceof Error ? error.message : "Transaction recovery storage is unavailable." });
     }

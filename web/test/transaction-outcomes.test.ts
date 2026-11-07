@@ -451,6 +451,19 @@ describe("operation ownership beyond transaction controls", () => {
     expect(f.map.size).toBe(1);
   });
 
+  it("removes its storage-error row once storage reads clean again, so new actions are no longer blocked", async () => {
+    const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
+    const terminal = await owner.submit(prepared, f.wallet);
+    const key = [...f.map.keys()][0];
+    await owner.acknowledge(terminal, f.wallet);
+    f.map.set(key, `0x${"cd".repeat(32)}`);
+    await owner.synchronize(account);
+    expect(owner.getSnapshot(account).map(item => item.id)).toEqual(["storage-error"]);
+    f.map.delete(key);
+    await owner.synchronize(account);
+    expect(owner.getSnapshot(account)).toEqual([]);
+  });
+
   it("recovers a cold tab's observed pending nonce from canonical storage events even after remote deletion", async () => {
     const f = fixture(), owner = createTransactionOutcomes(f.service, () => f.storage);
     const key = `labx:outcome:v1:31337:${contract}:${hash}:${account}:${hash}`;
