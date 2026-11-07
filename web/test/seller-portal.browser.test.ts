@@ -323,9 +323,21 @@ run("rendered seller portal on isolated Anvil", () => {
     expect(secret).toMatch(/^0x[0-9a-f]{64}$/);
     expect(await fixture.page.locator("body").innerText()).not.toContain(secret);
     expect(await fixture.page.evaluate(() => Object.values(localStorage).join("\n"))).not.toContain(secret);
-    await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
-    await fixture.page.getByText(/Your raffle setup couldn.t be restored right now/).waitFor();
+    // The server never saved that setup, so the next Create retires it and returns the filled-in form instead of asking to sign again.
+    const rpc = chain.rpc;
+    let signatures = 0;
+    chain.rpc = (method, params) => { if (method === "personal_sign") signatures++; return rpc(method, params); };
+    try {
+      await fixture.page.getByRole("button", { name: "Create", exact: true }).click();
+      await fixture.page.getByText("Your raffle setup wasn't saved. Press Create to start again.", { exact: true }).waitFor();
+    } finally { chain.rpc = rpc; }
+    expect(signatures).toBe(1);
     expect(posts).toBe(1);
+    expect(await fixture.page.getByLabel("Raffle title").inputValue()).toBe("Private preparation failure");
+    expect(await fixture.page.getByLabel("Token ID").inputValue()).toBe("999");
+    const createKeys = await fixture.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("labx:create:")));
+    expect(createKeys.filter(key => !key.includes(":retired:") && !key.endsWith(":generation"))).toEqual([]);
+    expect(createKeys.filter(key => key.includes(":retired:"))).toHaveLength(1);
     expect(await chain.client.getBlockNumber()).toBe(block.number);
     await fixture.page.unroute("**/api/reserve");
     // Isolated fixture cleanup: its intercepted request never reached storage or chain.

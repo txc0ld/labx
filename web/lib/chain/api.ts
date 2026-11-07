@@ -18,6 +18,8 @@ function record(value: unknown): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value));
 }
 function text(value: unknown): string { if (typeof value !== "string") throw new Error("Invalid workflow response."); return value; }
+/** The server's 404: what the request names doesn't exist, such as an NFT or a raffle setup it never saved. Nothing was saved. */
+export class WorkflowMissingError extends Error {}
 async function request(path: string, input?: unknown) {
   const response = await fetch(path, { method: input === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input) });
   const content = await response.text();
@@ -25,7 +27,10 @@ async function request(path: string, input?: unknown) {
   let body: Record<string, unknown>;
   // A platform error page (a timeout or crash) is not JSON, and its parse error means nothing to the person.
   try { body = record(JSON.parse(content)); } catch (error) { if (response.ok) throw error; throw new Error("LABx didn't respond. Try again in a minute."); }
-  if (!response.ok || body.ok !== true) throw new Error(typeof body.error === "string" ? body.error : "The workflow request was not acknowledged.");
+  if (!response.ok || body.ok !== true) {
+    const message = typeof body.error === "string" ? body.error : "The workflow request was not acknowledged.";
+    throw response.status === 404 ? new WorkflowMissingError(message) : new Error(message);
+  }
   return body;
 }
 async function contextFor(wallet: WalletSessionPort) {

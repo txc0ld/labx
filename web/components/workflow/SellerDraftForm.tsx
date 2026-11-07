@@ -13,7 +13,7 @@ import { isWalletRequestRejected } from "@/lib/chain/wallet-errors";
 import { STANDARD_MEMBERSHIP_TIERS, type MembershipTierName } from "@/lib/membership-tiers";
 import { canApplyWalletNftSelection, fetchWalletNfts, mergeWalletNftItems, nftTitle, shouldAutofillWalletNftTitle, type WalletNft } from "@/lib/wallet-nfts";
 import { captureCreateGeneration, assertCreateGeneration, advanceCreateGeneration, retireUnsentCreate, retireStaleCreate, recoverCreateTransaction, createStorageKey, decodeDraft, encodeDraft, finishCreate, readCreateRecord, serializeCreateRecord, writeCreateRecord, retireCompletedCreate, type CreateRecord } from "@/lib/chain/create-flow";
-import { recoverPreparation } from "@/lib/chain/api";
+import { recoverPreparation, WorkflowMissingError } from "@/lib/chain/api";
 import { CreateRecoveryControls } from "./CreateRecoveryControls";
 import { TransactionFlow } from "./TransactionFlow";
 import { CREATE_STEPS, createStepMessage } from "./create-progress";
@@ -100,6 +100,10 @@ function actionFromForm(form: FormDraft, salesEnd?: bigint): Omit<DraftInput, "r
 const UNSUPPORTED_BROWSER = "This browser isn't supported. Try a current Chrome, Safari or Firefox.";
 const DEADLINE_SKIPPED = "That time doesn't exist in your time zone because of a clock change. Choose another time.";
 const STALE_CREATE = "Your last raffle changed or passed its deadline, so it can't be finished here. Find it in Your raffles, or create a new one below.";
+
+function formFromDraft(draft: DraftInput): FormDraft {
+  return { nft: draft.nft, tokenId: draft.tokenId.toString(), title: draft.title, closing: localDeadlineInput(draft.salesEnd), packs: draft.packs.map((pack, index) => ({ id: `recovered-${index}`, name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() })) };
+}
 
 function formFromSnapshot(snapshot?: RaffleSnapshot): FormDraft {
   if (!snapshot) return INITIAL;
@@ -440,15 +444,27 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
             if (reserve.nft.toLowerCase() !== action.nft.toLowerCase() || reserve.tokenId !== action.tokenId.toString() || reserve.seller.toLowerCase() !== session.account.toLowerCase() || reserve.labx.toLowerCase() !== service.manifest.address.toLowerCase() || reserve.chainId !== String(service.manifest.chainId) || reserve.publicSummary !== input.publicSummary) throw new Error("Saved draw setup differs from this NFT or seller.");
             persist({ kind: "draft", data: encodeDraft({ ...action, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
           } catch (error) {
-            if (error instanceof PreparationNotDispatchedError || isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
-            if (isWalletRequestRejected(error)) throw error;
+            // The server saved nothing when the wallet refused, the request never left, or it found no such NFT.
+            if (error instanceof PreparationNotDispatchedError || error instanceof WorkflowMissingError || isWalletRequestRejected(error)) { localStorage.removeItem(key); setSavedCreation(null); }
+            if (isWalletRequestRejected(error) || error instanceof WorkflowMissingError) throw error;
             throw new Error("Couldn't save the raffle setup. Press Create to try again.");
           }
         } else if (record.kind === "preparing") {
           if (record.requestIdentity === null) throw new Error("Your raffle setup wasn't saved. Open Advanced recovery to start over and edit details.");
           const draft = decodeDraft(record.data);
           status(CREATE_STEPS.restoreSetup);
-          const reserve = await recoverPreparation(wallet, { requestIdentity: record.requestIdentity, nft: draft.nft, tokenId: draft.tokenId.toString() }, assertIntent);
+          let reserve: PublicReserve;
+          try { reserve = await recoverPreparation(wallet, { requestIdentity: record.requestIdentity, nft: draft.nft, tokenId: draft.tokenId.toString() }, assertIntent); }
+          catch (error) {
+            if (!(error instanceof WorkflowMissingError)) throw error;
+            // The server never saved this setup, so nothing can be restored: retire it, keep the details, and let Create start over.
+            await retireUnsentCreate({ service, wallet, storage: localStorage, key, expected: record, assertIntent });
+            invalidateSelection(); invalidateInventory();
+            replaceForm(() => formFromDraft(draft));
+            setSavedCreation(null); setState({ kind: "editing" });
+            setCreation({ kind: "error", message: error.message });
+            return;
+          }
           persist({ kind: "draft", data: encodeDraft({ ...draft, reserveNonce: reserve.nonce, reserveCommit: reserve.commit }), creationHash: null, id: null, pending: null });
         }
         const saved = readCreateRecord(localStorage, key);
@@ -507,7 +523,7 @@ export function SellerDraftForm({ service, wallet, saveCommitment, existing, onC
         assertIntent();
         const draft = decodeDraft(expected.data);
         invalidateSelection(); invalidateInventory();
-        replaceForm(() => ({ nft: draft.nft, tokenId: draft.tokenId.toString(), title: draft.title, closing: localDeadlineInput(draft.salesEnd), packs: draft.packs.map((pack, index) => ({ id: `recovered-${index}`, name: pack.name, price: formatUsdcInput(pack.priceUsdc), bonusEntries: pack.bonusEntries.toString(), maxSupply: pack.maxSupply.toString() })) }));
+        replaceForm(() => formFromDraft(draft));
         setSavedCreation(null); setCreation({ kind: "idle" }); setState({ kind: "editing" });
       });
     } catch (error) {
