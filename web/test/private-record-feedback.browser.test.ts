@@ -18,7 +18,7 @@ type PendingReceipt = {
 };
 
 type PendingRecords = {
-  respond(input?: { receiptStatus?: "missing" | "pending" | "delivered"; raffleId?: string }): Promise<void>;
+  respond(input?: { receiptStatus?: "missing" | "pending" | "unconfirmed" | "delivered"; to?: string; raffleId?: string }): Promise<void>;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -68,10 +68,11 @@ run("wallet-scoped private-record feedback", () => {
       const input = record(body.input);
       const purchases = Array.isArray(input.purchases) ? input.purchases : [];
       const raffleIds = Array.isArray(input.raffleIds) ? input.raffleIds : [];
-      const respond = async (response: { receiptStatus?: "missing" | "pending" | "delivered"; raffleId?: string } = {}) => {
+      const respond = async (response: { receiptStatus?: "missing" | "pending" | "unconfirmed" | "delivered"; to?: string; raffleId?: string } = {}) => {
+        const status = response.receiptStatus ?? "missing";
         const receipts = purchases.map((value) => {
           const purchase = record(value);
-          return { transactionHash: purchase.transactionHash, logIndex: purchase.logIndex, status: response.receiptStatus ?? "missing" };
+          return { transactionHash: purchase.transactionHash, logIndex: purchase.logIndex, status, ...(status === "missing" ? {} : { to: response.to ?? savedEmail }) };
         });
         await route.fulfill({
           status: 200,
@@ -323,5 +324,27 @@ run("wallet-scoped private-record feedback", () => {
     await fixture.page.getByRole("heading", { name: "Your purchases", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => fixture.page.getByText("Not sent", { exact: true }).count()).toBe(1);
     await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
+  }, 60_000);
+
+  it("offers the saved address after a receipt went to another one and hides a resend that can only fail", async () => {
+    await setFixtureSession({ chainId: 31337, account: chain.buyer });
+    await openRecords(chain.buyer);
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const elsewhere = await startRecordLoad();
+    await elsewhere.respond({ receiptStatus: "delivered", to: "receipts@exmaple.test" });
+    await fixture.page.getByText("Sent to receipts@exmaple.test", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const corrected = await startDelivery();
+    expect(corrected.recipient).toBe(savedEmail);
+    await corrected.respond({ delivered: true });
+    await fixture.page.getByText("Sent", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(async () => fixture.page.getByRole("button", { name: "Email receipt", exact: true }).count()).toBe(0);
+
+    await switchAccount(chain.buyer);
+    holdNextRecords = true;
+    const unconfirmed = await startRecordLoad();
+    await unconfirmed.respond({ receiptStatus: "unconfirmed" });
+    await fixture.page.getByText("Not confirmed", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await fixture.page.getByRole("button", { name: "Email receipt", exact: true }).count()).toBe(0);
   }, 60_000);
 });

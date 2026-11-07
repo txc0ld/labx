@@ -97,7 +97,14 @@ export async function readPrivateRecords(wallet: WalletSessionPort, input: Recor
   if (!Array.isArray(body.agreements) || !Array.isArray(body.receipts)) throw new Error("Invalid private records response.");
   return {
     agreements: body.agreements.map((value: unknown) => { const row = record(value); if (typeof row.recorded !== "boolean" || row.at !== null && typeof row.at !== "string") throw new Error("Invalid agreement record."); return { raffleId: text(row.raffleId), recorded: row.recorded, at: row.at }; }),
-    receipts: body.receipts.map((value: unknown) => { const row = record(value); if (typeof row.logIndex !== "number" || !Number.isSafeInteger(row.logIndex) || row.logIndex < 0 || row.status !== "missing" && row.status !== "pending" && row.status !== "delivered") throw new Error("Invalid receipt record."); return { transactionHash: hash(row.transactionHash), logIndex: row.logIndex, status: row.status }; })
+    receipts: body.receipts.map((value: unknown) => {
+      const row = record(value);
+      if (typeof row.logIndex !== "number" || !Number.isSafeInteger(row.logIndex) || row.logIndex < 0) throw new Error("Invalid receipt record.");
+      const purchase = { transactionHash: hash(row.transactionHash), logIndex: row.logIndex };
+      if (row.status === "missing") return { ...purchase, status: row.status };
+      if (row.status !== "pending" && row.status !== "unconfirmed" && row.status !== "delivered" || typeof row.to !== "string") throw new Error("Invalid receipt record.");
+      return { ...purchase, status: row.status, to: row.to };
+    })
   };
 }
 

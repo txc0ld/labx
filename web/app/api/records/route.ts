@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { workflowRequestBody } from "@/lib/chain/request-body";
 import { serverWorkflow, signatureVerifier } from "@/lib/chain/server";
 import { parseEnvelope } from "@/lib/workflow-records";
@@ -11,7 +12,8 @@ export async function POST(request: Request) {
     stage = "deployment";
     const { context, client } = await serverWorkflow();
     stage = "records";
-    const records = await privateRecords(activeStore(), { ...body, input }, context, signatureVerifier(client));
+    const mailKey = process.env.RESEND_API_KEY;
+    const records = await privateRecords(activeStore(), { ...body, input }, context, signatureVerifier(client), mailKey ? createHash("sha256").update(mailKey).digest("hex") : null);
     return Response.json({ ok: true, ...records }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return workflowFailure("records", stage, error, {

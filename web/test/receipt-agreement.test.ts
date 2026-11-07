@@ -1,6 +1,8 @@
-import { PUBLISHED_TERMS_HASH } from "../lib/published-terms";
+import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../lib/published-terms";
 import { describe, expect, it, vi } from "vitest";
-import { encodeAbiParameters, encodeEventTopics, parseAbiParameters, type Address, type Hex } from "viem";
+import { encodeAbiParameters, encodeEventTopics, keccak256, parseAbiParameters, toBytes, verifyMessage, type Address, type Hex } from "viem";
+import { workflowMessage } from "../lib/chain/messages";
+import { privateRecords } from "../lib/private-records";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { agreementMessage, recordAgreement, type AgreementRequest } from "../lib/agreement-record";
 import { deliverPurchaseReceipt, receiptAuthorizationMessage, resendSender, type MailPayload, type ReceiptRequest } from "../lib/receipt-delivery";
@@ -100,7 +102,55 @@ describe("verified purchase receipts", () => {
     const offline = reader(); vi.mocked(offline.getChainId).mockRejectedValue(new Error("offline"));
     await expect(deliverPurchaseReceipt(store, await receipt({}, context, now + 10_000), context, offline, send, from, transport, now + 10_000)).resolves.toEqual({ delivered: true, repeated: true });
     expect(send.mock.calls.length).toBe(count);
-    await expect(deliverPurchaseReceipt(store, await receipt({ to: "changed@example.com" }), context, reader(), send, from, transport, now)).rejects.toThrow(/another request/);
+  });
+
+  it("lets the buyer correct the address, sending once to each address and to at most three", async () => {
+    const store = new Store();
+    const keys: string[] = [];
+    let accept = false;
+    const send = vi.fn(async (body: MailPayload, key: string) => { keys.push(`${body.to} ${key}`); return accept; });
+    const first = `receipt:v2:${keccak256(toBytes(`11155111:${contract}:${transactionHash}:3`))}`;
+    // A mistyped address the provider never accepted.
+    expect(await deliverPurchaseReceipt(store, await receipt({ to: "buyer@exmaple.com" }), context, reader(), send, from, transport, now)).toMatchObject({ delivered: false });
+    accept = true;
+    // A request for a new address still needs the buyer's signature over that address.
+    const forged = { ...await receipt({ to: "buyer@exmaple.com" }), to: "buyer@example.com" };
+    await expect(deliverPurchaseReceipt(store, forged, context, reader(), send, from, transport, now)).rejects.toThrow(/authorization/);
+    const corrected = await receipt({ to: "buyer@example.com" });
+    const results = await Promise.all(Array.from({ length: 4 }, () => deliverPurchaseReceipt(store, corrected, context, reader(), send, from, transport, now + 1_000)));
+    expect(results.every(result => result.delivered)).toBe(true);
+    expect(new Set(keys.slice(1))).toEqual(new Set([`buyer@example.com ${first}:1`]));
+    expect(await deliverPurchaseReceipt(store, corrected, context, reader(), send, from, transport, now + 2_000)).toEqual({ delivered: true, repeated: true });
+    const sendsBefore = send.mock.calls.length;
+    // An address the provider already accepted can be followed by another, signed by the buyer.
+    expect(await deliverPurchaseReceipt(store, await receipt({ to: "work@example.com" }, context, now + 3_000), context, reader(), send, from, transport, now + 3_000)).toEqual({ delivered: true, repeated: false });
+    expect(keys.at(-1)).toBe(`work@example.com ${first}:2`);
+    await expect(deliverPurchaseReceipt(store, await receipt({ to: "fourth@example.com" }, context, now + 4_000), context, reader(), send, from, transport, now + 4_000)).rejects.toThrow("Receipt already went to three addresses.");
+    expect(send.mock.calls.length).toBe(sendsBefore + 1);
+    expect(keys[0]).toBe(`buyer@exmaple.com ${first}`);
+    expect([...store.map.keys()].sort()).toEqual([first, `${first}:1`, `${first}:1:sent`, `${first}:2`, `${first}:2:sent`]);
+  });
+
+  it("tells private records where a receipt went and whether it can still be sent there", async () => {
+    const store = new Store();
+    const workflow = { ...context, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
+    const selection = { raffleIds: [], purchases: [{ transactionHash, logIndex: 3 }] };
+    const receipts = async (at: number, identity: string | null = transport) => {
+      const deadline = String(Math.floor(at / 1000) + 60);
+      const signature = await account.signMessage({ message: workflowMessage("private records", workflow, account.address, selection, deadline) });
+      return (await privateRecords(store, { address: account.address, input: selection, deadline, signature }, workflow, verifyMessage, identity, at)).receipts;
+    };
+    expect(await receipts(now)).toEqual([{ transactionHash, logIndex: 3, status: "missing" }]);
+    await deliverPurchaseReceipt(store, await receipt({ to: "buyer@exmaple.com" }), context, reader(), async () => false, from, transport, now);
+    expect(await receipts(now + 1_000)).toEqual([{ transactionHash, logIndex: 3, status: "pending", to: "buyer@exmaple.com" }]);
+    // The same address can no longer be retried after the provider's retry window or a provider key change.
+    const later = now + 23 * 60 * 60 * 1000;
+    expect(await receipts(later)).toEqual([{ transactionHash, logIndex: 3, status: "unconfirmed", to: "buyer@exmaple.com" }]);
+    expect(await receipts(now + 1_000, "55".repeat(32))).toEqual([{ transactionHash, logIndex: 3, status: "unconfirmed", to: "buyer@exmaple.com" }]);
+    await expect(deliverPurchaseReceipt(store, await receipt({ to: "buyer@exmaple.com" }, context, later), context, reader(), async () => true, from, transport, later)).rejects.toThrow(/reconciliation/);
+    await deliverPurchaseReceipt(store, await receipt({ to: "buyer@example.com" }, context, later), context, reader(), async () => true, from, transport, later);
+    expect(await receipts(later + 1_000)).toEqual([{ transactionHash, logIndex: 3, status: "delivered", to: "buyer@example.com" }]);
+    expect(await receipts(later + 1_000, null)).toEqual([{ transactionHash, logIndex: 3, status: "delivered", to: "buyer@example.com" }]);
   });
 
   it("reuses the exact payload/key after send uncertainty but refuses retries beyond provider retention", async () => {
