@@ -348,7 +348,8 @@ stage1() {
       echo "mainnet-deploy: waiting for the recorded stage 1 transaction $tx" >&2
     fi
   else
-    [ "$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
+    nonce=$(read_chain "the deployer nonce" cast nonce "$who" --rpc-url "$RPC_URL")
+    [ "$nonce" = "$(read_chain "the deployer pending nonce" cast nonce "$who" --block pending --rpc-url "$RPC_URL")" ] \
       || die "the deployer has a pending transaction; settle it first"
     # A kept stage 1 run file without a record may hold a sent transaction that was never recorded.
     for f in "$(dirname "$RECORD")"/stage1*.json; do
@@ -359,6 +360,9 @@ stage1() {
     mkdir -p "$(dirname "$RECORD")"
   fi
   if [ -z "$tx" ]; then
+    # Binds the send to the nonce checked above: if anything lands at it first, such as an earlier stage 1 that the RPC
+    # did not know, forge's simulation refuses with NonceMoved and nothing is sent.
+    export STAGE1_NONCE=$nonce
     broadcast stage1 CreateMainnetSubscription
     run=$RUN
     [ -n "$run" ] || die "stage 1 sent no transaction"

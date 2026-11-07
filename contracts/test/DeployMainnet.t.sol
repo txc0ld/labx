@@ -24,8 +24,8 @@ interface IUsdc {
 }
 
 contract CreateMainnetSubscriptionHarness is CreateMainnetSubscription {
-    function create(uint256 pk) external {
-        _create(pk);
+    function create(uint256 pk, uint256 expectedNonce) external {
+        _create(pk, expectedNonce);
     }
 }
 
@@ -63,7 +63,15 @@ contract DeployMainnetRefusalTest is Test {
         script.run();
         CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
         vm.expectRevert("LABx: mainnet only.");
-        stage1.create(0xB0B);
+        stage1.create(0xB0B, 0);
+    }
+
+    function test_stage1RefusesANonceOtherThanTheCheckedOne() public {
+        vm.chainId(1);
+        CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
+        vm.setNonce(vm.addr(0xB0B), 1);
+        vm.expectRevert(abi.encodeWithSelector(CreateMainnetSubscription.NonceMoved.selector, uint256(0), uint256(1)));
+        stage1.create(0xB0B, 0);
     }
 
     function test_refusesASafeWithoutCodeOrBelowTwoSignatures() public {
@@ -149,7 +157,7 @@ contract DeployMainnetForkTest is Test {
         CreateMainnetSubscriptionHarness stage1 = new CreateMainnetSubscriptionHarness();
         vm.recordLogs();
         uint256 stage1Nonce = vm.getNonce(deployer);
-        stage1.create(TEST_KEY);
+        stage1.create(TEST_KEY, stage1Nonce);
         recordedNonce = stage1Nonce + 1;
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
