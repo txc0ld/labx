@@ -17,7 +17,8 @@ export async function POST(request: Request) {
     return workflowFailure("reserve/preparation", stage, error, {
       invalid: "The raffle setup request was invalid.",
       refused: "The signature wasn't accepted. Use the wallet that created this raffle and try again.",
-      unavailable: "Your raffle setup couldn't be restored right now. Try again in a minute."
+      unavailable: "Your raffle setup couldn't be restored right now. Try again in a minute.",
+      missing: "Your raffle setup wasn't saved. Press Create to start again."
     });
   }
 }
