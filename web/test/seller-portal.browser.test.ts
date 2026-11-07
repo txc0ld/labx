@@ -446,6 +446,32 @@ run("rendered seller portal on isolated Anvil", () => {
     await fixture.page.unroute("**/api/reserve");
   }, 60_000);
 
+  it("keeps unsaved draft edits open through the page Refresh", async () => {
+    await fixture.switchAccount(chain.seller);
+    const response = await fixture.page.goto(`${fixture.baseUrl}/seller/3`, { waitUntil: "domcontentloaded" });
+    expect(response?.status()).toBe(200);
+    const editDraft = fixture.page.locator("summary").filter({ hasText: "Edit draft" });
+    await connectWallet(fixture.page, editDraft);
+    await editDraft.click();
+    const pack = fixture.page.getByRole("group", { name: "Membership 1: Membership", exact: true });
+    await fixture.page.getByLabel("Raffle title").fill("Unsaved title change");
+    await pack.getByLabel("Price in USDC", { exact: true }).fill("33");
+
+    await chain.mine();
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).click();
+    await fixture.page.locator(".detail-path").getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await editDraft.waitFor({ state: "visible", timeout: 15_000 });
+    await fixture.page.getByLabel("Raffle title").waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByLabel("Raffle title").inputValue()).toBe("Unsaved title change");
+    expect(await pack.getByLabel("Price in USDC", { exact: true }).inputValue()).toBe("33");
+    expect((await chain.service.readRaffle({ id: 3n })).raffle.title).toBe("Canonical NFT retention");
+    await fixture.page.getByRole("button", { name: "Save changes", exact: true }).click();
+    const review = fixture.page.locator(".studio-review");
+    await review.getByText("Your saved draw setup stays the same, so no signature is needed. Saving sends your raffle back to LABx for review.", { exact: true }).waitFor({ state: "visible" });
+    expect(await review.locator("dd").first().innerText()).toBe("Unsaved title change");
+    expect(await review.getByText("33 USDC · 2 bonus entries · 100 supply", { exact: true }).isVisible()).toBe(true);
+  }, 45_000);
+
   it("gates a direct seller route immediately after the wallet changes", async () => {
     await fixture.page.setViewportSize({ width: 390, height: 844 });
     await fixture.switchAccount(chain.seller);

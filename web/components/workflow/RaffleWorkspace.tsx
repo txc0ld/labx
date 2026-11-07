@@ -17,7 +17,7 @@ import { drawRunnerEnabled } from "@/lib/draw-runner/enabled";
 import { sameAddress } from "@/lib/chain/validation";
 import type { ReserveRecord } from "@/lib/reserve";
 import { CompleteCreate } from "./CompleteCreate";
-import { SellerDraftForm, type SaveCommitment } from "./SellerDraftForm";
+import { SellerDraftForm, type FormDraft, type SaveCommitment } from "./SellerDraftForm";
 import { TransactionFlow } from "./TransactionFlow";
 import { catalogAvailability, formatUsdcAmount, fromPriceLabel, networkName, prizeStatus, shortAddress } from "./format";
 import { LocalTime } from "./LocalTime";
@@ -205,6 +205,8 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   const pieceRef = useRef<HTMLElement>(null);
   const pollRef = useRef(poll);
   pollRef.current = poll;
+  // The seller's unsaved draft edits. A refresh or account re-read remounts the edit form, which starts again from these.
+  const draftEdits = useRef<{ id: bigint; form: FormDraft } | null>(null);
   const { outcomes } = useTransactionOutcomes(browser.service, browser.wallet);
 
   useEffect(() => {
@@ -282,8 +284,9 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
 
   const fromPrice = mode === "public" && availabilityStatus.purchasable ? fromPriceLabel(snapshot) : null;
   const chainId = browser.service.manifest.chainId;
+  const edits = draftEdits.current?.id === snapshot.id ? draftEdits.current.form : undefined;
   const editDraft = mode === "seller" && seller && phase === 0 && saveCommitment && writesEnabled
-    ? <SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} onConfirmed={reload} />
+    ? <details className="workflow-details" open={edits !== undefined || undefined}><summary>Edit draft</summary><SellerDraftForm service={browser.service} wallet={browser.wallet} saveCommitment={saveCommitment} existing={snapshot} edits={edits} onEdit={form => { draftEdits.current = { id: snapshot.id, form }; }} onConfirmed={async () => { draftEdits.current = null; await reload(); }} /></details>
     : null;
 
   return (
@@ -778,7 +781,7 @@ function SellerActions({ browser, snapshot, revealedAt, account, availability, r
         : next.kind === "automatic" ? <><section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p></section><details className="workflow-details"><summary>Run it yourself</summary>{control(next.action)}</details></>
         : next.kind === "waiting" ? <section className="workflow-next stack" role="status"><h2>{next.title}</h2><p>{next.message}</p>{paid !== null ? <p className="workflow-fact">Paid to you: {formatUsdcAmount(paid)} USDC</p> : null}</section> : null}
       {editDraft || secondary.length ? <div className="seller-more">
-        {editDraft ? <details className="workflow-details"><summary>Edit draft</summary>{editDraft}</details> : null}
+        {editDraft}
         {Number(snapshot.raffle.phase) === 0
           ? secondary.map(item => <details key={item.kind} className="workflow-details"><summary>{item.label}</summary>{control(item)}</details>)
           : secondary.length ? <details className="workflow-details"><summary>Advanced ({secondary.length})</summary><div className="stack">{secondary.map(control)}</div></details> : null}
