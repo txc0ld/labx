@@ -192,17 +192,23 @@ print(txs[0] if txs else '')")
   echo "$tx"
 }
 
-# Succeeds when TX is mined now as the recorded deployer's transaction at EXPECTED_NONCE. A failed read is no match.
+# Succeeds when TX is mined now as the recorded deployer's transaction at EXPECTED_NONCE. A failed read stops the run.
 at_expected_nonce() {
   local tx=$1 tx_json receipt
-  tx_json=$(cast_json cast tx "$tx" --rpc-url "$RPC_URL" 2>/dev/null) || return 1
-  receipt=$(cast_json cast receipt "$tx" --async --rpc-url "$RPC_URL" 2>/dev/null) || return 1
+  tx_json=$(tx_rpc eth_getTransactionByHash "$tx"); receipt=$(tx_rpc eth_getTransactionReceipt "$tx")
   python3 -c '
 import json, sys
 t, r = json.loads(sys.argv[1]), json.loads(sys.argv[2])
-nonce = int(t["nonce"], 16) if isinstance(t["nonce"], str) else t["nonce"]
-sys.exit(0 if r and r.get("blockHash") and t["from"].lower() == sys.argv[3].lower() and nonce == int(sys.argv[4]) else 1)' \
+sys.exit(0 if t and r and r.get("blockHash") and t["from"].lower() == sys.argv[3].lower() and int(t["nonce"], 16) == int(sys.argv[4]) else 1)' \
     "$tx_json" "$receipt" "$(record_get deployer)" "$(record_get expectedNonce)"
+}
+
+# Stops when the deployer has not used EXPECTED_NONCE: a pending transaction at it must settle first, otherwise nothing
+# was created.
+nonce_unused() {
+  [ "$(read_chain "the deployer pending nonce" cast nonce "$(record_get deployer)" --block pending --rpc-url "$RPC_URL")" -le "$(record_get expectedNonce)" ] \
+    || die "the deployer's transaction at EXPECTED_NONCE is still pending; rerun once it is mined"
+  die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
 }
 
 # Makes sure the record names the CREATE, checked against its canonical receipt now: a recorded hash is checked again
@@ -231,7 +237,7 @@ print(" ".join(found))
 EOF
 )
   if [ -z "$candidates" ]; then
-    tx=$(find_create) || die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
+    tx=$(find_create) || nonce_unused
     record_create "$tx"; return 0
   fi
   for c in $candidates; do
@@ -239,8 +245,7 @@ EOF
   done
   expected=$(record_get expectedNonce)
   if [ "${#matches[@]}" -eq 0 ]; then
-    [ "$(read_chain "the deployer nonce" cast nonce "$(record_get deployer)" --rpc-url "$RPC_URL")" -gt "$expected" ] \
-      || die "the deployer has not used EXPECTED_NONCE; nothing was created. A fresh stage2 can run"
+    [ "$(read_chain "the deployer nonce" cast nonce "$(record_get deployer)" --rpc-url "$RPC_URL")" -gt "$expected" ] || nonce_unused
     die "no CREATE in the kept run files or CREATE_TX ($candidates) is the deployer's mined transaction at EXPECTED_NONCE $expected; set CREATE_TX to that transaction's hash"
   fi
   [ "${#matches[@]}" -eq 1 ] || die "more than one candidate CREATE (${matches[*]}) is mined at EXPECTED_NONCE $expected; settle which is canonical by hand"
