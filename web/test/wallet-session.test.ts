@@ -46,9 +46,9 @@ describe("wallet session revision boundary", () => {
 
   describe("after a wallet event whose session read fails", () => {
     function flaky() {
-      let failures = 0; const listeners = new Map<string, (...args: unknown[]) => void>();
-      const provider: WalletProvider = { async request({ method }) { if (method === "eth_chainId") { if (failures > 0) { failures--; throw new Error("Wallet read failed"); } return "0xaa36a7"; } if (method === "eth_accounts") return [account]; throw new Error("Unexpected request"); }, on(event, fn) { listeners.set(event, fn); }, removeListener(event) { listeners.delete(event); } };
-      return { wallet: new WalletSession(provider, 11155111), listeners, fail(count: number) { failures = count; } };
+      let failures = 0, chainReads = 0; const listeners = new Map<string, (...args: unknown[]) => void>();
+      const provider: WalletProvider = { async request({ method }) { if (method === "eth_chainId") { chainReads++; if (failures > 0) { failures--; throw new Error("Wallet read failed"); } return "0xaa36a7"; } if (method === "eth_accounts") return [account]; throw new Error("Unexpected request"); }, on(event, fn) { listeners.set(event, fn); }, removeListener(event) { listeners.delete(event); } };
+      return { wallet: new WalletSession(provider, 11155111), listeners, fail(count: number) { failures = count; }, chainReads: () => chainReads };
     }
     afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -76,16 +76,22 @@ describe("wallet session revision boundary", () => {
       expect(f.wallet.getSnapshot()).toEqual({ kind: "connected", account, chainId: 11155111, revision: before.revision + 2 });
     });
 
-    it("does not read again on focus after a local disconnect", async () => {
-      vi.stubGlobal("window", new EventTarget());
+    it("does not read the wallet on focus after a local disconnect or once disposed", async () => {
+      vi.useFakeTimers();
+      const page = new EventTarget(); vi.stubGlobal("window", page);
+      const removed = vi.spyOn(page, "removeEventListener");
       const f = flaky(); await f.wallet.refresh();
       f.fail(3);
       f.listeners.get("accountsChanged")?.([account]);
-      await vi.waitFor(() => expect(f.wallet.getSnapshot().kind).toBe("disconnected"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.chainReads()).toBe(4);
       f.wallet.disconnect();
       window.dispatchEvent(new Event("focus"));
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.chainReads()).toBe(4);
       expect(f.wallet.getSnapshot().kind).toBe("disconnected");
+      f.wallet.dispose();
+      expect(removed).toHaveBeenCalledWith("focus", expect.any(Function));
     });
   });
 });
