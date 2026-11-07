@@ -19,10 +19,13 @@ type PrivateRecords = {
 export type ReadPrivateRecords = (input: { raffleIds: string[]; purchases: { transactionHash: Hex; logIndex: number }[] }) => Promise<PrivateRecords>;
 export type DeliverReceipt = (input: { transactionHash: Hex; logIndex: number }) => Promise<{ delivered: boolean; repeated?: boolean; reason?: string }>;
 
+/** Records already signed for the first `count` purchases, kept when Load more adds older ones. */
+type SignedRecords = { records: PrivateRecords; count: number };
+
 type RecordsState =
   | { kind: "loading-history" }
-  | { kind: "ready-history"; purchases: readonly HistoryItem[] }
-  | { kind: "loading-records"; purchases: readonly HistoryItem[] }
+  | { kind: "ready-history"; purchases: readonly HistoryItem[]; signed?: SignedRecords }
+  | { kind: "loading-records"; purchases: readonly HistoryItem[]; signed?: SignedRecords }
   | { kind: "ready"; purchases: readonly HistoryItem[]; records: PrivateRecords }
   | { kind: "error"; message: string };
 
@@ -60,9 +63,13 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     const version = ++request.current;
     setState({ kind: "loading-history" });
     try {
+      const signed = !more ? undefined : state.kind === "ready" ? { records: state.records, count: state.purchases.length } : state.kind === "ready-history" ? state.signed : undefined;
       const page = await readHistoryPages(browser.service, wallet.account, more ? continuation : null);
       const items = [...more && "purchases" in state ? state.purchases : [], ...page.items.filter((item) => item.event === "PackPurchased")];
-      if (version === request.current) { setContinuation(page.continuation); setState({ kind: "ready-history", purchases: items }); }
+      if (version === request.current) {
+        setContinuation(page.continuation);
+        setState(signed && signed.count === items.length ? { kind: "ready", purchases: items, records: signed.records } : { kind: "ready-history", purchases: items, signed });
+      }
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Purchase history could not be loaded." });
     }
@@ -86,7 +93,7 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browser, wallet]);
 
-  async function loadRecords(purchases: readonly HistoryItem[]) {
+  async function loadRecords(purchases: readonly HistoryItem[], signed?: SignedRecords) {
     const expected = browser.wallet.getSnapshot();
     if (expected.kind !== "connected") return;
     const currentOperation = recordsInFlight.current;
@@ -94,9 +101,13 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
     const token = Symbol("private records request");
     recordsInFlight.current = { token, wallet: expected };
     const version = ++request.current;
-    setState({ kind: "loading-records", purchases });
+    setState({ kind: "loading-records", purchases, signed });
     try {
-      const records = await loadPrivateRecordBatches(purchases, readRecords, () => version === request.current);
+      // Only purchases without a signed record ask for a signature.
+      const fresh = await loadPrivateRecordBatches(purchases.slice(signed?.count ?? 0), readRecords, () => version === request.current);
+      const records = signed
+        ? { agreements: [...new Map([...signed.records.agreements, ...fresh.agreements].map((item) => [item.raffleId, item])).values()], receipts: [...signed.records.receipts, ...fresh.receipts] }
+        : fresh;
       if (version === request.current) setState({ kind: "ready", purchases, records });
     } catch (error) {
       if (version === request.current) setState({ kind: "error", message: error instanceof Error ? error.message : "Private records could not be loaded." });
@@ -135,13 +146,13 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
 
   if (loading) return <p className="notice" role="status">Loading your purchases…</p>;
   if (browser.kind === "unavailable") return <p className="notice warning" role="status">{browser.reason}</p>;
-  const signatures = "purchases" in state ? Math.ceil(state.purchases.length / 30) : 0;
+  const signatures = state.kind === "ready-history" || state.kind === "loading-records" ? Math.ceil((state.purchases.length - (state.signed?.count ?? 0)) / 30) : 0;
   return (
     <WalletGate wallet={browser.wallet}>
       {state.kind === "loading-history" ? <p className="notice" role="status">Loading your purchases…</p> : null}
       {state.kind === "error" ? <div className="notice error stack" role="alert"><span>{state.message}</span><button className="btn btn-dark" type="button" onClick={() => void loadHistory()}>Retry</button></div> : null}
       {state.kind === "ready-history" && !state.purchases.length ? <div className="well pad stack"><h2>{continuation ? "No purchases found yet" : "No purchases yet"}</h2><Link className="btn btn-dark" href="/">Browse raffles</Link></div> : null}
-      {(state.kind === "ready-history" || state.kind === "loading-records") && state.purchases.length ? <div className="well pad stack"><h2>See your receipts</h2><p>Signing is free and doesn’t send a transaction.{signatures > 1 ? ` You’ll sign ${signatures} times.` : ""}</p><button className="btn" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadRecords(state.purchases)}>{state.kind === "loading-records" ? "Opening wallet…" : "Sign to see receipts"}</button></div> : null}
+      {(state.kind === "ready-history" || state.kind === "loading-records") && state.purchases.length ? <div className="well pad stack"><h2>See your receipts</h2><p>Signing is free and doesn’t send a transaction.{signatures > 1 ? ` You’ll sign ${signatures} times.` : ""}</p><button className="btn" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadRecords(state.purchases, state.signed)}>{state.kind === "loading-records" ? "Opening wallet…" : "Sign to see receipts"}</button></div> : null}
       {continuation && state.kind !== "loading-history" ? <div className="stack"><p className="muted" role="status">Older purchases aren’t shown yet.</p><button className="btn btn-dark" type="button" disabled={state.kind === "loading-records"} onClick={() => void loadHistory(true)}>Load more</button></div> : null}
       {state.kind === "ready" ? (
         <div className="workflow-grid">

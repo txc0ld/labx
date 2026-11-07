@@ -32,6 +32,8 @@ run("wallet-scoped private-record feedback", () => {
   const pendingReceipts: PendingReceipt[] = [];
   const pendingRecords: PendingRecords[] = [];
   let holdNextRecords = false;
+  /** The purchase hashes each private-records request asked about, one signature each. */
+  const recordRequests: string[][] = [];
   const savedEmail = "receipts@example.test";
 
   beforeAll(async () => {
@@ -68,6 +70,7 @@ run("wallet-scoped private-record feedback", () => {
       const input = record(body.input);
       const purchases = Array.isArray(input.purchases) ? input.purchases : [];
       const raffleIds = Array.isArray(input.raffleIds) ? input.raffleIds : [];
+      recordRequests.push(purchases.map(value => String(record(value).transactionHash).toLowerCase()));
       const respond = async (response: { receiptStatus?: "missing" | "pending" | "delivered"; raffleId?: string } = {}) => {
         const receipts = purchases.map((value) => {
           const purchase = record(value);
@@ -324,4 +327,39 @@ run("wallet-scoped private-record feedback", () => {
     await expect.poll(async () => fixture.page.getByText("Not sent", { exact: true }).count()).toBe(1);
     await expect.poll(async () => fixture.page.getByText("Raffle #999", { exact: true }).count()).toBe(0);
   }, 60_000);
+
+  it("keeps signed receipts through Load more and asks to sign only for the older purchases it finds", async () => {
+    // Two loads of history (40,000 blocks) separate the buyer's first purchase from a new one.
+    await chain.rpc("anvil_mine", ["0x9c40"]);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 27_500_000n], chain.buyer);
+    const newest = (await chain.write(chain.raffle, "buyPack", [1n, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer)).transactionHash.toLowerCase();
+    await setFixtureSession({ chainId: 31337, account: chain.buyer });
+    const before = recordRequests.length;
+    await openRecords(chain.buyer);
+    const purchases = fixture.page.locator(".private-record-list").first().locator("li");
+    const loadMore = fixture.page.getByRole("button", { name: "Load more", exact: true });
+    const sign = fixture.page.getByRole("button", { name: "Sign to see receipts", exact: true });
+    expect(recordRequests.slice(before)).toEqual([[newest]]);
+    expect(await purchases.count()).toBe(1);
+
+    // The next 20,000 blocks hold no purchases: the signed receipt stays and nothing asks for a signature.
+    await loadMore.click();
+    await expect.poll(() => loadMore.isEnabled(), { timeout: 20_000 }).toBe(true);
+    await fixture.page.getByRole("heading", { name: "Your purchases", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    expect(await purchases.count()).toBe(1);
+    expect(await sign.count()).toBe(0);
+    expect(recordRequests.slice(before)).toEqual([[newest]]);
+
+    // The oldest blocks hold the first purchase: one signature covers only that purchase, and both receipts show.
+    await loadMore.click();
+    await sign.waitFor({ state: "visible", timeout: 20_000 });
+    expect(await fixture.page.getByText(/You’ll sign \d+ times/).count()).toBe(0);
+    await sign.click();
+    await expect.poll(() => purchases.count(), { timeout: 10_000 }).toBe(2);
+    const requests = recordRequests.slice(before);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toHaveLength(1);
+    expect(requests[1][0]).not.toBe(newest);
+    expect(await loadMore.count()).toBe(0);
+  }, 90_000);
 });
