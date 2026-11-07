@@ -256,10 +256,11 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
     if (!shouldPoll) return;
     const start = Date.now();
     let inFlight = false;
-    // A review, a submission or confirmation, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps
-    // the page still, so a re-read never remounts a control mid-sequence. A read that started before the control got busy is dropped.
-    // A purchase receipt is not mid-sequence, so it does not hold the page.
-    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, .transaction-state:not(.purchase-receipt), [aria-busy=true]");
+    // A review, a wallet request about to start or in flight (aria-busy) or a chained seller step keeps the page still, so a re-read
+    // never remounts a control mid-sequence; a submission or confirmation already stops polling through walletBusy. A read that
+    // started before the control got busy is dropped. A finished panel, such as a cancellation, an error or a receipt, is not
+    // mid-sequence, so it does not hold the page.
+    const busy = () => !!pieceRef.current?.querySelector(".transaction-review, [aria-busy=true]");
     const timer = window.setInterval(() => {
       if (Date.now() - start < pollDelaySeconds * 1000) return;
       if (inFlight || document.visibilityState !== "visible" || busy()) return;

@@ -14,6 +14,7 @@ import { watchWallet } from "./fixtures/wallet-watch";
 const run = process.env.RUN_BUYER_UI_REPAIRS_BROWSER === "1" ? describe : describe.skip;
 
 const APPROVE = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: ["0x0000000000000000000000000000000000000000", 0n] }).slice(0, 10);
+const CLOSE = encodeFunctionData({ abi: raffleAbi, functionName: "close", args: [0n] }).slice(0, 10);
 
 run("buyer UI repair invariants in a rendered browser", () => {
   let chain: LocalChain;
@@ -457,4 +458,31 @@ run("buyer UI repair invariants in a rendered browser", () => {
       await chain.write(chain.raffle, "setPaused", [false]);
     }
   }, 90_000);
+
+  it("keeps re-reading after a step is cancelled in the wallet, so the page moves on when someone else runs it", async () => {
+    await chain.write(chain.nft, "mint", [chain.seller, 904n]);
+    expect(await createOpenRaffle(904n, "Counting raffle", standardMembershipPacks(() => ({ priceUsdc: 10_000_000n, bonusEntries: 1, maxSupply: 20 })))).toBe(4n);
+    await chain.write(chain.usdc, "approve", [chain.raffle.address, 100_000_000n], chain.buyer);
+    await chain.write(chain.raffle, "buyPack", [4n, 0, 1, PUBLISHED_TERMS_HASH], chain.buyer);
+    const { raffle } = await service.readRaffle({ id: 4n });
+    await chain.warp(raffle.salesEnd + 1n);
+    await fixture.page.setViewportSize({ width: 1280, height: 900 });
+    // With sales over, a connected buyer's page shows what they paid instead of a wallet badge.
+    await fixture.switchAccount(chain.buyer);
+    await fixture.page.goto(`${fixture.baseUrl}/piece/4`, { waitUntil: "domcontentloaded" });
+    await fixture.page.getByText("Membership price paid", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    const wallet = await watchWallet(fixture.page);
+    await wallet.reject(CLOSE);
+    await fixture.page.locator("summary", { hasText: "Other actions" }).click();
+    await fixture.page.getByRole("button", { name: "Close sales", exact: true }).click();
+    await fixture.page.getByRole("button", { name: "Confirm close sales", exact: true }).click();
+    const cancelled = fixture.page.getByText("Cancelled in your wallet. Nothing was sent.", { exact: true });
+    await cancelled.waitFor({ state: "visible", timeout: 15_000 });
+
+    await chain.write(chain.raffle, "close", [4n]);
+    await expect.poll(() => cancelled.count(), { timeout: 40_000 }).toBe(0);
+    await fixture.page.getByRole("heading", { name: "Sales closed", exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    expect(await fixture.page.getByRole("button", { name: "Close sales", exact: true }).count()).toBe(0);
+    expect((await wallet.requests()).map(request => request.method)).toEqual(["eth_sendTransaction"]);
+  }, 120_000);
 });
