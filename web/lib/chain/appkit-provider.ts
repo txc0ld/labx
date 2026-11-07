@@ -613,6 +613,8 @@ async function initialize(projectId: string, key?: string): Promise<AppKitRuntim
   const ready = appKit.ready();
   void ready.then(() => {
     current!.startupPending = false;
+    // Readiness after the startup timeout means the SDK did initialize, so the chooser is usable without a reload.
+    current!.initializationFailed = false;
     settleStartup();
   }, () => {
     current!.startupPending = false;

@@ -253,6 +253,47 @@ describe("official AppKit chooser boundary", () => {
     expect(fixture.appKit.ready).toHaveBeenCalledOnce();
   });
 
+  it("becomes usable without a reload when SDK readiness arrives after the startup timeout", async () => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    vi.useFakeTimers();
+    const fixture = appKitFixture();
+    const ready = deferred<void>();
+    fixture.appKit.ready.mockReturnValueOnce(ready.promise);
+    const { createAppKitProvider } = await loadProvider();
+    const loading = createAppKitProvider("a".repeat(32));
+    await vi.advanceTimersByTimeAsync(20_001);
+    const chooser = await loading;
+    await expect(chooser.connect(new AbortController().signal)).rejects.toThrow("The wallet chooser could not initialize safely. Reload this page before retrying.");
+
+    ready.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+    const later = await createAppKitProvider("a".repeat(32));
+    const connecting = later.connect(new AbortController().signal);
+    await vi.waitFor(() => expect(fixture.appKit.open).toHaveBeenCalledWith({ view: "Connect", namespace: "eip155" }));
+    await fixture.runExternal();
+    fixture.connect(providerFixture());
+    await expect((await connecting).request({ method: "eth_accounts" })).resolves.toEqual([account]);
+    expect(fixture.appKit.ready).toHaveBeenCalledOnce();
+  });
+
+  it.each(["rejects", "never settles"] as const)("keeps requiring a reload when SDK readiness %s after the startup timeout", async outcome => {
+    vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
+    vi.useFakeTimers();
+    const fixture = appKitFixture();
+    const ready = deferred<void>();
+    fixture.appKit.ready.mockReturnValueOnce(ready.promise);
+    const { createAppKitProvider } = await loadProvider();
+    const loading = createAppKitProvider("a".repeat(32));
+    await vi.advanceTimersByTimeAsync(20_001);
+    const chooser = await loading;
+    if (outcome === "rejects") ready.reject(new Error("SDK init failed"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(chooser.connect(new AbortController().signal)).rejects.toThrow("The wallet chooser could not initialize safely. Reload this page before retrying.");
+    await expect((await createAppKitProvider("a".repeat(32))).connect(new AbortController().signal)).rejects.toThrow("The wallet chooser could not initialize safely. Reload this page before retrying.");
+    expect(fixture.appKit.open).not.toHaveBeenCalled();
+  });
+
   it("rejects provider/account and provider/network mismatches", async () => {
     vi.stubGlobal("window", { location: { origin: "https://labx.test" } });
     const fixture = appKitFixture();
