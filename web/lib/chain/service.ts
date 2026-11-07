@@ -34,10 +34,10 @@ export const CODE_ONLY_RECHECK_MS = [2_000, 2_000] as const;
 /** Confirmations a canonical receipt needs: its own block and one more. A pending record's nonce is spent at the same depth. */
 export const RECEIPT_CONFIRMATIONS = 2;
 /**
- * findCreation reads RaffleCreated events forward from a send's starting block in windows this size, at most this many,
- * however long ago that block was. A draft mined later than that after its start is not found.
+ * findCreation reads RaffleCreated events forward from a send's starting block to the head in windows this size. Only a
+ * search that reached the head may answer that no draft was made, because that answer lets Create send another.
  */
-const CREATION_LOG_WINDOW = 2_000n, CREATION_LOG_WINDOWS = 10n;
+const CREATION_LOG_WINDOW = 2_000n;
 const RAFFLE_CREATED = getAbiItem({ abi: raffleAbi, name: "RaffleCreated" });
 export function createRaffleService(client: PublicClient, manifest: DeploymentManifest, journal: PendingJournal = typeof window === "undefined" ? memoryPendingJournal() : browserPendingJournal(manifest)): RaffleService {
   const reader = createReader(client, manifest), build = actionBuilder(client, manifest, reader);
@@ -296,9 +296,8 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
   }
   async function findCreation({ account, checkpoint }: Parameters<RaffleService["findCreation"]>[0]) {
     const start = BigInt(checkpoint.startedBlock), head = await client.getBlockNumber({ cacheTime: 0 });
-    const last = start + CREATION_LOG_WINDOW * CREATION_LOG_WINDOWS - 1n < head ? start + CREATION_LOG_WINDOW * CREATION_LOG_WINDOWS - 1n : head;
-    for (let fromBlock = start; fromBlock <= last; fromBlock += CREATION_LOG_WINDOW) {
-      const toBlock = fromBlock + CREATION_LOG_WINDOW - 1n < last ? fromBlock + CREATION_LOG_WINDOW - 1n : last;
+    for (let fromBlock = start; fromBlock <= head; fromBlock += CREATION_LOG_WINDOW) {
+      const toBlock = fromBlock + CREATION_LOG_WINDOW - 1n < head ? fromBlock + CREATION_LOG_WINDOW - 1n : head;
       const logs = await client.getLogs({ address: manifest.address, event: RAFFLE_CREATED, args: { seller: account }, fromBlock, toBlock, strict: true });
       for (const log of logs) {
         if (log.removed) continue;
