@@ -10,7 +10,7 @@ import type { HistoryItem, WalletSnapshot } from "@/lib/chain/types";
 import { sameAddress } from "@/lib/chain/validation";
 import { formatUsdcAmount } from "./format";
 import { useWalletSnapshot, WalletGate } from "./WalletGate";
-import type { ReceiptStatus } from "@/lib/receipt-delivery";
+import { sameRecipient, type ReceiptStatus } from "@/lib/receipt-delivery";
 
 type PrivateRecords = {
   agreements: { raffleId: string; recorded: boolean; at: string | null }[];
@@ -149,10 +149,13 @@ export function PrivateRecordsPanel({ browser, email, readRecords, deliverReceip
           <section className="pearl pad stack"><h2>Your purchases</h2>{email ? <p className="notice">Receipts go to {email}. <Link href="/profile#email-preferences">Change</Link></p> : <p className="notice warning">Add your email to get receipts. <Link href="/profile#email-preferences">Add email</Link></p>}<ol className="private-record-list">{state.purchases.map((purchase) => {
             const key = `${purchase.transactionHash}-${purchase.logIndex}`;
             const record = state.records.receipts.find((item) => item.transactionHash.toLowerCase() === purchase.transactionHash.toLowerCase() && item.logIndex === purchase.logIndex);
-            const status = delivery[key] === "delivered" ? "delivered" : record?.status ?? "missing";
-            // A receipt meant for an earlier address can still go to the current one.
-            const sentTo = delivery[key] !== "delivered" && record && record.status !== "missing" && record.to !== email ? record.to : null;
-            return <li key={key}><div><strong>Raffle #{purchase.raffleId.toString()}</strong><span>{formatUsdcAmount(purchase.principal + purchase.fee)} USDC</span><span style={{ overflowWrap: "anywhere" }}>{status === "delivered" ? sentTo ? `Sent to ${sentTo}` : "Sent" : status === "pending" ? "Pending" : status === "unconfirmed" ? "Not confirmed" : "Not sent"}</span></div><details><summary>Transaction details</summary><p className="hash">{purchase.transactionHash}</p></details>{status === "missing" || status === "pending" || sentTo ? <button className="btn btn-dark" type="button" disabled={!email || delivery[key] === "sending"} onClick={() => void send(purchase.transactionHash, purchase.logIndex)}>{delivery[key] === "sending" ? "Sending…" : "Email receipt"}</button> : null}</li>;
+            // A receipt meant for an earlier address can still go to the current one, unless every address is used.
+            const match = email ? record?.sent.find((item) => sameRecipient(item.to, email)) : undefined;
+            const shown = match ?? record?.sent.at(-1);
+            const status = delivery[key] === "delivered" ? "delivered" : shown?.status ?? "missing";
+            const sentTo = delivery[key] !== "delivered" && !match && shown ? shown.to : null;
+            const canSend = delivery[key] !== "delivered" && (match ? match.status === "pending" : !record?.full);
+            return <li key={key}><div><strong>Raffle #{purchase.raffleId.toString()}</strong><span>{formatUsdcAmount(purchase.principal + purchase.fee)} USDC</span><span style={{ overflowWrap: "anywhere" }}>{status === "delivered" ? sentTo ? `Sent to ${sentTo}` : "Sent" : status === "pending" ? "Pending" : status === "unconfirmed" ? "Not confirmed" : "Not sent"}</span></div><details><summary>Transaction details</summary><p className="hash">{purchase.transactionHash}</p></details>{canSend ? <button className="btn btn-dark" type="button" disabled={!email || delivery[key] === "sending"} onClick={() => void send(purchase.transactionHash, purchase.logIndex)}>{delivery[key] === "sending" ? "Sending…" : "Email receipt"}</button> : null}</li>;
           })}</ol>{deliveryError ? <p className="notice error" role="alert">{deliveryError}</p> : null}</section>
           <section className="well pad stack"><h2>Agreements</h2>{!state.records.agreements.length ? <p>No agreements yet.</p> : <ol className="private-record-list">{state.records.agreements.map((agreement) => <li key={agreement.raffleId}><strong>Raffle #{agreement.raffleId}</strong><span>{agreement.recorded ? `Recorded${agreement.at ? ` · ${new Date(agreement.at).toLocaleString("en-AU")}` : ""}` : "Not recorded"}</span></li>)}</ol>}</section>
         </div>

@@ -6,7 +6,7 @@ import { address, hash, sameAddress } from "./validation";
 import { chainName, configuredChainId, isSupportedChainId, isSupportedChainText } from "./networks";
 import { workflowMessage } from "./messages";
 import { agreementMessage } from "../agreement-record";
-import { receiptAuthorizationMessage } from "../receipt-delivery";
+import { receiptAuthorizationMessage, type ReceiptSend } from "../receipt-delivery";
 import { PUBLISHED_TERMS_HASH, TERMS_VERSION } from "../published-terms";
 import { hashCommitment } from "../commitment";
 import type { WalletSessionPort } from "./ports";
@@ -99,11 +99,13 @@ export async function readPrivateRecords(wallet: WalletSessionPort, input: Recor
     agreements: body.agreements.map((value: unknown) => { const row = record(value); if (typeof row.recorded !== "boolean" || row.at !== null && typeof row.at !== "string") throw new Error("Invalid agreement record."); return { raffleId: text(row.raffleId), recorded: row.recorded, at: row.at }; }),
     receipts: body.receipts.map((value: unknown) => {
       const row = record(value);
-      if (typeof row.logIndex !== "number" || !Number.isSafeInteger(row.logIndex) || row.logIndex < 0) throw new Error("Invalid receipt record.");
-      const purchase = { transactionHash: hash(row.transactionHash), logIndex: row.logIndex };
-      if (row.status === "missing") return { ...purchase, status: row.status };
-      if (row.status !== "pending" && row.status !== "unconfirmed" && row.status !== "delivered" || typeof row.to !== "string") throw new Error("Invalid receipt record.");
-      return { ...purchase, status: row.status, to: row.to };
+      if (typeof row.logIndex !== "number" || !Number.isSafeInteger(row.logIndex) || row.logIndex < 0 || !Array.isArray(row.sent) || typeof row.full !== "boolean") throw new Error("Invalid receipt record.");
+      const sent = row.sent.map((value: unknown): ReceiptSend => {
+        const item = record(value), status = item.status;
+        if (typeof item.to !== "string" || status !== "pending" && status !== "unconfirmed" && status !== "delivered") throw new Error("Invalid receipt record.");
+        return { to: item.to, status };
+      });
+      return { transactionHash: hash(row.transactionHash), logIndex: row.logIndex, sent, full: row.full };
     })
   };
 }

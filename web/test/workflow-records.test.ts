@@ -104,7 +104,7 @@ describe("authenticated durable workflow records", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await privateRecords(store, request, context, verify)).toEqual({
       agreements: [{ raffleId: "1", recorded: false, at: null }, { raffleId: "2", recorded: false, at: null }],
-      receipts: [{ ...selection.purchases[0], status: "missing" }]
+      receipts: [{ ...selection.purchases[0], sent: [], full: false }]
     });
     expect(warn).toHaveBeenCalledWith("private-records stored-agreement-unverified", { raffleId: "1" });
     expect(JSON.stringify(warn.mock.calls)).not.toContain(agreementSignature.slice(2));

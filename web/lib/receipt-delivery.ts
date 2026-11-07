@@ -45,7 +45,7 @@ export async function deliverPurchaseReceipt(store: Store, input: ReceiptRequest
     let stored: Delivery;
     try { stored = JSON.parse(raw) as Delivery; } catch { throw new Error("Receipt record is invalid."); }
     if (stored.version !== 2 || stored.identity !== identity || stored.address !== input.address.toLowerCase() || typeof stored.to !== "string" || stored.payload?.to !== stored.to || !Number.isFinite(stored.createdAt) || typeof stored.payload.from !== "string" || typeof stored.payload.subject !== "string" || typeof stored.payload.html !== "string" || typeof stored.payload.text !== "string") throw new Error("Receipt is already bound to another request or its record is invalid.");
-    if (stored.to === input.to) delivery = stored;
+    if (sameRecipient(stored.to, input.to)) delivery = stored;
   }
   if (!delivery) throw new Error("Receipt already went to three addresses.");
   const sent = await store.get(`${slot}:sent`);
@@ -60,12 +60,19 @@ export async function deliverPurchaseReceipt(store: Store, input: ReceiptRequest
   return { delivered: true, repeated: false };
 }
 
-export type ReceiptStatus = { status: "missing" } | { status: "pending" | "unconfirmed" | "delivered"; to: string };
+/** Pending can still be sent by a request for that address; unconfirmed cannot. */
+export type ReceiptSend = { to: string; status: "pending" | "unconfirmed" | "delivered" };
+/** Each address a purchase's receipt was reserved for, oldest first. Full means a new address would be refused. */
+export type ReceiptStatus = { sent: ReceiptSend[]; full: boolean };
 
-/** The address a purchase's latest receipt reservation names, and whether a request for that address can still send it. */
+/** Email addresses that differ only in letter case name the same recipient. */
+export function sameRecipient(left: string, right: string) {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
 export async function receiptStatus(store: Store, context: RequestContext, purchase: { transactionHash: Hex; logIndex: number }, address: Address, transportIdentity: string | null, now: number): Promise<ReceiptStatus> {
   const { identity, key } = receiptIdentity(context, purchase);
-  let latest: ReceiptStatus = { status: "missing" };
+  const sent: ReceiptSend[] = [];
   for (let index = 0; index < MAX_RECIPIENTS; index++) {
     const slot = recipientKey(key, index);
     const raw = await store.get(slot);
@@ -73,9 +80,9 @@ export async function receiptStatus(store: Store, context: RequestContext, purch
     const record: unknown = JSON.parse(raw);
     if (!record || typeof record !== "object" || !("address" in record) || typeof record.address !== "string" || !sameAddress(record.address, address) || !("identity" in record) || record.identity !== identity || !("to" in record) || typeof record.to !== "string") break;
     const retryable = "transportIdentity" in record && record.transportIdentity === transportIdentity && "createdAt" in record && typeof record.createdAt === "number" && now >= record.createdAt && now - record.createdAt < RETRY_WINDOW;
-    latest = { status: await store.get(`${slot}:sent`) === "delivered" ? "delivered" : retryable ? "pending" : "unconfirmed", to: record.to };
+    sent.push({ to: record.to, status: await store.get(`${slot}:sent`) === "delivered" ? "delivered" : retryable ? "pending" : "unconfirmed" });
   }
-  return latest;
+  return { sent, full: sent.length === MAX_RECIPIENTS };
 }
 
 function receiptIdentity(context: RequestContext, purchase: { transactionHash: Hex; logIndex: number }) {

@@ -131,6 +131,19 @@ describe("verified purchase receipts", () => {
     expect([...store.map.keys()].sort()).toEqual([first, `${first}:1`, `${first}:1:sent`, `${first}:2`, `${first}:2:sent`]);
   });
 
+  it("treats a different letter case of an address as the same address", async () => {
+    const store = new Store();
+    const send = vi.fn(async (_body: MailPayload, _key: string) => true);
+    const first = `receipt:v2:${keccak256(toBytes(`11155111:${contract}:${transactionHash}:3`))}`;
+    expect(await deliverPurchaseReceipt(store, await receipt({ to: "buyer@example.com" }), context, reader(), send, from, transport, now)).toEqual({ delivered: true, repeated: false });
+    for (const to of ["Buyer@example.com", "buyer@EXAMPLE.com"]) {
+      expect(await deliverPurchaseReceipt(store, await receipt({ to }), context, reader(), send, from, transport, now + 1_000)).toEqual({ delivered: true, repeated: true });
+    }
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0][0].to).toBe("buyer@example.com");
+    expect([...store.map.keys()].sort()).toEqual([first, `${first}:sent`]);
+  });
+
   it("tells private records where a receipt went and whether it can still be sent there", async () => {
     const store = new Store();
     const workflow = { ...context, termsHash: PUBLISHED_TERMS_HASH, termsVersion: TERMS_VERSION };
@@ -140,17 +153,20 @@ describe("verified purchase receipts", () => {
       const signature = await account.signMessage({ message: workflowMessage("private records", workflow, account.address, selection, deadline) });
       return (await privateRecords(store, { address: account.address, input: selection, deadline, signature }, workflow, verifyMessage, identity, at)).receipts;
     };
-    expect(await receipts(now)).toEqual([{ transactionHash, logIndex: 3, status: "missing" }]);
+    expect(await receipts(now)).toEqual([{ transactionHash, logIndex: 3, sent: [], full: false }]);
     await deliverPurchaseReceipt(store, await receipt({ to: "buyer@exmaple.com" }), context, reader(), async () => false, from, transport, now);
-    expect(await receipts(now + 1_000)).toEqual([{ transactionHash, logIndex: 3, status: "pending", to: "buyer@exmaple.com" }]);
+    expect(await receipts(now + 1_000)).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "pending" }], full: false }]);
     // The same address can no longer be retried after the provider's retry window or a provider key change.
     const later = now + 23 * 60 * 60 * 1000;
-    expect(await receipts(later)).toEqual([{ transactionHash, logIndex: 3, status: "unconfirmed", to: "buyer@exmaple.com" }]);
-    expect(await receipts(now + 1_000, "55".repeat(32))).toEqual([{ transactionHash, logIndex: 3, status: "unconfirmed", to: "buyer@exmaple.com" }]);
+    expect(await receipts(later)).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }], full: false }]);
+    expect(await receipts(now + 1_000, "55".repeat(32))).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }], full: false }]);
     await expect(deliverPurchaseReceipt(store, await receipt({ to: "buyer@exmaple.com" }, context, later), context, reader(), async () => true, from, transport, later)).rejects.toThrow(/reconciliation/);
     await deliverPurchaseReceipt(store, await receipt({ to: "buyer@example.com" }, context, later), context, reader(), async () => true, from, transport, later);
-    expect(await receipts(later + 1_000)).toEqual([{ transactionHash, logIndex: 3, status: "delivered", to: "buyer@example.com" }]);
-    expect(await receipts(later + 1_000, null)).toEqual([{ transactionHash, logIndex: 3, status: "delivered", to: "buyer@example.com" }]);
+    expect(await receipts(later + 1_000)).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }, { to: "buyer@example.com", status: "delivered" }], full: false }]);
+    expect(await receipts(later + 1_000, null)).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }, { to: "buyer@example.com", status: "delivered" }], full: false }]);
+    // Once three addresses are used, private records say so, because a fourth would be refused.
+    await deliverPurchaseReceipt(store, await receipt({ to: "work@example.com" }, context, later), context, reader(), async () => true, from, transport, later);
+    expect(await receipts(later + 1_000)).toEqual([{ transactionHash, logIndex: 3, sent: [{ to: "buyer@exmaple.com", status: "unconfirmed" }, { to: "buyer@example.com", status: "delivered" }, { to: "work@example.com", status: "delivered" }], full: true }]);
   });
 
   it("reuses the exact payload/key after send uncertainty but refuses retries beyond provider retention", async () => {
