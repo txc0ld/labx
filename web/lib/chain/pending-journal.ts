@@ -22,10 +22,12 @@ export const REQUEST_OPEN_ELSEWHERE = "Your wallet already has a request from LA
 export function transactionIntent(tx: { to: Address; data: Hex; value: bigint }): Hex {
   return keccak256(encodeAbiParameters([{ type: "address" }, { type: "bytes32" }, { type: "uint256" }], [tx.to, keccak256(tx.data), tx.value]));
 }
+/** An unreadable marker reads as one below every nonce, so the account's next send stops once and removes it. */
 function parseCleared(raw: string | null): ClearedSend | null {
   if (raw === null) return null;
-  const value: unknown = JSON.parse(raw);
-  if (!value || typeof value !== "object" || !("nonce" in value) || typeof value.nonce !== "number" || !Number.isSafeInteger(value.nonce) || value.nonce < 0 || !("startedBlock" in value) || typeof value.startedBlock !== "string" || !/^\d+$/.test(value.startedBlock)) throw new Error("Pending transaction record is invalid. Reconcile wallet activity before continuing.");
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { value = null; }
+  if (!value || typeof value !== "object" || !("nonce" in value) || typeof value.nonce !== "number" || !Number.isSafeInteger(value.nonce) || value.nonce < 0 || !("startedBlock" in value) || typeof value.startedBlock !== "string" || !/^\d+$/.test(value.startedBlock)) return { nonce: -1, startedBlock: "0" };
   return { nonce: value.nonce, startedBlock: value.startedBlock };
 }
 function parse(raw: string | null): PendingIntent | null {
