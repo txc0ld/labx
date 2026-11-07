@@ -12,7 +12,7 @@ When enabled, a server-side draw runner (`/api/cron/draw`, every five minutes) c
 
 This is a Sepolia testing deployment. The Safe's threshold of one is testing-only. Human review remains required for each raffle. Deployment verification does not establish a completed live Chainlink raffle lifecycle; that test remains separate.
 
-The v2 contract `0xef27306567a5ADA354fe9403008D041d0b468213` and older contract `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` remain excluded from current transactions. Updating the website does not change their bytecode or migrate their entries, balances or claims.
+The Sepolia v2 contract `0xef27306567a5ADA354fe9403008D041d0b468213` and older contract `0xa59B62E76ee2cc0219f879ae10f2CC84c10bB59C` remain excluded from current transactions. The mainnet v3 raffle has the same address `0xef27…8213`, because the same deployer created both at nonce 19; on chain 1 that address is the registered v3 deployment. Updating the website does not change their bytecode or migrate their entries, balances or claims.
 
 ## Layout
 
