@@ -100,17 +100,23 @@ abstract contract MainnetDeployment is Script {
 /// @notice Stage 1: creates the VRF subscription, owned by the deployer. The coordinator derives the ID from the mined
 ///         block and its subscription nonce, so a simulated ID can differ from the real one. Read the ID from the
 ///         SubscriptionCreated event in the mined receipt and pass that to DeployMainnet; never reuse this script's output.
+///         STAGE1_NONCE is the deployer nonce the operator checked was unused. Any other nonce means a transaction has
+///         landed since, possibly an earlier stage 1, so nothing is sent.
 contract CreateMainnetSubscription is MainnetDeployment {
+    error NonceMoved(uint256 expected, uint256 actual);
+
     function run() external {
         _requireMainnet();
-        _create(vm.envUint("DEPLOYER_PRIVATE_KEY"));
+        _create(vm.envUint("DEPLOYER_PRIVATE_KEY"), vm.envUint("STAGE1_NONCE"));
         console2.log(
             "Read the subscription ID from SubscriptionCreated in the mined receipt, not from this simulation."
         );
     }
 
-    function _create(uint256 pk) internal {
+    function _create(uint256 pk, uint256 expectedNonce) internal {
         _requireMainnet();
+        uint256 nonce = vm.getNonce(vm.addr(pk));
+        if (nonce != expectedNonce) revert NonceMoved(expectedNonce, nonce);
         vm.startBroadcast(pk);
         IVRFSubscriptionAdmin(VRF_COORDINATOR).createSubscription();
         vm.stopBroadcast();
