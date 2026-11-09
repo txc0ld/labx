@@ -571,8 +571,14 @@ fixtures.
 Severity: high (the prize of a live raffle and the buyers' money are at risk), conditional on the collection. A
 collection that follows ERC-721 is not affected. No raffle exists on mainnet today.
 
-Reachable sequence, with a collection whose `transferFrom` moves a token for its owner without checking that `from`
-is the owner:
+Reachable sequence, with a collection whose `safeTransferFrom` moves a token when the caller owns it, without
+checking that `from` is the owner. `escrow` uses the three-argument `safeTransferFrom` (`:525`); `transferFrom` is only
+used on the way out (`:841`), so a collection that is strict in `transferFrom` and lax in `safeTransferFrom` is still
+affected. The attacker needs no approval, token or role, and the four calls fit in one transaction.
+
+The independent review confirmed it works in every state in which the contract holds the token: Draft with escrow
+(before any review), Open, Closed, Drawing, Drawn, Settled with the prize unclaimed, and Cancelled with the prize
+unreclaimed. Pausing does not stop it. The Open case:
 
 1. Raffle A is escrowed, approved and Open on token T. The contract owns T.
 2. Anyone calls `createRaffle` for the same collection and T. No approval is needed for a draft.
@@ -580,8 +586,17 @@ is the owner:
    The collection moves T from the contract to the contract. `ownerOf == this` holds, so the draft is `escrowed`
    (`:524-526`).
 4. They call `cancel` on their own draft (`:805-819`), then `reclaimPrize` (`:835-843`). The contract sends T to them.
-5. Raffle A still reads `escrowed == true`, keeps selling, draws and settles. `claimPrize` reverts for its winner, and
-   the seller can still claim the proceeds.
+5. Raffle A still reads `escrowed == true`, keeps selling, draws and settles. `claimPrize` and `refund` revert, and
+   the seller can still claim the proceeds. If nobody draws, anyone can cancel at `salesEnd + 7 days` and buyers get
+   their principal back without the fee. A Draft victim cannot be approved (`EscrowFailed`) and its seller cannot
+   reclaim.
+
+Not affected: OpenZeppelin 5.2 refused both a stranger's and the same seller's second escrow when run. Solmate,
+ERC721A and wrapped punks check `from` (from their source, not run here). No variant against a standard collection
+was found: token identity locks after escrow and the raffle never grants approvals.
+
+A collection that is malicious rather than faulty can move a held token by itself, so this finding adds risk only for
+a collection that is honest and wrong about `from`.
 
 Cause: `escrowed` is per raffle and custody is `ownerOf == this` (`:526`, `:591`). Neither says which raffle a held
 token belongs to, and `escrow` does not check that the seller owned the token before the transfer.
@@ -591,15 +606,15 @@ shows the sequence works). Control: `test_standardCollectionRefusesASecondEscrow
 
 Mitigation, since the contract cannot change:
 
-- Admission review, before `approveRaffle`: prove the collection refuses a transfer whose `from` is not the owner.
-  Simulate, as the current holder, `transferFrom(<some other address>, <raffle>, <tokenId>)` and require a revert,
-  for example `cast call <nft> "transferFrom(address,address,uint256)" <other> <raffle> <tokenId> --from <holder>`.
-  Add it to the NFT review in `LAUNCH.md` section 5 next to the proxy and transfer-restriction checks. The collections
-  in common use (OpenZeppelin, Solmate, ERC721A) pass.
-- Review, before `approveRaffle`: no other raffle that is not Settled-and-claimed or Cancelled-and-reclaimed names the
-  same collection and token.
-- Monitoring: alert on an `Escrowed` event whose collection and token are already held for another raffle, and on
-  `PrizeReclaimed` for a raffle whose token is named by a raffle in Open, Closed, Drawing or Drawn.
+- Admission review, before `approveRaffle`, is the control that works: approve only a collection whose verified source
+  is a known standard implementation, and prove it refuses a safe transfer whose `from` is not the owner. Simulate, as
+  the current holder, `safeTransferFrom(<some other address>, <an EOA>, <tokenId>)` and require a revert, for example
+  `cast call <nft> "safeTransferFrom(address,address,uint256)" <other> <eoa> <tokenId> --from <holder>`. The recipient
+  must be an EOA: with the raffle as recipient the call always reverts in `onERC721Received` (`:940`) and proves
+  nothing. A probe of plain `transferFrom` is not enough. Add this to the NFT review in `LAUNCH.md` section 5.
+- Not sufficient on their own: checking at approval that no other raffle names the token (the attacker's draft can be
+  created afterwards), and monitoring (the attack fits in one transaction, so an alert comes after the prize is gone).
+  Monitoring is still worth having to start the response below.
 - If it happens anyway: the owner cannot cancel a raffle that has lots (`:814`), and `requestRandomness` and `settle`
   are permissionless, so the raffle will draw and pay the seller unless the draw is kept from starting. The one lever
   the Safe holds is the VRF subscription: pause (stops new sales), then remove the raffle contract as a consumer until

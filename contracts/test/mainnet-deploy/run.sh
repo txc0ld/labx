@@ -4,6 +4,8 @@
 #
 #   contracts/test/mainnet-deploy/run.sh [DRIVER]    DRIVER defaults to contracts/script/mainnet-deploy.sh
 set -uo pipefail
+# The fake node's Python helpers must not leave compiled files in the repository.
+export PYTHONDONTWRITEBYTECODE=1
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 DRIVER=${1:-$HERE/../../script/mainnet-deploy.sh}
