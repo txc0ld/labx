@@ -107,6 +107,16 @@ export async function readFromBlock<T extends { block: { number: bigint } }>(rea
   }
 }
 
+/**
+ * Whether a background read is at least as new as every one before it, recording its block. A newer read that changes
+ * nothing visible is not stored, so the shown snapshot's block alone would let an older read through after it.
+ */
+export function newestRead(seen: { current: bigint }, block: bigint): boolean {
+  if (block < seen.current) return false;
+  seen.current = block;
+  return true;
+}
+
 /** Re-reads the raffle. After a confirmed transaction it takes the confirmation, so the read is never older than its block. */
 type Reload = (confirmation?: Pick<Extract<Confirmation, { kind: "confirmed" }>, "blockNumber">) => Promise<void>;
 
@@ -123,6 +133,8 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
   const request = useRef(0);
   // The newest block of a transaction this page has confirmed. Every later read waits for it, including Refresh and Try again.
   const confirmedBlock = useRef(0n);
+  // The newest block a background re-read has come from.
+  const polledBlock = useRef(0n);
   const currentScope = useRef(workspaceScope(browser, id));
   currentScope.current = workspaceScope(browser, id);
   const scopedState = state.kind !== "loading" && sameWorkspace(state.scope, currentScope.current) ? state : { kind: "loading" } satisfies WorkspaceState;
@@ -172,7 +184,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
       const deployment = await browser.service.attest();
       if (deployment.kind !== "verified") return;
       const snapshot = await browser.service.readRaffle({ id });
-      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !canApply()) return;
+      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !canApply() || !newestRead(polledBlock, snapshot.block.number)) return;
       setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && snapshot.block.number >= current.snapshot.block.number && viewKey(current.snapshot, revealedAt) !== viewKey(snapshot, revealedAt)
         ? { ...current, snapshot }
         : current);
@@ -181,7 +193,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
 
   useEffect(() => {
     void refresh();
-    return () => { request.current += 1; confirmedBlock.current = 0n; };
+    return () => { request.current += 1; confirmedBlock.current = 0n; polledBlock.current = 0n; };
     // A new runtime or route ID invalidates the previous authoritative read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browser.kind, browser.wallet, browser.kind === "configured" ? browser.service : browser.reason, id]);

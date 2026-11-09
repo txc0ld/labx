@@ -119,7 +119,7 @@ Sequence, raffle read behind:
 
 Sequence, quote behind: steps 1 and 2 as above. The raffle re-read is current, and the quote that follows it is answered with the block before the approval. The page shows the raffle at the new block and the same waiting button, and stays there.
 
-Fix: `readFromBlock` (`RaffleWorkspace.tsx:101`) repeats a read until its block is at or after a given block, five reads two seconds apart, the same rule as the owner review. `refresh` takes the confirmed block and keeps the highest one for the life of the route (`:125`, `:135`, `:154`), so Refresh and Try again wait for it too. Every confirmed transaction on the page passes its confirmation through `reload` (`:260`). The quote repeats until it is at or after the raffle shown (`:584`). After five reads behind, the raffle read ends in the page's existing "Couldn't update the raffle" error with Try again and paused actions, and the quote ends in the existing quote error. Neither shows the older state. No wallet prompt was added.
+Fix: `readFromBlock` (`RaffleWorkspace.tsx:101`) repeats a read until its block is at or after a given block, five reads two seconds apart, the same rule as the owner review. `refresh` takes the confirmed block and keeps the highest one for the life of the route (`:125`, `:135`, `:154`), so Refresh and Try again wait for it too. The buyer and seller actions pass their confirmation through `reload`. Two paths do not carry a block: a confirmed draft edit, and the recovery panel's refresh after a confirmed saved transaction. Those reads take "latest" unless the page has already confirmed something at or after that block (see unverified suspicions). The quote repeats until it is at or after the raffle shown (`:584`). After five reads behind, the raffle read ends in the page's existing "Couldn't update the raffle" error with Try again and paused actions, and the quote ends in the existing quote error. Neither shows the older state. No wallet prompt was added.
 
 Tests:
 - `frontend-consistency.test.ts`, "read after a confirmed transaction", four cases. Before: 4 failed (the helper did not exist). After: 4 passed.
@@ -162,6 +162,8 @@ Code: `web/components/workflow/RaffleWorkspace.tsx:166`, applied at `:176`; time
 Fix: a background re-read is applied only when its block number is at or after the shown snapshot's (`:176`).
 
 Test: `frontend-consistency.browser.test.ts`, "keeps the newer raffle state when an older background read finishes after it". Before: failed, the "Sales closed" heading was gone after the older read returned. After: passed.
+
+Review correction: the first version compared a background read only with the snapshot on screen. A newer read that changed nothing visible was not stored, so an older read arriving after it was still applied (paused at block 50, reads from blocks 51 and 52 finishing newest first showed "Open"). The page now records the newest block any background read came from (`newestRead`) and drops older ones. Test: `frontend-consistency.test.ts`, "order of background reads". The rule is unit-tested; this exact ordering was not driven in a browser.
 
 ### 4. The catalog's load-more error never clears
 
@@ -209,6 +211,8 @@ Reasoned from the code and not reproduced by a test. None was changed.
 6. The "needs attention" status of an automatic hash check outlives its components. The registry entry keeps its last status after the last user unmounts (`useTransactionOutcomes.ts:160`), so a later page for the same wallet revision starts on the manual panel.
 7. A quote that is retried after its inputs changed keeps reading. `readFromBlock` does not know its effect was superseded, so up to four more reads run before they are discarded (`RaffleWorkspace.tsx:584`). The result is dropped by the request counter; the cost is extra RPC reads while a node lags.
 
+8. A confirmed draft edit and the recovery panel's refresh re-read without the confirmed block, so a lagging node can show the state from before the transaction until the next refresh (`RaffleWorkspace.tsx` draft form `onConfirmed`, `ResumeTransaction.tsx:104`). Found by the independent review, not reproduced.
+
 ## Ambiguities
 
 Behavior that may be intended. Each needs a product decision.
@@ -232,6 +236,10 @@ Behavior that may be intended. Each needs a product decision.
 ## Test results
 
 Final code: `2c2f0d3`. Every opt-in lane was run alone with `--maxWorkers=1`, one dev server at a time.
+
+### Independent review
+
+A Codex review of `2078b82..2c2f0d3` ran its own 12 browser probes (all passed) and one polling probe (failed). It found no unrequested or duplicate transaction, no unbounded retry and no seller-flow regression, and measured at most two wallet prompts per uninterrupted purchase (three across a rejection plus an explicit retry). Its two low findings, the background-read ordering gap in fix 3 and the over-broad confirmation claim, are corrected in the commit after `8a1b1c0`. After that commit: default suite 1268 passed, 376 skipped; type check PASS; `frontend-consistency.browser` 7 of 7; `easy-buy.browser` 11 of 11.
 
 ### Default suite
 

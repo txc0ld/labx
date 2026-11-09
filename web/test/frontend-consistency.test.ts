@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFromBlock } from "../components/workflow/RaffleWorkspace";
+import { readFromBlock, newestRead } from "../components/workflow/RaffleWorkspace";
 
 /** A read whose successive answers are pinned to `blocks`, as a load-balanced RPC answers from nodes at different heights. */
 function nodeAt(blocks: readonly bigint[]) {
@@ -41,5 +41,17 @@ describe("read after a confirmed transaction", () => {
     await expect(readFromBlock(node.read, 42n, node.wait)).rejects.toThrow("The network hasn’t caught up yet. Try again in a moment.");
     expect(node.reads()).toBe(5);
     expect(node.waits).toEqual([2_000, 2_000, 2_000, 2_000]);
+  });
+});
+
+describe("order of background reads", () => {
+  it("drops a read older than one already seen, even when the newer one changed nothing visible", () => {
+    const seen = { current: 0n };
+    // Two overlapping re-reads from blocks 51 and 52 finish newest first.
+    expect(newestRead(seen, 52n)).toBe(true);
+    expect(newestRead(seen, 51n)).toBe(false);
+    expect(newestRead(seen, 52n)).toBe(true);
+    expect(newestRead(seen, 53n)).toBe(true);
+    expect(seen.current).toBe(53n);
   });
 });
