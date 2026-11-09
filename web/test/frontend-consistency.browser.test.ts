@@ -73,6 +73,38 @@ run("frontend consistency sequences", () => {
     expect(response?.status()).toBe(200);
     await connectWallet(fixture.page, identity(account).or(fixture.page.getByText("Membership price paid", { exact: true })).first());
   }
+  /**
+   * While `behind` is set, the page's RPC answers "latest" with that block, as a load-balanced node behind the chain does.
+   * `only` limits that to the reads it returns true for.
+   */
+  async function lagLatest(only: () => Promise<boolean> = async () => true) {
+    const lag = { behind: null as Hex | null, staleReads: 0 };
+    await fixture.page.route(`${chain.url}/`, async route => {
+      const request = rpcRequest(route);
+      if (lag.behind && request?.method === "eth_getBlockByNumber" && request.params[0] === "latest" && await only()) {
+        lag.staleReads++;
+        await route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), params: [lag.behind, request.params[1]] }) });
+        return;
+      }
+      await route.continue();
+    });
+    return lag;
+  }
+  /** The block of the raffle the page shows, from "State block" under Contract and review details. */
+  const stateBlock = () => fixture.page.evaluate(() => {
+    const term = [...document.querySelectorAll("dt")].find(item => item.textContent === "State block");
+    return BigInt(term?.nextElementSibling?.textContent ?? "0").toString();
+  }).then(BigInt);
+  const agreement = () => fixture.page.getByRole("checkbox", { name: /I’m 18 or older and agree to the membership terms and draw rules/ });
+  const buy = () => fixture.page.getByRole("button", { name: `Buy for ${formatUsdcAmount(TOTAL)} USDC`, exact: true });
+  const opening = () => fixture.page.getByRole("button", { name: "Approved. Opening your purchase…", exact: true });
+  const youreIn = () => fixture.page.locator(".purchase-receipt", { hasText: "You’re in" });
+  /** Sends the approval and returns its block. It stays one block deep until the test mines its second confirmation. */
+  async function approvalBlock(wallet: Awaited<ReturnType<typeof watchWallet>>) {
+    await buy().click();
+    await expect.poll(async () => (await wallet.requests())[0]?.hash, { timeout: 20_000 }).toBeTruthy();
+    return (await chain.client.getTransactionReceipt({ hash: (await wallet.requests())[0].hash as Hex })).blockNumber;
+  }
   function call(request: WalletRequest) {
     if (request.data?.startsWith(APPROVE)) return { name: "approve", args: decodeFunctionData({ abi: erc20Abi, data: request.data as Hex }).args };
     return { name: "buyPack", args: decodeFunctionData({ abi: raffleAbi, data: request.data as Hex }).args };
@@ -86,6 +118,8 @@ run("frontend consistency sequences", () => {
     for (let tokenId = 1n; tokenId <= 13n; tokenId++) await chain.write(chain.nft, "mint", [chain.seller, tokenId]);
     await chain.write(chain.usdc, "mint", [chain.buyer, 2_000_000_000n]);
     await chain.write(chain.usdc, "mint", [chain.stranger, 2_000_000_000n]);
+    await chain.write(chain.usdc, "mint", [chain.treasury, 2_000_000_000n]);
+    await chain.write(chain.usdc, "mint", [chain.operator, 2_000_000_000n]);
     expect(await createOpenRaffle(1n, "Lagging read raffle", 7_200n)).toBe(1n);
     expect(await createOpenRaffle(2n, "Late poll raffle", 3_600n)).toBe(2n);
     // Thirteen raffles: one more than the catalog's first page.
@@ -105,37 +139,23 @@ run("frontend consistency sequences", () => {
   it("opens the purchase after its approval when the first re-read comes from a node behind the approval", async () => {
     await openPiece(1n, chain.buyer);
     const wallet = await watchWallet(fixture.page);
-    await fixture.page.getByRole("checkbox", { name: /I’m 18 or older and agree to the membership terms and draw rules/ }).check();
-    // While set, the page's RPC answers "latest" with this block, as a load-balanced node behind the chain does.
-    let lagging: Hex | null = null, staleReads = 0;
-    await fixture.page.route(`${chain.url}/`, async route => {
-      const request = rpcRequest(route);
-      if (lagging && request?.method === "eth_getBlockByNumber" && request.params[0] === "latest") {
-        staleReads++;
-        await route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), params: [lagging, request.params[1]] }) });
-        return;
-      }
-      await route.continue();
-    });
-    // The approval is mined at once and stays one block deep until the test mines its second confirmation.
+    await agreement().check();
+    const lag = await lagLatest();
     fixture.setMineConfirmation(false);
     try {
-      await fixture.page.getByRole("button", { name: `Buy for ${formatUsdcAmount(TOTAL)} USDC`, exact: true }).click();
-      await expect.poll(async () => (await wallet.requests())[0]?.hash, { timeout: 20_000 }).toBeTruthy();
-      const approval = await chain.client.getTransactionReceipt({ hash: (await wallet.requests())[0].hash as Hex });
-      lagging = numberToHex(approval.blockNumber - 1n);
+      lag.behind = numberToHex(await approvalBlock(wallet) - 1n);
       await chain.mine();
-      await fixture.page.getByRole("button", { name: "Approved. Opening your purchase…", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
-      await expect.poll(() => staleReads, { timeout: 15_000 }).toBeGreaterThan(0);
+      await opening().waitFor({ state: "visible", timeout: 30_000 });
+      await expect.poll(() => lag.staleReads, { timeout: 15_000 }).toBeGreaterThan(0);
       await fixture.page.waitForTimeout(2_500);
     } finally {
       // The node catches up.
-      lagging = null;
+      lag.behind = null;
       fixture.setMineConfirmation(true);
     }
     try {
       // No click and no second approval: the page reads again and the purchase opens in the wallet.
-      await fixture.page.locator(".purchase-receipt", { hasText: "You’re in" }).waitFor({ state: "visible", timeout: 30_000 });
+      await youreIn().waitFor({ state: "visible", timeout: 30_000 });
       expect((await wallet.requests()).map(call)).toEqual([
         { name: "approve", args: [chain.raffle.address, TOTAL] },
         { name: "buyPack", args: [1n, 0, 1, PUBLISHED_TERMS_HASH] }
@@ -227,6 +247,72 @@ run("frontend consistency sequences", () => {
     expect(await fixture.page.getByText("Wallet not connected", { exact: true }).count()).toBe(1);
     expect(await raffles.getByRole("link", { name: "Late poll raffle", exact: true }).count()).toBe(0);
   }, 90_000);
+
+  it("opens the purchase after its approval when only the price quote comes from a node behind the approval", async () => {
+    await openPiece(1n, chain.treasury);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    // Only reads made once the page shows the raffle at or after the approval lag: the raffle read is current, the quote is not.
+    let approved = 0n;
+    const lag = await lagLatest(async () => approved > 0n && await stateBlock() >= approved);
+    fixture.setMineConfirmation(false);
+    try {
+      approved = await approvalBlock(wallet);
+      lag.behind = numberToHex(approved - 1n);
+      await chain.mine();
+      await expect.poll(async () => lag.staleReads > 0 && await stateBlock() >= approved, { timeout: 30_000 }).toBe(true);
+      await fixture.page.waitForTimeout(3_000);
+      expect(await opening().count()).toBe(1);
+    } finally {
+      lag.behind = null;
+      fixture.setMineConfirmation(true);
+    }
+    try {
+      await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+      expect((await wallet.requests()).map(call)).toEqual([
+        { name: "approve", args: [chain.raffle.address, TOTAL] },
+        { name: "buyPack", args: [1n, 0, 1, PUBLISHED_TERMS_HASH] }
+      ]);
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+  }, 120_000);
+
+  it("needs no second approval when the pack changes while the approval confirms and the re-read comes from a node behind it", async () => {
+    await openPiece(1n, chain.operator);
+    const wallet = await watchWallet(fixture.page);
+    await agreement().check();
+    const lag = await lagLatest();
+    const asksTwice = fixture.page.getByText(/Your wallet asks twice/);
+    fixture.setMineConfirmation(false);
+    try {
+      const approved = await approvalBlock(wallet);
+      await fixture.page.getByText(/^Confirming on the network/).waitFor({ state: "visible", timeout: 20_000 });
+      // Every membership costs the same here, so the approval for the first also covers the second.
+      await fixture.page.locator("label.squishy-pack-card").filter({ hasText: "Bronze" }).click();
+      await expect.poll(() => fixture.page.getByRole("radio", { name: /Bronze/ }).isChecked(), { timeout: 10_000 }).toBe(true);
+      lag.behind = numberToHex(approved - 1n);
+      await chain.mine();
+      await expect.poll(() => lag.staleReads, { timeout: 30_000 }).toBeGreaterThan(0);
+      await fixture.page.waitForTimeout(3_000);
+    } finally {
+      lag.behind = null;
+      fixture.setMineConfirmation(true);
+    }
+    try {
+      // The page reads the allowance at or after the approval, so the button is the purchase.
+      await expect.poll(() => asksTwice.count(), { timeout: 20_000 }).toBe(0);
+      await expect.poll(() => buy().isEnabled(), { timeout: 20_000 }).toBe(true);
+      await buy().click();
+      await youreIn().waitFor({ state: "visible", timeout: 30_000 });
+      expect((await wallet.requests()).map(call)).toEqual([
+        { name: "approve", args: [chain.raffle.address, TOTAL] },
+        { name: "buyPack", args: [1n, 1, 1, PUBLISHED_TERMS_HASH] }
+      ]);
+    } finally {
+      await fixture.page.unroute(`${chain.url}/`);
+    }
+  }, 120_000);
 
   // Last: it moves the chain past raffle 2's sales deadline.
   it("keeps the newer raffle state when an older background read finishes after it", async () => {

@@ -95,14 +95,14 @@ function sameWorkspace(left: WorkspaceScope, right: WorkspaceScope) {
 }
 
 /**
- * Reads the raffle until its block is at least `minBlock`. A load-balanced RPC can answer "latest" from a node behind a
- * transaction this page has just confirmed, which would show the raffle from before it.
+ * Repeats a read until its block is at least `minBlock`. A load-balanced RPC can answer "latest" from a node behind a
+ * transaction this page has just confirmed, which would show the state from before it.
  */
-export async function readRaffleFrom(service: Pick<RaffleService, "readRaffle">, id: bigint, minBlock: bigint, wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms)), attempts = 5): Promise<RaffleSnapshot> {
+export async function readFromBlock<T extends { block: { number: bigint } }>(read: () => Promise<T>, minBlock: bigint, wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms)), attempts = 5): Promise<T> {
   for (let attempt = 1; ; attempt++) {
-    const snapshot = await service.readRaffle({ id });
-    if (snapshot.block.number >= minBlock) return snapshot;
-    if (attempt >= attempts) throw new Error("The network hasn’t caught up with your confirmed transaction yet. Try again in a moment.");
+    const value = await read();
+    if (value.block.number >= minBlock) return value;
+    if (attempt >= attempts) throw new Error("The network hasn’t caught up yet. Try again in a moment.");
     await wait(2_000);
   }
 }
@@ -151,7 +151,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
           : { kind: deployment.kind, message: deployment.reason, scope });
         return;
       }
-      const snapshot = await readRaffleFrom(browser.service, id, confirmedBlock.current);
+      const snapshot = await readFromBlock(() => browser.service.readRaffle({ id }), confirmedBlock.current);
       if (version === request.current && sameWorkspace(scope, currentScope.current)) setState({ kind: "ready", snapshot, scope, refresh: { kind: "idle" } });
     } catch (error) {
       if (version !== request.current || !sameWorkspace(scope, currentScope.current)) return;
@@ -580,7 +580,8 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
     }
     setQuoteState("loading");
     setQuoteError("");
-    void browser.service.quoteMembership({ id: snapshot.id, packId, quantity }).then((next) => {
+    // A quote is never older than the raffle shown, so a purchase waiting on its approval is not left waiting on an older quote.
+    void readFromBlock(() => browser.service.quoteMembership({ id: snapshot.id, packId, quantity }), snapshot.block.number).then((next) => {
       if (version === quoteRequest.current) { setQuote(next); setQuoteState("idle"); }
     }).catch((error: unknown) => {
       if (version === quoteRequest.current) { setQuoteError(error instanceof Error ? error.message : "A current quote is unavailable."); setQuoteState("error"); }
@@ -652,7 +653,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const approvalAfterReadHash = approvalAfterRead?.kind === "terminal" ? approvalAfterRead.confirmation.hash : null;
   useEffect(() => {
     if (!approvalAfterReadHash || !buyerAccount || !owner.claimRefresh(approvalRefreshKey(buyerAccount, buyerWallet.revision, approvalAfterReadHash))) return;
-    void onConfirmed();
+    void onConfirmed(approvalAfterRead?.kind === "terminal" ? approvalAfterRead.confirmation.receipt : undefined);
     // onConfirmed is a fresh function on each render; the claimed key makes this run once per approval.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approvalAfterReadHash, buyerAccount, buyerWallet.revision, owner]);
