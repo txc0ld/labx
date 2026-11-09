@@ -1346,12 +1346,14 @@ describe("draw runner stuck transaction replacement", () => {
   function stuckChain(store: Store) {
     const raffle = open();
     const { chain } = fakeChain({ 1: raffle });
-    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, mineAfterNextQuote: false, loseNextSend: false, nonceReads: 0, pendingHash: null as Hex | null };
+    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, mineAfterNextQuote: false, cancelAfterNextQuote: false, loseNextSend: false, acceptNextSendSilently: false, nonceReads: 0, pendingHash: null as Hex | null };
     const sends: string[] = [];
     chain.nonces = async () => { state.nonceReads++; return { latest: state.latest, pending: state.pending }; };
     chain.quote = async () => {
       // The estimate ran against the block before the pending close was mined.
       if (state.mineAfterNextQuote) { state.mineAfterNextQuote = false; state.latest = state.pending; state.pendingHash = null; advance(raffle, "close"); }
+      // The operator's cancellation at the runner's nonce reaches the pool while the estimate runs.
+      if (state.cancelAfterNextQuote) { state.cancelAfterNextQuote = false; state.pending = state.latest + 1; state.pendingHash = pad("0xca", { size: 32 }); }
       return state.quote;
     };
     chain.pendingAt = async (hash, nonce) => hash === state.pendingHash && nonce === state.latest && state.pending === state.latest + 1;
@@ -1363,6 +1365,8 @@ describe("draw runner stuck transaction replacement", () => {
       if (nonce < state.latest) return { kind: "unknown", hash, error: "NonceTooLow" };
       // The broadcast is lost in transit, so the node's pool keeps what it held.
       if (state.loseNextSend) { state.loseNextSend = false; return { kind: "unknown", hash, error: "Timeout" }; }
+      // The node takes the broadcast into its pool, and its answer is lost in transit.
+      if (state.acceptNextSendSilently) { state.acceptNextSendSilently = false; state.pending = nonce + 1; state.pendingHash = hash; return { kind: "unknown", hash, error: "Timeout" }; }
       if (!state.mine) { state.pending = nonce + 1; state.pendingHash = hash; return { kind: "sent", hash }; }
       state.latest = state.pending = nonce + 1;
       state.pendingHash = null;
@@ -1509,6 +1513,37 @@ describe("draw runner stuck transaction replacement", () => {
       `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
       `close:0:${parseGwei("25")}:${parseGwei("1.1")}`
     ]);
+  });
+
+  it("replaces a replacement the node accepted without answering, bumping from that replacement's fees", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    const stuck = await record(store);
+    state.quote = fees("20");
+    state.acceptNextSendSilently = true;
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
+    // The pool now holds the replacement. The record names it and the send it replaced, because the runner cannot tell which.
+    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(2), { size: 32 }), maxFeePerGas: parseGwei("20").toString(), maxPriorityFeePerGas: parseGwei("1.1").toString(), replaces: stuck });
+
+    state.quote = fees("25");
+    state.mine = true;
+    expect(await run(LAST)).toMatchObject({ ok: true, status: "complete", sends: 3 });
+    expect(sends.slice(0, 3)).toEqual([
+      `close:0:${parseGwei("2")}:${parseGwei("1")}`,
+      `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
+      `close:0:${parseGwei("25")}:${parseGwei("1.21")}`
+    ]);
+    expect(await record(store)).not.toHaveProperty("replaces");
+  });
+
+  it("sends nothing when another transaction takes the runner's nonce in the pool while the step is being estimated", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    state.cancelAfterNextQuote = true;
+    expect(await run(START)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0, nextCursor: "1" });
+    expect(sends).toEqual([]);
+    expect(state.pendingHash).toBe(pad("0xca", { size: 32 }));
   });
 
   it("sends no replacement while another run holds the lease", async () => {

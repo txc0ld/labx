@@ -403,7 +403,7 @@ Environment events:
 | `K:accepted` and `K:reconciliation` together | Reachable, benign (see events) |
 | Terminal marker with neither `K:accepted` nor `K:reconciliation` | Unreachable: both results are returned only after the marker's source record was read back |
 | `K:accepted` without `K` | Unreachable: acceptance is written only after the reservation was parsed |
-| Two mails for one event | Unreachable inside the provider's retention; no send starts later than 23 h after the reservation |
+| Two mails for one event | Unreachable inside the provider's retention while the writer's and reader's clocks disagree by less than one hour in total; no send starts later than 23 h after the reservation by the reader's clock. The review showed that a writer 59 minutes ahead and a reader 59 minutes behind allow a send at a real age of 24 h 30 min. This predates the audit and is not changed by it |
 | Retry cursor past a pending event | Unreachable (I23). Tests: "retries a later page's failed event inside its window while an earlier page stays pending", "stops a slow terminal-prefix scan at its phase deadline without advancing retry progress" |
 
 ## 6. Receipt delivery slots
@@ -611,8 +611,13 @@ position, or reverts when the count had already finished.
 - Test: "does not send the step again at the next nonce when its pending transaction is mined right after the estimate
   and fees %s" (`web/test/draw-runner.test.ts:1478`), with fees unchanged and risen.
 - Before, observed: the run reported `sends: 1`, a `close` at nonce 1.
-- Fix: the nonce is read before the estimate (run.ts:184). A transaction mined before both fails the estimate; one
-  mined between them leaves the runner holding the old nonce, so it waits or its send fails on the nonce.
+- Fix: the nonce is read before the estimate and again after it. A transaction mined before both fails the
+  estimate; one mined between them shows as a changed latest nonce and the run stops with `pending-transaction`.
+- Review correction: the first version of this fix read the nonce only before the estimate. The independent review
+  showed that this let a transaction that reached the pool during the estimate, such as an operator's cancellation
+  at the runner's nonce, go unseen, so the runner replaced it with its own step. The second read decides what is sent,
+  as before the change. Test: "sends nothing when another transaction takes the runner's nonce in the pool while the
+  step is being estimated". FAILED on the first version (one send), PASSES now (no send).
 - After, observed: `sends: 0`, status `pending-transaction`, and the next run sends `snapshot:1,
   requestRandomness:2`.
 
@@ -631,8 +636,13 @@ position, or reverts when the count had already finished.
   (`web/test/draw-runner.test.ts:1491`).
 - Before, observed: the third run returned `{ ok: false, status: "pending-transaction", sends: 0 }` while the node
   still held the first send.
-- Fix: the record is written only when the node confirmed the send, or when the send was not a replacement
-  (run.ts:223).
+- Fix: a replacement the node did not confirm is recorded together with the send it was meant to replace
+  (`replaces`), and a later run replaces whichever of the two the node reports pending, bumping from that one's fees.
+- Review correction: the first version of this fix kept only the original record. The independent review showed that
+  a replacement the node accepted without answering then stalled the runner for good, because the original was no
+  longer pending. Test: "replaces a replacement the node accepted without answering, bumping from that replacement's
+  fees". FAILED on the first version (`pending-transaction`, no send), PASSES now (replaced at 25 gwei with the tip
+  bumped to 1.21 gwei).
 - After, observed: the third run replaces the original at 25 gwei with the tip bumped to 1.1 gwei and completes with
   three sends.
 
@@ -756,9 +766,10 @@ branch; the commit that adds this file changes no code.
 | Types | `npx --prefix web tsc --noEmit -p web/tsconfig.json` from the repository root | PASS, exit 0 |
 | Types, exactly as requested | `npx tsc --noEmit -p web/tsconfig.json` from the repository root | NOT_RUN as written: the root has no `node_modules`, so `npx` fetched an unrelated `tsc` package that exits 1 without compiling. The row above is the same check with the project's TypeScript |
 | Opt-in lanes (integration, browser, fork: the 51 skipped files, 369 tests) | | NOT_RUN |
-| Independent review of the candidate | | NOT_RUN in this slice |
+| Independent review of the first candidate (3196610) | Codex review with its own 19-case probe | FAIL: two runner findings (cancellation replaced during the estimate; accepted but unanswered replacement stalls). Both are fixed in the following commit with the two tests named under issues 1 and 2 |
+| Runner tests after the review fixes | `npx vitest run test/draw-runner.test.ts` | PASS: 212 of 212 |
 
-The 11 new tests: six in `web/test/draw-runner.test.ts`, three in `web/test/notification-delivery.test.ts`, one in
+The review fixes add two more runner regression tests. The first 11 new tests: six in `web/test/draw-runner.test.ts`, three in `web/test/notification-delivery.test.ts`, one in
 `web/test/notification-processor.test.ts` and one in `web/test/receipt-agreement.test.ts`. Nine are regression tests
 for the three issues; two pin accepted behavior (the unrecorded pending transaction, and acceptance winning over a
 reconciliation marker).
