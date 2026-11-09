@@ -184,7 +184,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
       const deployment = await browser.service.attest();
       if (deployment.kind !== "verified") return;
       const snapshot = await browser.service.readRaffle({ id });
-      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !canApply() || !newestRead(polledBlock, snapshot.block.number)) return;
+      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !newestRead(polledBlock, snapshot.block.number) || !canApply()) return;
       setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && snapshot.block.number >= current.snapshot.block.number && viewKey(current.snapshot, revealedAt) !== viewKey(snapshot, revealedAt)
         ? { ...current, snapshot }
         : current);
