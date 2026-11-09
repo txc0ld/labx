@@ -18,6 +18,9 @@ type State =
 export function BuyerRaffles({ browser }: { browser: BrowserService }) {
   const wallet = useWalletSnapshot(browser.wallet);
   const [state, setState] = useState<State>({ kind: "idle" });
+  // A changed wallet session drops the earlier account's raffles in this render, before the effect below reads again.
+  const [owner, setOwner] = useState(wallet);
+  if (owner !== wallet) { setOwner(wallet); setState({ kind: "idle" }); }
   const request = useRef(0);
   const ready = browser.kind === "configured" && wallet.kind === "connected" && wallet.chainId === browser.service.manifest.chainId;
 
