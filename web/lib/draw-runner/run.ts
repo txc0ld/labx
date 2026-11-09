@@ -116,15 +116,6 @@ function replacementQuote(raw: string | null, runner: Address, nonce: { latest: 
   return { hash: last.hash as Hex, quote: { gasLimit: quote.gasLimit, maxFeePerGas: larger(quote.maxFeePerGas, bumped(maxFeePerGas)), maxPriorityFeePerGas: larger(quote.maxPriorityFeePerGas, bumped(maxPriorityFeePerGas)) } };
 }
 
-/** The records of the earlier sends an unanswered replacement may have left in a pool, newest first. */
-function replacedSends(raw: string | null): string[] {
-  try {
-    const last: unknown = raw === null ? null : JSON.parse(raw);
-    const replaces = last && typeof last === "object" && "replaces" in last ? last.replaces : null;
-    return Array.isArray(replaces) ? replaces.filter(item => item && typeof item === "object").slice(0, 3).map(item => JSON.stringify(item)) : [];
-  } catch { return []; }
-}
-
 export async function runDraw({ chain, store, now, deadline }: { chain: DrawChain; store: Store; now: () => number; deadline: number }): Promise<RunReport> {
   const workEnd = deadline - FINISH_RESERVE_MS;
   const bounded = <T>(work: Promise<T>) => within(work, workEnd - now());
@@ -212,19 +203,11 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         // The second read decides what is sent, so a transaction that reached the pool during the estimate is seen.
         const nonce = await bounded(chain.nonces());
         if (nonce.latest !== before.latest) { stop("pending-transaction", id); break raffles; }
-        let candidates: string[] = [];
         if (nonce.pending !== nonce.latest) {
           // Only the runner's own last send, alone in the pool, is replaced, and only once fees have risen past it. A
           // transaction that took its place, such as an operator's cancellation, is waited for. So is a failed read.
-          // A replacement whose broadcast got no answer is recorded with the sends before it, and whichever is pending is replaced.
-          const last = await bounded(store.get(LAST_SEND_KEY)).catch(() => null);
-          let replacement: ReturnType<typeof replacementQuote> = null;
-          const recorded = last === null ? [] : [last, ...replacedSends(last)];
-          for (const candidate of recorded) {
-            const found = replacementQuote(candidate, chain.runner, nonce, quote);
-            if (found && await bounded(chain.pendingAt(found.hash, nonce.latest)).catch(() => false)) { replacement = found; candidates = recorded; break; }
-          }
-          if (!replacement) { stop("pending-transaction", id); break raffles; }
+          const replacement = replacementQuote(await bounded(store.get(LAST_SEND_KEY)).catch(() => null), chain.runner, nonce, quote);
+          if (!replacement || !await bounded(chain.pendingAt(replacement.hash, nonce.latest)).catch(() => false)) { stop("pending-transaction", id); break raffles; }
           if (replacement.quote.maxFeePerGas > MAX_FEE_PER_GAS) { stop("fee-cap", id); break raffles; }
           if (await bounded(chain.balance()) < requiredBalance(replacement.quote)) { record(action, null, "low-funds", null); break; }
           quote = replacement.quote;
@@ -238,10 +221,8 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         }
         report.sends++;
         try {
-          // A replacement the node did not confirm may or may not be in a pool, so its record also names the sends before it.
           await bounded(store.set(LAST_SEND_KEY, JSON.stringify({
-            runner: chain.runner, nonce: nonce.latest, hash: sent.hash, maxFeePerGas: quote.maxFeePerGas.toString(), maxPriorityFeePerGas: quote.maxPriorityFeePerGas.toString(),
-            ...(sent.kind === "unknown" && candidates.length > 0 ? { replaces: candidates.slice(0, 3).map(item => ({ ...JSON.parse(item), replaces: undefined })) } : {})
+            runner: chain.runner, nonce: nonce.latest, hash: sent.hash, maxFeePerGas: quote.maxFeePerGas.toString(), maxPriorityFeePerGas: quote.maxPriorityFeePerGas.toString()
           })));
         } catch {
           // Without this record a later run waits for the transaction instead of replacing it.

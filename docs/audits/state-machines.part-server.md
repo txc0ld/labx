@@ -35,7 +35,7 @@ Phase numbers used below are the contract's: 0 Draft, 1 Open, 2 Closed, 3 Drawin
 |---|---|---|---|
 | 1a | high (small amount) | The runner sent a step twice when the read after its own confirmed send came from a node one block behind | 5d05063 |
 | 1b | high (small amount, narrow) | The runner sent a step again at the next nonce when its pending transaction was mined between the gas estimate and the nonce read | 5d05063 |
-| 2 | medium | A replacement whose broadcast got no answer erased the record of the stuck transaction, so it was never replaced | 5d05063 |
+| 2 | medium | A replacement whose broadcast got no answer erases the record of the stuck transaction, so it is never replaced | not fixed; see issue 2 |
 | 3 | medium for alerts, low for receipts | A reservation dated ahead of the reader's clock was treated as an expired retry window | 3196610 |
 
 Severity scale, as in the earlier audit: high means a possible duplicate send or money at risk, medium means a user or
@@ -191,7 +191,7 @@ Environment events:
 | Combination | Result |
 |---|---|
 | A step sent at nonce N+1 while the runner's transaction for that step at nonce N is being mined | Reachable before 5d05063: the nonce was read after the estimate. Test: "does not send the step again at the next nonce when its pending transaction is mined right after the estimate and fees %s" (`web/test/draw-runner.test.ts:1478`). Finding 1b |
-| Record names a hash the node does not hold while the node holds the runner's earlier send | Reachable before 5d05063 through a replacement lost in transit. Test: "still replaces its stuck transaction after a replacement's broadcast never reached the node" (`web/test/draw-runner.test.ts:1491`). Finding 2 |
+| Record names a hash the node does not hold while the node holds the runner's earlier send | Reachable through a replacement lost in transit, on `main` and on this branch. Confirmed and not fixed: see issue 2 |
 | A replacement of someone else's transaction | Unreachable: `pendingAt` must confirm hash, nonce and sender. Test: "waits instead of replacing a transaction that took its recorded send's place" |
 | A replacement above the fee cap | Unreachable. Test: "stops at the 50 gwei fee cap instead of replacing above it" |
 | A new nonce used behind a pending transaction | Unreachable: every send uses `nonce.latest` (run.ts:214). Test: "waits for an earlier runner transaction instead of sending behind it" |
@@ -621,7 +621,7 @@ position, or reverts when the count had already finished.
 - After, observed: `sends: 0`, status `pending-transaction`, and the next run sends `snapshot:1,
   requestRandomness:2`.
 
-### Issue 2. An unconfirmed replacement erases the record of the stuck transaction (medium)
+### Issue 2. An unconfirmed replacement erases the record of the stuck transaction (medium, not fixed)
 
 1. The runner's `close` at nonce 0 is stuck: fees rose past its own. The record names its hash and fees.
 2. The next run sends a replacement at nonce 0 with bumped fees. The request times out or the provider answers with an
@@ -631,29 +631,28 @@ position, or reverts when the count had already finished.
    the node does hold is never replaced, and the runner sends nothing until fees fall or the operator steps in with
    the hot key. Draws can still be triggered by anyone on chain.
 
-- Code: `web/lib/draw-runner/run.ts:221-227`.
-- Test: "still replaces its stuck transaction after a replacement's broadcast never reached the node"
-  (`web/test/draw-runner.test.ts:1491`).
-- Before, observed: the third run returned `{ ok: false, status: "pending-transaction", sends: 0 }` while the node
-  still held the first send.
-- Fix: a replacement the node did not confirm is recorded together with the sends before it (`replaces`, newest
-  first, at most three), and a later run replaces whichever of them the node reports pending, bumping from that one's
-  fees.
-- Review correction: the first version of this fix kept only the original record. The independent review showed that
-  a replacement the node accepted without answering then stalled the runner for good, because the original was no
-  longer pending. Test: "replaces a replacement the node accepted without answering, bumping from that replacement's
-  fees". FAILED on the first version (`pending-transaction`, no send), PASSES now (replaced at 25 gwei with the tip
-  bumped to 1.21 gwei).
-- After, observed: the third run replaces the original at 25 gwei with the tip bumped to 1.1 gwei and completes with
-  three sends.
-- Second review correction: with one `replaces` entry, a third unanswered send forgot the second. Nodes that disagree
-  about the pool could then leave the runner waiting on a send it no longer had on record. Test: "keeps every
-  unanswered send on record, so one seen on another node is still replaced later". FAILED at cb3599d, PASSES now.
+- Code: the record write after the send in `web/lib/draw-runner/run.ts`.
+- Status: confirmed and NOT fixed. The behavior on this branch is the same as on `main`.
+- Why it is not fixed: three attempts each failed independent review. Keeping the original record stalled the runner
+  when the node had accepted the replacement. Recording the replacement together with the sends before it recovered
+  both cases, but a third review showed it could forget a send after several unanswered broadcasts across nodes that
+  disagree, drop its history on an acknowledged lower-fee send, and widen which stored records authorize a
+  replacement. Each version traded one stall for another, so the change was withdrawn rather than merged.
+- What a fix needs: the runner must know which of its own transactions the pool holds. That means recording the signed
+  transaction's hash before it is broadcast and treating every recorded hash for the nonce as its own until the nonce
+  is used, with a design review before code.
+- Until then: a stuck runner transaction whose replacement was lost is waited for. It ends when the transaction is
+  mined, when fees fall to it, or when the operator replaces it by hand with the cron stopped. Draws can still be
+  triggered by anyone on chain.
+- A related case that already works and is now pinned: a replacement the node accepted without answering is replaced
+  later with fees bumped from its own. Test: "replaces a replacement the node accepted without answering, bumping from
+  that replacement's fees".
 
 ### Known limits of the runner's send path, not fixed
 
 The second independent review would not fund the runner on mainnet because of the first two items. Both exist on
-`main` today and are not made worse by this branch. They are recorded here for the owner's decision.
+`main` today and are not made worse by this branch. They are recorded here for the owner's decision, together with
+issue 2 above.
 
 1. A transaction from the runner's key that reaches the pool after the runner's last check is replaced by the
    runner's step if the step pays more. The check and the send are separate calls, so this window cannot be closed
@@ -664,6 +663,11 @@ The second independent review would not fund the runner on mainnet because of th
    transaction, bounded by the fee and gas caps. Closing it needs the raffle read, the estimate and the nonce pinned
    to one block no older than the runner's last mined transaction.
 3. A kill or store failure between the broadcast and the record write leaves a pending transaction with no record.
+
+What this branch does change in the send path costs at most one cron period in three cases, in exchange for not
+sending a step twice: a chain reorganisation that removes a step this run just saw confirmed is read as a stale node,
+so the step is sent by the next run; a failed first nonce read ends work on that raffle for this run; and two nonce
+reads that disagree stop the run with `pending-transaction`.
 
 Accepted limit in the same machine, not fixed: a kill or store failure between the broadcast and the record write
 leaves no record, so that transaction is waited for and never replaced. The window is one store write. Closing it
@@ -719,7 +723,7 @@ server's clock" and the second half of the receipt test).
 | D4 | A reserve request that never reached the server left Create asking for a recovery signature and getting 503 | Fixed: recovery answers 404 and the seller starts over | "reserve/preparation answers 404, so the seller starts over, when the server never saved that setup" (`web/test/workflow-route-failures.test.ts:195`) |
 | D5 | An `ownerOf` revert answered 503 | Fixed: a revert or missing code answers 404; a node failure still answers 503 | "reserve answers 404 with a plain message, and saves nothing, when the NFT read %s" and "reserve answers 503, not a missing NFT, when the node fails the ownership read (%s)" (`web/test/workflow-route-failures.test.ts:185, 179`) |
 | D6 | A shallow reorg of the activation block left the deployment reconciliation-required for good | Fixed: the boundary is re-anchored to the finalized block before anything is ingested | "reads and mails nothing before finality, then re-anchors a reorged activation block to the finalized block" and "recovers a deployment that an earlier build marked for activation reconciliation" (`web/test/notification-processor.test.ts:64, 89`) |
-| D7 | The runner stalled on a stuck transaction | Mostly fixed in f767de7 by replacement. This branch fixes the hole in it (issue 2). One limit is accepted: a transaction whose record was never written is waited for | "replaces its own stuck transaction at the same nonce with bumped fees once suggested fees rise", "still replaces its stuck transaction after a replacement's broadcast never reached the node", "waits for a pending transaction whose record was never written" (`web/test/draw-runner.test.ts:1378, 1491, 1437`) |
+| D7 | The runner stalled on a stuck transaction | Mostly fixed in f767de7 by replacement. Two limits remain: a replacement lost in transit leaves the stuck transaction unreplaced (issue 2, not fixed), and a transaction whose record was never written is waited for | "replaces its own stuck transaction at the same nonce with bumped fees once suggested fees rise"; "waits for a pending transaction whose record was never written, as after a kill between the broadcast and the store write" |
 
 ## Suspicions not reproduced
 
@@ -729,9 +733,7 @@ RPC fault the fakes would only assume, or because it needs two independent fault
 1. Low-water mark and reorgs. The scan reads at the latest block (`web/lib/draw-runner/chain.ts:99`). If a block that
    settled or cancelled a raffle is dropped and that transaction never returns, the mark has already passed the raffle
    and the runner never reads it again. The transaction normally returns to the pool and is mined again.
-2. Replacement that landed although unconfirmed. After issue 2's fix the record keeps naming the replaced transaction.
-   If the replacement did reach the pool, the runner waits for it. It carries fees from that run, so it should be
-   mined; it stalls only if fees more than double again.
+2. Withdrawn: this concerned the replacement record change, which is not part of this branch (see issue 2).
 3. Stale reads the estimate does not catch. If a node serves a stale state to the read, the simulation and the
    estimate while serving a fresh nonce, the runner sends a step another caller already took. Issue 1a covers only the
    runner's own confirmed step.
@@ -781,16 +783,13 @@ branch; the commit that adds this file changes no code.
 |---|---|---|
 | Baseline at 2078b82 | `npx vitest run` in `web` | PASS: 75 files passed, 51 skipped; 1,263 tests passed, 369 skipped |
 | Regression tests before each fix | `npx vitest run test/draw-runner.test.ts`, `test/notification-delivery.test.ts`, `test/notification-processor.test.ts`, `test/receipt-agreement.test.ts` | FAIL as expected: 5 runner cases (2 for 1a, 2 for 1b, 1 for issue 2), 2 delivery cases, 1 processor case, 1 receipt case |
-| Full suite after the fixes | `npm --prefix web test` | PASS: 75 files passed, 51 skipped; 1,274 tests passed, 369 skipped |
+| Full suite at the final code | `npm --prefix web test` | PASS: 75 files passed, 51 skipped; 1,275 tests passed, 369 skipped |
 | Types | `npx --prefix web tsc --noEmit -p web/tsconfig.json` from the repository root | PASS, exit 0 |
 | Types, exactly as requested | `npx tsc --noEmit -p web/tsconfig.json` from the repository root | NOT_RUN as written: the root has no `node_modules`, so `npx` fetched an unrelated `tsc` package that exits 1 without compiling. The row above is the same check with the project's TypeScript |
 | Opt-in lanes (integration, browser, fork: the 51 skipped files, 369 tests) | | NOT_RUN |
 | Independent review of the first candidate (3196610) | Codex review with its own 19-case probe | FAIL: two runner findings (cancellation replaced during the estimate; accepted but unanswered replacement stalls). Both are fixed in the following commit with the two tests named under issues 1 and 2 |
-| Second independent review, at cb3599d | Codex review with its own 37-case probe | The two corrections hold (C: PASS). FAIL overall on two findings that predate this branch (items 1 and 2 under known limits) and one new corner, fixed in the next commit |
-| Runner tests after both rounds of review fixes | `npx vitest run test/draw-runner.test.ts` | PASS: 213 of 213 |
-| Full suite after both rounds | `npm --prefix web test` | PASS: 1,277 passed, 369 skipped |
+| Second independent review, at cb3599d | Codex review with its own 37-case probe | FAIL: one new corner in the replacement history, plus two findings that predate this branch |
+| Third independent review, at 02b9ca1, against `main` | Codex differential review, 37 probes run against both versions | DO NOT MERGE: the replacement history was less safe than `main` in four sequences. The stale-read guard and the nonce reads were rated safer than `main` (no duplicate send where `main` sends two) |
+| After withdrawing the replacement history | `npx vitest run test/draw-runner.test.ts` | PASS: 211 of 211 |
 
-The review fixes add two more runner regression tests. The first 11 new tests: six in `web/test/draw-runner.test.ts`, three in `web/test/notification-delivery.test.ts`, one in
-`web/test/notification-processor.test.ts` and one in `web/test/receipt-agreement.test.ts`. Nine are regression tests
-for the three issues; two pin accepted behavior (the unrecorded pending transaction, and acceptance winning over a
-reconciliation marker).
+New tests on this branch: five in `web/test/draw-runner.test.ts` for issue 1 (two stale-read cases, two mined-during-estimate cases, one pool arrival during the estimate), one that pins the accepted unrecorded-transaction limit and one that pins recovery from a silently accepted replacement; three in `web/test/notification-delivery.test.ts`, one in `web/test/notification-processor.test.ts` and one in `web/test/receipt-agreement.test.ts`.

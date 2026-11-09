@@ -1346,7 +1346,7 @@ describe("draw runner stuck transaction replacement", () => {
   function stuckChain(store: Store) {
     const raffle = open();
     const { chain } = fakeChain({ 1: raffle });
-    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, mineAfterNextQuote: false, cancelAfterNextQuote: false, loseNextSend: false, acceptNextSendSilently: false, nonceReads: 0, pendingHash: null as Hex | null };
+    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, mineAfterNextQuote: false, cancelAfterNextQuote: false, acceptNextSendSilently: false, nonceReads: 0, pendingHash: null as Hex | null };
     const sends: string[] = [];
     chain.nonces = async () => { state.nonceReads++; return { latest: state.latest, pending: state.pending }; };
     chain.quote = async () => {
@@ -1363,8 +1363,6 @@ describe("draw runner stuck transaction replacement", () => {
       sends.push(`${action.kind}:${nonce}:${quote.maxFeePerGas}:${quote.maxPriorityFeePerGas}`);
       const hash = pad(toHex(sends.length), { size: 32 });
       if (nonce < state.latest) return { kind: "unknown", hash, error: "NonceTooLow" };
-      // The broadcast is lost in transit, so the node's pool keeps what it held.
-      if (state.loseNextSend) { state.loseNextSend = false; return { kind: "unknown", hash, error: "Timeout" }; }
       // The node takes the broadcast into its pool, and its answer is lost in transit.
       if (state.acceptNextSendSilently) { state.acceptNextSendSilently = false; state.pending = nonce + 1; state.pendingHash = hash; return { kind: "unknown", hash, error: "Timeout" }; }
       if (!state.mine) { state.pending = nonce + 1; state.pendingHash = hash; return { kind: "sent", hash }; }
@@ -1492,39 +1490,15 @@ describe("draw runner stuck transaction replacement", () => {
     expect(sends.map(item => item.split(":").slice(0, 2).join(":"))).toEqual(["close:0", "snapshot:1", "requestRandomness:2"]);
   });
 
-  it("still replaces its stuck transaction after a replacement's broadcast never reached the node", async () => {
-    const store = new MemoryStore();
-    const { state, sends, run } = stuckChain(store);
-    await run(START);
-    const stuck = await record(store);
-    state.quote = fees("20");
-    state.loseNextSend = true;
-    const lost = await run(LATER);
-    expect(lost).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
-    expect(outcomes(lost)).toEqual(["1:close:unknown:Timeout"]);
-    // The node still holds the first send, so the next run must still be able to replace it.
-    expect(state.pendingHash).toBe(stuck.hash);
-
-    state.quote = fees("25");
-    state.mine = true;
-    expect(await run(LAST)).toMatchObject({ ok: true, status: "complete", sends: 3 });
-    expect(sends.slice(0, 3)).toEqual([
-      `close:0:${parseGwei("2")}:${parseGwei("1")}`,
-      `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
-      `close:0:${parseGwei("25")}:${parseGwei("1.1")}`
-    ]);
-  });
-
   it("replaces a replacement the node accepted without answering, bumping from that replacement's fees", async () => {
     const store = new MemoryStore();
     const { state, sends, run } = stuckChain(store);
     await run(START);
-    const stuck = await record(store);
     state.quote = fees("20");
     state.acceptNextSendSilently = true;
     expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
-    // The pool now holds the replacement. The record names it and the send it replaced, because the runner cannot tell which.
-    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(2), { size: 32 }), maxFeePerGas: parseGwei("20").toString(), maxPriorityFeePerGas: parseGwei("1.1").toString(), replaces: [stuck] });
+    // The pool now holds the replacement, and the record names it.
+    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(2), { size: 32 }), maxFeePerGas: parseGwei("20").toString(), maxPriorityFeePerGas: parseGwei("1.1").toString() });
 
     state.quote = fees("25");
     state.mine = true;
@@ -1533,35 +1507,6 @@ describe("draw runner stuck transaction replacement", () => {
       `close:0:${parseGwei("2")}:${parseGwei("1")}`,
       `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
       `close:0:${parseGwei("25")}:${parseGwei("1.21")}`
-    ]);
-    expect(await record(store)).not.toHaveProperty("replaces");
-  });
-
-  it("keeps every unanswered send on record, so one seen on another node is still replaced later", async () => {
-    const store = new MemoryStore();
-    const { state, sends, run } = stuckChain(store);
-    await run(START);
-    const first = pad(toHex(1), { size: 32 }), second = pad(toHex(2), { size: 32 });
-    state.quote = fees("20");
-    state.acceptNextSendSilently = true;
-    await run(LATER);
-    // Fees fall below the second send's, and this node still holds the first. A third send to replace it is lost.
-    state.quote = fees("10");
-    state.pendingHash = first;
-    state.loseNextSend = true;
-    expect(await run(LAST)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
-    expect((await record(store)).replaces.map((item: { hash: Hex }) => item.hash)).toEqual([second, first]);
-
-    // The node answering now holds the second send, and fees have risen past it.
-    state.pendingHash = second;
-    state.quote = fees("30");
-    state.mine = true;
-    expect(await run(LAST + LEASE_BUCKET_MS)).toMatchObject({ ok: true, status: "complete", sends: 3 });
-    expect(sends.slice(0, 4)).toEqual([
-      `close:0:${parseGwei("2")}:${parseGwei("1")}`,
-      `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
-      `close:0:${parseGwei("10")}:${parseGwei("1.1")}`,
-      `close:0:${parseGwei("30")}:${parseGwei("1.21")}`
     ]);
   });
 
