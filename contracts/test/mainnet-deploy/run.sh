@@ -192,6 +192,29 @@ test_interrupted_stage2_resumes_without_a_second_create() {
   is "fresh broadcasts" "$(sends 'DeployMainnet fail')" 1
 }
 
+# D1: a driver killed outright cannot keep forge's run file. The next step must keep it and use it, not delete it.
+test_d1_killed_stage2_leaves_a_run_file_that_resume_keeps_and_uses() {
+  stage1_done; plan kill-driver
+  chain 'd["history"] = False'  # a pruned node: the CREATE cannot be searched for by nonce
+  drive stage2; is "killed" "$status" 137
+  is "kept stage 2 run files after the kill" "$(ls "$ROOT/deployments" | grep -c '^stage2')" 0
+  drive resume; is "resume exit" "$status" 0
+  is "recorded CREATE" "$(record 'd["create"]["tx"]')" "$(creates mined)"
+  is "kept copy of the killed run's file" "$(grep -l "$(creates mined)" "$ROOT"/deployments/stage2*.json | wc -l)" 1
+}
+
+test_d1_killed_stage2_before_the_create_mined_keeps_its_run_file_too() {
+  stage1_done; plan kill-driver
+  chain 'd["history"] = False'
+  drive stage2; is "killed" "$status" 137
+  local dead; dead=$(creates mined)
+  # The CREATE was never mined after all: drop it and free its nonce.
+  chain 'd["txs"]["'"$dead"'"].update(dropped=True, block=None); d["code"] = {k: v for k, v in d["code"].items() if k in ("'"$SAFE"'", "0xd7f86b4b8cae7d942340ff628f82735b7a20893a", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")}'
+  drive stage2; is "fresh stage2 again" "$status" 0
+  is "kept copy of the killed run's file" "$(grep -l "$dead" "$ROOT"/deployments/stage2*.json | wc -l)" 1
+  [ "$(record 'd["create"]["tx"]')" != "$dead" ] || { echo "    the record names the dropped CREATE"; ok=1; }
+}
+
 # --- two runs at once ---
 
 test_two_stage1_runs_at_once_create_one_subscription() {

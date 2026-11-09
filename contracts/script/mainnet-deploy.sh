@@ -133,6 +133,17 @@ keep_run() {
   echo "$kept"
 }
 
+# Keeps forge's run file as LABEL-leftover when no kept file holds a copy of it. A driver that was killed outright
+# could not keep it, the next broadcast deletes it, and it may be the only file that names the CREATE.
+keep_leftover() {
+  local f
+  [ -f "$LATEST" ] || return 0
+  for f in "$(dirname "$RECORD")"/*.json; do
+    if [ -f "$f" ] && cmp -s "$LATEST" "$f"; then return 0; fi
+  done
+  keep_run "$1-leftover" > /dev/null
+}
+
 # Runs forge with --broadcast in the main shell, its output on the terminal, and sets RUN to the kept run file (empty when
 # nothing was sent). If forge fails or is interrupted, keeps whatever run file it wrote before stopping, and for stage 1
 # records the transaction in it as pending.
@@ -142,6 +153,7 @@ keep_run() {
 RUN=""
 broadcast() {
   local label=$1 status=0 kept child
+  keep_leftover "$label"
   rm -f "$LATEST"
   forge script "$SCRIPT:$2" --root contracts --rpc-url "$RPC_URL" --slow --broadcast >&2 &
   child=$!
@@ -214,12 +226,14 @@ nonce_unused() {
 # Makes sure the record names the CREATE, checked against its canonical receipt now: a recorded hash is checked again
 # (a reorg can move or drop it). Otherwise the candidates are CREATE_TX and every CREATE in the kept run files; exactly
 # one of them must be mined as the deployer's transaction at EXPECTED_NONCE, and record_create checks it like any
-# other. With no candidate at all, the deployer's transaction at that nonce is searched for on chain.
+# other. A run file left unkept by a killed driver is kept first, so its CREATE is a candidate too. With no candidate
+# at all, the deployer's transaction at that nonce is searched for on chain.
 reconcile_create() {
   local tx="" candidates c expected
   local -a matches=()
   tx=$(record_get create.tx 2>/dev/null || true)
   if [ -n "$tx" ]; then record_create "$tx"; return 0; fi
+  keep_leftover stage2
   # A run file cut short by an interruption can be unreadable: it is skipped with a note and left in place as evidence.
   candidates=$(python3 - "$(dirname "$RECORD")" "${CREATE_TX:-}" <<'EOF'
 import glob, json, os, sys
