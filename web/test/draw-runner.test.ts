@@ -1524,7 +1524,7 @@ describe("draw runner stuck transaction replacement", () => {
     state.acceptNextSendSilently = true;
     expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
     // The pool now holds the replacement. The record names it and the send it replaced, because the runner cannot tell which.
-    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(2), { size: 32 }), maxFeePerGas: parseGwei("20").toString(), maxPriorityFeePerGas: parseGwei("1.1").toString(), replaces: stuck });
+    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(2), { size: 32 }), maxFeePerGas: parseGwei("20").toString(), maxPriorityFeePerGas: parseGwei("1.1").toString(), replaces: [stuck] });
 
     state.quote = fees("25");
     state.mine = true;
@@ -1535,6 +1535,34 @@ describe("draw runner stuck transaction replacement", () => {
       `close:0:${parseGwei("25")}:${parseGwei("1.21")}`
     ]);
     expect(await record(store)).not.toHaveProperty("replaces");
+  });
+
+  it("keeps every unanswered send on record, so one seen on another node is still replaced later", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    const first = pad(toHex(1), { size: 32 }), second = pad(toHex(2), { size: 32 });
+    state.quote = fees("20");
+    state.acceptNextSendSilently = true;
+    await run(LATER);
+    // Fees fall below the second send's, and this node still holds the first. A third send to replace it is lost.
+    state.quote = fees("10");
+    state.pendingHash = first;
+    state.loseNextSend = true;
+    expect(await run(LAST)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
+    expect((await record(store)).replaces.map((item: { hash: Hex }) => item.hash)).toEqual([second, first]);
+
+    // The node answering now holds the second send, and fees have risen past it.
+    state.pendingHash = second;
+    state.quote = fees("30");
+    state.mine = true;
+    expect(await run(LAST + LEASE_BUCKET_MS)).toMatchObject({ ok: true, status: "complete", sends: 3 });
+    expect(sends.slice(0, 4)).toEqual([
+      `close:0:${parseGwei("2")}:${parseGwei("1")}`,
+      `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
+      `close:0:${parseGwei("10")}:${parseGwei("1.1")}`,
+      `close:0:${parseGwei("30")}:${parseGwei("1.21")}`
+    ]);
   });
 
   it("sends nothing when another transaction takes the runner's nonce in the pool while the step is being estimated", async () => {

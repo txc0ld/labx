@@ -636,8 +636,9 @@ position, or reverts when the count had already finished.
   (`web/test/draw-runner.test.ts:1491`).
 - Before, observed: the third run returned `{ ok: false, status: "pending-transaction", sends: 0 }` while the node
   still held the first send.
-- Fix: a replacement the node did not confirm is recorded together with the send it was meant to replace
-  (`replaces`), and a later run replaces whichever of the two the node reports pending, bumping from that one's fees.
+- Fix: a replacement the node did not confirm is recorded together with the sends before it (`replaces`, newest
+  first, at most three), and a later run replaces whichever of them the node reports pending, bumping from that one's
+  fees.
 - Review correction: the first version of this fix kept only the original record. The independent review showed that
   a replacement the node accepted without answering then stalled the runner for good, because the original was no
   longer pending. Test: "replaces a replacement the node accepted without answering, bumping from that replacement's
@@ -645,6 +646,24 @@ position, or reverts when the count had already finished.
   bumped to 1.21 gwei).
 - After, observed: the third run replaces the original at 25 gwei with the tip bumped to 1.1 gwei and completes with
   three sends.
+- Second review correction: with one `replaces` entry, a third unanswered send forgot the second. Nodes that disagree
+  about the pool could then leave the runner waiting on a send it no longer had on record. Test: "keeps every
+  unanswered send on record, so one seen on another node is still replaced later". FAILED at cb3599d, PASSES now.
+
+### Known limits of the runner's send path, not fixed
+
+The second independent review would not fund the runner on mainnet because of the first two items. Both exist on
+`main` today and are not made worse by this branch. They are recorded here for the owner's decision.
+
+1. A transaction from the runner's key that reaches the pool after the runner's last check is replaced by the
+   runner's step if the step pays more. The check and the send are separate calls, so this window cannot be closed
+   from inside the runner; this branch narrows it to the time between the second nonce read and the broadcast.
+   Operational rule: stop the cron, or wait out its lease, before using the runner key by hand.
+2. A step that was mined before the run's nonce reads can be sent again at the next nonce when the gas estimate is
+   answered by a node one block behind. The contract refuses the duplicate, so the cost is the gas of one reverted
+   transaction, bounded by the fee and gas caps. Closing it needs the raffle read, the estimate and the nonce pinned
+   to one block no older than the runner's last mined transaction.
+3. A kill or store failure between the broadcast and the record write leaves a pending transaction with no record.
 
 Accepted limit in the same machine, not fixed: a kill or store failure between the broadcast and the record write
 leaves no record, so that transaction is waited for and never replaced. The window is one store write. Closing it
@@ -767,7 +786,9 @@ branch; the commit that adds this file changes no code.
 | Types, exactly as requested | `npx tsc --noEmit -p web/tsconfig.json` from the repository root | NOT_RUN as written: the root has no `node_modules`, so `npx` fetched an unrelated `tsc` package that exits 1 without compiling. The row above is the same check with the project's TypeScript |
 | Opt-in lanes (integration, browser, fork: the 51 skipped files, 369 tests) | | NOT_RUN |
 | Independent review of the first candidate (3196610) | Codex review with its own 19-case probe | FAIL: two runner findings (cancellation replaced during the estimate; accepted but unanswered replacement stalls). Both are fixed in the following commit with the two tests named under issues 1 and 2 |
-| Runner tests after the review fixes | `npx vitest run test/draw-runner.test.ts` | PASS: 212 of 212 |
+| Second independent review, at cb3599d | Codex review with its own 37-case probe | The two corrections hold (C: PASS). FAIL overall on two findings that predate this branch (items 1 and 2 under known limits) and one new corner, fixed in the next commit |
+| Runner tests after both rounds of review fixes | `npx vitest run test/draw-runner.test.ts` | PASS: 213 of 213 |
+| Full suite after both rounds | `npm --prefix web test` | PASS: 1,277 passed, 369 skipped |
 
 The review fixes add two more runner regression tests. The first 11 new tests: six in `web/test/draw-runner.test.ts`, three in `web/test/notification-delivery.test.ts`, one in
 `web/test/notification-processor.test.ts` and one in `web/test/receipt-agreement.test.ts`. Nine are regression tests
