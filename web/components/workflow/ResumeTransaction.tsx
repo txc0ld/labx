@@ -77,8 +77,8 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     return () => { active = false; };
   }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck, pendingSend.status]);
 
-  // A send at the record's nonce was mined and the record cleared, or a send stopped because an earlier cleared request may
-  // have landed: the page reads the chain again.
+  // A send at the record's nonce was mined and the record cleared, the wallet replaced or dropped a saved hash, or a send
+  // stopped because an earlier cleared request may have landed: the page reads the chain again.
   const earlierSendSeen = earlierSends !== seenEarlierSends.current;
   useEffect(() => {
     if (earlierSends === notedEarlierSends.current) return;
@@ -87,13 +87,13 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   }, [earlierSends]);
   useEffect(() => { if (ownRequestOpen) setEarlierStop(false); }, [ownRequestOpen]);
   useEffect(() => {
-    if (pendingSend.status !== "spent" && !earlierSendSeen || deferRefresh || !callback.current) return;
+    if (pendingSend.status !== "spent" && savedCheck !== "replaced" && !earlierSendSeen || deferRefresh || !callback.current) return;
     seenEarlierSends.current = earlierSends;
     const version = generation.current;
     void Promise.resolve(callback.current()).catch(reason => {
       if (version === generation.current) setError(reason instanceof Error ? reason.message : "Refresh the current state before another action.");
     });
-  }, [pendingSend.status, earlierSendSeen, earlierSends, deferRefresh]);
+  }, [pendingSend.status, savedCheck, earlierSendSeen, earlierSends, deferRefresh]);
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;

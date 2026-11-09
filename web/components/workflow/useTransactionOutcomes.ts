@@ -21,9 +21,10 @@ export function useTransactionOutcomes(service: RaffleService, wallet: WalletSes
 
 /**
  * "checking" while a saved hash is re-checked normally, "attention" once a person needs the manual form, and
- * "settled" once the journal no longer holds the hash, so the page reads the journal again.
+ * "settled" once the journal no longer holds the hash, so the page reads the journal again. "replaced" is settled because
+ * the chain no longer knows the hash and the account's nonces cleared its record: no receipt will come for that hash.
  */
-export type SavedHashCheck = "checking" | "attention" | "settled";
+export type SavedHashCheck = "checking" | "attention" | "settled" | "replaced";
 export type PageVisibility = { visible(): boolean; onVisible(listener: () => void): () => void };
 type CheckService = Pick<RaffleService, "pending" | "inspectOutcome">;
 type CheckOwner = Pick<TransactionOutcomes, "getSnapshot" | "resume" | "settlePending">;
@@ -54,7 +55,7 @@ function ownCheckFailed(outcomes: readonly TransactionOutcome[], hash: Hex) {
  * that record and the hash's own unfinished outcomes. A reverted receipt, a different intent, an unknown hash the nonces
  * cannot settle, a failed confirmation in this tab, or a send still pending after three minutes calls onAttention and
  * leaves the decision to the person.
- * onSettled reports that the journal no longer holds the hash.
+ * onSettled reports that the journal no longer holds the hash, with true when this check's own nonce read cleared it.
  */
 export function startSavedHashCheck({ owner, service, wallet, account, hash, onAttention, onSettled, visibility = documentVisibility, now = Date.now }: {
   owner: CheckOwner;
@@ -63,7 +64,7 @@ export function startSavedHashCheck({ owner, service, wallet, account, hash, onA
   account: Address;
   hash: Hex;
   onAttention(): void;
-  onSettled(): void;
+  onSettled(replaced?: boolean): void;
   visibility?: PageVisibility;
   now?: () => number;
 }) {
@@ -91,7 +92,7 @@ export function startSavedHashCheck({ owner, service, wallet, account, hash, onA
       } else if (inspection.kind === "unknown") {
         const settled = await owner.settlePending({ wallet, expected: pending });
         if (stopped) return;
-        if (settled.kind === "spent" || settled.kind === "dropped") { onSettled(); return; }
+        if (settled.kind === "spent" || settled.kind === "dropped") { onSettled(true); return; }
         if (++failures >= 2) attention();
       } else if (inspection.kind === "confirmed" && sameHash(inspection.hash, hash) && inspection.receipt.to) {
         const expectedIntent = transactionIntent({ to: inspection.receipt.to, data: inspection.receipt.data, value: inspection.receipt.value });
@@ -153,11 +154,12 @@ export function useSavedHashCheck(service: RaffleService, wallet: WalletSessionP
   useEffect(() => {
     if (!entry || !account || !hash) return;
     const publish = (status: SavedHashCheck) => {
-      if (entry.status === status) return;
+      // A replaced hash stays replaced: later reads only find its record gone.
+      if (entry.status === status || entry.status === "replaced") return;
       entry.status = status;
       for (const listener of entry.listeners) listener();
     };
-    if (entry.users++ === 0) entry.stop = startSavedHashCheck({ owner, service, wallet, account, hash, onAttention: () => publish("attention"), onSettled: () => publish("settled") });
+    if (entry.users++ === 0) entry.stop = startSavedHashCheck({ owner, service, wallet, account, hash, onAttention: () => publish("attention"), onSettled: replaced => publish(replaced ? "replaced" : "settled") });
     return () => {
       if (--entry.users > 0) return;
       entry.stop?.();
