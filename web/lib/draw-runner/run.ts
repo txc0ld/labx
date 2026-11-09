@@ -148,12 +148,18 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
     // Counting costs gas per lot (about 230,000 each on Sepolia after its October 2026 repricing), so a batch whose
     // quote is over the cap is halved until it fits, down to one lot, and the size that fits is kept for this raffle.
     let batch = SNAPSHOT_BATCH;
+    // The step this run last saw confirmed for this raffle, and the count position it was sent from.
+    let confirmed: { kind: RunnerAction["kind"]; lotCursor: bigint } | null = null;
     try {
       for (;;) {
         if (deadline - now() < SEND_MIN_REMAINING_MS) { stop("deadline", id); break raffles; }
-        const next = nextRunnerAction(await bounded(chain.read(id)), chain.runner);
+        const read = await bounded(chain.read(id));
+        const next = nextRunnerAction(read, chain.runner);
         if (!next) { progressed = true; break; }
         const action: RunnerAction = next.kind === "snapshot" ? { ...next, maxSteps: batch } : next;
+        // A confirmed step changes the phase or moves the count on. A read that calls for it again from the same position
+        // came from a node behind that step's block, so the raffle is left for a later run and the step is not sent twice.
+        if (confirmed !== null && confirmed.kind === action.kind && confirmed.lotCursor === read.raffle.lotCursor) { record(action, null, "skipped", null); break; }
         if (report.sends >= MAX_SENDS) { stop("send-cap", id); break raffles; }
         let prepared: PreparedAction;
         try {
@@ -173,6 +179,9 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
           record(action, null, "failed", "Refused");
           break;
         }
+        // The nonce is read before the estimate and again after it. A runner transaction mined before both fails the
+        // estimate, and one mined between them shows as a changed nonce, so the step never lands twice at the next nonce.
+        const before = await bounded(chain.nonces());
         let quote: Quote;
         try {
           quote = await bounded(chain.quote(prepared));
@@ -191,7 +200,9 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         }
         // An unaffordable step is left for a later run. Cheaper steps on later raffles still go ahead.
         if (await bounded(chain.balance()) < requiredBalance(quote)) { record(action, null, "low-funds", null); break; }
+        // The second read decides what is sent, so a transaction that reached the pool during the estimate is seen.
         const nonce = await bounded(chain.nonces());
+        if (nonce.latest !== before.latest) { stop("pending-transaction", id); break raffles; }
         if (nonce.pending !== nonce.latest) {
           // Only the runner's own last send, alone in the pool, is replaced, and only once fees have risen past it. A
           // transaction that took its place, such as an operator's cancellation, is waited for. So is a failed read.
@@ -229,6 +240,7 @@ export async function runDraw({ chain, store, now, deadline }: { chain: DrawChai
         }
         record(action, sent.hash, outcome, null);
         if (outcome === "reverted") break;
+        confirmed = { kind: action.kind, lotCursor: read.raffle.lotCursor };
       }
     } catch {
       // A read failed or ran out of time. Resume after this raffle so one unreadable raffle cannot stall the scan.

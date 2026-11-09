@@ -5,7 +5,7 @@ import { workflowMessage } from "../lib/chain/messages";
 import { previousReceiptStatus, privateRecords } from "../lib/private-records";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { agreementMessage, recordAgreement, type AgreementRequest } from "../lib/agreement-record";
-import { deliverPurchaseReceipt, receiptAuthorizationMessage, resendSender, type MailPayload, type ReceiptRequest } from "../lib/receipt-delivery";
+import { deliverPurchaseReceipt, receiptAuthorizationMessage, receiptStatus, resendSender, type MailPayload, type ReceiptRequest } from "../lib/receipt-delivery";
 import { purchaseEvent, verifiedPurchase, type PurchaseReader } from "../lib/purchase-proof";
 import type { RequestContext } from "../lib/request-auth";
 
@@ -186,6 +186,22 @@ describe("verified purchase receipts", () => {
     const later = now + 24 * 60 * 60 * 1000;
     await expect(deliverPurchaseReceipt(store, await receipt({}, context, later), context, reader(), send, from, transport, later)).rejects.toThrow(/reconciliation/);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves a request that started just before the overlapping request that reserved the receipt", async () => {
+    const store = new Store(); const input = await receipt();
+    const send = vi.fn(async (_body: MailPayload, _key: string) => true);
+    // Two overlapping requests for one receipt. The one that started 40 ms later reserved it first, and its send was not acknowledged.
+    expect(await deliverPurchaseReceipt(store, input, context, reader(), async () => false, from, transport, now + 40)).toMatchObject({ delivered: false });
+    expect((await receiptStatus(store, context, { transactionHash, logIndex: 3 }, account.address, transport, now)).sent).toEqual([{ to: "buyer@example.com", status: "pending" }]);
+    expect(await deliverPurchaseReceipt(store, input, context, reader(), send, from, transport, now)).toEqual({ delivered: true, repeated: false });
+    expect(send).toHaveBeenCalledOnce();
+    // A reservation dated more than an hour ahead still needs reconciliation.
+    const ahead = new Store();
+    await deliverPurchaseReceipt(ahead, await receipt({}, context, now + 3_600_001), context, reader(), async () => false, from, transport, now + 3_600_001);
+    await expect(deliverPurchaseReceipt(ahead, input, context, reader(), send, from, transport, now)).rejects.toThrow(/reconciliation/);
+    expect((await receiptStatus(ahead, context, { transactionHash, logIndex: 3 }, account.address, transport, now)).sent).toEqual([{ to: "buyer@example.com", status: "unconfirmed" }]);
+    expect(send).toHaveBeenCalledOnce();
   });
 
   it("does not send if reservation fails and safely retries an uncertain delivered-marker write", async () => {

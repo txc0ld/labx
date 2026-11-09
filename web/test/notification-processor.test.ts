@@ -194,6 +194,34 @@ describe("notification processor", () => {
     expect(await backing.get(`${laterKey}:accepted`)).toBe("accepted");
   });
 
+  it("delivers once and records acceptance when two overlapping runs' clocks disagree by a fraction of a second", async () => {
+    const store = new MemoryStore();
+    const input = source([event(1)]);
+    const key = reservationKey(event(1), input.deployment);
+    await processNotifications({ store, source: input, sender: async () => true, ...config, now: 1_000 });
+    // The provider keeps one message per idempotency key, as Resend does for 24 hours.
+    const mailed = new Set<string>();
+    let reached!: () => void, acknowledge!: (accepted: boolean) => void;
+    const inFlight = new Promise<void>(resolve => { reached = resolve; });
+    const answer = new Promise<boolean>(resolve => { acknowledge = resolve; });
+    // The first run's clock is 250 ms ahead. It reserves the event, and its provider request is still in flight.
+    const ahead = processNotifications({
+      store, source: input, ...config, now: 5_250, clock: () => 5_250,
+      sender: async (_payload, sendKey) => { mailed.add(sendKey); reached(); return answer; }
+    });
+    await inFlight;
+    expect(JSON.parse((await store.get(key))!).createdAt).toBe(5_250);
+    // The second run starts while that request is in flight and finishes first.
+    const behind = await processNotifications({ store, source: input, ...config, now: 5_000, clock: () => 5_000, sender: async (_payload, sendKey) => { mailed.add(sendKey); return true; } });
+    acknowledge(true);
+    const first = await ahead;
+    expect([...mailed]).toEqual([key]);
+    expect(await store.get(`${key}:reconciliation`)).toBeNull();
+    expect(await store.get(`${key}:accepted`)).toBe("accepted");
+    expect(behind).toMatchObject({ status: "ok", accepted: 1, reconciliationRequired: 0 });
+    expect(first).toMatchObject({ status: "ok", accepted: 1, reconciliationRequired: 0 });
+  });
+
   it("treats unproved future progress hints as replay hints", async () => {
     const store = new MemoryStore();
     const input = source([event(1), event(2)]);

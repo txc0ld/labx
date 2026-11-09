@@ -91,6 +91,53 @@ describe("admin notification delivery", () => {
     expect(sender).not.toHaveBeenCalled();
   });
 
+  it("retries a reservation written a moment ago by a server whose clock runs ahead", async () => {
+    const store = new MemoryStore();
+    // An overlapping run on a server whose clock is 250 ms ahead reserved the event, and its send was not acknowledged.
+    await expect(deliverNotification({ ...base, store, sender: async () => false, clock: () => baseTime + 250 })).resolves.toMatchObject({ status: "pending" });
+    const sender = vi.fn(async () => true);
+    const result = await deliverNotification({ ...base, store, sender });
+    expect(result).toMatchObject({ status: "accepted", repeated: false });
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(await store.get(`${result.key}:reconciliation`)).toBeNull();
+  });
+
+  it("records reconciliation for a reservation dated more than an hour ahead of this server's clock", async () => {
+    const store = new MemoryStore();
+    await deliverNotification({ ...base, store, sender: async () => false, clock: () => baseTime + 60 * 60 * 1_000 + 1 });
+    const sender = vi.fn(async () => true);
+    await expect(deliverNotification({ ...base, store, sender })).resolves.toMatchObject({ status: "reconciliation-required", reason: "retry-window-ended" });
+    expect(sender).not.toHaveBeenCalled();
+    const onTheHour = new MemoryStore();
+    await deliverNotification({ ...base, store: onTheHour, sender: async () => false, clock: () => baseTime + 60 * 60 * 1_000 });
+    await expect(deliverNotification({ ...base, store: onTheHour, sender })).resolves.toMatchObject({ status: "accepted" });
+  });
+
+  it("lets acceptance win when an overlapping run records reconciliation between the provider's answer and the acceptance write", async () => {
+    const memory = new MemoryStore();
+    let overlapped = false;
+    const store = {
+      get: (key: string) => memory.get(key),
+      set: (key: string, value: string) => memory.set(key, value),
+      async setIfAbsent(entries: Record<string, string>) {
+        // A run that holds a rotated provider key finishes just before the first run writes its acceptance.
+        if (!overlapped && Object.keys(entries).some(key => key.endsWith(":accepted"))) {
+          overlapped = true;
+          await expect(deliverNotification({ ...base, store: memory, sender: async () => true, transportIdentity: "b".repeat(64) }))
+            .resolves.toMatchObject({ status: "reconciliation-required", reason: "provider-identity-changed" });
+        }
+        return memory.setIfAbsent(entries);
+      }
+    };
+    const sender = vi.fn(async () => true);
+    const first = await deliverNotification({ ...base, store, sender });
+    expect(first).toMatchObject({ status: "accepted", repeated: false });
+    expect(await memory.get(`${first.key}:accepted`)).toBe("accepted");
+    expect(await memory.get(`${first.key}:reconciliation`)).not.toBeNull();
+    await expect(deliverNotification({ ...base, store: memory, sender, transportIdentity: "b".repeat(64) })).resolves.toMatchObject({ status: "accepted", repeated: true });
+    expect(sender).toHaveBeenCalledTimes(1);
+  });
+
   it("records payload configuration drift but preserves historical acceptance", async () => {
     const pendingStore = new MemoryStore();
     await deliverNotification({ ...base, store: pendingStore, sender: async () => false });

@@ -979,6 +979,28 @@ describe("draw runner cron handler", () => {
     expect(outcomes(body)).toEqual(["1:close:reverted:null", "2:close:reverted:null"]);
   });
 
+  it.each([
+    ["close", () => open()],
+    ["snapshot", () => closed(250n)]
+  ] as const)("does not send %s again when the read after its confirmed send comes from a node one block behind", async (step, raffle) => {
+    const store = new MemoryStore();
+    const { chain, sent } = fakeChain({ 1: raffle(), 2: drawn() });
+    const read = chain.read, send = chain.send;
+    let before: RaffleSnapshot | null = null, lag = 0;
+    // The first read after the first send returns the state from before that send, as a load-balanced node can.
+    chain.read = async id => { if (lag === 1 && before) { lag = 2; return before; } return before = await read(id); };
+    chain.send = async (...args) => { const result = await send(...args); if (lag === 0) lag = 1; return result; };
+    const { body } = await call(chain, store);
+    expect(sent.map(item => `${item.id}:${item.action}:${item.nonce}`)).toEqual([`1:${step}:0`, "2:settle:1"]);
+    expect(outcomes(body)).toEqual([`1:${step}:succeeded:null`, `1:${step}:skipped:null`, "2:settle:succeeded:null"]);
+    expect(body).toMatchObject({ ok: true, status: "complete", sends: 2 });
+    // The next run reads the raffle afresh and carries on from the step that landed.
+    const later = await call(chain, store, () => START + LEASE_BUCKET_MS);
+    expect(later.body).toMatchObject({ ok: true, status: "complete" });
+    expect(sent.filter(item => item.action === step)).toHaveLength(step === "close" ? 1 : 3);
+    expect(sent.at(-1)).toMatchObject({ id: "1", action: "requestRandomness" });
+  });
+
   it("does not count a send the node refused, and resumes after that raffle", async () => {
     const { chain } = fakeChain({ 1: open(), 2: open(), 3: open() }, { send: action => action.id === 2n ? { kind: "refused", error: "Rpc" } : undefined });
     const { body } = await call(chain);
@@ -1324,10 +1346,16 @@ describe("draw runner stuck transaction replacement", () => {
   function stuckChain(store: Store) {
     const raffle = open();
     const { chain } = fakeChain({ 1: raffle });
-    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, nonceReads: 0, pendingHash: null as Hex | null };
+    const state = { latest: 0, pending: 0, mine: false, quote: cheap, mineBeforeNextSend: false, mineAfterNextQuote: false, cancelAfterNextQuote: false, acceptNextSendSilently: false, nonceReads: 0, pendingHash: null as Hex | null };
     const sends: string[] = [];
     chain.nonces = async () => { state.nonceReads++; return { latest: state.latest, pending: state.pending }; };
-    chain.quote = async () => state.quote;
+    chain.quote = async () => {
+      // The estimate ran against the block before the pending close was mined.
+      if (state.mineAfterNextQuote) { state.mineAfterNextQuote = false; state.latest = state.pending; state.pendingHash = null; advance(raffle, "close"); }
+      // The operator's cancellation at the runner's nonce reaches the pool while the estimate runs.
+      if (state.cancelAfterNextQuote) { state.cancelAfterNextQuote = false; state.pending = state.latest + 1; state.pendingHash = pad("0xca", { size: 32 }); }
+      return state.quote;
+    };
     chain.pendingAt = async (hash, nonce) => hash === state.pendingHash && nonce === state.latest && state.pending === state.latest + 1;
     chain.send = async (prepared, nonce, quote) => {
       const action = prepared.action as RunnerAction;
@@ -1335,6 +1363,8 @@ describe("draw runner stuck transaction replacement", () => {
       sends.push(`${action.kind}:${nonce}:${quote.maxFeePerGas}:${quote.maxPriorityFeePerGas}`);
       const hash = pad(toHex(sends.length), { size: 32 });
       if (nonce < state.latest) return { kind: "unknown", hash, error: "NonceTooLow" };
+      // The node takes the broadcast into its pool, and its answer is lost in transit.
+      if (state.acceptNextSendSilently) { state.acceptNextSendSilently = false; state.pending = nonce + 1; state.pendingHash = hash; return { kind: "unknown", hash, error: "Timeout" }; }
       if (!state.mine) { state.pending = nonce + 1; state.pendingHash = hash; return { kind: "sent", hash }; }
       state.latest = state.pending = nonce + 1;
       state.pendingHash = null;
@@ -1406,6 +1436,21 @@ describe("draw runner stuck transaction replacement", () => {
     expect(sends).toHaveLength(1);
   });
 
+  it("waits for a pending transaction whose record was never written, as after a kill between the broadcast and the store write", async () => {
+    const memory = new MemoryStore();
+    const store: Store = {
+      get: key => memory.get(key),
+      async set(key, value) { if (key === "draw-runner:last-send") throw new Error("store unavailable"); return memory.set(key, value); },
+      setIfAbsent: entries => memory.setIfAbsent(entries)
+    };
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    expect(await memory.get("draw-runner:last-send")).toBeNull();
+    state.quote = fees("20");
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0, nextCursor: "1" });
+    expect(sends).toHaveLength(1);
+  });
+
   it("stops at the 50 gwei fee cap instead of replacing above it", async () => {
     const store = new MemoryStore();
     const { state, sends, run } = stuckChain(store);
@@ -1430,6 +1475,48 @@ describe("draw runner stuck transaction replacement", () => {
     state.mine = true;
     expect(await run(LAST)).toMatchObject({ ok: true, status: "complete", sends: 2 });
     expect(sends.map(item => item.split(":").slice(0, 2).join(":"))).toEqual(["close:0", "close:0", "snapshot:1", "requestRandomness:2"]);
+  });
+
+  it.each([["have not risen", "2"], ["have risen", "20"]])("does not send the step again at the next nonce when its pending transaction is mined right after the estimate and fees %s", async (_, maxFee) => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    state.quote = fees(maxFee);
+    state.mineAfterNextQuote = true;
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0, nextCursor: "1" });
+    expect(sends).toHaveLength(1);
+    state.mine = true;
+    expect(await run(LAST)).toMatchObject({ ok: true, status: "complete", sends: 2 });
+    expect(sends.map(item => item.split(":").slice(0, 2).join(":"))).toEqual(["close:0", "snapshot:1", "requestRandomness:2"]);
+  });
+
+  it("replaces a replacement the node accepted without answering, bumping from that replacement's fees", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    await run(START);
+    state.quote = fees("20");
+    state.acceptNextSendSilently = true;
+    expect(await run(LATER)).toMatchObject({ ok: false, status: "pending-transaction", sends: 1 });
+    // The pool now holds the replacement, and the record names it.
+    expect(await record(store)).toEqual({ runner, nonce: 0, hash: pad(toHex(2), { size: 32 }), maxFeePerGas: parseGwei("20").toString(), maxPriorityFeePerGas: parseGwei("1.1").toString() });
+
+    state.quote = fees("25");
+    state.mine = true;
+    expect(await run(LAST)).toMatchObject({ ok: true, status: "complete", sends: 3 });
+    expect(sends.slice(0, 3)).toEqual([
+      `close:0:${parseGwei("2")}:${parseGwei("1")}`,
+      `close:0:${parseGwei("20")}:${parseGwei("1.1")}`,
+      `close:0:${parseGwei("25")}:${parseGwei("1.21")}`
+    ]);
+  });
+
+  it("sends nothing when another transaction takes the runner's nonce in the pool while the step is being estimated", async () => {
+    const store = new MemoryStore();
+    const { state, sends, run } = stuckChain(store);
+    state.cancelAfterNextQuote = true;
+    expect(await run(START)).toMatchObject({ ok: false, status: "pending-transaction", sends: 0, nextCursor: "1" });
+    expect(sends).toEqual([]);
+    expect(state.pendingHash).toBe(pad("0xca", { size: 32 }));
   });
 
   it("sends no replacement while another run holds the lease", async () => {
