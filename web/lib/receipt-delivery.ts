@@ -10,6 +10,8 @@ export type MailPayload = { from: string; to: string; subject: string; html: str
 type Delivery = { version: 2; identity: string; address: string; to: string; createdAt: number; transportIdentity: string; payload: MailPayload };
 export type MailSender = (payload: MailPayload, idempotencyKey: string) => Promise<boolean>;
 const RETRY_WINDOW = 23 * 60 * 60 * 1000; // Inside the provider's documented 24-hour idempotency retention.
+/** A reservation dated at most this far ahead was written by an overlapping request that started later, or by a server whose clock runs ahead. It is the hour the retry window leaves before that retention ends. */
+const CLOCK_SKEW = 60 * 60 * 1000;
 /** The first address and two corrections. */
 const MAX_RECIPIENTS = 3;
 
@@ -52,7 +54,7 @@ export async function deliverPurchaseReceipt(store: Store, input: ReceiptRequest
   if (sent === "delivered") return { delivered: true, repeated: true };
   if (sent !== null) throw new Error("Receipt delivery record is invalid.");
   if (delivery.transportIdentity !== transportIdentity) throw new Error("Receipt delivery needs reconciliation after provider credentials changed.");
-  if (now < delivery.createdAt || now - delivery.createdAt >= RETRY_WINDOW) throw new Error("Receipt delivery needs reconciliation; the safe retry window has ended.");
+  if (delivery.createdAt - now > CLOCK_SKEW || now - delivery.createdAt >= RETRY_WINDOW) throw new Error("Receipt delivery needs reconciliation; the safe retry window has ended.");
   // Identical persisted payload and event key make overlapping requests/uncertain retries idempotent.
   const delivered = await sender(delivery.payload, slot);
   if (!delivered) return { delivered: false, reason: "Receipt delivery was not acknowledged; retry the same purchase and email." };
@@ -79,7 +81,7 @@ export async function receiptStatus(store: Store, context: RequestContext, purch
     if (!raw) break;
     const record: unknown = JSON.parse(raw);
     if (!record || typeof record !== "object" || !("address" in record) || typeof record.address !== "string" || !sameAddress(record.address, address) || !("identity" in record) || record.identity !== identity || !("to" in record) || typeof record.to !== "string") break;
-    const retryable = "transportIdentity" in record && record.transportIdentity === transportIdentity && "createdAt" in record && typeof record.createdAt === "number" && now >= record.createdAt && now - record.createdAt < RETRY_WINDOW;
+    const retryable = "transportIdentity" in record && record.transportIdentity === transportIdentity && "createdAt" in record && typeof record.createdAt === "number" && record.createdAt - now <= CLOCK_SKEW && now - record.createdAt < RETRY_WINDOW;
     sent.push({ to: record.to, status: await store.get(`${slot}:sent`) === "delivered" ? "delivered" : retryable ? "pending" : "unconfirmed" });
   }
   return { sent, full: sent.length === MAX_RECIPIENTS };

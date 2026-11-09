@@ -8,6 +8,8 @@ export type { NotificationEvent } from "./events";
 
 export const ADMIN_NOTIFICATION_RECIPIENT = "team@fantomlabs.io";
 const RETRY_WINDOW_MS = 23 * 60 * 60 * 1_000;
+/** A reservation dated at most this far ahead was written by a server whose clock runs ahead, or by an overlapping run. It is the hour the retry window leaves before the provider's 24-hour retention ends. */
+const CLOCK_SKEW_MS = 60 * 60 * 1_000;
 
 type DeliveryReservation = {
   version: 1;
@@ -261,7 +263,7 @@ function reconciliationReason(
   now: number
 ): ReconciliationReason | null {
   if (reservation.transportIdentity !== transportIdentity) return "provider-identity-changed";
-  if (now < reservation.createdAt || now - reservation.createdAt >= RETRY_WINDOW_MS) return "retry-window-ended";
+  if (reservation.createdAt - now > CLOCK_SKEW_MS || now - reservation.createdAt >= RETRY_WINDOW_MS) return "retry-window-ended";
   return null;
 }
 
