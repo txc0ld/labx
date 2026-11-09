@@ -217,9 +217,10 @@ export function createRaffleService(client: PublicClient, manifest: DeploymentMa
               if (!await quiet(current)) return;
               const latest = journal.read(account);
               if (!latest || latest.id !== current.id || latest.hash !== null) return;
-              onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
-              // A bare code does not prove the wallet sent nothing, so the next send first checks this nonce.
+              // A bare code does not prove the wallet sent nothing, so the next send first checks this nonce, and the caller keeps
+              // its own checkpoint of this send for the chain to settle.
               if (evidence === "code") journal.writeCleared(account, { nonce: current.nonce, startedBlock: current.startedBlock });
+              else onNotDispatched?.({ id: current.id, intentHash: current.intentHash, nonce: current.nonce, startedBlock: current.startedBlock });
               journal.remove(account);
               notSent = true;
             });
