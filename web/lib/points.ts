@@ -10,6 +10,9 @@ export type Store = {
 
 export type PointAccount = { balance: number; lastDay: string };
 
+/** The bot token or the wallet signature did not match. */
+export class CheckInRefusal extends Error {}
+
 export function utcDay(now = Date.now()): string {
   return new Date(now).toISOString().slice(0, 10);
 }
@@ -38,15 +41,16 @@ export async function checkIn(
   args: { address: Address; signature: Hex; botToken: string | null; expectedToken: string | undefined; now?: number }
 ): Promise<PointAccount & { awarded: number }> {
   if (!tokensMatch(args.botToken, args.expectedToken)) {
-    throw new Error("Bot gate refused the check-in.");
+    throw new CheckInRefusal("Bot gate refused the check-in.");
   }
   const day = utcDay(args.now ?? Date.now());
+  // A signature the verifier cannot parse is refused like one that does not match.
   const ok = await verifyMessage({
     address: args.address,
     message: checkInMessage(args.address, day),
     signature: args.signature
-  });
-  if (!ok) throw new Error("Check-in signature does not match this wallet.");
+  }).catch(() => false);
+  if (!ok) throw new CheckInRefusal("Check-in signature does not match this wallet.");
   const current = await readPoints(store, args.address);
   if (current.lastDay === day) return { ...current, awarded: 0 };
   const next = { balance: current.balance + 10, lastDay: day };

@@ -20,7 +20,7 @@ export function receiptBody(input: Receipt): { subject: string; html: string; te
     "This note is a membership receipt."
   ].join("\n");
   const html = `<p>Your <strong>${escapeHtml(input.pack)}</strong> membership pack for <strong>${escapeHtml(input.piece)}</strong> is recorded.</p>
-<p>${input.entries} bonus entries. Pack price ${input.priceUsdc} USDC. Nonrefundable processing fee ${input.feeUsdc} USDC.</p>
+<p>${escapeHtml(String(input.entries))} bonus entries. Pack price ${escapeHtml(String(input.priceUsdc))} USDC. Nonrefundable processing fee ${escapeHtml(String(input.feeUsdc))} USDC.</p>
 <p>If this raffle is cancelled, only the pack price is refundable.</p>
 <p>Bonus entries expire 12 months after they are recorded.</p>`;
   return { subject, html, text };
