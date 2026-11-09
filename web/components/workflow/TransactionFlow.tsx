@@ -263,11 +263,12 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }, [ownSendSettled, disabled]);
 
   // This flow's own slow send left the journal without a check here seeing its receipt. Settled: another tab confirmed it,
-  // so the Check again check finds its receipt. Replaced: the wallet replaced or dropped it, and the page reads the chain again.
+  // so the Check again check finds its receipt. Replaced: the wallet replaced or dropped it, so no receipt will come. The
+  // page's recovery panel says so and reads the chain again, which may remount this control, so the button returns here.
   useEffect(() => {
     if (state.kind !== "pending" || disabled) return;
     if (savedCheck === "settled") void checkConfirmation(state.submitted);
-    else if (savedCheck === "replaced") setCurrent(context.current, { kind: "error", plain: true, message: "Your wallet replaced or dropped this transaction. Check the page before trying again." });
+    else if (savedCheck === "replaced") setCurrent(context.current, { kind: "idle" });
     // checkConfirmation claims the scope before its first await, as above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.kind, savedCheck, disabled]);

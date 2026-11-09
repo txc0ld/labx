@@ -72,6 +72,7 @@ run("client state machine sequences", () => {
   const buy = (page: Page) => page.getByRole("button", { name: `Buy for ${formatUsdcAmount(TOTAL)} USDC`, exact: true });
   const youreIn = (page: Page) => page.locator(".purchase-receipt", { hasText: "You’re in" });
   const pricePaid = (page: Page) => page.getByText("Membership price paid", { exact: true });
+  const replacedLine = (page: Page) => page.getByText("Your wallet replaced or dropped your last transaction. Check the page before trying again.", { exact: true });
 
   /** Opens the raffle as `account`, sends its purchase and holds it unmined until the checkout's first watch has ended. */
   async function slowPurchase(account: Address) {
@@ -105,12 +106,13 @@ run("client state machine sequences", () => {
       await chain.mine();
       await chain.mine();
       await expect.poll(() => stillConfirming(page).count(), { timeout: 60_000 }).toBe(0);
-      await page.getByText("Your wallet replaced or dropped this transaction. Check the page before trying again.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-      await page.getByRole("button", { name: "Try again", exact: true }).click();
-      await expect.poll(() => buy(page).isEnabled().catch(() => false), { timeout: 20_000 }).toBe(true);
+      // The page re-reads the chain, which remounts the checkout, so the line stays above the page until the next send.
+      await expect.poll(() => buy(page).isEnabled().catch(() => false), { timeout: 30_000 }).toBe(true);
+      await replacedLine(page).waitFor({ state: "visible", timeout: 10_000 });
       await buy(page).click();
       await youreIn(page).waitFor({ state: "visible", timeout: 30_000 });
-      expect((await wallet.requests()).map(request => request.data?.slice(0, 10))).toHaveLength(2);
+      expect(await replacedLine(page).count()).toBe(0);
+      expect(await wallet.requests()).toHaveLength(2);
     } finally {
       await release();
     }
@@ -128,6 +130,7 @@ run("client state machine sequences", () => {
       await chain.mine();
       await pricePaid(page).waitFor({ state: "visible", timeout: 60_000 });
       await expect.poll(() => stillConfirming(page).count(), { timeout: 20_000 }).toBe(0);
+      await replacedLine(page).waitFor({ state: "visible", timeout: 10_000 });
       expect(await wallet.requests()).toHaveLength(1);
       expect(await chain.client.readContract({ address: chain.raffle.address, abi: raffleAbi, functionName: "lotCount", args: [id] })).toBeGreaterThan(0n);
     } finally {
