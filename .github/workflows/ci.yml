@@ -23,6 +23,8 @@ jobs:
       # EIP-170: forge exits non-zero when any runtime exceeds 24,576 bytes.
       - run: forge build --sizes
       - run: forge test
+      # The mainnet deploy driver against a fake cast, forge and node; no network.
+      - run: test/mainnet-deploy/run.sh
 
   web:
     runs-on: ubuntu-latest
