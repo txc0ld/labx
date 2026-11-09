@@ -24,6 +24,7 @@ type State = {
 };
 
 const BenchContext = createContext<Bench | null>(null);
+const MORE_RAFFLES_FAILED = "More raffles could not be loaded. Refresh and retry.";
 
 export type CatalogState =
   | { kind: "loading" }
@@ -122,10 +123,12 @@ export function BenchProvider({ children }: { children: ReactNode }) {
   const loadMoreCatalog = useCallback(async () => {
     if (browser.kind !== "configured" || catalog.kind !== "ready" || catalog.nextCursor === null || loadingPage.current) return;
     loadingPage.current = true; const request = generation.current;
+    // A new attempt replaces the last one's failure.
+    setState(current => current.banner?.text === MORE_RAFFLES_FAILED ? { ...current, banner: undefined } : current);
     try {
       const page = await browser.service.listRaffles({ cursor: catalog.nextCursor, block: catalog.block });
       if (request === generation.current) setCatalog({ kind: "ready", ...page, items: [...catalog.items, ...page.items] });
-    } catch { if (request === generation.current) setState(current => ({ ...current, banner: { tone: "error", text: "More raffles could not be loaded. Refresh and retry." } })); }
+    } catch { if (request === generation.current) setState(current => ({ ...current, banner: { tone: "error", text: MORE_RAFFLES_FAILED } })); }
     finally { loadingPage.current = false; }
   }, [browser, catalog]);
   useEffect(() => { setBrowser(configuredBrowserService()); }, []);

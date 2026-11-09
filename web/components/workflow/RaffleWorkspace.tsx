@@ -94,6 +94,32 @@ function sameWorkspace(left: WorkspaceScope, right: WorkspaceScope) {
     : left.kind === "unavailable" && right.kind === "unavailable" && left.reason === right.reason;
 }
 
+/**
+ * Repeats a read until its block is at least `minBlock`. A load-balanced RPC can answer "latest" from a node behind a
+ * transaction this page has just confirmed, which would show the state from before it.
+ */
+export async function readFromBlock<T extends { block: { number: bigint } }>(read: () => Promise<T>, minBlock: bigint, wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms)), attempts = 5): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    const value = await read();
+    if (value.block.number >= minBlock) return value;
+    if (attempt >= attempts) throw new Error("The network hasn’t caught up yet. Try again in a moment.");
+    await wait(2_000);
+  }
+}
+
+/**
+ * Whether a background read is at least as new as every one before it, recording its block. A newer read that changes
+ * nothing visible is not stored, so the shown snapshot's block alone would let an older read through after it.
+ */
+export function newestRead(seen: { current: bigint }, block: bigint): boolean {
+  if (block < seen.current) return false;
+  seen.current = block;
+  return true;
+}
+
+/** Re-reads the raffle. After a confirmed transaction it takes the confirmation, so the read is never older than its block. */
+type Reload = (confirmation?: Pick<Extract<Confirmation, { kind: "confirmed" }>, "blockNumber">) => Promise<void>;
+
 export function RaffleWorkspace({ browser, id, termsHash, availableActions, saveCommitment, recoverCommitment, mode = "public" }: {
   browser: BrowserService;
   id: bigint;
@@ -105,15 +131,20 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
 }) {
   const [state, setState] = useState<WorkspaceState>({ kind: "loading" });
   const request = useRef(0);
+  // The newest block of a transaction this page has confirmed. Every later read waits for it, including Refresh and Try again.
+  const confirmedBlock = useRef(0n);
+  // The newest block a background re-read has come from.
+  const polledBlock = useRef(0n);
   const currentScope = useRef(workspaceScope(browser, id));
   currentScope.current = workspaceScope(browser, id);
   const scopedState = state.kind !== "loading" && sameWorkspace(state.scope, currentScope.current) ? state : { kind: "loading" } satisfies WorkspaceState;
   // LABx's finish step for a confirmed draw is not late until 30 minutes after the draw confirmation's block time.
   const revealedAt = useRevealTime(browser.kind === "configured" ? browser.service : null, scopedState.kind === "ready" ? scopedState.snapshot : null, mode === "seller" && drawRunnerEnabled());
 
-  async function refresh() {
+  async function refresh(minBlock?: bigint) {
     const observedScope = workspaceScope(browser, id);
     if (!sameWorkspace(observedScope, currentScope.current)) return;
+    if (minBlock !== undefined && minBlock > confirmedBlock.current) confirmedBlock.current = minBlock;
     if (browser.kind === "unavailable") {
       setState({ kind: "unavailable", message: browser.reason, scope: observedScope });
       return;
@@ -132,7 +163,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
           : { kind: deployment.kind, message: deployment.reason, scope });
         return;
       }
-      const snapshot = await browser.service.readRaffle({ id });
+      const snapshot = await readFromBlock(() => browser.service.readRaffle({ id }), confirmedBlock.current);
       if (version === request.current && sameWorkspace(scope, currentScope.current)) setState({ kind: "ready", snapshot, scope, refresh: { kind: "idle" } });
     } catch (error) {
       if (version !== request.current || !sameWorkspace(scope, currentScope.current)) return;
@@ -143,7 +174,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
     }
   }
 
-  /** Read-only background re-read. It never pauses controls, never claims a refresh version, applies only a changed view while canApply() holds, and leaves errors to Refresh. */
+  /** Read-only background re-read. It never pauses controls, never claims a refresh version, applies only a changed view from a block at or after the shown one while canApply() holds, and leaves errors to Refresh. */
   async function poll(canApply: () => boolean) {
     if (browser.kind !== "configured") return;
     const scope: Extract<WorkspaceScope, { kind: "configured" }> = { kind: "configured", service: browser.service, wallet: browser.wallet, id };
@@ -153,8 +184,8 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
       const deployment = await browser.service.attest();
       if (deployment.kind !== "verified") return;
       const snapshot = await browser.service.readRaffle({ id });
-      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !canApply()) return;
-      setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && viewKey(current.snapshot, revealedAt) !== viewKey(snapshot, revealedAt)
+      if (version !== request.current || !sameWorkspace(scope, currentScope.current) || !newestRead(polledBlock, snapshot.block.number) || !canApply()) return;
+      setState((current) => current.kind === "ready" && current.refresh.kind === "idle" && sameWorkspace(current.scope, scope) && snapshot.block.number >= current.snapshot.block.number && viewKey(current.snapshot, revealedAt) !== viewKey(snapshot, revealedAt)
         ? { ...current, snapshot }
         : current);
     } catch { /* The visible state stays as it was; the next tick or Refresh tries again. */ }
@@ -162,7 +193,7 @@ export function RaffleWorkspace({ browser, id, termsHash, availableActions, save
 
   useEffect(() => {
     void refresh();
-    return () => { request.current += 1; };
+    return () => { request.current += 1; confirmedBlock.current = 0n; polledBlock.current = 0n; };
     // A new runtime or route ID invalidates the previous authoritative read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browser.kind, browser.wallet, browser.kind === "configured" ? browser.service : browser.reason, id]);
@@ -192,7 +223,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   availableActions: AvailabilityReader;
   saveCommitment?: SaveCommitment;
   recoverCommitment?: RecoverCommitment;
-  refresh: () => Promise<void>;
+  refresh: (minBlock?: bigint) => Promise<void>;
   poll: (canApply: () => boolean) => Promise<void>;
   refreshState: Extract<WorkspaceState, { kind: "ready" }>["refresh"];
   mode: RaffleWorkspaceMode;
@@ -238,7 +269,7 @@ function LoadedRaffle({ browser, snapshot, revealedAt, termsHash, availableActio
   const r = snapshot.raffle, now = snapshot.block.timestamp;
   const phase = Number(r.phase);
   const seller = walletSnapshot.kind === "connected" && sellerOwnsRaffle(walletSnapshot.account, snapshot);
-  const reload = async () => { await refresh(); };
+  const reload: Reload = async (confirmation) => { await refresh(confirmation?.blockNumber); };
   // A chained seller step whose fresh check failed re-reads the raffle, so a raffle that moved on shows its next step and an
   // unchanged one keeps the error and its Try again.
   const recheck = () => poll(() => true);
@@ -499,7 +530,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
   termsHash: Hex;
-  onConfirmed: () => Promise<void>;
+  onConfirmed: Reload;
   /** The last read of the raffle or of this wallet's account failed. */
   reloadFailed: boolean;
   writesEnabled: boolean;
@@ -561,7 +592,8 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
     }
     setQuoteState("loading");
     setQuoteError("");
-    void browser.service.quoteMembership({ id: snapshot.id, packId, quantity }).then((next) => {
+    // A quote is never older than the raffle shown, so a purchase waiting on its approval is not left waiting on an older quote.
+    void readFromBlock(() => browser.service.quoteMembership({ id: snapshot.id, packId, quantity }), snapshot.block.number).then((next) => {
       if (version === quoteRequest.current) { setQuote(next); setQuoteState("idle"); }
     }).catch((error: unknown) => {
       if (version === quoteRequest.current) { setQuoteError(error instanceof Error ? error.message : "A current quote is unavailable."); setQuoteState("error"); }
@@ -623,7 +655,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const approved = async (confirmation: Extract<Confirmation, { kind: "confirmed" }>) => {
     if (order) setBuyAfterApproval({ order, revision: buyerWallet.revision, block: confirmation.blockNumber });
     if (buyerAccount) owner.claimRefresh(approvalRefreshKey(buyerAccount, buyerWallet.revision, confirmation.hash));
-    await onConfirmed();
+    await onConfirmed(confirmation);
   };
   // This page's own approval that confirmed after this wallet's account was read. When the pack, quantity or payment changed
   // while it was in the wallet or confirming, its flow unmounted before it could re-read the account, so the page re-reads it
@@ -633,7 +665,7 @@ export function BuyerActions({ browser, snapshot, account, availability, termsHa
   const approvalAfterReadHash = approvalAfterRead?.kind === "terminal" ? approvalAfterRead.confirmation.hash : null;
   useEffect(() => {
     if (!approvalAfterReadHash || !buyerAccount || !owner.claimRefresh(approvalRefreshKey(buyerAccount, buyerWallet.revision, approvalAfterReadHash))) return;
-    void onConfirmed();
+    void onConfirmed(approvalAfterRead?.kind === "terminal" ? approvalAfterRead.confirmation.receipt : undefined);
     // onConfirmed is a fresh function on each render; the claimed key makes this run once per approval.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approvalAfterReadHash, buyerAccount, buyerWallet.revision, owner]);
@@ -749,7 +781,7 @@ function SellerActions({ browser, snapshot, revealedAt, account, availability, r
   account: AccountRaffleState | null;
   availability: readonly ActionAvailability[];
   recoverCommitment?: RecoverCommitment;
-  onConfirmed: () => Promise<void>;
+  onConfirmed: Reload;
   onUnavailable: () => Promise<void>;
   /** The last read of the raffle or of this wallet's account failed. */
   reloadFailed: boolean;
@@ -799,7 +831,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   snapshot: RaffleSnapshot;
   availability: SellerActionAvailability;
   recoverCommitment?: RecoverCommitment;
-  onConfirmed: () => Promise<void>;
+  onConfirmed: Reload;
   /** Re-reads the raffle when a step sent on its own finds it can no longer run. */
   onUnavailable: () => Promise<void>;
   /** Called with the block of a cancellation confirmed straight from its own click, when Reclaim NFT should follow. */
@@ -848,7 +880,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
   // Reclaim NFT follows only a cancellation whose own click confirmed it. A rejection, revert or later check ends the sequence.
   const reclaimNext = availability.kind === "cancel" && cancelReclaimsPrize(snapshot) ? onCancelled : undefined;
   const confirmed = reclaimNext
-    ? async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, via: "wallet" | "check") => { if (via === "wallet") reclaimNext(confirmation.blockNumber); await onConfirmed(); }
+    ? async (confirmation: Extract<Confirmation, { kind: "confirmed" }>, _submitted: SubmittedAction, via: "wallet" | "check") => { if (via === "wallet") reclaimNext(confirmation.blockNumber); await onConfirmed(confirmation); }
     : onConfirmed;
   return <section className="workflow-next stack"><div><h2>{label}</h2><p>{availability.reason || description || sellerStepText(snapshot, availability.kind)}</p>{fact ? <p className="workflow-fact">{fact}</p> : null}</div><TransactionFlow service={browser.service} wallet={browser.wallet} action={action} submitOnClick={STATE_ONLY_KINDS.has(availability.kind)} submitOnMount={submitOnMount} onUnavailable={onUnavailable} prepareOnMount={primary && (action.kind === "approvePrize" || action.kind === "escrow")} label={label} formatUsdc={formatUsdcAmount} onConfirmed={confirmed} disabled={!writesEnabled} disabledReason={writeDisabledReason} /></section>;
 }
@@ -856,7 +888,7 @@ function SellerActionControl({ browser, snapshot, availability, recoverCommitmen
 function OpeningPolicyControl({ browser, snapshot, onConfirmed, writesEnabled, writeDisabledReason }: {
   browser: Extract<BrowserService, { kind: "configured" }>;
   snapshot: RaffleSnapshot;
-  onConfirmed: () => Promise<void>;
+  onConfirmed: Reload;
   writesEnabled: boolean;
   writeDisabledReason?: string;
 }) {
