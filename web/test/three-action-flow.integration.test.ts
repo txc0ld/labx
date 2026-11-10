@@ -357,4 +357,39 @@ run("one-intent creation and capability-owned owner requests", () => {
     expect(await raffles()).toBe(1n);
     expect(journal.read(c.seller)).toBeNull();
   });
+
+  it("finds the draft a wallet sent behind a bare -32603 error that LABx's RPC saw only later, and makes no second draft", async () => {
+    const journal = memoryPendingJournal(); c.service = createRaffleService(c.client, c.manifest, journal);
+    const flow = await setup();
+    const prepare = c.service.prepare;
+    let currentStep = "", failed = false, late: { to: string; data: string; nonce: number } | null = null;
+    const requested: string[] = [];
+    vi.spyOn(c.service, "prepare").mockImplementation(async input => { currentStep = input.action.kind; return prepare(input); });
+    const request = flow.wallet.session.requestTransaction.bind(flow.wallet.session);
+    vi.spyOn(flow.wallet.session, "requestTransaction").mockImplementation(async (session, tx, before, dispatched) => {
+      requested.push(currentStep);
+      if (failed) return request(session, tx, before, dispatched);
+      failed = true;
+      await before?.();
+      dispatched?.();
+      // The wallet's own RPC took the send. LABx's RPC shows it only after the few seconds the service keeps reading the nonce.
+      late = { to: tx.to, data: tx.data, nonce: tx.nonce ?? 0 };
+      throw { code: -32603, message: "Internal JSON-RPC error." };
+    });
+    await expect(flow.execute()).rejects.toThrow("Your wallet couldn't send this transaction. Nothing was sent.");
+    expect(journal.read(c.seller)).toBeNull();
+    if (!late) throw new Error("The wallet was not asked for the draft.");
+    const sent: { to: string; data: string; nonce: number } = late;
+    expect(journal.readCleared(c.seller)).toMatchObject({ nonce: sent.nonce });
+    await c.rpc("eth_sendTransaction", [{ from: c.seller, to: sent.to, data: sent.data, value: "0x0", nonce: toHex(sent.nonce), gas: "0x989680" }]);
+    await c.mine(); await c.mine();
+    expect(await raffles()).toBe(1n);
+    // Every later Create, however often the seller presses it, continues from that draft.
+    let result: Awaited<ReturnType<typeof flow.execute>> | null = null;
+    for (let press = 0; press < 3 && !result; press++) result = await flow.execute().catch(() => null);
+    expect(requested).toEqual(["createDraft", "approvePrize", "escrow"]);
+    expect(await raffles()).toBe(1n);
+    expect(result?.raffle.escrowed).toBe(true);
+    expect(flow.record()).toMatchObject({ id: "1", pending: null });
+  }, 30_000);
 });

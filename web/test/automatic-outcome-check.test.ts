@@ -143,7 +143,8 @@ describe("automatic check of a saved transaction hash", () => {
     expect(h.owner.settlePending).toHaveBeenCalledTimes(1);
     expect(h.owner.settlePending.mock.calls[0][0].continueUnsent).toBeUndefined();
     expect(h.journal).toBeNull();
-    expect(h.onSettled).toHaveBeenCalled();
+    // Reported as replaced, so the page that waited on this hash stops waiting and reads the chain again.
+    expect(h.onSettled.mock.calls).toEqual([[true]]);
     expect(h.onAttention).not.toHaveBeenCalled();
     expect(h.owner.resume).not.toHaveBeenCalled();
     expectReadsOnly(h);
@@ -153,7 +154,7 @@ describe("automatic check of a saved transaction hash", () => {
   it("does not inspect or clear when the journal holds a different hash, and reports it settled", async () => {
     const h = harness({ saved: { id: "newer", hash: otherHash, nonce: 5 } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.onSettled).toHaveBeenCalled();
+    expect(h.onSettled.mock.calls).toEqual([[]]);
     expect(h.service.inspectOutcome).not.toHaveBeenCalled();
     expect(h.owner.resume).not.toHaveBeenCalled();
     expect(h.journal).toEqual({ id: "newer", hash: otherHash, nonce: 5 });

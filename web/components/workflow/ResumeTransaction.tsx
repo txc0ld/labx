@@ -52,11 +52,13 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   // control that stopped, so the line stays here, above the page, until the next send or another wallet.
   const [earlierStop, setEarlierStop] = useState(false);
   const notedEarlierSends = useRef(earlierSends);
+  // The line for a saved transaction the wallet replaced or dropped, kept the same way.
+  const [replacedStop, setReplacedStop] = useState(false);
 
   useEffect(() => {
     const version = ++generation.current;
     inFlight.current = null; editedHash.current = false;
-    setChecking(false); setError(""); setHash(""); setPending(null); setEarlierStop(false);
+    setChecking(false); setError(""); setHash(""); setPending(null); setEarlierStop(false); setReplacedStop(false);
     return () => { if (generation.current === version) generation.current++; };
   }, [browser.service, browser.wallet, wallet]);
 
@@ -77,23 +79,24 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
     return () => { active = false; };
   }, [browser.service, browser.wallet, connected, wallet, journalActivity, checking, savedCheck, pendingSend.status]);
 
-  // A send at the record's nonce was mined and the record cleared, or a send stopped because an earlier cleared request may
-  // have landed: the page reads the chain again.
+  // A send at the record's nonce was mined and the record cleared, the wallet replaced or dropped a saved hash, or a send
+  // stopped because an earlier cleared request may have landed: the page reads the chain again.
   const earlierSendSeen = earlierSends !== seenEarlierSends.current;
   useEffect(() => {
     if (earlierSends === notedEarlierSends.current) return;
     notedEarlierSends.current = earlierSends;
     setEarlierStop(true);
   }, [earlierSends]);
-  useEffect(() => { if (ownRequestOpen) setEarlierStop(false); }, [ownRequestOpen]);
+  useEffect(() => { if (ownRequestOpen) { setEarlierStop(false); setReplacedStop(false); } }, [ownRequestOpen]);
+  useEffect(() => { if (savedCheck === "replaced") setReplacedStop(true); }, [savedCheck]);
   useEffect(() => {
-    if (pendingSend.status !== "spent" && !earlierSendSeen || deferRefresh || !callback.current) return;
+    if (pendingSend.status !== "spent" && savedCheck !== "replaced" && !earlierSendSeen || deferRefresh || !callback.current) return;
     seenEarlierSends.current = earlierSends;
     const version = generation.current;
     void Promise.resolve(callback.current()).catch(reason => {
       if (version === generation.current) setError(reason instanceof Error ? reason.message : "Refresh the current state before another action.");
     });
-  }, [pendingSend.status, earlierSendSeen, earlierSends, deferRefresh]);
+  }, [pendingSend.status, savedCheck, earlierSendSeen, earlierSends, deferRefresh]);
 
   useEffect(() => {
     if (!connected || wallet.kind !== "connected" || !callback.current || deferRefresh) return;
@@ -161,7 +164,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
   const normalWait = pending !== null && !error && (pending.hash ? savedCheck !== null && savedCheck !== "attention" : unresolved.some(outcome => outcome.kind === "submitting"));
   const waiting = (outcome: TransactionOutcome) => normalWait && (outcome.kind === "submitting"
     || pending?.hash != null && outcomeTransactionHash(outcome)?.toLowerCase() === pending.hash.toLowerCase());
-  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error && !earlierStop) return null;
+  if (!connected || pendingOnly && !pending && outcomes.length === 0 && !error && !earlierStop && !replacedStop) return null;
   const form = (heading: ReactNode) => <form className="well pad stack" onSubmit={submit}>
     {heading}
     <label htmlFor={inputId}>Transaction hash<input id={inputId} spellCheck={false} autoComplete="off" value={hash} onChange={event => { editedHash.current = true; setHash(event.target.value.trim()); }} placeholder="0x…" /></label>
@@ -194,6 +197,7 @@ function ConfiguredResume({ browser, onConfirmed, pendingOnly = false, scope = "
       {unresolved.filter(outcome => !waiting(outcome)).map(renderOutcome)}
       {history.length ? <details className="workflow-details"><summary>Activity ({history.length})</summary><div className="stack">{history.map(renderOutcome)}</div></details> : null}
       {earlierStop ? <p className="notice warning" role="status">Your wallet sent an earlier LABx request. Check the page before trying again.</p> : null}
+      {replacedStop ? <p className="notice warning" role="status">Your wallet replaced or dropped your last transaction. Check the page before trying again.</p> : null}
       {panel}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
     </section>

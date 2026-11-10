@@ -226,7 +226,7 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
   }, [scope]);
 
   useEffect(() => {
-    if (state.kind !== "recovery" || !recoveryTerminal && savedCheck !== "settled" && !pendingSendSettled) return;
+    if (state.kind !== "recovery" || !recoveryTerminal && savedCheck !== "settled" && savedCheck !== "replaced" && !pendingSendSettled) return;
     const expected = context.current, recovery = state;
     let active = true;
     void expected.service.pending({ wallet: expected.wallet }).then(pending => {
@@ -261,6 +261,17 @@ export function TransactionFlow({ service, wallet, action, label, formatUsdc, re
     // checkConfirmation claims the scope before its first await, so a repeated render cannot start a second check.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownSendSettled, disabled]);
+
+  // This flow's own slow send left the journal without a check here seeing its receipt. Settled: another tab confirmed it,
+  // so the Check again check finds its receipt. Replaced: the wallet replaced or dropped it, so no receipt will come. The
+  // page's recovery panel says so and reads the chain again, which may remount this control, so the button returns here.
+  useEffect(() => {
+    if (state.kind !== "pending" || disabled) return;
+    if (savedCheck === "settled") void checkConfirmation(state.submitted);
+    else if (savedCheck === "replaced") setCurrent(context.current, { kind: "idle" });
+    // checkConfirmation claims the scope before its first await, as above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.kind, savedCheck, disabled]);
 
   async function showError(error: unknown, expected: FlowContext) {
     try {
