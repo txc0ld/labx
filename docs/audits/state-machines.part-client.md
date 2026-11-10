@@ -94,7 +94,9 @@ One machine per account and deployment. It is encoded by:
 - J-I6. No tab settles a record from the chain while a wallet request for that account is open in any tab
   (service.ts:266, 271, 291).
 - J-I7. Every send carries the pending nonce read just before it (service.ts:158, 170). Two sends LABx makes for one
-  intent around a cleared record therefore share a nonce, and a wallet that honors the nonce mines one of them.
+  intent around a cleared record therefore share a nonce while that nonce is unused, and a wallet that honors the
+  nonce mines one of them. This does not hold once the first send's nonce is used and its result is not found: the
+  Create recovery then sends at the next nonce (open issue 3).
 - J-I8. The service tells a caller that its send was not dispatched, so the caller may drop its own checkpoint, only
   when the wallet refused, was never asked, or its own message says it sent nothing (service.ts:196, 223). Before
   3bc0972 it also did so after a code-only failure. Finding 1.
@@ -908,6 +910,43 @@ replaced record through the same nonce rule without reporting it as replaced, so
 "Action unavailable" with the RPC's text, the line is not shown and the page is not re-read. By reading; see
 suspicion 2.
 
+### Open issue 3. Create sends a second draft when the creation log is not found (high, narrow, not fixed)
+
+This predates the audit and is not changed by this branch. The independent review reproduced it on Anvil with an
+injected lagging log read: two `createRaffle` requests and two raffles for one saved intent.
+
+1. The seller's Create is broadcast and the wallet answers with a bare -32603. The checkpoint is kept (issue 1).
+2. The draft is mined. The seller clicks Create. The nonce reads show the checkpoint's nonce as used.
+3. `findCreation` reads the `RaffleCreated` logs up to the head and gets nothing, because the node that answers the
+   log read is behind the node that answered the nonce read (`web/lib/chain/service.ts:298-310`).
+4. The recovery treats the nonce as used by something else, drops the checkpoint (`web/lib/chain/create-flow.ts:291`)
+   and sends `createRaffle` at the next nonce.
+
+Cost: the gas of a second `createRaffle` and a spare draft the seller can cancel. No buyer money is involved.
+
+Why it is not fixed here: a log range read cannot tell "no such log" from "this node has not seen those blocks yet",
+and the two exact alternatives each have a cost that needs a decision. Finding the block in which the nonce was used
+and reading that one block by hash is exact, but needs account state at past blocks, which pruning RPC providers do
+not keep. Requiring two searches some blocks apart before giving up is provider-independent, but adds a field to the
+saved create record and makes a seller whose wallet really did replace the draft wait and click again.
+
+### Open issue 4. A tab keeps an unverified row after another tab settles the same send (medium, not fixed)
+
+This predates the audit. The independent review observed it at module level: two tabs recover a pending purchase;
+after the wallet cancels it, tab A settles it and removes the shared recovery data; tab B keeps its `unverified` row
+(`web/lib/chain/transaction-outcomes.ts:179`), which pauses transactions in tab B until a reload. Whether a tab
+should drop a row whose checkpoint has gone is ambiguity 3.
+
+### Independent review of this branch
+
+A Codex review of `54f317e..9032cdd` with eleven module probes and two browser probes found no defect in the three
+changes. It confirmed that the kept record is the seller workflow's checkpoint and not the account-wide journal, that
+a Create after a real no-send goes out at the same nonce, and that an approval confirmed in a second tab leads to
+exactly one `buyPack` request across both tabs (the tab that sent the approval opens the purchase; the other does
+not). It answered DO NOT MERGE because of open issues 3 and 4, which exist on `main` regardless of this branch. It
+also noted that an RPC missing both a hash and its pending nonce can report a send as dropped while it is still
+pending; the existing marker then holds the nonce, so a retry replaces that send and does not add one.
+
 ## Status of A1 to A5, B1 to B7 and C1 to C6
 
 The earlier document gives one line per ID. Where the line covers two IDs (C5 and C6) the split below is inferred from
@@ -961,14 +1000,8 @@ These follow from reading the code. None was driven to an invalid state by a tes
    nonces without the replaced report, so a control in pending then runs its check, gets the RPC's not-found text
    under "Action unavailable", and the page is not re-read. It needs a person to press Check again in the panel in the
    seconds before the automatic check would have done the same. Low.
-3. A draft the log read cannot see. `findCreation` answers "no draft" when its log reads return nothing up to the head
-   it read (`web/lib/chain/service.ts:298-310`). If the log RPC is behind the nonce RPC, or prunes logs, a mined draft
-   is missed, the step is dropped, and the next Create sends a second draft. The nonce must already be two blocks
-   deep, which makes a lagging log index less likely, and the fakes could only assume the fault. High if it happens.
-4. A stale row after another tab settles a replaced hash. Tab A clears the record from the nonces and removes the
-   shared checkpoints. Tab B's unverified row for that hash stays and pauses new actions in tab B until a reload
-   (`web/lib/chain/transaction-outcomes.ts:271-290, 432-448`). It needs two tabs and a replaced transaction. Medium if
-   it happens; see ambiguity 3.
+3. Confirmed by the independent review; see open issue 3 under findings.
+4. Confirmed by the independent review; see open issue 4 under findings.
 5. Signed receipts lost on a failed step. A failed Load more or a rejected signature sets the error state, and Retry
    starts again with nothing signed (`web/components/workflow/PrivateRecordsPanel.tsx:75, 114`). Low.
 6. The automatic-send latch and a scope change. If a control with `submitOnMount` stayed mounted through a wallet
